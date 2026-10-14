@@ -11,6 +11,8 @@ import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart';
+import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 
 import '../../utils/matrix_sdk_extensions/event_extension.dart';
 
@@ -98,11 +100,22 @@ class ImageViewerController extends State<ImageViewer> {
   bool get canGoBack => _index > 0;
 
   /// Forward this image to another room.
-  void forwardAction() => showScaffoldDialog(
-    context: context,
-    builder: (context) =>
-        ShareScaffoldDialog(items: [ContentShareItem(currentEvent.content)]),
-  );
+  void forwardAction() {
+    final event = currentEvent;
+    final policy = RoundMediaPolicy.fromContent(event.content);
+    if (event.redacted || !policy.canForward) return;
+    if (RoundVideoDescriptor.fromContent(event.content) != null) {
+      TelegramRoundService.of(
+        event.room.client,
+      ).showForwardPicker(context, event);
+      return;
+    }
+    showScaffoldDialog(
+      context: context,
+      builder: (context) =>
+          ShareScaffoldDialog(items: [ContentShareItem(event.content)]),
+    );
+  }
 
   /// Save this file with a system call.
   void saveFileAction(BuildContext context) => currentEvent.saveFile(context);

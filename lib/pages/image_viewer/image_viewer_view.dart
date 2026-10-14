@@ -4,13 +4,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat/events/round_video_message.dart';
+import 'package:fluffychat/pages/chat/events/round_video_bridge_message.dart';
 import 'package:fluffychat/pages/image_viewer/pointers_listener.dart';
 import 'package:fluffychat/pages/image_viewer/video_player.dart';
+import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
+import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/hover_builder.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart';
 
 import 'image_viewer.dart';
 
@@ -41,36 +46,69 @@ class ImageViewerView extends StatelessWidget {
           ),
           backgroundColor: Colors.transparent,
           actions: [
-            IconButton(
-              style: iconButtonStyle,
-              icon: const Icon(Icons.reply_outlined),
-              onPressed: controller.forwardAction,
-              color: Colors.white,
-              tooltip: L10n.of(context).share,
+            AnimatedBuilder(
+              animation: controller.pageController,
+              builder: (context, _) {
+                final event = controller.pageController.hasClients
+                    ? controller.currentEvent
+                    : controller.widget.event;
+                final policy = RoundMediaPolicy.fromContent(event.content);
+                final round =
+                    RoundVideoDescriptor.fromContent(
+                      event.content,
+                      redacted: event.redacted,
+                    ) !=
+                    null;
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      style: iconButtonStyle,
+                      icon: const Icon(Icons.reply_outlined),
+                      onPressed:
+                          !event.redacted &&
+                              policy.canForward &&
+                              (!round ||
+                                  TelegramRoundService.of(
+                                    event.room.client,
+                                  ).canNativeForward(event))
+                          ? controller.forwardAction
+                          : null,
+                      color: Colors.white,
+                      tooltip: round
+                          ? 'Przekazywanie w Telegramie wymaga wsparcia mostu'
+                          : L10n.of(context).share,
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      style: iconButtonStyle,
+                      icon: const Icon(Icons.download_outlined),
+                      onPressed: !event.redacted && policy.canExport
+                          ? () => controller.saveFileAction(context)
+                          : null,
+                      color: Colors.white,
+                      tooltip: L10n.of(context).downloadFile,
+                    ),
+                    const SizedBox(width: 8),
+                    if (PlatformInfos.isMobile)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Builder(
+                          builder: (context) => IconButton(
+                            style: iconButtonStyle,
+                            onPressed: !event.redacted && policy.canExport
+                                ? () => controller.shareFileAction(context)
+                                : null,
+                            tooltip: L10n.of(context).share,
+                            color: Colors.white,
+                            icon: Icon(Icons.adaptive.share_outlined),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
-            const SizedBox(width: 8),
-            IconButton(
-              style: iconButtonStyle,
-              icon: const Icon(Icons.download_outlined),
-              onPressed: () => controller.saveFileAction(context),
-              color: Colors.white,
-              tooltip: L10n.of(context).downloadFile,
-            ),
-            const SizedBox(width: 8),
-            if (PlatformInfos.isMobile)
-              // Use builder context to correctly position the share dialog on iPad
-              Padding(
-                padding: const EdgeInsets.only(right: 8.0),
-                child: Builder(
-                  builder: (context) => IconButton(
-                    style: iconButtonStyle,
-                    onPressed: () => controller.shareFileAction(context),
-                    tooltip: L10n.of(context).share,
-                    color: Colors.white,
-                    icon: Icon(Icons.adaptive.share_outlined),
-                  ),
-                ),
-              ),
           ],
         ),
         body: HoverBuilder(
@@ -86,9 +124,45 @@ class ImageViewerView extends StatelessWidget {
                         : NeverScrollableScrollPhysics(),
                     scrollDirection: Axis.horizontal,
                     controller: controller.pageController,
+                    onPageChanged: (_) =>
+                        RoundPlaybackCoordinator.shared.stopAll(suspend: false),
                     itemCount: controller.allEvents.length,
                     itemBuilder: (context, i) {
                       final event = controller.allEvents[i];
+                      final policy = RoundMediaPolicy.fromContent(
+                        event.content,
+                      );
+                      final round =
+                          RoundVideoDescriptor.fromContent(
+                            event.content,
+                            redacted: event.redacted,
+                          ) !=
+                          null;
+                      if (!policy.canPlay || round || event.redacted) {
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 52),
+                          child: Center(
+                            child: GestureDetector(
+                              onTap: () {},
+                              child: round
+                                  ? RoundVideoBridgeMessage(
+                                      event,
+                                      key: ValueKey((
+                                        event.room.client,
+                                        event.room.id,
+                                        event.eventId,
+                                      )),
+                                      textColor: Colors.white,
+                                    )
+                                  : RoundVideoMessage(
+                                      event,
+                                      textColor: Colors.white,
+                                      showThumbnail: false,
+                                    ),
+                            ),
+                          ),
+                        );
+                      }
                       switch (event.messageType) {
                         case MessageTypes.Video:
                           return Padding(

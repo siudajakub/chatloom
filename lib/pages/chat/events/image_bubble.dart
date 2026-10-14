@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
@@ -51,7 +52,7 @@ class ImageBubble extends StatelessWidget {
     final theme = Theme.of(context);
 
     var borderRadius =
-        this.borderRadius ?? BorderRadius.circular(AppConfig.borderRadius);
+        this.borderRadius ?? BorderRadius.circular(NotionTokens.radius);
 
     final fileDescription = event.fileDescription;
     final textColor = this.textColor;
@@ -63,83 +64,99 @@ class ImageBubble extends StatelessWidget {
       );
     }
 
-    return Column(
-      mainAxisSize: .min,
-      spacing: 8,
-      children: [
-        Material(
-          color: Colors.transparent,
-          clipBehavior: Clip.hardEdge,
-          shape: RoundedRectangleBorder(
-            borderRadius: borderRadius,
-            side: BorderSide(
-              color: event.messageType == MessageTypes.Sticker
-                  ? Colors.transparent
-                  : theme.dividerColor,
-            ),
-          ),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: borderRadius,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Hero(
-                  tag: event.eventId,
-                  child: AppSettings.showThumbnailsInTimeline.value
-                      ? MxcImage(
-                          cacheKey: event.transactionId ?? event.eventId,
-                          cacheName: event.room.id,
-                          event: event,
-                          width: width,
-                          height: height,
-                          fit: fit,
-                          animated: animated,
-                          isThumbnail: thumbnailOnly,
-                          placeholder: event.messageType == MessageTypes.Sticker
-                              ? null
-                              : (_) => _ImageBubblePlaceholder(
-                                  event: event,
-                                  width: width,
-                                  height: height,
-                                  fit: fit,
-                                ),
-                        )
-                      : _ImageBubblePlaceholder(
-                          event: event,
-                          width: width,
-                          height: height,
-                          fit: fit,
-                        ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width =
+            constraints.maxWidth.isFinite && this.width > constraints.maxWidth
+            ? constraints.maxWidth
+            : this.width;
+        final height = this.width > 0
+            ? this.height * width / this.width
+            : this.height;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: .min,
+          spacing: 8,
+          children: [
+            Material(
+              color: Colors.transparent,
+              clipBehavior: Clip.hardEdge,
+              shape: RoundedRectangleBorder(
+                borderRadius: borderRadius,
+                side: BorderSide(
+                  color: event.messageType == MessageTypes.Sticker
+                      ? Colors.transparent
+                      : theme.dividerColor,
                 ),
-              ],
-            ),
-          ),
-        ),
-        if (fileDescription != null && textColor != null)
-          SizedBox(
-            width: width,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Linkify(
-                text: fileDescription,
-                textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: AppConfig.messageFontSize,
+              ),
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: borderRadius,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Hero(
+                      tag: event.eventId,
+                      child: AppSettings.showThumbnailsInTimeline.value
+                          ? MxcImage(
+                              cacheKey: event.transactionId ?? event.eventId,
+                              cacheName: event.room.id,
+                              event: event,
+                              width: width,
+                              height: height,
+                              fit: fit,
+                              animated: animated,
+                              isThumbnail: thumbnailOnly,
+                              placeholder:
+                                  event.messageType == MessageTypes.Sticker
+                                  ? null
+                                  : (_) => _ImageBubblePlaceholder(
+                                      event: event,
+                                      width: width,
+                                      height: height,
+                                      fit: fit,
+                                    ),
+                            )
+                          : _ImageBubblePlaceholder(
+                              event: event,
+                              width: width,
+                              height: height,
+                              fit: fit,
+                            ),
+                    ),
+                  ],
                 ),
-                options: const LinkifyOptions(humanize: false),
-                linkStyle: TextStyle(
-                  color: linkColor,
-                  fontSize: AppConfig.messageFontSize,
-                  decoration: TextDecoration.underline,
-                  decorationColor: linkColor,
-                ),
-                onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
               ),
             ),
-          ),
-      ],
+            if (fileDescription != null && textColor != null)
+              SizedBox(
+                width: width,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Linkify(
+                    text: fileDescription,
+                    textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: AppConfig.messageFontSize,
+                    ),
+                    options: const LinkifyOptions(humanize: false),
+                    linkStyle: TextStyle(
+                      color: linkColor,
+                      fontSize: AppConfig.messageFontSize,
+                      decoration: TextDecoration.underline,
+                      decorationColor: linkColor,
+                    ),
+                    onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }

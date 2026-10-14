@@ -30,6 +30,7 @@ class MxcImage extends StatefulWidget {
   final Curve animationCurve;
   final ThumbnailMethod thumbnailMethod;
   final Widget Function(BuildContext context)? placeholder;
+  final bool usePlaceholderOnError;
   final String? cacheKey;
   final String? cacheName;
   final Client? client;
@@ -45,6 +46,7 @@ class MxcImage extends StatefulWidget {
     this.height,
     this.fit,
     this.placeholder,
+    this.usePlaceholderOnError = false,
     this.isThumbnail = true,
     this.animated = false,
     this.animationDuration = FluffyThemes.animationDuration,
@@ -164,6 +166,9 @@ class _MxcImageState extends State<MxcImage> {
       StackTrace? stackTrace,
     ) {
       Logs().d('Unable to render mxc image', error, stackTrace);
+      if (widget.usePlaceholderOnError && widget.placeholder != null) {
+        return widget.placeholder!(context);
+      }
       return SizedBox(
         width: widget.width,
         height: widget.height,

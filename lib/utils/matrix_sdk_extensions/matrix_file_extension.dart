@@ -3,11 +3,16 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/media/media_access.dart';
 import 'package:fluffychat/utils/size_string.dart';
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 extension MatrixFileExtension on MatrixFile {
@@ -41,15 +46,41 @@ extension MatrixFileExtension on MatrixFile {
     // Workaround for iPad from
     // https://github.com/fluttercommunity/plus_plugins/tree/main/packages/share_plus/share_plus#ipad
     final box = context.findRenderObject() as RenderBox?;
+    final origin = box == null
+        ? null
+        : box.localToGlobal(Offset.zero) & box.size;
 
-    await SharePlus.instance.share(
-      ShareParams(
-        files: [XFile.fromData(bytes, name: name, mimeType: mimeType)],
-        sharePositionOrigin: box == null
-            ? null
-            : box.localToGlobal(Offset.zero) & box.size,
+    if (kIsWeb) {
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile.fromData(bytes, name: name, mimeType: mimeType)],
+          sharePositionOrigin: origin,
+        ),
+      );
+      return;
+    }
+    final access = await MediaAccess.open(
+      directory: Directory(
+        '${(await getTemporaryDirectory()).path}/personal_media',
       ),
     );
+    final extension = switch (msgType) {
+      'm.image' => '.jpg',
+      'm.audio' => '.ogg',
+      'm.video' => '.mp4',
+      _ => '.bin',
+    };
+    final lease = await access.create(bytes, extension: extension);
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(lease.file.path, name: name, mimeType: mimeType)],
+          sharePositionOrigin: origin,
+        ),
+      );
+    } finally {
+      await lease.close();
+    }
     return;
   }
 

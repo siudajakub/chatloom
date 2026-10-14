@@ -3,9 +3,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:chewie/chewie.dart';
+import 'package:fluffychat/personal/media/media_access.dart';
+import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -29,10 +32,46 @@ class EventVideoPlayer extends StatefulWidget {
 }
 
 class EventVideoPlayerState extends State<EventVideoPlayer> {
+  late final _playback = RoundPlaybackCoordinator.shared.register(
+    pause: () async {
+      await _videoPlayerController?.pause();
+    },
+    stop: () async {
+      await _disposeControllers();
+      if (mounted) setState(() {});
+    },
+  );
+  bool _coordinating = false;
+  void _checkAudible() {
+    final player = _videoPlayerController;
+    if (player == null ||
+        !player.value.isPlaying ||
+        _playback.isCurrent ||
+        _coordinating)
+      return;
+    _coordinating = true;
+    unawaited(
+      () async {
+        try {
+          await player.pause();
+          if (await _playback.acquireAudible() &&
+              _playback.isCurrent &&
+              mounted &&
+              identical(player, _videoPlayerController))
+            await player.play();
+        } finally {
+          _coordinating = false;
+        }
+      }().catchError((Object _) {}),
+    );
+  }
+
   ChewieController? _chewieController;
   VideoPlayerController? _videoPlayerController;
 
   double? _downloadProgress;
+  ManagedMediaFile? _lease;
+  bool _downloading = false;
 
   // The video_player package only doesn't support Windows and Linux.
   final _supportsVideoPlayer =
@@ -44,7 +83,10 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
       return;
     }
 
+    if (_downloading) return;
+    _downloading = true;
     try {
+      if(!await _playback.acquireAudible() || !_playback.isCurrent || !mounted) return;
       final fileSize = widget.event.content
           .tryGetMap<String, Object?>('info')
           ?.tryGet<int>('size');
@@ -52,6 +94,7 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
         onDownloadProgress: fileSize == null
             ? null
             : (progress) {
+                if (!mounted) return;
                 final progressPercentage = progress / fileSize;
                 setState(() {
                   _downloadProgress = progressPercentage < 1
@@ -62,7 +105,8 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
       );
 
       // Dispose the controllers if we already have them.
-      _disposeControllers();
+      await _disposeControllers();
+      if (!mounted || !_playback.isCurrent) return;
       late VideoPlayerController videoPlayerController;
 
       // Create the VideoPlayerController from the contents of videoFile.
@@ -72,52 +116,72 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
         );
       } else {
         final tempDir = await getTemporaryDirectory();
-        final fileNameStr =
-            widget.event.attachmentMxcUrl?.pathSegments.last ??
-            widget.event.body;
-        final fileName = Uri.encodeComponent(fileNameStr);
-        final file = File('${tempDir.path}/${fileName}_${videoFile.name}');
-        if (await file.exists() == false) {
-          await file.writeAsBytes(videoFile.bytes);
-        }
-        videoPlayerController = VideoPlayerController.file(file);
+        final access = await MediaAccess.open(
+          directory: Directory('${tempDir.path}/personal_video'),
+        );
+        _lease = await access.create(videoFile.bytes, extension: '.mp4');
+        videoPlayerController = VideoPlayerController.file(_lease!.file);
       }
       _videoPlayerController = videoPlayerController;
+      videoPlayerController.addListener(_checkAudible);
 
       await videoPlayerController.initialize();
+      if (!mounted || !_playback.isCurrent) {
+        await _disposeControllers();
+        return;
+      }
 
       // Create a ChewieController on top.
       setState(() {
         _chewieController = ChewieController(
           videoPlayerController: videoPlayerController,
           showControlsOnInitialize: false,
-          autoPlay: true,
+          autoPlay: false,
           autoInitialize: true,
           looping: true,
           aspectRatio: _videoPlayerController?.value.aspectRatio,
         );
       });
+      if (await _playback.acquireAudible() &&
+          _playback.isCurrent &&
+          mounted &&
+          identical(_videoPlayerController, videoPlayerController)) {
+        await videoPlayerController.play();
+      }
     } on IOException catch (e) {
+      await _disposeControllers();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
     } catch (e, s) {
+      await _disposeControllers();
       if (!mounted) return;
       ErrorReporter(context, 'Unable to play video').onErrorCallback(e, s);
+    } finally {
+      _downloading = false;
     }
   }
 
-  void _disposeControllers() {
-    _chewieController?.dispose();
-    _videoPlayerController?.dispose();
+  Future<void> _disposeControllers() async {
+    final chewie = _chewieController;
+    final video = _videoPlayerController;
+    final lease = _lease;
     _chewieController = null;
     _videoPlayerController = null;
+    _lease = null;
+    try {
+      chewie?.dispose();
+      await video?.dispose();
+    } finally {
+      await lease?.close();
+    }
   }
 
   @override
   void dispose() {
-    _disposeControllers();
+    _playback.dispose();
+    unawaited(_disposeControllers().catchError((Object _) {}));
     super.dispose();
   }
 

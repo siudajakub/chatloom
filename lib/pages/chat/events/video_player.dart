@@ -7,6 +7,7 @@ import 'dart:math';
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -47,117 +48,136 @@ class EventVideoPlayer extends StatelessWidget {
     final fileDescription = event.fileDescription;
     const maxDimension = 300.0;
     final infoMap = event.content.tryGetMap<String, Object?>('info');
-    final videoWidth = infoMap?.tryGet<int>('w') ?? maxDimension;
-    final videoHeight = infoMap?.tryGet<int>('h') ?? maxDimension;
+    final videoWidth = (infoMap?.tryGet<int>('w') ?? 0) > 0
+        ? infoMap!.tryGet<int>('w')!.toDouble()
+        : maxDimension;
+    final videoHeight = (infoMap?.tryGet<int>('h') ?? 0) > 0
+        ? infoMap!.tryGet<int>('h')!.toDouble()
+        : maxDimension;
 
     final modifier = max(videoWidth, videoHeight) / maxDimension;
-    final width = videoWidth / modifier;
-    final height = videoHeight / modifier;
+    final desiredWidth = videoWidth / modifier;
+    final desiredHeight = videoHeight / modifier;
 
     final durationInt = infoMap?.tryGet<int>('duration');
     final duration = durationInt == null
         ? null
         : Duration(milliseconds: durationInt);
 
-    return Column(
-      mainAxisSize: .min,
-      spacing: 8,
-      children: [
-        Material(
-          color: Colors.black,
-          borderRadius: BorderRadius.circular(AppConfig.borderRadius),
-          child: InkWell(
-            onTap: () => supportsVideoPlayer
-                ? showDialog(
-                    context: context,
-                    builder: (_) => ImageViewer(
-                      event,
-                      timeline: timeline,
-                      outerContext: context,
-                    ),
-                  )
-                : event.saveFile(context),
-            borderRadius: BorderRadius.circular(AppConfig.borderRadius),
-            child: SizedBox(
-              width: width,
-              height: height,
-              child: Hero(
-                tag: event.eventId,
-                child: Stack(
-                  children: [
-                    if (event.hasThumbnail &&
-                        AppSettings.showThumbnailsInTimeline.value)
-                      MxcImage(
-                        event: event,
-                        cacheKey: event.transactionId ?? event.eventId,
-                        cacheName: event.room.id,
-                        isThumbnail: true,
-                        width: width,
-                        height: height,
-                        fit: BoxFit.cover,
-                        placeholder: (context) => BlurHash(
-                          blurhash: blurHash,
-                          width: width,
-                          height: height,
-                          fit: BoxFit.cover,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width =
+            constraints.maxWidth.isFinite && desiredWidth > constraints.maxWidth
+            ? constraints.maxWidth
+            : desiredWidth;
+        final height = desiredHeight * width / desiredWidth;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: .min,
+          spacing: 8,
+          children: [
+            Material(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(NotionTokens.radius),
+              child: InkWell(
+                onTap: () => supportsVideoPlayer
+                    ? showDialog(
+                        context: context,
+                        builder: (_) => ImageViewer(
+                          event,
+                          timeline: timeline,
+                          outerContext: context,
                         ),
                       )
-                    else
-                      BlurHash(
-                        blurhash: blurHash,
-                        width: width,
-                        height: height,
-                        fit: BoxFit.cover,
-                      ),
-                    Center(
-                      child: CircleAvatar(
-                        child: supportsVideoPlayer
-                            ? const Icon(Icons.play_arrow_outlined)
-                            : const Icon(Icons.file_download_outlined),
-                      ),
-                    ),
-                    if (duration != null)
-                      Positioned(
-                        bottom: 8,
-                        left: 16,
-                        child: Text(
-                          '${duration.inMinutes.toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
-                          style: TextStyle(
-                            color: Colors.white,
-                            backgroundColor: Colors.black.withAlpha(32),
+                    : event.saveFile(context),
+                borderRadius: BorderRadius.circular(NotionTokens.radius),
+                child: SizedBox(
+                  width: width,
+                  height: height,
+                  child: Hero(
+                    tag: event.eventId,
+                    child: Stack(
+                      children: [
+                        if (event.hasThumbnail &&
+                            AppSettings.showThumbnailsInTimeline.value)
+                          MxcImage(
+                            event: event,
+                            cacheKey: event.transactionId ?? event.eventId,
+                            cacheName: event.room.id,
+                            isThumbnail: true,
+                            width: width,
+                            height: height,
+                            fit: BoxFit.cover,
+                            placeholder: (context) => BlurHash(
+                              blurhash: blurHash,
+                              width: width,
+                              height: height,
+                              fit: BoxFit.cover,
+                            ),
+                          )
+                        else
+                          BlurHash(
+                            blurhash: blurHash,
+                            width: width,
+                            height: height,
+                            fit: BoxFit.cover,
+                          ),
+                        Center(
+                          child: CircleAvatar(
+                            child: supportsVideoPlayer
+                                ? const Icon(Icons.play_arrow_outlined)
+                                : const Icon(Icons.file_download_outlined),
                           ),
                         ),
-                      ),
-                  ],
+                        if (duration != null)
+                          Positioned(
+                            bottom: 8,
+                            left: 16,
+                            child: Text(
+                              '${duration.inMinutes.toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                              style: TextStyle(
+                                color: Colors.white,
+                                backgroundColor: Colors.black.withAlpha(32),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
-        if (fileDescription != null && textColor != null && linkColor != null)
-          SizedBox(
-            width: width,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Linkify(
-                text: fileDescription,
-                textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: AppConfig.messageFontSize,
+            if (fileDescription != null &&
+                textColor != null &&
+                linkColor != null)
+              SizedBox(
+                width: width,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Linkify(
+                    text: fileDescription,
+                    textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: AppConfig.messageFontSize,
+                    ),
+                    options: const LinkifyOptions(humanize: false),
+                    linkStyle: TextStyle(
+                      color: linkColor,
+                      fontSize: AppConfig.messageFontSize,
+                      decoration: TextDecoration.underline,
+                      decorationColor: linkColor,
+                    ),
+                    onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
+                  ),
                 ),
-                options: const LinkifyOptions(humanize: false),
-                linkStyle: TextStyle(
-                  color: linkColor,
-                  fontSize: AppConfig.messageFontSize,
-                  decoration: TextDecoration.underline,
-                  decorationColor: linkColor,
-                ),
-                onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
               ),
-            ),
-          ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
