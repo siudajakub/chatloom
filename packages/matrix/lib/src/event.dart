@@ -1,0 +1,1347 @@
+// SPDX-FileCopyrightText: 2019-Present Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:collection/collection.dart';
+import 'package:html/parser.dart';
+import 'package:http/http.dart' as http;
+import 'package:mime/mime.dart';
+
+import '../matrix.dart';
+import 'utils/file_send_request_credentials.dart';
+import 'utils/html_to_text.dart';
+import 'utils/markdown.dart';
+import 'utils/multipart_request_progress.dart';
+
+abstract class RelationshipTypes {
+  static const String edit = 'm.replace';
+  static const String reaction = 'm.annotation';
+  static const String reference = 'm.reference';
+  static const String thread = 'm.thread';
+}
+
+/// All data exchanged over Matrix is expressed as an "event". Typically each client action (e.g. sending a message) correlates with exactly one event.
+class Event extends MatrixEvent {
+  /// Requests the user object of the sender of this event.
+  Future<User?> fetchSenderUser() =>
+      room.requestUser(senderId, ignoreErrors: true);
+
+  @Deprecated(
+    'Use eventSender instead or senderFromMemoryOrFallback for a synchronous alternative',
+  )
+  User get sender => senderFromMemoryOrFallback;
+
+  User get senderFromMemoryOrFallback =>
+      room.unsafeGetUserFromMemoryOrFallback(senderId);
+
+  /// The room this event belongs to. May be null.
+  final Room room;
+
+  /// The status of this event.
+  EventStatus status;
+
+  static const EventStatus defaultStatus = EventStatus.synced;
+
+  /// Optional. The event that redacted this event, if any. Otherwise null.
+  Event? get redactedBecause {
+    final redacted_because = unsigned?['redacted_because'];
+    final room = this.room;
+    return (redacted_because is Map<String, dynamic>)
+        ? Event.fromJson(redacted_because, room)
+        : null;
+  }
+
+  bool get redacted => redactedBecause != null;
+
+  User? get stateKeyUser => stateKey != null
+      ? room.unsafeGetUserFromMemoryOrFallback(stateKey!)
+      : null;
+
+  MatrixEvent? _originalSource;
+
+  MatrixEvent? get originalSource => _originalSource;
+
+  String? get transactionId => unsigned?.tryGet<String>('transaction_id');
+
+  Map<String, Object?>? get prevContent =>
+      unsigned?.tryGetMap<String, Object?>('prev_content');
+
+  Event({
+    this.status = defaultStatus,
+    required Map<String, dynamic> super.content,
+    required super.type,
+    required String eventId,
+    required super.senderId,
+    required DateTime originServerTs,
+    Map<String, dynamic>? unsigned,
+    String? stateKey,
+    super.redacts,
+    required this.room,
+    MatrixEvent? originalSource,
+  }) : _originalSource = originalSource,
+       super(
+         eventId: eventId,
+         originServerTs: originServerTs,
+         roomId: room.id,
+       ) {
+    this.eventId = eventId;
+    this.unsigned = unsigned;
+    this.stateKey = stateKey;
+
+    // Mark event as failed to send if status is `sending` and event is older
+    // than the timeout. This should not happen with the deprecated Moor
+    // database!
+    if (status.isSending) {
+      // Age of this event in milliseconds
+      final age =
+          DateTime.now().millisecondsSinceEpoch -
+          originServerTs.millisecondsSinceEpoch;
+
+      final room = this.room;
+
+      if (
+      // We don't want to mark the event as failed if it's the lastEvent in the room
+      // since that would be a race condition (with the same event from timeline)
+      // The `room.lastEvent` is null at the time this constructor is called for it,
+      // there's no other way to check this.
+      room.lastEvent?.eventId != null &&
+          // If the event is in the sending queue, then we don't mess with it.
+          !room.sendingQueueEventsByTxId.contains(transactionId) &&
+          // Else, if the event is older than the timeout, then we mark it as failed.
+          age > room.client.sendTimelineEventTimeout.inMilliseconds) {
+        // Update this event in database and open timelines
+        final json = toJson();
+        json['unsigned'] ??= <String, dynamic>{};
+        json['unsigned'][messageSendingStatusKey] = EventStatus.error.intValue;
+        // ignore: discarded_futures
+        room.client.handleSync(
+          SyncUpdate(
+            nextBatch: '',
+            rooms: RoomsUpdate(
+              join: {
+                room.id: JoinedRoomUpdate(
+                  timeline: TimelineUpdate(
+                    events: [MatrixEvent.fromJson(json)],
+                  ),
+                ),
+              },
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  static Map<String, dynamic> getMapFromPayload(Object? payload) {
+    if (payload is String) {
+      try {
+        return json.decode(payload);
+      } catch (e) {
+        return {};
+      }
+    }
+    if (payload is Map<String, dynamic>) return payload;
+    return {};
+  }
+
+  factory Event.fromMatrixEvent(
+    MatrixEvent matrixEvent,
+    Room room, {
+    EventStatus? status,
+  }) => matrixEvent is Event
+      ? matrixEvent
+      : Event(
+          status:
+              status ??
+              eventStatusFromInt(
+                matrixEvent.unsigned?.tryGet<int>(messageSendingStatusKey) ??
+                    defaultStatus.intValue,
+              ),
+          content: matrixEvent.content,
+          type: matrixEvent.type,
+          eventId: matrixEvent.eventId,
+          senderId: matrixEvent.senderId,
+          originServerTs: matrixEvent.originServerTs,
+          unsigned: matrixEvent.unsigned,
+          stateKey: matrixEvent.stateKey,
+          redacts: matrixEvent.redacts,
+          room: room,
+        );
+
+  /// Get a State event from a table row or from the event stream.
+  factory Event.fromJson(Map<String, dynamic> jsonPayload, Room room) {
+    final content = Event.getMapFromPayload(jsonPayload['content']);
+    final unsigned = Event.getMapFromPayload(jsonPayload['unsigned']);
+    final originalSource = Event.getMapFromPayload(
+      jsonPayload['original_source'],
+    );
+
+    // Previous implementations have defined prev_content on the top level:
+    final topLevelPrevContent = Event.getMapFromPayload(
+      jsonPayload['prev_content'],
+    );
+    if (topLevelPrevContent.isNotEmpty) {
+      unsigned['prev_content'] ??= topLevelPrevContent;
+    }
+
+    return Event(
+      status: eventStatusFromInt(
+        jsonPayload['status'] ??
+            unsigned[messageSendingStatusKey] ??
+            defaultStatus.intValue,
+      ),
+      stateKey: jsonPayload['state_key'],
+      content: content,
+      type: jsonPayload['type'],
+      eventId: jsonPayload['event_id'] ?? '',
+      senderId: jsonPayload['sender'],
+      originServerTs: DateTime.fromMillisecondsSinceEpoch(
+        jsonPayload['origin_server_ts'] ?? 0,
+      ),
+      unsigned: unsigned,
+      room: room,
+      redacts: jsonPayload['redacts'],
+      originalSource: originalSource.isEmpty
+          ? null
+          : MatrixEvent.fromJson(originalSource),
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    final data = <String, dynamic>{};
+    if (stateKey != null) data['state_key'] = stateKey;
+    if (prevContent?.isNotEmpty == true) {
+      data['prev_content'] = prevContent;
+    }
+    data['content'] = content;
+    data['type'] = type;
+    data['event_id'] = eventId;
+    data['room_id'] = roomId;
+    data['sender'] = senderId;
+    data['origin_server_ts'] = originServerTs.millisecondsSinceEpoch;
+    if (unsigned?.isNotEmpty == true) {
+      data['unsigned'] = unsigned;
+    }
+    if (originalSource != null) {
+      data['original_source'] = originalSource?.toJson();
+    }
+    if (redacts != null) {
+      data['redacts'] = redacts;
+    }
+    data['status'] = status.intValue;
+    return data;
+  }
+
+  User get asUser => User.fromState(
+    // state key should always be set for member events
+    stateKey: stateKey!,
+    prevContent: prevContent,
+    content: content,
+    typeKey: type,
+    senderId: senderId,
+    room: room,
+    originServerTs: originServerTs,
+  );
+
+  String get messageType => type == EventTypes.Sticker
+      ? MessageTypes.Sticker
+      : (content.tryGet<String>('msgtype') ?? MessageTypes.Text);
+
+  void setRedactionEvent(Event redactedBecause) {
+    unsigned = {'redacted_because': redactedBecause.toJson()};
+    _originalSource = null;
+    final contentKeyWhiteList = <String>[];
+    switch (type) {
+      case EventTypes.RoomMember:
+        contentKeyWhiteList.add('membership');
+        break;
+      case EventTypes.RoomCreate:
+        contentKeyWhiteList.add('creator');
+        break;
+      case EventTypes.RoomJoinRules:
+        contentKeyWhiteList.add('join_rule');
+        break;
+      case EventTypes.RoomPowerLevels:
+        contentKeyWhiteList.add('ban');
+        contentKeyWhiteList.add('events');
+        contentKeyWhiteList.add('events_default');
+        contentKeyWhiteList.add('kick');
+        contentKeyWhiteList.add('redact');
+        contentKeyWhiteList.add('state_default');
+        contentKeyWhiteList.add('users');
+        contentKeyWhiteList.add('users_default');
+        break;
+      case EventTypes.RoomAliases:
+        contentKeyWhiteList.add('aliases');
+        break;
+      case EventTypes.HistoryVisibility:
+        contentKeyWhiteList.add('history_visibility');
+        break;
+      default:
+        break;
+    }
+    content.removeWhere((k, v) => !contentKeyWhiteList.contains(k));
+  }
+
+  /// Returns the body of this event if it has a body.
+  String get text => content.tryGet<String>('body') ?? '';
+
+  /// Returns the formatted boy of this event if it has a formatted body.
+  String get formattedText => content.tryGet<String>('formatted_body') ?? '';
+
+  /// Use this to get the body.
+  String get body {
+    if (redacted) return 'Redacted';
+    if (text != '') return text;
+    return 'Unknown message format of type "$type"';
+  }
+
+  /// Use this to get a plain-text representation of the event, stripping things
+  /// like spoilers and thelike. Useful for plain text notifications.
+  String get plaintextBody => switch (formattedText) {
+    // if the formattedText is empty, fallback to body
+    '' => body,
+    final String s when content['format'] == 'org.matrix.custom.html' =>
+      HtmlToText.convert(s),
+    _ => body,
+  };
+
+  /// Returns a list of [Receipt] instances for this event.
+  List<Receipt> get receipts {
+    final room = this.room;
+    final receipts = room.receiptState;
+    final receiptsList = receipts.global.otherUsers.entries
+        .where((entry) => entry.value.eventId == eventId)
+        .map(
+          (entry) => Receipt(
+            room.unsafeGetUserFromMemoryOrFallback(entry.key),
+            entry.value.timestamp,
+          ),
+        )
+        .toList();
+
+    // add your own only once
+    final own =
+        receipts.global.latestOwnReceipt ??
+        receipts.mainThread?.latestOwnReceipt;
+    if (own != null && own.eventId == eventId) {
+      receiptsList.add(
+        Receipt(
+          room.unsafeGetUserFromMemoryOrFallback(room.client.userID!),
+          own.timestamp,
+        ),
+      );
+    }
+
+    // also add main thread. https://github.com/famedly/product-management/issues/1020
+    // also deduplicate.
+    receiptsList.addAll(
+      receipts.mainThread?.otherUsers.entries
+              .where(
+                (entry) =>
+                    entry.value.eventId == eventId &&
+                    receiptsList.every(
+                      (element) => element.user.id != entry.key,
+                    ),
+              )
+              .map(
+                (entry) => Receipt(
+                  room.unsafeGetUserFromMemoryOrFallback(entry.key),
+                  entry.value.timestamp,
+                ),
+              ) ??
+          [],
+    );
+
+    return receiptsList;
+  }
+
+  @Deprecated('Use [cancelSend()] instead.')
+  Future<bool> remove() async {
+    try {
+      await cancelSend();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Removes an unsent or yet-to-send event from the database and timeline.
+  /// These are events marked with the status `SENDING` or `ERROR`.
+  /// Throws an exception if used for an already sent event!
+  ///
+  Future<void> cancelSend() async {
+    if (status.isSent) {
+      throw Exception('Can only delete events which are not sent yet!');
+    }
+
+    await room.client.database.removeEvent(eventId, room.id);
+
+    if (room.lastEvent != null && room.lastEvent!.eventId == eventId) {
+      final redactedBecause = Event.fromMatrixEvent(
+        MatrixEvent(
+          type: EventTypes.Redaction,
+          content: {'redacts': eventId},
+          redacts: eventId,
+          senderId: senderId,
+          eventId: '${eventId}_cancel_send',
+          originServerTs: DateTime.now(),
+        ),
+        room,
+      );
+
+      await room.client.handleSync(
+        SyncUpdate(
+          nextBatch: '',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(events: [redactedBecause]),
+              ),
+            },
+          ),
+        ),
+      );
+    }
+    room.client.onCancelSendEvent.add(eventId);
+  }
+
+  /// The name a thumbnail of the file [filename] is stored under. Only gets a
+  /// file extension if the mimetype of the thumbnail is actually known,
+  /// instead of guessing one.
+  String _thumbnailFileName(String filename) {
+    final extension = extensionFromMime(thumbnailMimetype);
+    return '$filename.thumbnail${extension == null ? '' : '.$extension'}';
+  }
+
+  Future<MatrixFile?> _getCachedFile({bool getThumbnail = false}) async {
+    if (transactionId == null) return null;
+
+    final filename = content.tryGet<String>('filename')!;
+
+    if (getThumbnail) {
+      final thumbnailBytes = await room.client.database.getFile(
+        Uri(scheme: 'cache', host: 'thumbnail', path: transactionId),
+      );
+      if (thumbnailBytes != null) {
+        return MatrixImageFile(
+          bytes: thumbnailBytes,
+          name: _thumbnailFileName(filename),
+          mimeType: thumbnailMimetype,
+          width: thumbnailInfoMap.tryGet<int>('w'),
+          height: thumbnailInfoMap.tryGet<int>('h'),
+          blurhash: thumbnailInfoMap.tryGet<String>('xyz.amorgan.blurhash'),
+        );
+      }
+
+      // If a thumbnail does not exist, we should return null.
+      // Otherwise it sends the original file as a thumbnail back.
+      return null;
+    }
+
+    final fileBytes = await room.client.database.getFile(
+      Uri(scheme: 'cache', host: 'file', path: transactionId),
+    );
+    if (fileBytes == null) {
+      await cancelSend();
+      throw Exception('Can not try to send again. File is no longer cached.');
+    }
+    return switch (messageType) {
+      MessageTypes.Video => MatrixVideoFile(
+        bytes: fileBytes,
+        name: filename,
+        mimeType: attachmentMimetype,
+        duration: infoMap.tryGet<int>('duration'),
+        width: infoMap.tryGet<int>('w'),
+        height: infoMap.tryGet<int>('h'),
+      ),
+      MessageTypes.Audio => MatrixAudioFile(
+        bytes: fileBytes,
+        name: filename,
+        mimeType: attachmentMimetype,
+        duration: infoMap.tryGet<int>('duration'),
+      ),
+      MessageTypes.Image => MatrixImageFile(
+        bytes: fileBytes,
+        name: filename,
+        mimeType: attachmentMimetype,
+        width: infoMap.tryGet<int>('w'),
+        height: infoMap.tryGet<int>('h'),
+        blurhash: infoMap.tryGet<String>('xyz.amorgan.blurhash'),
+      ),
+      MessageTypes.File || _ => MatrixFile(
+        bytes: fileBytes,
+        name: filename,
+        mimeType: attachmentMimetype,
+      ),
+    };
+  }
+
+  /// Try to send this event again. Only works with events of status -1.
+  /// If this is a file event and the file was not uploaded yet and the file is
+  /// not found in the cache locally, this throws a
+  /// `FileNoLongerInCacheException`.
+  Future<String?> sendAgain({String? txid}) async {
+    if (!status.isError) return null;
+
+    // Retry sending a file:
+    if ({
+      MessageTypes.Image,
+      MessageTypes.Video,
+      MessageTypes.Audio,
+      MessageTypes.File,
+    }.contains(messageType)) {
+      final file = await _getCachedFile();
+      final thumbnail = await _getCachedFile(getThumbnail: true);
+      if (file == null) throw FileNoLongerInCacheException();
+
+      final credentials = FileSendRequestCredentials.fromJson(unsigned ?? {});
+      final inReplyTo = credentials.inReplyTo == null
+          ? null
+          : await room.getEventById(credentials.inReplyTo!);
+      return await room.sendFileEvent(
+        file,
+        txid: txid ?? transactionId,
+        thumbnail: thumbnail as MatrixImageFile?,
+        inReplyTo: inReplyTo,
+        editEventId: credentials.editEventId,
+        shrinkImageMaxDimension: credentials.shrinkImageMaxDimension,
+        extraContent: credentials.extraContent,
+      );
+    }
+
+    // we do not remove the event here. It will automatically be updated
+    // in the `sendEvent` method to transition -1 -> 0 -> 1 -> 2
+    return await room.sendEvent(
+      content,
+      txid: txid ?? transactionId ?? eventId,
+    );
+  }
+
+  /// Whether the client is allowed to redact this event.
+  bool get canRedact => senderId == room.client.userID || room.canRedact;
+
+  /// Redacts this event. Throws `ErrorResponse` on error.
+  Future<String?> redactEvent({
+    String? reason,
+    String? txid,
+    bool redactAllEdits = false,
+  }) => room.redactEvent(
+    eventId,
+    reason: reason,
+    txid: txid,
+    redactAllEdits: redactAllEdits,
+  );
+
+  /// Searches for the reply event in the given timeline. Also returns the
+  /// event fallback if the relationship type is `m.thread`.
+  /// https://spec.matrix.org/v1.14/client-server-api/#fallback-for-unthreaded-clients
+  Future<Event?> getReplyEvent(Timeline timeline) async {
+    final relationshipEventId = content
+        .tryGetMap<String, Object?>('m.relates_to')
+        ?.tryGetMap<String, Object?>('m.in_reply_to')
+        ?.tryGet<String>('event_id');
+    return relationshipEventId == null
+        ? null
+        : await timeline.getEventById(relationshipEventId);
+  }
+
+  /// If this event is encrypted and the decryption was not successful because
+  /// the session is unknown, this requests the session key from other devices
+  /// in the room. If the event is not encrypted or the decryption failed because
+  /// of a different error, this throws an exception.
+  Future<void> requestKey() async {
+    if (type != EventTypes.Encrypted ||
+        messageType != MessageTypes.BadEncrypted ||
+        content['can_request_session'] != true) {
+      throw ('Session key not requestable');
+    }
+
+    final sessionId = content.tryGet<String>('session_id');
+    final senderKey = content.tryGet<String>('sender_key');
+    if (sessionId == null || senderKey == null) {
+      throw ('Unknown session_id or sender_key');
+    }
+    await room.requestSessionKey(sessionId, senderKey);
+    return;
+  }
+
+  /// Gets the info map of file events, or a blank map if none present
+  Map<String, Object?> get infoMap =>
+      content.tryGetMap<String, Object?>('info') ?? <String, Object?>{};
+
+  /// Gets the thumbnail info map of file events, or a blank map if nonepresent
+  Map<String, Object?> get thumbnailInfoMap =>
+      infoMap.tryGetMap<String, Object?>('thumbnail_info') ??
+      <String, Object?>{};
+
+  /// Returns if a file event has an attachment
+  bool get hasAttachment => content['url'] is String || content['file'] is Map;
+
+  /// Returns if a file event has a thumbnail
+  bool get hasThumbnail =>
+      infoMap['thumbnail_url'] is String || infoMap['thumbnail_file'] is Map;
+
+  /// Returns if a file events attachment is encrypted
+  bool get isAttachmentEncrypted => content['file'] is Map;
+
+  /// Returns if a file events thumbnail is encrypted
+  bool get isThumbnailEncrypted => infoMap['thumbnail_file'] is Map;
+
+  /// Gets the mimetype of the attachment of a file event, or a blank string if not present
+  String get attachmentMimetype =>
+      infoMap.tryGet<String>('mimetype')?.toLowerCase() ??
+      content
+          .tryGetMap<String, Object?>('file')
+          ?.tryGet<String>('mimetype')
+          ?.toLowerCase() ??
+      '';
+
+  /// Gets the mimetype of the thumbnail of a file event, or a blank string if not present
+  String get thumbnailMimetype =>
+      thumbnailInfoMap.tryGet<String>('mimetype')?.toLowerCase() ??
+      infoMap
+          .tryGetMap<String, Object?>('thumbnail_file')
+          ?.tryGet<String>('mimetype')
+          ?.toLowerCase() ??
+      '';
+
+  /// Gets the underlying mxc url of an attachment of a file event, or null if not present
+  Uri? get attachmentMxcUrl {
+    final url = isAttachmentEncrypted
+        ? (content.tryGetMap<String, Object?>('file')?['url'])
+        : content['url'];
+    return url is String ? Uri.tryParse(url) : null;
+  }
+
+  /// Gets the underlying mxc url of a thumbnail of a file event, or null if not present
+  Uri? get thumbnailMxcUrl => Uri.tryParse(
+    isThumbnailEncrypted
+        ? (infoMap
+                  .tryGetMap<String, Object?>('thumbnail_file')
+                  ?.tryGet<String>('url') ??
+              '')
+        : (infoMap.tryGet<String>('thumbnail_url') ?? ''),
+  );
+
+  /// Gets the mxc url of an attachment/thumbnail of a file event, taking sizes into account, or null if not present
+  Uri? attachmentOrThumbnailMxcUrl({bool getThumbnail = false}) {
+    final fileSize = infoMap.tryGet<int>('size');
+    final thumbnailFileSize = thumbnailInfoMap.tryGet<int>('size');
+    // Only images can fall back to their original bytes as a preview, so the
+    // size-based discard must not apply to other types like m.video.
+    if (getThumbnail &&
+        messageType == MessageTypes.Image &&
+        fileSize != null &&
+        thumbnailFileSize != null &&
+        fileSize <= thumbnailFileSize) {
+      getThumbnail = false;
+    }
+    if (getThumbnail && !hasThumbnail) {
+      getThumbnail = false;
+    }
+    return getThumbnail ? thumbnailMxcUrl : attachmentMxcUrl;
+  }
+
+  // size determined from an approximate 800x800 jpeg thumbnail with method=scale
+  static const _minNoThumbSize = 80 * 1024;
+
+  /// Gets the attachment https URL to display in the timeline, taking into account if the original image is tiny.
+  /// Returns null for encrypted rooms, if the image can't be fetched via http url or if the event does not contain an attachment.
+  /// Set [getThumbnail] to true to fetch the thumbnail, set [width], [height] and [method]
+  /// for the respective thumbnailing properties.
+  /// [minNoThumbSize] is the minimum size that an original image may be to not fetch its thumbnail, defaults to 80k
+  /// [useThumbnailMxcUrl] says weather to use the mxc url of the thumbnail, rather than the original attachment.
+  ///  [animated] says weather the thumbnail is animated
+  ///
+  /// Throws an exception if the scheme is not `mxc` or the homeserver is not
+  /// set.
+  ///
+  /// Scanner and authenticated media URLs may need an authorization header:
+  /// `headers: {"authorization": "Bearer ${client.accessToken}"}`
+  Future<Uri?> getAttachmentUri({
+    bool getThumbnail = false,
+    bool useThumbnailMxcUrl = false,
+    double width = 800.0,
+    double height = 800.0,
+    ThumbnailMethod method = ThumbnailMethod.scale,
+    int minNoThumbSize = _minNoThumbSize,
+    bool animated = false,
+    bool skipScanner = false,
+  }) async {
+    if (![EventTypes.Message, EventTypes.Sticker].contains(type) ||
+        !hasAttachment ||
+        isAttachmentEncrypted) {
+      return null; // can't url-thumbnail in encrypted rooms
+    }
+    if (useThumbnailMxcUrl && !hasThumbnail) {
+      return null; // can't fetch from thumbnail
+    }
+    final thisInfoMap = useThumbnailMxcUrl ? thumbnailInfoMap : infoMap;
+    final thisMxcUrl = useThumbnailMxcUrl
+        ? infoMap.tryGet<String>('thumbnail_url')
+        : content.tryGet<String>('url');
+    if (thisMxcUrl == null) return null;
+
+    // if we have as method scale, we can return safely the original image, should it be small enough
+    final thisInfoMapSize = thisInfoMap.tryGet<int>('size');
+    if (getThumbnail &&
+        method == ThumbnailMethod.scale &&
+        thisInfoMapSize != null &&
+        thisInfoMapSize < minNoThumbSize) {
+      getThumbnail = false;
+    }
+    // now generate the actual URLs
+    if (getThumbnail) {
+      return await Uri.parse(thisMxcUrl).getThumbnailUri(
+        room.client,
+        width: width,
+        height: height,
+        method: method,
+        animated: animated,
+        skipScanner: skipScanner,
+      );
+    } else {
+      return await Uri.parse(
+        thisMxcUrl,
+      ).getDownloadUri(room.client, skipScanner: skipScanner);
+    }
+  }
+
+  /// Gets the attachment https URL to display in the timeline, taking into account if the original image is tiny.
+  /// Returns null for encrypted rooms, if the image can't be fetched via http url or if the event does not contain an attachment.
+  /// Set [getThumbnail] to true to fetch the thumbnail, set [width], [height] and [method]
+  /// for the respective thumbnailing properties.
+  /// [minNoThumbSize] is the minimum size that an original image may be to not fetch its thumbnail, defaults to 80k
+  /// [useThumbnailMxcUrl] says weather to use the mxc url of the thumbnail, rather than the original attachment.
+  ///  [animated] says weather the thumbnail is animated
+  ///
+  /// Throws an exception if the scheme is not `mxc` or the homeserver is not
+  /// set.
+  ///
+  /// Deprecated: scanner-unaware. Use [getAttachmentUri] instead.
+  ///
+  /// This URL may need an authorization header:
+  /// `headers: {"authorization": "Bearer ${client.accessToken}"}`
+  @Deprecated(
+    'Use getAttachmentUri() instead. This legacy helper is scanner-unaware.',
+  )
+  Uri? getAttachmentUrl({
+    bool getThumbnail = false,
+    bool useThumbnailMxcUrl = false,
+    double width = 800.0,
+    double height = 800.0,
+    ThumbnailMethod method = ThumbnailMethod.scale,
+    int minNoThumbSize = _minNoThumbSize,
+    bool animated = false,
+  }) {
+    if (![EventTypes.Message, EventTypes.Sticker].contains(type) ||
+        !hasAttachment ||
+        isAttachmentEncrypted) {
+      return null; // can't url-thumbnail in encrypted rooms
+    }
+    if (useThumbnailMxcUrl && !hasThumbnail) {
+      return null; // can't fetch from thumbnail
+    }
+    final thisInfoMap = useThumbnailMxcUrl ? thumbnailInfoMap : infoMap;
+    final thisMxcUrl = useThumbnailMxcUrl
+        ? infoMap.tryGet<String>('thumbnail_url')
+        : content.tryGet<String>('url');
+    if (thisMxcUrl == null) return null;
+    // if we have as method scale, we can return safely the original image, should it be small enough
+    final thisInfoMapSize = thisInfoMap.tryGet<int>('size');
+    if (getThumbnail &&
+        method == ThumbnailMethod.scale &&
+        thisInfoMapSize != null &&
+        thisInfoMapSize < minNoThumbSize) {
+      getThumbnail = false;
+    }
+    // now generate the actual URLs
+    if (getThumbnail) {
+      return Uri.parse(thisMxcUrl).getThumbnail(
+        room.client,
+        width: width,
+        height: height,
+        method: method,
+        animated: animated,
+      );
+    } else {
+      return Uri.parse(thisMxcUrl).getDownloadLink(room.client);
+    }
+  }
+
+  /// Returns if an attachment is in the local store
+  Future<bool> isAttachmentInLocalStore({bool getThumbnail = false}) async {
+    if (![EventTypes.Message, EventTypes.Sticker].contains(type)) {
+      throw ("This event has the type '$type' and so it can't contain an attachment.");
+    }
+    final mxcUrl = attachmentOrThumbnailMxcUrl(getThumbnail: getThumbnail);
+    if (mxcUrl == null) {
+      throw "This event hasn't any attachment or thumbnail.";
+    }
+    getThumbnail = mxcUrl != attachmentMxcUrl;
+    // Is this file storeable?
+    final thisInfoMap = getThumbnail ? thumbnailInfoMap : infoMap;
+    final database = room.client.database;
+
+    final thisInfoMapSize = thisInfoMap.tryGet<int>('size');
+    final storeable =
+        thisInfoMapSize != null && thisInfoMapSize <= database.maxFileSize;
+
+    Uint8List? uint8list;
+    if (storeable) {
+      uint8list = await database.getFile(mxcUrl);
+    }
+    return uint8list != null;
+  }
+
+  /// Downloads (and decrypts if necessary) the attachment of this
+  /// event and returns it as a [MatrixFile]. If this event doesn't
+  /// contain an attachment, this throws an error. Set [getThumbnail] to
+  /// true to download the thumbnail instead. Set [fromLocalStoreOnly] to true
+  /// if you want to retrieve the attachment from the local store only without
+  /// making http request.
+  ///
+  /// With `Client.contentScannerConfig`, network downloads use the scanner.
+  /// Scanner errors throw [ContentScannerException]. For encrypted scanner
+  /// downloads, [downloadCallback] is ignored.
+  Future<MatrixFile> downloadAndDecryptAttachment({
+    bool getThumbnail = false,
+    Future<Uint8List> Function(Uri)? downloadCallback,
+    bool fromLocalStoreOnly = false,
+    bool skipScanner = false,
+    bool cacheAttachment = true,
+
+    /// Callback which gets triggered on progress containing the amount of
+    /// downloaded bytes.
+    void Function(int)? onDownloadProgress,
+  }) async {
+    if (![EventTypes.Message, EventTypes.Sticker].contains(type)) {
+      throw ("This event has the type '$type' and so it can't contain an attachment.");
+    }
+    await room.client.authorizeAttachmentAccess?.call(this, getThumbnail);
+    if (!status.isSent && cacheAttachment) {
+      final localFile = await _getCachedFile(getThumbnail: getThumbnail);
+      if (localFile != null) return localFile;
+    }
+    final database = room.client.database;
+    final mxcUrl = attachmentOrThumbnailMxcUrl(getThumbnail: getThumbnail);
+    if (mxcUrl == null) {
+      throw "This event hasn't any attachment or thumbnail.";
+    }
+    getThumbnail = mxcUrl != attachmentMxcUrl;
+    final isEncrypted = getThumbnail
+        ? isThumbnailEncrypted
+        : isAttachmentEncrypted;
+    if (isEncrypted && !room.client.encryptionEnabled) {
+      throw ('Encryption is not enabled in your Client.');
+    }
+
+    // Is this file storeable?
+    final thisInfoMap = getThumbnail ? thumbnailInfoMap : infoMap;
+    final thisInfoMapSize = thisInfoMap.tryGet<int>('size');
+    var storeable =
+        cacheAttachment &&
+        thisInfoMapSize != null &&
+        thisInfoMapSize <= database.maxFileSize;
+    Uint8List? uint8list;
+    if (storeable) {
+      uint8list = await room.client.database.getFile(mxcUrl);
+    }
+
+    // Download the file
+    final scanner = skipScanner ? null : room.client.contentScannerConfig;
+    final useScannerForEncrypted = scanner != null && isEncrypted;
+    final canDownloadFileFromServer = uint8list == null && !fromLocalStoreOnly;
+    if (canDownloadFileFromServer) {
+      if (useScannerForEncrypted) {
+        final fileMap = getThumbnail
+            ? infoMap.tryGetMap<String, Object?>('thumbnail_file')
+            : content.tryGetMap<String, Object?>('file');
+        if (fileMap == null) throw ('No encrypted file info found');
+
+        uint8list = await _downloadEncryptedAttachmentViaScanner(
+          scanner: scanner,
+          fileMap: fileMap,
+        );
+      } else {
+        final downloadUri = await mxcUrl.getDownloadUri(
+          room.client,
+          skipScanner: skipScanner,
+        );
+        if (downloadCallback != null) {
+          uint8list = await downloadCallback(downloadUri);
+        } else {
+          uint8list = await _downloadAttachmentBytes(
+            downloadUri,
+            scanner: scanner,
+            onDownloadProgress: onDownloadProgress,
+          );
+        }
+      }
+      storeable = storeable && uint8list.lengthInBytes < database.maxFileSize;
+      if (storeable) {
+        await database.storeFile(
+          mxcUrl,
+          uint8list,
+          DateTime.now().millisecondsSinceEpoch,
+        );
+      }
+    } else if (uint8list == null) {
+      throw ('Unable to download file from local store.');
+    }
+
+    // Scanner downloads still return encrypted media bytes.
+    if (isEncrypted) {
+      final fileMap = getThumbnail
+          ? infoMap.tryGetMap<String, Object?>('thumbnail_file')
+          : content.tryGetMap<String, Object?>('file');
+      if (fileMap == null) throw ('No encrypted file info found');
+      if (fileMap
+              .tryGetMap<String, Object?>('key')
+              ?.tryGetList<String>('key_ops')
+              ?.contains('decrypt') !=
+          true) {
+        throw ("Missing 'decrypt' in 'key_ops'.");
+      }
+      final encryptedFile = EncryptedFile(
+        data: uint8list,
+        iv: fileMap.tryGet<String>('iv')!,
+        k: fileMap.tryGetMap<String, Object?>('key')!.tryGet<String>('k')!,
+        sha256: fileMap
+            .tryGetMap<String, Object?>('hashes')!
+            .tryGet<String>('sha256')!,
+      );
+      uint8list = await room.client.nativeImplementations.decryptFile(
+        encryptedFile,
+      );
+      if (uint8list == null) {
+        throw ('Unable to decrypt file');
+      }
+    }
+
+    final useThumbnail = getThumbnail && hasThumbnail;
+    final filename = content.tryGet<String>('filename') ?? body;
+
+    return MatrixFile(
+      bytes: uint8list,
+      name: useThumbnail ? _thumbnailFileName(filename) : filename,
+      mimeType: useThumbnail ? thumbnailMimetype : attachmentMimetype,
+    );
+  }
+
+  Future<Uint8List> _downloadEncryptedAttachmentViaScanner({
+    required MatrixContentScannerConfig scanner,
+    required Map<String, Object?> fileMap,
+  }) async {
+    final request = http.Request('POST', scanner.downloadEncryptedUri);
+    request.headers['content-type'] = 'application/json';
+    if (scanner.withAuthHeader) {
+      request.headers['authorization'] = 'Bearer ${room.client.accessToken}';
+    }
+    request.body = jsonEncode({'file': fileMap});
+
+    final streamed = await room.client.httpClient.send(request);
+    final response = await http.Response.fromStream(streamed);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw parseContentScannerError(response);
+    }
+
+    return response.bodyBytes;
+  }
+
+  Future<Uint8List> _downloadAttachmentBytes(
+    Uri url, {
+    required MatrixContentScannerConfig? scanner,
+    void Function(int)? onDownloadProgress,
+  }) async {
+    final request = http.Request('GET', url);
+    if (scanner == null || scanner.withAuthHeader) {
+      request.headers['authorization'] = 'Bearer ${room.client.accessToken}';
+    }
+
+    final response = await room.client.httpClient.send(request);
+    if (scanner != null &&
+        (response.statusCode < 200 || response.statusCode >= 300)) {
+      throw parseContentScannerError(await http.Response.fromStream(response));
+    }
+    if (scanner == null && response.statusCode >= 400) {
+      room.client.unexpectedResponse(response, await response.stream.toBytes());
+    }
+
+    return response.stream.toBytesWithProgress(onDownloadProgress);
+  }
+
+  /// Returns if this is a known event type.
+  bool get isEventTypeKnown =>
+      EventLocalizations.localizationsMap.containsKey(type);
+
+  /// Returns a localized String representation of this event. For a
+  /// room list you may find [withSenderNamePrefix] useful. Set [hideReply] to
+  /// crop all lines starting with '>'. With [plaintextBody] it'll use the
+  /// plaintextBody instead of the normal body which in practice will convert
+  /// the html body to a plain text body before falling back to the body. In
+  /// either case this function won't return the html body without converting
+  /// it to plain text.
+  /// [removeMarkdown] allow to remove the markdown formating from the event body.
+  /// Usefull form message preview or notifications text.
+  Future<String> calcLocalizedBody(
+    MatrixLocalizations i18n, {
+    bool withSenderNamePrefix = false,
+    bool hideReply = false,
+    bool hideEdit = false,
+    bool plaintextBody = false,
+    bool removeMarkdown = false,
+  }) async {
+    if (redacted) {
+      await redactedBecause?.fetchSenderUser();
+    }
+
+    if (withSenderNamePrefix &&
+        (type == EventTypes.Message || type.contains(EventTypes.Encrypted))) {
+      // To be sure that if the event need to be localized, the user is in memory.
+      // used by EventLocalizations._localizedBodyNormalMessage
+      await fetchSenderUser();
+    }
+
+    return calcLocalizedBodyFallback(
+      i18n,
+      withSenderNamePrefix: withSenderNamePrefix,
+      hideReply: hideReply,
+      hideEdit: hideEdit,
+      plaintextBody: plaintextBody,
+      removeMarkdown: removeMarkdown,
+    );
+  }
+
+  @Deprecated('Use calcLocalizedBody or calcLocalizedBodyFallback')
+  String getLocalizedBody(
+    MatrixLocalizations i18n, {
+    bool withSenderNamePrefix = false,
+    bool hideReply = false,
+    bool hideEdit = false,
+    bool plaintextBody = false,
+    bool removeMarkdown = false,
+  }) => calcLocalizedBodyFallback(
+    i18n,
+    withSenderNamePrefix: withSenderNamePrefix,
+    hideReply: hideReply,
+    hideEdit: hideEdit,
+    plaintextBody: plaintextBody,
+    removeMarkdown: removeMarkdown,
+  );
+
+  /// Works similar to `calcLocalizedBody()` but does not wait for the sender
+  /// user to be fetched. If it is not in the cache it will just use the
+  /// fallback and display the localpart of the MXID according to the
+  /// values of `formatLocalpart` and `mxidLocalPartFallback` in the `Client`
+  /// class.
+  String calcLocalizedBodyFallback(
+    MatrixLocalizations i18n, {
+    bool withSenderNamePrefix = false,
+    bool hideReply = false,
+    bool hideEdit = false,
+    bool plaintextBody = false,
+    bool removeMarkdown = false,
+  }) {
+    final redactedBecause = this.redactedBecause;
+    if (redactedBecause != null) {
+      if (status.intValue < EventStatus.synced.intValue) {
+        return i18n.cancelledSend;
+      }
+      return i18n.removedBy(redactedBecause);
+    }
+
+    final body = calcUnlocalizedBody(
+      hideReply: hideReply,
+      hideEdit: hideEdit,
+      plaintextBody: plaintextBody,
+      removeMarkdown: removeMarkdown,
+    );
+
+    final callback = EventLocalizations.localizationsMap[type];
+    var localizedBody = i18n.unknownEvent(type);
+    if (callback != null) {
+      localizedBody = callback(this, i18n, body);
+    }
+
+    // Add the sender name prefix
+    if (withSenderNamePrefix &&
+        type == EventTypes.Message &&
+        textOnlyMessageTypes.contains(messageType)) {
+      final senderNameOrYou = senderId == room.client.userID
+          ? i18n.you
+          : senderFromMemoryOrFallback.calcDisplayname(i18n: i18n);
+      localizedBody = '$senderNameOrYou: $localizedBody';
+    }
+
+    return localizedBody;
+  }
+
+  /// Calculating the body of an event regardless of localization.
+  String calcUnlocalizedBody({
+    bool hideReply = false,
+    bool hideEdit = false,
+    bool plaintextBody = false,
+    bool removeMarkdown = false,
+  }) {
+    if (redacted) {
+      return 'Removed by ${senderFromMemoryOrFallback.displayName ?? senderId}';
+    }
+    var body = plaintextBody ? this.plaintextBody : this.body;
+
+    // Html messages will already have their reply fallback removed during the Html to Text conversion.
+    var mayHaveReplyFallback =
+        !plaintextBody ||
+        (content['format'] != 'org.matrix.custom.html' ||
+            formattedText.isEmpty);
+
+    // If we have an edit, we want to operate on the new content
+    final newContent = content.tryGetMap<String, Object?>('m.new_content');
+    if (hideEdit &&
+        relationshipType == RelationshipTypes.edit &&
+        newContent != null) {
+      final newBody = newContent.tryGet<String>(
+        'formatted_body',
+        TryGet.silent,
+      );
+      if (plaintextBody &&
+          newContent['format'] == 'org.matrix.custom.html' &&
+          newBody != null &&
+          newBody.isNotEmpty) {
+        mayHaveReplyFallback = false;
+        body = HtmlToText.convert(newBody);
+      } else {
+        mayHaveReplyFallback = true;
+        body = newContent.tryGet<String>('body') ?? body;
+      }
+    }
+    // Hide reply fallback
+    // Be sure that the plaintextBody already stripped teh reply fallback,
+    // if the message is formatted
+    if (hideReply && mayHaveReplyFallback) {
+      body = body.replaceFirst(
+        RegExp(r'^>( \*)? <[^>]+>[^\n\r]+\r?\n(> [^\n]*\r?\n)*\r?\n'),
+        '',
+      );
+    }
+
+    // return the html tags free body
+    if (removeMarkdown == true) {
+      final html = markdown(body, convertLinebreaks: false);
+      final document = parse(html);
+      body = document.documentElement?.text.trim() ?? body;
+    }
+    return body;
+  }
+
+  static const Set<String> textOnlyMessageTypes = {
+    MessageTypes.Text,
+    MessageTypes.Notice,
+    MessageTypes.Emote,
+    MessageTypes.None,
+  };
+
+  /// returns if this event matches the passed event or transaction id
+  bool matchesEventOrTransactionId(String? search) {
+    if (search == null) {
+      return false;
+    }
+    if (eventId == search) {
+      return true;
+    }
+    return transactionId == search;
+  }
+
+  /// Get the relationship type of an event. `null` if there is none.
+  String? get relationshipType => content
+      .tryGetMap<String, Object?>('m.relates_to')
+      ?.tryGet<String>('rel_type');
+
+  /// Get the event ID that this relationship will reference and `null` if there
+  /// is none. This could for example be the thread root, the original event for
+  /// an edit or the event, this is an reaction for. For replies please use
+  /// `Event.inReplyToEventId()` instead!
+  String? get relationshipEventId => content
+      .tryGetMap<String, Object?>('m.relates_to')
+      ?.tryGet<String>('event_id');
+
+  /// If this event is in reply to another event, this returns the event ID or
+  /// null if this event is not a reply.
+  String? inReplyToEventId({bool includingFallback = true}) {
+    final isFallback = content
+        .tryGetMap<String, Object?>('m.relates_to')
+        ?.tryGet<bool>('is_falling_back');
+    if (isFallback == true && !includingFallback) return null;
+    return content
+        .tryGetMap<String, Object?>('m.relates_to')
+        ?.tryGetMap<String, Object?>('m.in_reply_to')
+        ?.tryGet<String>('event_id');
+  }
+
+  /// Get whether this event has aggregated events from a certain [type]
+  /// To be able to do that you need to pass a [timeline]
+  bool hasAggregatedEvents(Timeline timeline, String type) =>
+      timeline.aggregatedEvents[eventId]?.containsKey(type) == true;
+
+  /// Get all the aggregated event objects for a given [type]. To be able to do this
+  /// you have to pass a [timeline]
+  Set<Event> aggregatedEvents(Timeline timeline, String type) =>
+      timeline.aggregatedEvents[eventId]?[type] ?? <Event>{};
+
+  /// Fetches the event to be rendered, taking into account all the edits and the like.
+  /// It needs a [timeline] for that.
+  Event getDisplayEvent(Timeline timeline) {
+    if (redacted) {
+      return this;
+    }
+    if (hasAggregatedEvents(timeline, RelationshipTypes.edit)) {
+      // alright, we have an edit
+      final allEditEvents = aggregatedEvents(timeline, RelationshipTypes.edit)
+          // we only allow edits made by the original author themself
+          .where((e) => e.senderId == senderId && e.type == EventTypes.Message)
+          .toList();
+      // we need to check again if it isn't empty, as we potentially removed all
+      // aggregated edits
+      if (allEditEvents.isNotEmpty) {
+        allEditEvents.sort(
+          (a, b) =>
+              a.originServerTs.millisecondsSinceEpoch -
+                      b.originServerTs.millisecondsSinceEpoch >
+                  0
+              ? 1
+              : -1,
+        );
+        final rawEvent = allEditEvents.last.toJson();
+        // update the content of the new event to render
+        if (rawEvent['content']['m.new_content'] is Map) {
+          rawEvent['content'] = rawEvent['content']['m.new_content'];
+        }
+        return Event.fromJson(rawEvent, room);
+      }
+    }
+    return this;
+  }
+
+  /// returns if a message is a rich message
+  bool get isRichMessage =>
+      content['format'] == 'org.matrix.custom.html' &&
+      content['formatted_body'] is String;
+
+  // regexes to fetch the number of emotes, including emoji, and if the message consists of only those
+  // to match an emoji we can use the following regularly updated regex : https://stackoverflow.com/a/67705964
+  // to see if there is a custom emote, we use the following regex: <img[^>]+data-mx-(?:emote|emoticon)(?==|>|\s)[^>]*>
+  // now we combined the two to have four regexes and one helper:
+  // 0. the raw components
+  //   - the pure unicode sequence from the link above and
+  //   - the padded sequence with whitespace, option selection and copyright/tm sign
+  //   - the matrix emoticon sequence
+  // 1. are there only emoji, or whitespace
+  // 2. are there only emoji, emotes, or whitespace
+  // 3. count number of emoji
+  // 4. count number of emoji or emotes
+
+  // update from : https://stackoverflow.com/a/67705964
+  static const _unicodeSequences =
+      r'\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff]';
+  // the above sequence but with copyright, trade mark sign and option selection
+  static const _paddedUnicodeSequence =
+      r'(?:\u00a9|\u00ae|' + _unicodeSequences + r')[\ufe00-\ufe0f]?';
+  // should match a <img> tag with the matrix emote/emoticon attribute set
+  static const _matrixEmoticonSequence =
+      r'<img[^>]+data-mx-(?:emote|emoticon)(?==|>|\s)[^>]*>';
+
+  static final RegExp _onlyEmojiRegex = RegExp(
+    r'^(' + _paddedUnicodeSequence + r'|\s)*$',
+    caseSensitive: false,
+    multiLine: false,
+  );
+  static final RegExp _onlyEmojiEmoteRegex = RegExp(
+    r'^(' + _paddedUnicodeSequence + r'|' + _matrixEmoticonSequence + r'|\s)*$',
+    caseSensitive: false,
+    multiLine: false,
+  );
+  static final RegExp _countEmojiRegex = RegExp(
+    r'(' + _paddedUnicodeSequence + r')',
+    caseSensitive: false,
+    multiLine: false,
+  );
+  static final RegExp _countEmojiEmoteRegex = RegExp(
+    r'(' + _paddedUnicodeSequence + r'|' + _matrixEmoticonSequence + r')',
+    caseSensitive: false,
+    multiLine: false,
+  );
+
+  /// Returns if a given event only has emotes, emojis or whitespace as content.
+  /// If the body contains a reply then it is stripped.
+  /// This is useful to determine if stand-alone emotes should be displayed bigger.
+  bool get onlyEmotes {
+    if (isRichMessage) {
+      // calcUnlocalizedBody strips out the <img /> tags in favor of a :placeholder:
+      final formattedTextStripped = formattedText.replaceAll(
+        RegExp(
+          '<mx-reply>.*</mx-reply>',
+          caseSensitive: false,
+          multiLine: false,
+          dotAll: true,
+        ),
+        '',
+      );
+      return _onlyEmojiEmoteRegex.hasMatch(formattedTextStripped);
+    } else {
+      return _onlyEmojiRegex.hasMatch(plaintextBody);
+    }
+  }
+
+  /// Gets the number of emotes in a given message. This is useful to determine
+  /// if the emotes should be displayed bigger.
+  /// If the body contains a reply then it is stripped.
+  /// WARNING: This does **not** test if there are only emotes. Use `event.onlyEmotes` for that!
+  int get numberEmotes {
+    if (isRichMessage) {
+      // calcUnlocalizedBody strips out the <img /> tags in favor of a :placeholder:
+      final formattedTextStripped = formattedText.replaceAll(
+        RegExp(
+          '<mx-reply>.*</mx-reply>',
+          caseSensitive: false,
+          multiLine: false,
+          dotAll: true,
+        ),
+        '',
+      );
+      return _countEmojiEmoteRegex.allMatches(formattedTextStripped).length;
+    } else {
+      return _countEmojiRegex.allMatches(plaintextBody).length;
+    }
+  }
+
+  /// If this event is in Status SENDING and it aims to send a file, then this
+  /// shows the status of the file sending.
+  FileSendingStatus? get fileSendingStatus {
+    final status = unsigned?.tryGet<String>(fileSendingStatusKey);
+    if (status == null) return null;
+    return FileSendingStatus.values.singleWhereOrNull(
+      (fileSendingStatus) => fileSendingStatus.name == status,
+    );
+  }
+
+  /// Returns the mentioned userIds and whether the event includes an @room
+  /// mention. This is only determined by the `m.mention` object in the event
+  /// content.
+  ({List<String> userIds, bool room}) get mentions {
+    final mentionsMap = content.tryGetMap<String, Object?>('m.mentions');
+    return (
+      userIds: mentionsMap?.tryGetList<String>('user_ids') ?? [],
+      room: mentionsMap?.tryGet<bool>('room') ?? false,
+    );
+  }
+}
+
+enum FileSendingStatus { generatingThumbnail, encrypting, uploading }
+
+class FileNoLongerInCacheException implements Exception {}
