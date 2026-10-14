@@ -6,7 +6,7 @@
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/device_settings/device_settings.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'user_device_list_item.dart';
@@ -24,7 +24,7 @@ class DevicesSettingsView extends StatelessWidget {
         centerTitle: FluffyThemes.isColumnMode(context),
         title: Text(L10n.of(context).devices),
       ),
-      body: MaxWidthBody(
+      body: NotionSettingsBody(
         child: FutureBuilder<bool>(
           future: controller.loadUserDevices(context),
           builder: (BuildContext context, snapshot) {

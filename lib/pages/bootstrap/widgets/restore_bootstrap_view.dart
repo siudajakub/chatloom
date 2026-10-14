@@ -68,7 +68,7 @@ class RestoreBootstrapView extends StatelessWidget {
                   ? L10n.of(context).waitingForKeys
                   : viewModel.value.noSecretsreceived
                   ? L10n.of(context).noKeysTransmitted
-                  : L10n.of(context).restoreBootstrapDevicesDescription,
+                  : 'Verification is requested automatically. Accept it in your existing client or use your existing recovery key. The list below shows your devices; it does not select one.',
 
               style: TextStyle(fontSize: 14),
             ),

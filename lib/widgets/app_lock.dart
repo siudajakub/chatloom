@@ -1,3 +1,7 @@
+import 'package:fluffychat/personal/privacy.dart';
+import 'dart:async';
+import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
+import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
 // SPDX-FileCopyrightText: 2019-Present Christian Kußowski
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 //
@@ -44,6 +48,10 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
     _useBiometrics = widget.useBiometrics;
     _pincode = widget.pincode;
     _isLocked = isActive;
+    PersonalPrivacy.surfaceUnlocked = !_isLocked;
+    if(!_isLocked && WidgetsBinding.instance.lifecycleState==AppLifecycleState.resumed) {
+      RoundPlaybackCoordinator.shared.resume();
+    }
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback(_checkLoggedIn);
@@ -56,11 +64,23 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
     await changePincode(null);
     setState(() {
       _isLocked = false;
+      PersonalPrivacy.surfaceUnlocked = true;
     });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    PersonalPrivacy.surfaceForeground = state == AppLifecycleState.resumed;
+    if (state != AppLifecycleState.resumed) {
+      unawaited(
+        RoundPlaybackCoordinator.shared.stopAll().catchError((Object _) {}),
+      );
+      unawaited(
+        RoundCaptureController.interruptActive().catchError((Object _) {}),
+      );
+    } else if (!_isLocked) {
+      RoundPlaybackCoordinator.shared.resume();
+    }
     if (isActive && state == AppLifecycleState.hidden && !_isLocked) {
       showLockScreen();
     }
@@ -103,6 +123,8 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
     if (unlocked) {
       setState(() {
         _isLocked = false;
+        PersonalPrivacy.surfaceUnlocked = true;
+        RoundPlaybackCoordinator.shared.resume();
         _triedAutoBiometrics = false;
       });
     }
@@ -114,14 +136,28 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
     if (isCorrect) {
       setState(() {
         _isLocked = false;
+        PersonalPrivacy.surfaceUnlocked = true;
+        RoundPlaybackCoordinator.shared.resume();
       });
     }
     return isCorrect;
   }
 
   void showLockScreen() => setState(() {
+    PersonalPrivacy.surfaceUnlocked = false;
+    unawaited(
+      RoundPlaybackCoordinator.shared.stopAll().catchError((Object _) {}),
+    );
+    unawaited(
+      RoundCaptureController.interruptActive().catchError((Object _) {}),
+    );
     _isLocked = true;
   });
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   Future<T> pauseWhile<T>(Future<T> future) async {
     _paused = true;
