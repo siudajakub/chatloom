@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: 2019-Present Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import '../../../matrix.dart';
+
+class CallParticipant {
+  final VoIP voip;
+  final String userId;
+  final String? deviceId;
+
+  CallParticipant(this.voip, {required this.userId, this.deviceId});
+
+  bool get isLocal =>
+      userId == voip.client.userID && deviceId == voip.client.deviceID;
+
+  String get id {
+    var pid = userId;
+    if (deviceId != null) {
+      pid += ':$deviceId';
+    }
+    return pid;
+  }
+
+  @override
+  String toString() {
+    return id;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is CallParticipant &&
+          userId == other.userId &&
+          deviceId == other.deviceId);
+
+  @override
+  int get hashCode => Object.hash(userId.hashCode, deviceId.hashCode);
+}
