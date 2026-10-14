@@ -1,0 +1,288 @@
+// SPDX-FileCopyrightText: 2019-Present, 2021 Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'dart:typed_data';
+
+import '../../encryption/utils/olm_session.dart';
+import '../../encryption/utils/outbound_group_session.dart';
+import '../../encryption/utils/ssss_cache.dart';
+import '../../encryption/utils/stored_inbound_group_session.dart';
+import '../../matrix.dart';
+import '../utils/queued_to_device_event.dart';
+
+abstract class DatabaseApi {
+  int get maxFileSize => 1 * 1000 * 1000;
+
+  bool get supportsFileStoring => false;
+
+  Future<Map<String, dynamic>?> getClient(String name);
+
+  Future updateClient(
+    String homeserverUrl,
+    String token,
+    DateTime? tokenExpiresAt,
+    String? refreshToken,
+    String userId,
+    String? deviceId,
+    String? deviceName,
+    String? prevBatch,
+    String? olmAccount,
+    String? oidcClientId,
+  );
+
+  Future insertClient(
+    String name,
+    String homeserverUrl,
+    String token,
+    DateTime? tokenExpiresAt,
+    String? refreshToken,
+    String userId,
+    String? deviceId,
+    String? deviceName,
+    String? prevBatch,
+    String? olmAccount,
+    String? oidcClientId,
+  );
+
+  Future<List<Room>> getRoomList(Client client);
+
+  Future<Room?> getSingleRoom(
+    Client client,
+    String roomId, {
+    bool loadImportantStates = true,
+  });
+
+  Future<Map<String, BasicEvent>> getAccountData();
+
+  /// Stores a RoomUpdate object in the database. Must be called inside of
+  /// [transaction].
+  Future<void> storeRoomUpdate(
+    String roomId,
+    SyncRoomUpdate roomUpdate,
+    Event? lastEvent,
+    Client client,
+  );
+
+  Future<void> deleteTimelineForRoom(String roomId);
+
+  /// Stores an EventUpdate object in the database. Must be called inside of
+  /// [transaction].
+  Future<void> storeEventUpdate(
+    String roomId,
+    StrippedStateEvent event,
+    EventUpdateType type,
+    Client client,
+  );
+
+  Future<Event?> getEventById(String eventId, Room room);
+
+  Future<void> forgetRoom(String roomId);
+
+  Future<CachedProfileInformation?> getUserProfile(String userId);
+
+  Future<void> storeUserProfile(
+    String userId,
+    CachedProfileInformation profile,
+  );
+
+  Future<void> markUserProfileAsOutdated(String userId);
+
+  Future<void> clearCache();
+
+  Future<void> clear();
+
+  Future<User?> getUser(String userId, Room room);
+
+  Future<List<User>> getUsers(Room room);
+
+  Future<List<Event>> getEventList(
+    Room room, {
+    int start = 0,
+    bool onlySending = false,
+    int? limit,
+  });
+
+  Future<List<String>> getEventIdList(
+    Room room, {
+    int start = 0,
+    bool includeSending = false,
+    int? limit,
+  });
+
+  /// Get a file from the app's file cache which is usually an mxcUri. This is
+  /// also used for caching not-yet-sent files. Those are cached under an Uri
+  /// with this format:
+  /// `cache://file/<TRANSACTION_ID>` or `cache://thumbnail/<TRANSACTION_ID>`
+  Future<Uint8List?> getFile(Uri mxcUri);
+
+  Future storeFile(Uri mxcUri, Uint8List bytes, int time);
+
+  Future<bool> deleteFile(Uri mxcUri);
+
+  Future storeSyncFilterId(String syncFilterId);
+
+  Future storeAccountData(String type, Map<String, Object?> content);
+
+  Future storeRoomAccountData(String roomId, BasicEvent event);
+
+  Future<Map<String, DeviceKeysList>> getUserDeviceKeys(Client client);
+
+  Future<SSSSCache?> getSSSSCache(String type);
+
+  Future<OutboundGroupSession?> getOutboundGroupSession(
+    String roomId,
+    String userId,
+  );
+
+  Future<List<StoredInboundGroupSession>> getAllInboundGroupSessions();
+
+  Future<StoredInboundGroupSession?> getInboundGroupSession(
+    String roomId,
+    String sessionId,
+  );
+
+  Future updateInboundGroupSessionIndexes(
+    String indexes,
+    String roomId,
+    String sessionId,
+  );
+
+  Future storeInboundGroupSession(
+    String roomId,
+    String sessionId,
+    String pickle,
+    String content,
+    String indexes,
+    String allowedAtIndex,
+    String senderKey,
+    String senderClaimedKey,
+  );
+
+  Future markInboundGroupSessionAsUploaded(String roomId, String sessionId);
+
+  Future updateInboundGroupSessionAllowedAtIndex(
+    String allowedAtIndex,
+    String roomId,
+    String sessionId,
+  );
+
+  Future removeOutboundGroupSession(String roomId);
+
+  Future storeOutboundGroupSession(
+    String roomId,
+    String pickle,
+    String deviceIds,
+    int creationTime,
+  );
+
+  Future updateClientKeys(String olmAccount);
+
+  Future storeOlmSession(
+    String identityKey,
+    String sessionId,
+    String pickle,
+    int lastReceived,
+  );
+
+  Future setLastSentMessageUserDeviceKey(
+    String lastSentMessage,
+    String userId,
+    String deviceId,
+  );
+
+  Future clearSSSSCache();
+
+  Future storeSSSSCache(
+    String type,
+    String keyId,
+    String ciphertext,
+    String content,
+  );
+
+  Future markInboundGroupSessionsAsNeedingUpload();
+
+  Future storePrevBatch(String prevBatch);
+
+  Future deleteOldFiles(int savedAt);
+
+  Future deleteFromToDeviceQueue(int id);
+
+  Future removeEvent(String eventId, String roomId);
+
+  Future setRoomPrevBatch(String? prevBatch, String roomId, Client client);
+
+  Future<List<Event>> getUnimportantRoomEventStatesForRoom(
+    List<String> events,
+    Room room,
+  );
+
+  Future<List<OlmSession>> getOlmSessions(String identityKey, String userId);
+
+  Future<Map<String, Map>> getAllOlmSessions();
+
+  Future<List<OlmSession>> getOlmSessionsForDevices(
+    List<String> identityKeys,
+    String userId,
+  );
+
+  Future<List<QueuedToDeviceEvent>> getToDeviceEventQueue();
+
+  /// Please do `jsonEncode(content)` in your code to stay compatible with
+  /// auto generated methods here.
+  Future insertIntoToDeviceQueue(String type, String txnId, String content);
+
+  Future<void> removeLastSentMessageUserDeviceKey(
+    String userId,
+    String deviceId,
+  );
+
+  Future<List<String>> getLastSentMessageUserDeviceKey(
+    String userId,
+    String deviceId,
+  );
+
+  Future<List<StoredInboundGroupSession>> getInboundGroupSessionsToUpload();
+
+  Future<void> addSeenDeviceId(
+    String userId,
+    String deviceId,
+    String publicKeys,
+  );
+
+  Future<void> addSeenPublicKey(String publicKey, String deviceId);
+
+  Future<String?> deviceIdSeen(String userId, String deviceId);
+
+  Future<String?> publicKeySeen(String publicKey);
+
+  Future<dynamic> close();
+
+  Future<void> transaction(Future<void> Function() action);
+
+  Future<String> exportDump();
+
+  Future<bool> importDump(String export);
+
+  Future<void> storePresence(String userId, CachedPresence presence);
+
+  Future<CachedPresence?> getPresence(String userId);
+
+  Future<void> cacheCustomObject(String cacheKey, Map<String, Object?> object);
+
+  Future<({Map<String, Object?> content, DateTime savedAt})?>
+  getCustomCacheObject(String cacheKey);
+
+  /// Deletes the whole database. The database needs to be created again after
+  /// this.
+  Future<void> delete();
+
+  Future<void> storeLatestReceiptState(
+    String roomId,
+    LatestReceiptState receiptState,
+  );
+
+  Future<DeviceKeysList?> getDeviceKeysList(String userId, Client client);
+
+  Future<void> storeDeviceKeysList(DeviceKeysList deviceKeysList);
+}

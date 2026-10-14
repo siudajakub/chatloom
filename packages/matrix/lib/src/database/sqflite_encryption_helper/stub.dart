@@ -1,0 +1,55 @@
+// SPDX-FileCopyrightText: 2019-Present Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'package:sqflite_common/sqlite_api.dart';
+
+/// A helper utility for SQfLite related encryption operations
+///
+/// * helps loading the required dynamic libraries - even on cursed systems
+/// * migrates unencrypted SQLite databases to SQLCipher
+/// * applies the PRAGMA key to a database and ensure it is properly loading
+class SQfLiteEncryptionHelper {
+  /// the factory to use for all SQfLite operations
+  final DatabaseFactory factory;
+
+  /// the path of the database
+  final String path;
+
+  /// the (supposed) PRAGMA key of the database
+  final String cipher;
+
+  const SQfLiteEncryptionHelper({
+    required this.factory,
+    required this.path,
+    required this.cipher,
+  });
+
+  /// checks whether the database exists and is encrypted
+  ///
+  /// In case it is not encrypted, the file is being migrated
+  /// to SQLCipher and encrypted using the given cipher and checks
+  /// whether that operation was successful
+  Future<void> ensureDatabaseFileEncrypted() async =>
+      throw UnimplementedError();
+
+  /// Optional: Call this method to clean up free database pages e.g. on every
+  /// client start or after a `clearCache()`.
+  Future<void> ensureIncrementalAutoVacuum(Database database) async =>
+      throw UnimplementedError();
+
+  /// safely applies the PRAGMA key to a [Database]
+  ///
+  /// To be directly used as [OpenDatabaseOptions.onConfigure].
+  ///
+  /// * ensures PRAGMA is supported by the given [database]
+  /// * applies [cipher] as PRAGMA key
+  /// * checks whether this operation was successful
+  Future<void> applyPragmaKey(
+    Database database, {
+
+    /// (Optional) ensures incremental auto vacuum to clean up free database
+    /// pages e.g. after a `Database.clearCache()`.
+    bool ensureIncrementalAutoVacuum = false,
+  }) async => throw UnimplementedError();
+}
