@@ -1,39 +1,41 @@
-// SPDX-FileCopyrightText: 2019-Present Christian Kußowski
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
-//
 // SPDX-License-Identifier: AGPL-3.0-or-later
-
-import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:async/async.dart';
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
-import 'package:fluffychat/pages/chat_list/dummy_chat_list_item.dart';
-import 'package:fluffychat/pages/chat_list/search_title.dart';
+import 'package:fluffychat/pages/chat_list/client_chooser_button.dart';
 import 'package:fluffychat/pages/chat_list/space_view.dart';
+import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/organization_page.dart';
+import 'package:fluffychat/personal/personal_hub.dart';
+import 'package:fluffychat/personal/personal_search_page.dart';
+import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
+import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
+import 'package:fluffychat/personal/ui/notion_search_controls.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/stream_extension.dart';
+import 'package:fluffychat/utils/sync_status_localization.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/public_room_dialog.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:fluffychat/widgets/matrix.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
-import '../../config/themes.dart';
-import '../../widgets/adaptive_dialogs/user_dialog.dart';
-import '../../widgets/matrix.dart';
-import 'chat_list_header.dart';
-
 class ChatListViewBody extends StatelessWidget {
   final ChatListController controller;
-
   const ChatListViewBody(this.controller, {super.key});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     final client = Matrix.of(context).client;
     final activeSpace = controller.activeSpaceId;
-    if (activeSpace != null) {
+    if (activeSpace != null)
       return SpaceView(
         key: ValueKey(activeSpace),
         spaceId: activeSpace,
@@ -41,221 +43,279 @@ class ChatListViewBody extends StatelessWidget {
         onChatTab: controller.onChatTap,
         activeChat: controller.activeChat,
       );
-    }
-    final spaces = client.rooms.where((r) => r.isSpace);
-    final spaceDelegateCandidates = <String, Room>{};
+    final spaces = client.rooms.where((room) => room.isSpace);
+    final delegated = <String, Room>{};
     for (final space in spaces) {
-      for (final spaceChild in space.spaceChildren) {
-        final roomId = spaceChild.roomId;
-        if (roomId == null) continue;
-        spaceDelegateCandidates[roomId] = space;
+      for (final child in space.spaceChildren) {
+        if (child.roomId != null) delegated[child.roomId!] = space;
       }
     }
-
-    final publicRooms = controller.roomSearchResult?.chunk
-        .where((room) => room.roomType != 'm.space')
-        .toList();
-    final publicSpaces = controller.roomSearchResult?.chunk
-        .where((room) => room.roomType == 'm.space')
-        .toList();
-    final userSearchResult = controller.userSearchResult;
-    const dummyChatCount = 4;
-    final filter = controller.searchController.text.toLowerCase();
-    return StreamBuilder(
-      key: ValueKey(client.userID.toString()),
-      stream: client.onSync.stream
-          .where((s) => s.hasRoomUpdate)
-          .rateLimit(const Duration(seconds: 1)),
+    return StreamBuilder<Object>(
+      key: ValueKey(client.clientName),
+      stream: StreamGroup.merge<Object>([
+        client.onSync.stream.where((s) => s.hasRoomUpdate),
+        client.onSyncStatus.stream,
+        controller.personal.changes,
+      ]).rateLimit(const Duration(milliseconds: 200)),
       builder: (context, _) {
+        final projection = InboxProjection(controller.personal);
         final rooms = controller.filteredRooms
             .where(
               (room) =>
                   !AppSettings.hideRoomsInSpaces.value ||
-                  spaceDelegateCandidates[room.id] == null,
+                  delegated[room.id] == null,
             )
             .toList();
-
-        return CustomScrollView(
-          controller: controller.scrollController,
-          slivers: [
-            ChatListHeader(controller: controller),
-            SliverList(
-              delegate: SliverChildListDelegate([
-                if (controller.isSearchMode) ...[
-                  SearchTitle(
-                    title: L10n.of(context).publicRooms,
-                    icon: const Icon(Icons.explore_outlined),
+        final pins = rooms
+            .where((room) => projection.metadataFor(room).isPinned)
+            .map(
+              (room) => NotionPinnedShortcut(
+                name: projection.displayName(room),
+                avatar: notionInboxAvatar(
+                  controller.personal,
+                  projection,
+                  room,
+                  size: 28,
+                ),
+                onTap: () => controller.onChatTap(room),
+                onLongPress: () => controller.chatContextAction(
+                  room,
+                  context,
+                  delegated[room.id],
+                ),
+                order: projection.metadataFor(room).pinOrder!,
+                isGroup: !room.isDirectChat,
+              ),
+            )
+            .toList();
+        final status = client.onSyncStatus.value;
+        final failed = status?.status == SyncStatus.error;
+        return NotionInboxPage(
+          scrollController: controller.scrollController,
+          rows: rooms
+              .map(
+                (room) => ChatListItem(
+                  room,
+                  space: delegated[room.id],
+                  key: ValueKey('chat_list_item_${room.id}'),
+                  onTap: () => controller.onChatTap(room),
+                  onLongPress: (posContext) => controller.chatContextAction(
+                    room,
+                    posContext,
+                    delegated[room.id],
                   ),
-                  PublicRoomsHorizontalList(publicRooms: publicRooms),
-                  SearchTitle(
-                    title: L10n.of(context).publicSpaces,
-                    icon: const Icon(Icons.workspaces_outlined),
-                  ),
-                  PublicRoomsHorizontalList(publicRooms: publicSpaces),
-                  SearchTitle(
-                    title: L10n.of(context).users,
-                    icon: const Icon(Icons.group_outlined),
-                  ),
-                  AnimatedContainer(
-                    clipBehavior: Clip.hardEdge,
-                    decoration: const BoxDecoration(),
-                    height:
-                        userSearchResult == null ||
-                            userSearchResult.results.isEmpty
-                        ? 0
-                        : 106,
-                    duration: FluffyThemes.animationDuration,
-                    curve: FluffyThemes.animationCurve,
-                    child: userSearchResult == null
-                        ? null
-                        : ListView.builder(
-                            scrollDirection: Axis.horizontal,
-                            itemCount: userSearchResult.results.length,
-                            itemBuilder: (context, i) => _SearchItem(
-                              title:
-                                  userSearchResult.results[i].displayName ??
-                                  userSearchResult
-                                      .results[i]
-                                      .userId
-                                      .localpart ??
-                                  L10n.of(context).unknownDevice,
-                              avatar: userSearchResult.results[i].avatarUrl,
-                              onPressed: () => UserDialog.show(
-                                context: context,
-                                profile: userSearchResult.results[i],
-                              ),
-                            ),
-                          ),
-                  ),
-                ],
-                if (client.rooms.isNotEmpty && !controller.isSearchMode)
-                  Container(
-                    height: 36 + 8 + 8,
-                    padding: EdgeInsets.symmetric(vertical: 8),
-                    child: ListView(
-                      padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                      shrinkWrap: true,
-                      scrollDirection: Axis.horizontal,
-                      children: [
-                        ...ActiveFilter.values
-                            .where((filter) => filter != ActiveFilter.tag)
-                            .map(
-                              (filter) => Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 4.0,
-                                ),
-                                child: Center(
-                                  child: FilterChip(
-                                    selected: filter == controller.activeFilter,
-                                    onSelected: (_) => controller
-                                        .setActiveFilter(filter, null),
-                                    label: Text(
-                                      filter.toLocalizedString(context),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ...controller.roomTags.entries.map(
-                          (entry) => Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 4.0,
-                            ),
-                            child: Center(
-                              child: FilterChip(
-                                selected: entry.key == controller.activeTag,
-                                onSelected: (_) => controller.setActiveFilter(
-                                  ActiveFilter.tag,
-                                  entry.key,
-                                ),
-                                label: Text(entry.key.replaceFirst('u.', '')),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                if (controller.isSearchMode)
-                  SearchTitle(
-                    title: L10n.of(context).chats,
-                    icon: const Icon(Icons.forum_outlined),
-                  ),
-                if (client.prevBatch != null &&
-                    rooms.isEmpty &&
-                    !controller.isSearchMode) ...[
-                  Column(
-                    mainAxisAlignment: .center,
+                  activeChat: controller.activeChat == room.id,
+                ),
+              )
+              .toList(),
+          pins: pins,
+          loading: client.prevBatch == null && !failed,
+          emptyMessage: controller.searchController.text.trim().isNotEmpty
+              ? 'No matching chats in the current view. Try another name or change the filter.'
+              : controller.selectedNetwork != null
+              ? 'No chats from this network in the current view.'
+              : controller.personalFilter != InboxFilter.inbox ||
+                    controller.activeFilter != ActiveFilter.allChats
+              ? 'No chats in this view. Change the inbox filter to see other conversations.'
+              : 'No chats yet. Start a new chat.',
+          status: failed
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
                     children: [
-                      Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          const Column(
-                            mainAxisSize: .min,
-                            children: [
-                              DummyChatListItem(opacity: 0.5, animate: false),
-                              DummyChatListItem(opacity: 0.3, animate: false),
-                            ],
-                          ),
-                          Icon(
-                            CupertinoIcons.chat_bubble_text_fill,
-                            size: 128,
-                            color: theme.colorScheme.secondary,
-                          ),
-                        ],
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(16.0),
+                      const Icon(Icons.cloud_off_outlined, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
                         child: Text(
-                          client.rooms.isEmpty
-                              ? L10n.of(context).noChatsFoundHere
-                              : L10n.of(context).noMoreChatsFound,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 18,
-                            color: theme.colorScheme.secondary,
-                          ),
+                          '${status!.calcLocalizedString(context)}. Showing loaded chats.',
+                          style: const TextStyle(fontSize: 12, height: 1.4),
                         ),
+                      ),
+                      TextButton(
+                        onPressed: () => showFutureLoadingDialog(
+                          context: context,
+                          future: () =>
+                              client.oneShotSync(timeout: Duration.zero),
+                        ),
+                        child: const Text('Retry'),
                       ),
                     ],
                   ),
-                ],
-              ]),
-            ),
-            if (client.prevBatch == null)
-              SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (context, i) => DummyChatListItem(
-                    opacity: (dummyChatCount - i) / dummyChatCount,
-                    animate: true,
-                  ),
-                  childCount: dummyChatCount,
-                ),
-              ),
-            if (client.prevBatch != null)
-              SliverSafeArea(
-                top: false,
-                sliver: SliverList.builder(
-                  itemCount: rooms.length,
-                  itemBuilder: (BuildContext context, int i) {
-                    final room = rooms[i];
-                    final space = spaceDelegateCandidates[room.id];
-                    return ChatListItem(
-                      room,
-                      space: space,
-                      key: Key('chat_list_item_${room.id}'),
-                      filter: filter,
-                      onTap: () => controller.onChatTap(room),
-                      onLongPress: (context) =>
-                          controller.chatContextAction(room, context, space),
-                      activeChat: controller.activeChat == room.id,
-                    );
-                  },
-                ),
-              ),
-          ],
+                )
+              : null,
+          onCompose: () => context.go('/rooms/newprivatechat'),
+          onSettings: () => context.go('/rooms/settings'),
+          onSearch: controller.startSearch,
+          networks: controller.availableNetworks,
+          selectedNetwork: controller.selectedNetwork,
+          onNetworkSelected: controller.setNetwork,
+          searchTools: controller.isSearchMode
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    NotionInboxSearch(
+                      controller: controller.searchController,
+                      focusNode: controller.searchFocusNode,
+                      onChanged: controller.onSearchEnter,
+                      onClose: controller.cancelSearch,
+                      searchingPublic: controller.isSearching,
+                      onHistorySearch: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              PersonalSearchPage(personal: controller.personal),
+                        ),
+                      ),
+                      onPublicDiscovery: controller.discoverPublic,
+                      options: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextButton.icon(
+                            onPressed: () => _showOptions(context),
+                            icon: const Icon(Icons.tune, size: 18),
+                            label: const Text('Inbox view'),
+                          ),
+                          ClientChooserButton(controller),
+                        ],
+                      ),
+                    ),
+                    if (controller.publicDiscovery) _publicResults(context),
+                  ],
+                )
+              : null,
         );
       },
+    );
+  }
+
+  void _showOptions(BuildContext context) => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) => SafeArea(
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Inbox view', style: NotionTokens.heading),
+              const SizedBox(height: 12),
+              PersonalInboxFilters(
+                personal: controller.personal,
+                value: controller.personalFilter,
+                labelKey: controller.personalLabel,
+                onChanged: (filter, label) {
+                  controller.setPersonalFilter(filter, label);
+                  Navigator.of(context).pop();
+                },
+              ),
+              Wrap(
+                children: [
+                  for (final filter in ActiveFilter.values.where(
+                    (f) => f != ActiveFilter.tag,
+                  ))
+                    TextButton(
+                      onPressed: () {
+                        controller.setActiveFilter(filter, null);
+                        Navigator.of(context).pop();
+                      },
+                      child: Text(filter.toLocalizedString(context)),
+                    ),
+                  for (final tag in controller.roomTags.keys)
+                    TextButton(
+                      onPressed: () {
+                        controller.setActiveFilter(ActiveFilter.tag, tag);
+                        Navigator.of(context).pop();
+                      },
+                      child: Text(tag.replaceFirst('u.', '')),
+                    ),
+                ],
+              ),
+              if (controller.spaces.isNotEmpty) ...[
+                const Divider(),
+                Text('Spaces', style: NotionTokens.heading),
+                for (final space in controller.spaces)
+                  TextButton.icon(
+                    onPressed: () {
+                      controller.setActiveSpace(space.id);
+                      Navigator.of(context).pop();
+                    },
+                    icon: const Icon(Icons.workspaces_outlined),
+                    label: Text(space.getLocalizedDisplayname()),
+                  ),
+              ],
+              const PersonalHubButton(),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _publicResults(BuildContext context) {
+    final publicRooms = controller.roomSearchResult?.chunk
+        .where((r) => r.roomType != 'm.space')
+        .toList();
+    final publicSpaces = controller.roomSearchResult?.chunk
+        .where((r) => r.roomType == 'm.space')
+        .toList();
+    final users = controller.userSearchResult?.results;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        Text('Public discovery', style: NotionTokens.heading),
+        Text(
+          'This query is sent to the selected homeserver directory.',
+          style: TextStyle(
+            fontSize: 12,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        TextButton.icon(
+          onPressed: controller.setServer,
+          icon: const Icon(Icons.edit_outlined, size: 16),
+          label: Text(
+            controller.searchServer ??
+                Matrix.of(context).client.homeserver?.host ??
+                'Choose homeserver',
+          ),
+        ),
+        if (!controller.isSearching &&
+            publicRooms?.isEmpty == true &&
+            publicSpaces?.isEmpty == true &&
+            users?.isEmpty == true)
+          const Text(
+            'No results in this directory. Other networks and message history were not searched.',
+          ),
+        if (publicRooms?.isNotEmpty == true) ...[
+          const Text('Public rooms'),
+          PublicRoomsHorizontalList(publicRooms: publicRooms),
+        ],
+        if (publicSpaces?.isNotEmpty == true) ...[
+          const Text('Public spaces'),
+          PublicRoomsHorizontalList(publicRooms: publicSpaces),
+        ],
+        if (users?.isNotEmpty == true) ...[
+          const Text('People'),
+          SizedBox(
+            height: 106,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: users!.length,
+              itemBuilder: (context, i) => _SearchItem(
+                title:
+                    users[i].displayName ??
+                    users[i].userId.localpart ??
+                    'Unknown name',
+                avatar: users[i].avatarUrl,
+                onPressed: () =>
+                    UserDialog.show(context: context, profile: users[i]),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

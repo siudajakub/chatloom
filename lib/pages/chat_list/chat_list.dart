@@ -11,8 +11,16 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
+import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/merged_chat_page.dart';
+import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/ui/notion_network_filter.dart';
+import 'package:fluffychat/personal/ui/notion_network_adapter.dart';
+import 'package:fluffychat/ui/notion/metadata_actions.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
+import 'package:fluffychat/utils/localized_exception_extension.dart'
+    show ExceptionContext;
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/show_scaffold_dialog.dart';
@@ -123,6 +131,16 @@ class ChatListController extends State<ChatList>
   }
 
   Future<void> onChatTap(Room room) async {
+    final group = InboxProjection(personal).groupFor(room);
+    if (group != null) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => MergedChatPage(personal: personal, group: group),
+        ),
+      );
+      return;
+    }
+
     final l10n = L10n.of(context);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     if (room.membership == Membership.invite) {
@@ -177,9 +195,61 @@ class ChatListController extends State<ChatList>
     }
   }
 
-  List<Room> get filteredRooms => Matrix.of(
-    context,
-  ).client.rooms.where(getRoomFilterByActiveFilter(activeFilter)).toList();
+  InboxFilter personalFilter = InboxFilter.inbox;
+  String? personalLabel;
+  PersonalClient get personal => PersonalClient.of(Matrix.of(context).client);
+  void setPersonalFilter(InboxFilter filter, String? label) => setState(() {
+    personalFilter = filter;
+    personalLabel = label;
+  });
+  final networkSelections = NotionAccountNetworkSelection();
+  String get inboxAccountKey =>
+      '${Matrix.of(context).client.clientName}:${Matrix.of(context).client.userID}';
+  String? get selectedNetwork => networkSelections.forAccount(inboxAccountKey);
+  void setNetwork(String? network) => setState(() {
+    networkSelections.select(inboxAccountKey, network);
+  });
+  List<Room> get visibleRooms => InboxProjection(personal)
+      .rooms(
+        Matrix.of(context).client.rooms,
+        filter: personalFilter,
+        query: searchController.text,
+        labelKey: personalLabel,
+      )
+      .where(getRoomFilterByActiveFilter(activeFilter))
+      .toList();
+  List<String> get availableNetworks {
+    final projection = InboxProjection(personal);
+    final networks = projection
+        .rooms(
+          Matrix.of(context).client.rooms,
+          filter: personalFilter,
+          labelKey: personalLabel,
+        )
+        .expand((room) => notionRoomNetworks(projection, room))
+        .toSet()
+        .toList();
+    networks.sort(
+      (a, b) => notionNetworkLabel(a).compareTo(notionNetworkLabel(b)),
+    );
+    return networks;
+  }
+
+  List<Room> get filteredRooms => InboxProjection(personal)
+      .rooms(
+        Matrix.of(context).client.rooms,
+        filter: personalFilter,
+        query: searchController.text,
+        labelKey: personalLabel,
+      )
+      .where(getRoomFilterByActiveFilter(activeFilter))
+      .where(
+        (room) => notionMatchesNetwork(
+          notionRoomNetworks(InboxProjection(personal), room),
+          selectedNetwork,
+        ),
+      )
+      .toList();
 
   bool isSearchMode = false;
   Future<QueryPublicRoomsResponse>? publicRoomsResponse;
@@ -189,6 +259,10 @@ class ChatListController extends State<ChatList>
   QueryPublicRoomsResponse? roomSearchResult;
 
   bool isSearching = false;
+  bool publicDiscovery = false;
+  int _searchGeneration = 0;
+  int _searchScrollGeneration = 0;
+  final Map<String, double> _preSearchInboxOffsets = {};
   static const String _serverStoreNamespace = 'im.fluffychat.search.server';
 
   Future<void> setServer() async {
@@ -211,11 +285,18 @@ class ChatListController extends State<ChatList>
     if (newServer == null) return;
     if (!mounted) return;
     matrix.store.setString(_serverStoreNamespace, newServer);
+    _searchGeneration++;
     setState(() {
       searchServer = newServer;
     });
     _coolDown?.cancel();
-    _coolDown = Timer(const Duration(milliseconds: 500), _search);
+    // Changing the server does not disclose a query until the explicit search.
+    setState(() {
+      roomSearchResult = null;
+      userSearchResult = null;
+      publicDiscovery = false;
+      isSearching = false;
+    });
   }
 
   final TextEditingController searchController = TextEditingController();
@@ -223,6 +304,7 @@ class ChatListController extends State<ChatList>
 
   Future<void> _search() async {
     final client = Matrix.of(context).client;
+    final generation = ++_searchGeneration;
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     if (!isSearching) {
       setState(() {
@@ -238,6 +320,11 @@ class ChatListController extends State<ChatList>
         filter: PublicRoomQueryFilter(genericSearchTerm: searchQuery),
         limit: 20,
       );
+      if (!mounted ||
+          generation != _searchGeneration ||
+          !publicDiscovery ||
+          client != Matrix.of(context).client)
+        return;
 
       if (searchQuery.isValidMatrixIdStrict() &&
           searchQuery.sigil == '#' &&
@@ -260,18 +347,36 @@ class ChatListController extends State<ChatList>
           );
         }
       }
+      if (!mounted ||
+          generation != _searchGeneration ||
+          !publicDiscovery ||
+          client != Matrix.of(context).client)
+        return;
       userSearchResult = await client.searchUserDirectory(
-        searchController.text,
+        searchQuery,
         limit: 20,
       );
-    } catch (e, s) {
-      Logs().w('Searching has crashed', e, s);
-      if (!mounted) return;
+    } catch (e) {
+      // Directory errors may embed the query or identifiers in their payload.
+      Logs().w('Public discovery failed (${e.runtimeType})');
+      if (!mounted ||
+          generation != _searchGeneration ||
+          client != Matrix.of(context).client)
+        return;
       scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text(e.toLocalizedString(context))),
+        const SnackBar(
+          content: Text(
+            'Public discovery could not be completed. Try again or choose another homeserver.',
+          ),
+        ),
       );
     }
-    if (!isSearchMode) return;
+    if (!mounted ||
+        !isSearchMode ||
+        !publicDiscovery ||
+        generation != _searchGeneration ||
+        client != Matrix.of(context).client)
+      return;
     setState(() {
       isSearching = false;
       this.roomSearchResult = roomSearchResult;
@@ -279,19 +384,26 @@ class ChatListController extends State<ChatList>
     });
   }
 
-  void onSearchEnter(String text, {bool globalSearch = true}) {
-    if (text.isEmpty) {
-      cancelSearch(unfocus: false);
-      return;
-    }
-
+  void onSearchEnter(String text, {bool globalSearch = false}) {
+    _rememberInboxPositionBeforeSearch();
+    _searchGeneration++;
+    _coolDown?.cancel();
     setState(() {
       isSearchMode = true;
+      publicDiscovery = false;
+      isSearching = false;
+      roomSearchResult = null;
+      userSearchResult = null;
     });
-    _coolDown?.cancel();
-    if (globalSearch) {
-      _coolDown = Timer(const Duration(milliseconds: 500), _search);
-    }
+  }
+
+  void discoverPublic() {
+    if (searchController.text.trim().isEmpty) return;
+    setState(() {
+      isSearchMode = true;
+      publicDiscovery = true;
+    });
+    _search();
   }
 
   void openNavrail() {
@@ -303,22 +415,57 @@ class ChatListController extends State<ChatList>
   }
 
   void startSearch() {
+    _rememberInboxPositionBeforeSearch();
     setState(() {
       isSearchMode = true;
     });
     searchFocusNode.requestFocus();
     _coolDown?.cancel();
-    _coolDown = Timer(const Duration(milliseconds: 500), _search);
   }
 
   void cancelSearch({bool unfocus = true}) {
+    final account = inboxAccountKey;
+    final originalOffset = isSearchMode
+        ? _preSearchInboxOffsets.remove(account)
+        : null;
+    final restoration = ++_searchScrollGeneration;
+    _searchGeneration++;
+    _coolDown?.cancel();
     setState(() {
       searchController.clear();
       isSearchMode = false;
       roomSearchResult = userSearchResult = null;
       isSearching = false;
+      publicDiscovery = false;
     });
     if (unfocus) searchFocusNode.unfocus();
+    if (originalOffset != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            restoration != _searchScrollGeneration ||
+            inboxAccountKey != account ||
+            isSearchMode ||
+            activeSpaceId != null ||
+            !scrollController.hasClients)
+          return;
+        final position = scrollController.position;
+        if (!position.hasContentDimensions) return;
+        scrollController.jumpTo(
+          originalOffset.clamp(
+            position.minScrollExtent,
+            position.maxScrollExtent,
+          ),
+        );
+      });
+    }
+  }
+
+  void _rememberInboxPositionBeforeSearch() {
+    if (isSearchMode) return;
+    _searchScrollGeneration++;
+    if (scrollController.hasClients && scrollController.position.hasPixels) {
+      _preSearchInboxOffsets[inboxAccountKey] = scrollController.offset;
+    }
   }
 
   BoxConstraints? snappingSheetContainerSize;
@@ -409,6 +556,38 @@ class ChatListController extends State<ChatList>
 
   StreamSubscription? _onRoomTagUpdate;
 
+  void _listenRoomTags(Client client) {
+    _onRoomTagUpdate?.cancel();
+    _onRoomTagUpdate = client.onSync.stream
+        .where(
+          (syncUpdate) =>
+              syncUpdate.rooms?.join?.values.any(
+                (roomUpdate) =>
+                    roomUpdate.accountData?.any(
+                      (accountData) => accountData.type == 'm.tag',
+                    ) ??
+                    false,
+              ) ??
+              false,
+        )
+        .listen(_updateRoomTags);
+  }
+
+  void _loadAccountInbox(Client client) {
+    PersonalClient.of(client)
+        .load()
+        .then((_) {
+          if (mounted && Matrix.of(context).client == client) setState(() {});
+        })
+        .catchError((Object error, StackTrace stack) {
+          if (!mounted || Matrix.of(context).client != client) return;
+          ErrorReporter(
+            context,
+            'Unable to load personal inbox',
+          ).onErrorCallback(error, stack);
+        });
+  }
+
   @override
   void initState() {
     _initReceiveSharingIntent();
@@ -444,19 +623,7 @@ class ChatListController extends State<ChatList>
     });
 
     _updateRoomTags();
-    _onRoomTagUpdate = Matrix.of(context).client.onSync.stream
-        .where(
-          (syncUpdate) =>
-              syncUpdate.rooms?.join?.values.any(
-                (roomUpdate) =>
-                    roomUpdate.accountData?.any(
-                      (accountData) => accountData.type == 'm.tag',
-                    ) ??
-                    false,
-              ) ??
-              false,
-        )
-        .listen(_updateRoomTags);
+    _listenRoomTags(Matrix.of(context).client);
 
     if (roomTags.containsKey(AppSettings.chatFilter.value)) {
       activeFilter = ActiveFilter.tag;
@@ -472,10 +639,13 @@ class ChatListController extends State<ChatList>
     _processPushHelperCrashReport();
 
     super.initState();
+    _loadAccountInbox(Matrix.of(context).client);
   }
 
   @override
   void dispose() {
+    _searchScrollGeneration++;
+    _coolDown?.cancel();
     _intentDataStreamSubscription?.cancel();
     _intentFileStreamSubscription?.cancel();
     _callEventSubscription?.cancel();
@@ -591,18 +761,23 @@ class ChatListController extends State<ChatList>
               ],
             ),
           ),
-          if (!room.isLowPriority)
+          if (NotionMetadataActions.canEdit(
+            personal,
+            InboxProjection(personal).entityFor(room),
+          ))
             PopupMenuItem(
               value: ChatContextAction.favorite,
               child: Row(
                 mainAxisSize: .min,
                 children: [
                   Icon(
-                    room.isFavourite ? Icons.push_pin : Icons.push_pin_outlined,
+                    InboxProjection(personal).metadataFor(room).isPinned
+                        ? Icons.push_pin
+                        : Icons.push_pin_outlined,
                   ),
                   const SizedBox(width: 12),
                   Text(
-                    room.isFavourite
+                    InboxProjection(personal).metadataFor(room).isPinned
                         ? L10n.of(context).unpin
                         : L10n.of(context).pin,
                   ),
@@ -741,7 +916,11 @@ class ChatListController extends State<ChatList>
       case ChatContextAction.favorite:
         await showFutureLoadingDialog(
           context: context,
-          future: () => room.setFavourite(!room.isFavourite),
+          future: () => NotionMetadataActions.setPinned(
+            personal,
+            InboxProjection(personal).entityFor(room),
+            !InboxProjection(personal).metadataFor(room).isPinned,
+          ),
         );
         return;
       case ChatContextAction.markUnread:
@@ -895,6 +1074,7 @@ class ChatListController extends State<ChatList>
     );
     if (input == null) return;
     if (!mounted) return;
+    if (!PersonalPrivacy.policy.allowOnlinePresence) return;
     await showFutureLoadingDialog(
       context: context,
       future: () => client.setPresence(
@@ -913,17 +1093,18 @@ class ChatListController extends State<ChatList>
     await client.roomsLoading;
     await client.accountDataLoading;
     await client.userDeviceKeysLoading;
+    if (!mounted || Matrix.of(context).client != client) return;
     if (client.prevBatch == null) {
       await client.onSyncStatus.stream.firstWhere(
         (status) => status.status == SyncStatus.finished,
       );
 
-      if (!mounted) return;
+      if (!mounted || Matrix.of(context).client != client) return;
       setState(() {
         waitForFirstSync = true;
       });
     }
-    if (!mounted) return;
+    if (!mounted || Matrix.of(context).client != client) return;
     setState(() {
       waitForFirstSync = true;
     });
@@ -971,19 +1152,45 @@ class ChatListController extends State<ChatList>
   }
 
   void setActiveClient(Client client) {
+    _searchScrollGeneration++;
+    _searchGeneration++;
+    _coolDown?.cancel();
     context.go('/rooms');
     setState(() {
       activeFilter = ActiveFilter.allChats;
+      personalFilter = InboxFilter.inbox;
+      personalLabel = null;
+      searchController.clear();
+      isSearchMode = false;
+      publicDiscovery = false;
+      isSearching = false;
+      roomSearchResult = null;
+      userSearchResult = null;
       _activeSpaceId = null;
       Matrix.of(context).setActiveClient(client);
     });
     _clientStream.add(client);
+    _listenRoomTags(client);
+    _updateRoomTags();
+    _loadAccountInbox(client);
+    _waitForFirstSync();
   }
 
   void setActiveBundle(String bundle) {
+    _searchScrollGeneration++;
+    _searchGeneration++;
+    _coolDown?.cancel();
     context.go('/rooms');
     setState(() {
       _activeSpaceId = null;
+      personalFilter = InboxFilter.inbox;
+      personalLabel = null;
+      searchController.clear();
+      isSearchMode = false;
+      publicDiscovery = false;
+      isSearching = false;
+      roomSearchResult = null;
+      userSearchResult = null;
       Matrix.of(context).activeBundle = bundle;
       if (!Matrix.of(
         context,
@@ -993,6 +1200,11 @@ class ChatListController extends State<ChatList>
         ).setActiveClient(Matrix.of(context).currentBundle!.first);
       }
     });
+    final client = Matrix.of(context).client;
+    _listenRoomTags(client);
+    _updateRoomTags();
+    _loadAccountInbox(client);
+    _waitForFirstSync();
   }
 
   Future<void> editBundlesForAccount(

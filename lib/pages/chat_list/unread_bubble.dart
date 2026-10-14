@@ -9,15 +9,18 @@ import 'package:matrix/matrix.dart';
 
 class UnreadBubble extends StatelessWidget {
   final Room room;
-  const UnreadBubble({required this.room, super.key});
+  final int? countOverride;
+  final bool? unreadOverride;
+  const UnreadBubble({required this.room,this.countOverride,this.unreadOverride,super.key});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final unread = room.isUnread;
-    final hasNotifications = room.notificationCount > 0;
+    final unread = unreadOverride ?? room.isUnread;
+    final count=countOverride ?? room.notificationCount;
+    final hasNotifications = count > 0;
     final unreadBubbleSize = unread || room.hasNewMessages
-        ? room.notificationCount > 0
+        ? count > 0
               ? 20.0
               : 14.0
         : 0.0;
@@ -29,7 +32,7 @@ class UnreadBubble extends StatelessWidget {
       height: unreadBubbleSize,
       width: !hasNotifications && !unread && !room.hasNewMessages
           ? 0
-          : (unreadBubbleSize - 9) * room.notificationCount.toString().length +
+          : (unreadBubbleSize - 9) * count.toString().length +
                 9,
       decoration: BoxDecoration(
         color: room.highlightCount > 0
@@ -41,7 +44,7 @@ class UnreadBubble extends StatelessWidget {
       ),
       child: hasNotifications || room.markedUnread
           ? Text(
-              room.notificationCount.toString(),
+              count.toString(),
               style: TextStyle(
                 color: room.highlightCount > 0
                     ? theme.colorScheme.onError
