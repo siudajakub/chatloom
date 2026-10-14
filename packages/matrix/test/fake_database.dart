@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: 2019, 2020 Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'dart:io';
+
+import 'package:matrix/matrix.dart';
+import 'package:path/path.dart' as path_joiner;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+Future<DatabaseApi> getDatabase({String? databasePath}) =>
+    getMatrixSdkDatabase(path: databasePath);
+
+// ignore: deprecated_member_use_from_same_package
+Future<MatrixSdkDatabase> getMatrixSdkDatabase({String? path}) async {
+  final directory = await Directory(
+    path_joiner.join(
+      Directory.current.path,
+      '.tmp_files',
+      DateTime.now().toIso8601String(),
+    ),
+  ).create(recursive: true);
+  return MatrixSdkDatabase.init(
+    'unit_test.${DateTime.now().millisecondsSinceEpoch}',
+    database: await databaseFactoryFfi.openDatabase(
+      path ?? ':memory:',
+      options: OpenDatabaseOptions(singleInstance: false),
+    ),
+    sqfliteFactory: databaseFactoryFfi,
+    fileStorageLocation: directory.uri,
+    maxFileSize: 1000,
+  );
+}

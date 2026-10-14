@@ -1,0 +1,164 @@
+// SPDX-FileCopyrightText: 2019-Present, 2020 Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'package:matrix/matrix.dart';
+import 'package:test/test.dart';
+
+import 'fake_database.dart';
+
+void main() {
+  group('Databse', () {
+    Logs().level = Level.error;
+    late final Room room;
+    test('setupDatabase', () async {
+      final database = await getDatabase();
+      room = Room(
+        id: '!room:blubb',
+        client: Client('testclient', database: database),
+      );
+      await database.insertClient(
+        'testclient',
+        'https://example.org',
+        'blubb',
+        null,
+        null,
+        '@test:example.org',
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+    });
+
+    test('storeEventUpdate', () async {
+      final database = await getDatabase();
+      final client = Client('testclient', database: database);
+      // store a simple update
+      await database.storeEventUpdate(
+        room.id,
+        MatrixEvent.fromJson({
+          'type': 'm.room.message',
+          'origin_server_ts': 100,
+          'content': <String, dynamic>{'blah': 'blubb'},
+          'event_id': '\$event-1',
+          'sender': '@blah:blubb',
+        }),
+        EventUpdateType.timeline,
+        client,
+      );
+      var event = await database.getEventById('\$event-1', room);
+      expect(event?.eventId, '\$event-1');
+
+      // insert a transaction id
+      await database.storeEventUpdate(
+        room.id,
+        Event.fromJson({
+          'type': 'm.room.message',
+          'origin_server_ts': 100,
+          'content': <String, dynamic>{'blah': 'blubb'},
+          'event_id': 'transaction-1',
+          'sender': '@blah:blubb',
+          'status': EventStatus.sending.intValue,
+        }, room),
+        EventUpdateType.timeline,
+        client,
+      );
+      event = await database.getEventById('transaction-1', room);
+      expect(event?.eventId, 'transaction-1');
+
+      await database.storeEventUpdate(
+        room.id,
+        Event.fromJson({
+          'type': 'm.room.message',
+          'origin_server_ts': 100,
+          'content': <String, dynamic>{'blah': 'blubb'},
+          'event_id': '\$event-2',
+          'sender': '@blah:blubb',
+          'unsigned': <String, dynamic>{'transaction_id': 'transaction-1'},
+          'status': EventStatus.sent.intValue,
+        }, room),
+        EventUpdateType.timeline,
+        client,
+      );
+      event = await database.getEventById('transaction-1', room);
+      expect(event, null);
+      event = await database.getEventById('\$event-2', room);
+
+      // insert a transaction id if the event id for it already exists
+      await database.storeEventUpdate(
+        room.id,
+        Event.fromJson({
+          'type': 'm.room.message',
+          'origin_server_ts': 100,
+          'content': {'blah': 'blubb'},
+          'event_id': '\$event-3',
+          'sender': '@blah:blubb',
+          'status': EventStatus.sending.intValue,
+        }, room),
+        EventUpdateType.timeline,
+        client,
+      );
+      event = await database.getEventById('\$event-3', room);
+      expect(event?.eventId, '\$event-3');
+
+      await database.storeEventUpdate(
+        room.id,
+        Event.fromJson({
+          'type': 'm.room.message',
+          'origin_server_ts': 100,
+          'content': {'blah': 'blubb'},
+          'event_id': '\$event-3',
+          'sender': '@blah:blubb',
+          'status': EventStatus.sent.intValue,
+          'unsigned': <String, dynamic>{'transaction_id': 'transaction-2'},
+        }, room),
+        EventUpdateType.timeline,
+        client,
+      );
+      event = await database.getEventById('\$event-3', room);
+      expect(event?.eventId, '\$event-3');
+      expect(event?.status, EventStatus.sent);
+      event = await database.getEventById('transaction-2', room);
+      expect(event, null);
+
+      // insert transaction id and not update status
+      await database.storeEventUpdate(
+        room.id,
+        Event.fromJson({
+          'type': 'm.room.message',
+          'origin_server_ts': 100,
+          'content': {'blah': 'blubb'},
+          'event_id': '\$event-4',
+          'sender': '@blah:blubb',
+          'status': EventStatus.synced.intValue,
+        }, room),
+        EventUpdateType.timeline,
+        client,
+      );
+      event = await database.getEventById('\$event-4', room);
+      expect(event?.eventId, '\$event-4');
+
+      await database.storeEventUpdate(
+        room.id,
+        Event.fromJson({
+          'type': 'm.room.message',
+          'origin_server_ts': 100,
+          'content': {'blah': 'blubb'},
+          'event_id': '\$event-4',
+          'sender': '@blah:blubb',
+          'status': EventStatus.sent.intValue,
+          'unsigned': <String, dynamic>{'transaction_id': 'transaction-3'},
+        }, room),
+        EventUpdateType.timeline,
+        client,
+      );
+      event = await database.getEventById('\$event-4', room);
+      expect(event?.eventId, '\$event-4');
+      expect(event?.status, EventStatus.synced);
+      event = await database.getEventById('transaction-3', room);
+      expect(event, null);
+    });
+  });
+}

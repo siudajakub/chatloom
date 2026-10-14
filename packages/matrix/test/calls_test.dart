@@ -1,0 +1,1424 @@
+// SPDX-FileCopyrightText: 2019-Present Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'dart:async';
+
+import 'package:matrix/matrix.dart';
+import 'package:matrix/src/voip/models/call_options.dart';
+import 'package:matrix/src/voip/models/delayed_event_canceller.dart';
+import 'package:matrix/src/voip/models/voip_id.dart';
+import 'package:test/test.dart';
+import 'package:webrtc_interface/webrtc_interface.dart';
+
+import 'fake_client.dart';
+import 'webrtc_stub.dart';
+
+class MockMutatingGroupCallSession extends GroupCallSession {
+  MockMutatingGroupCallSession({
+    required super.client,
+    required super.room,
+    required super.voip,
+    required super.backend,
+    required super.groupCallId,
+    required super.application,
+    required super.scope,
+    this.onMemberStateChangedHook,
+  });
+
+  final FutureOr<void> Function()? onMemberStateChangedHook;
+  int onMemberStateChangedCalls = 0;
+
+  @override
+  Future<void> onMemberStateChanged() async {
+    onMemberStateChangedCalls++;
+    await onMemberStateChangedHook?.call();
+  }
+}
+
+void main() {
+  late Client matrix;
+  late Room room;
+  late VoIP voip;
+  group('Call tests', () {
+    Logs().level = Level.info;
+    setUp(() async {
+      matrix = await getClient();
+      await matrix.abortSync();
+
+      voip = VoIP(matrix, MockWebRTCDelegate());
+      VoIP.customTxid = '1234';
+      const id = '!calls:example.com';
+      room = matrix.getRoomById(id)!;
+    });
+
+    test('Test call methods', () async {
+      final call = CallSession(
+        CallOptions(
+          callId: '1234',
+          type: CallType.kVoice,
+          dir: CallDirection.kOutgoing,
+          localPartyId: '4567',
+          voip: voip,
+          room: room,
+          iceServers: [],
+        ),
+      );
+      await call.sendInviteToCall(
+        room,
+        '1234',
+        1234,
+        '4567',
+        'sdp',
+        txid: '1234',
+      );
+      await call.sendAnswerCall(room, '1234', 'sdp', '4567', txid: '1234');
+      await call.sendCallCandidates(room, '1234', '4567', [], txid: '1234');
+      await call.sendSelectCallAnswer(
+        room,
+        '1234',
+        '4567',
+        '6789',
+        txid: '1234',
+      );
+      await call.sendCallReject(room, '1234', '4567', txid: '1234');
+      await call.sendCallNegotiate(
+        room,
+        '1234',
+        1234,
+        '4567',
+        'sdp',
+        txid: '1234',
+      );
+      await call.sendHangupCall(
+        room,
+        '1234',
+        '4567',
+        'userHangup',
+        txid: '1234',
+      );
+      await call.sendAssertedIdentity(
+        room,
+        '1234',
+        '4567',
+        AssertedIdentity()
+          ..displayName = 'name'
+          ..id = 'some_id',
+        txid: '1234',
+      );
+      await call.sendCallReplaces(
+        room,
+        '1234',
+        '4567',
+        CallReplaces(),
+        txid: '1234',
+      );
+      await call.sendSDPStreamMetadataChanged(
+        room,
+        '1234',
+        '4567',
+        SDPStreamMetadata({}),
+        txid: '1234',
+      );
+    });
+
+    test('Call lifetime and age', () async {
+      expect(voip.currentCID, null);
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.invite',
+                      content: {
+                        'lifetime': 60000,
+                        'call_id': '1702472924955oq1uQbNAfU7wAaEA',
+                        'party_id': 'DPCIPPBGPO',
+                        'offer': {'type': 'offer', 'sdp': 'sdp'},
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'newevent',
+                      originServerTs: DateTime.utc(1969),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      await Future.delayed(Duration(seconds: 2));
+      // confirm that no call got created after 3 seconds, which is
+      // expected in this case because the originTs was old asf
+      expect(voip.currentCID, null);
+
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      unsigned: {'age': 60001},
+                      type: 'm.call.invite',
+                      content: {
+                        'lifetime': 60000,
+                        'call_id': 'unsignedTsInvalidCall',
+                        'party_id': 'DPCIPPBGPO',
+                        'offer': {'type': 'offer', 'sdp': 'sdp'},
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'newevent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      await Future.delayed(Duration(seconds: 2));
+      // confirm that no call got created after 3 seconds, which is
+      // expected in this case because age was older than lifetime
+      expect(voip.currentCID, null);
+    });
+    test('Call connection and hanging up', () async {
+      expect(voip.currentCID, null);
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.invite',
+                      content: {
+                        'lifetime': 60000,
+                        'call_id': 'originTsValidCall',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'offer': {'type': 'offer', 'sdp': 'sdp'},
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerInviteEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.candidates',
+                      content: {
+                        'call_id': 'originTsValidCall',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'candidates': [
+                          {
+                            'candidate':
+                                'candidate:01UDP2122252543uwu50184typhost',
+                            'sdpMid': '0',
+                            'sdpMLineIndex': 0,
+                          },
+                          {
+                            'candidate':
+                                'candidate:31TCP2105524479uwu9typhosttcptypeactive',
+                            'sdpMid': '0',
+                            'sdpMLineIndex': 0,
+                          },
+                        ],
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerCallCandidatesEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      while (voip.currentCID !=
+          VoipId(roomId: room.id, callId: 'originTsValidCall')) {
+        // call invite looks valid, call should be created now :D
+        await Future.delayed(Duration(milliseconds: 50));
+        Logs().d('Waiting for currentCID to update');
+      }
+      expect(
+        voip.currentCID,
+        VoipId(roomId: room.id, callId: 'originTsValidCall'),
+      );
+      final call = voip.calls[voip.currentCID]!;
+      expect(call.state, CallState.kRinging);
+      await call.answer(txid: '1234');
+
+      call.pc!.onIceGatheringState!.call(
+        RTCIceGatheringState.RTCIceGatheringStateComplete,
+      );
+      // we send them manually anyway because our stub sends empty list of
+      // candidates
+      await call.sendCallCandidates(room, 'originTsValidCall', 'GHTYAJCE', [
+        {
+          'candidate': 'candidate:0 1 UDP 2122252543 uwu 50184 typ host',
+          'sdpMid': '0',
+          'sdpMLineIndex': 0,
+        },
+        {
+          'candidate':
+              'candidate:3 1 TCP 2105524479 uwu 9 typ host tcptype active',
+          'sdpMid': '0',
+          'sdpMLineIndex': 0,
+        },
+      ], txid: '1234');
+
+      expect(call.state, CallState.kConnecting);
+
+      // caller sends select answer
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.select_answer',
+                      content: {
+                        'call_id': 'originTsValidCall',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'lifetime': 10000,
+                        'selected_party_id': 'GHTYAJCE',
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerSelectAnswerEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+
+      call.pc!.onIceConnectionState!.call(
+        RTCIceConnectionState.RTCIceConnectionStateChecking,
+      );
+      call.pc!.onIceConnectionState!.call(
+        RTCIceConnectionState.RTCIceConnectionStateConnected,
+      );
+      // just to make sure there are no errors after running functions
+      // that are supposed to run once iceConnectionState is connected
+      await Future.delayed(Duration(seconds: 2));
+
+      expect(call.state, CallState.kConnected);
+
+      await call.hangup(reason: CallErrorCode.userHangup);
+      expect(call.state, CallState.kEnded);
+      expect(voip.currentCID, null);
+    });
+
+    test('Call answered elsewhere', () async {
+      expect(voip.currentCID, null);
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.invite',
+                      content: {
+                        'lifetime': 60000,
+                        'call_id': 'answer_elseWhere',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'offer': {'type': 'offer', 'sdp': 'sdp'},
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerInviteEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.candidates',
+                      content: {
+                        'call_id': 'answer_elseWhere',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'candidates': [
+                          {
+                            'candidate':
+                                'candidate:01UDP2122252543uwu50184typhost',
+                            'sdpMid': '0',
+                            'sdpMLineIndex': 0,
+                          },
+                          {
+                            'candidate':
+                                'candidate:31TCP2105524479uwu9typhosttcptypeactive',
+                            'sdpMid': '0',
+                            'sdpMLineIndex': 0,
+                          },
+                        ],
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerCallCandidatesEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      while (voip.currentCID !=
+          VoipId(roomId: room.id, callId: 'answer_elseWhere')) {
+        // call invite looks valid, call should be created now :D
+        await Future.delayed(Duration(milliseconds: 50));
+        Logs().d('Waiting for currentCID to update');
+      }
+      expect(
+        voip.currentCID,
+        VoipId(roomId: room.id, callId: 'answer_elseWhere'),
+      );
+      final call = voip.calls[voip.currentCID]!;
+      expect(call.state, CallState.kRinging);
+
+      // caller sends select answer
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.select_answer',
+                      content: {
+                        'call_id': 'answer_elseWhere',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'lifetime': 10000,
+                        'selected_party_id':
+                            'not_us', // selected some other device for answer
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerSelectAnswerEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      // wait for select answer to end the call
+      await Future.delayed(Duration(seconds: 2));
+      // call ended because answered elsewhere
+      expect(call.state, CallState.kEnded);
+      expect(voip.currentCID, null);
+    });
+
+    test('Reject incoming call', () async {
+      expect(voip.currentCID, null);
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.invite',
+                      content: {
+                        'lifetime': 60000,
+                        'call_id': 'reject_call',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'offer': {'type': 'offer', 'sdp': 'sdp'},
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerInviteEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.candidates',
+                      content: {
+                        'call_id': 'reject_call',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'candidates': [
+                          {
+                            'candidate':
+                                'candidate:01UDP2122252543uwu50184typhost',
+                            'sdpMid': '0',
+                            'sdpMLineIndex': 0,
+                          },
+                          {
+                            'candidate':
+                                'candidate:31TCP2105524479uwu9typhosttcptypeactive',
+                            'sdpMid': '0',
+                            'sdpMLineIndex': 0,
+                          },
+                        ],
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerCallCandidatesEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      while (voip.currentCID !=
+          VoipId(roomId: room.id, callId: 'reject_call')) {
+        // call invite looks valid, call should be created now :D
+        await Future.delayed(Duration(milliseconds: 50));
+        Logs().d('Waiting for currentCID to update');
+      }
+      expect(voip.currentCID, VoipId(roomId: room.id, callId: 'reject_call'));
+      final call = voip.calls[voip.currentCID]!;
+      expect(call.state, CallState.kRinging);
+
+      await call.reject();
+
+      // call ended because answered elsewhere
+      expect(call.state, CallState.kEnded);
+      expect(voip.currentCID, null);
+    });
+
+    test('Glare after invite was sent', () async {
+      expect(voip.currentCID, null);
+      final firstCall = await voip.inviteToCall(
+        room,
+        CallType.kVoice,
+        userId: '@alice:testing.com',
+      );
+      await firstCall.pc!.onRenegotiationNeeded!.call();
+      expect(firstCall.state, CallState.kInviteSent);
+      // KABOOM YOU JUST GLARED
+      await Future.delayed(Duration(seconds: 3));
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.invite',
+                      content: {
+                        'lifetime': 60000,
+                        'call_id': 'zzzz_glare_2nd_call',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'offer': {'type': 'offer', 'sdp': 'sdp'},
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerInviteEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      await Future.delayed(Duration(seconds: 3));
+      expect(
+        voip.currentCID,
+        VoipId(roomId: room.id, callId: firstCall.callId),
+      );
+      await firstCall.hangup(reason: CallErrorCode.userBusy);
+    });
+    test('Glare before invite was sent', () async {
+      expect(voip.currentCID, null);
+      final firstCall = await voip.inviteToCall(
+        room,
+        CallType.kVoice,
+        userId: '@alice:testing.com',
+      );
+      expect(firstCall.state, CallState.kCreateOffer);
+      // KABOOM YOU JUST GLARED, but this tiem you were still preparing your call
+      // so just cancel that instead
+      await Future.delayed(Duration(seconds: 3));
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.invite',
+                      content: {
+                        'lifetime': 60000,
+                        'call_id': 'zzzz_glare_2nd_call',
+                        'party_id': 'GHTYAJCE_caller',
+                        'version': '1',
+                        'offer': {'type': 'offer', 'sdp': 'sdp'},
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'callerInviteEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      await Future.delayed(Duration(seconds: 3));
+      expect(
+        voip.currentCID,
+        VoipId(roomId: room.id, callId: 'zzzz_glare_2nd_call'),
+      );
+    });
+
+    test('getFamedlyCallEvents sort order', () {
+      room.setState(
+        Event(
+          content: {
+            'memberships': [
+              CallMembership(
+                userId: '@test1:example.com',
+                callId: '1111',
+                backend: MeshBackend(),
+                deviceId: '1111',
+                expiresTs: DateTime.now()
+                    .add(Duration(hours: 12))
+                    .millisecondsSinceEpoch,
+                roomId: room.id,
+                membershipId: voip.currentSessionId,
+                voip: voip,
+              ).toJson(),
+            ],
+          },
+          type: EventTypes.GroupCallMember,
+          eventId: 'asdfasdf',
+          senderId: '@test1:example.com',
+          originServerTs: DateTime.now().add(Duration(hours: 12)),
+          room: room,
+          stateKey: '@test1:example.com',
+        ),
+      );
+      room.setState(
+        Event(
+          content: {
+            'memberships': [
+              CallMembership(
+                userId: '@test2:example.com',
+                callId: '1111',
+                backend: MeshBackend(),
+                deviceId: '1111',
+                expiresTs: DateTime.now().millisecondsSinceEpoch,
+                roomId: room.id,
+                membershipId: voip.currentSessionId,
+                voip: voip,
+              ).toJson(),
+            ],
+          },
+          type: EventTypes.GroupCallMember,
+          eventId: 'asdfasdf',
+          senderId: '@test2:example.com',
+          originServerTs: DateTime.now(),
+          room: room,
+          stateKey: '@test2:example.com',
+        ),
+      );
+      room.setState(
+        Event(
+          content: {
+            'memberships': [
+              CallMembership(
+                userId: '@test2.0:example.com',
+                callId: '1111',
+                backend: MeshBackend(),
+                deviceId: '1111',
+                expiresTs: DateTime.now().millisecondsSinceEpoch,
+                roomId: room.id,
+                membershipId: voip.currentSessionId,
+                voip: voip,
+              ).toJson(),
+            ],
+          },
+          type: EventTypes.GroupCallMember,
+          eventId: 'asdfasdf',
+          senderId: '@test2.0:example.com',
+          originServerTs: DateTime.now(),
+          room: room,
+          stateKey: '@test2.0:example.com',
+        ),
+      );
+      room.setState(
+        Event(
+          content: {
+            'memberships': [
+              CallMembership(
+                userId: '@test3:example.com',
+                callId: '1111',
+                backend: MeshBackend(),
+                deviceId: '1111',
+                expiresTs: DateTime.now()
+                    .subtract(Duration(hours: 1))
+                    .millisecondsSinceEpoch,
+                roomId: room.id,
+                membershipId: voip.currentSessionId,
+                voip: voip,
+              ).toJson(),
+            ],
+          },
+          type: EventTypes.GroupCallMember,
+          eventId: 'asdfasdf',
+          senderId: '@test3:example.com',
+          originServerTs: DateTime.now().subtract(Duration(hours: 1)),
+          room: room,
+          stateKey: '@test3:example.com',
+        ),
+      );
+      expect(
+        room.getFamedlyCallEvents(voip).entries.elementAt(0).key,
+        '@test3:example.com',
+      );
+      expect(
+        room.getFamedlyCallEvents(voip).entries.elementAt(1).key,
+        '@test2:example.com',
+      );
+      expect(
+        room.getFamedlyCallEvents(voip).entries.elementAt(2).key,
+        '@test2.0:example.com',
+      );
+      expect(
+        room.getFamedlyCallEvents(voip).entries.elementAt(3).key,
+        '@test1:example.com',
+      );
+      expect(
+        room.getCallMembershipsFromRoom(voip).entries.elementAt(0).key,
+        '@test3:example.com',
+      );
+      expect(
+        room.getCallMembershipsFromRoom(voip).entries.elementAt(1).key,
+        '@test2:example.com',
+      );
+      expect(
+        room.getCallMembershipsFromRoom(voip).entries.elementAt(2).key,
+        '@test2.0:example.com',
+      );
+      expect(
+        room.getCallMembershipsFromRoom(voip).entries.elementAt(3).key,
+        '@test1:example.com',
+      );
+    });
+
+    test('Enabling group calls', () async {
+      // users default is 0 and so group calls not enabled
+      room.setState(
+        Event(
+          senderId: '@test:example.com',
+          type: 'm.room.power_levels',
+          room: room,
+          eventId: '123a',
+          content: {
+            'events': {EventTypes.GroupCallMember: 100},
+            'state_default': 50,
+            'users_default': 0,
+          },
+          originServerTs: DateTime.now(),
+          stateKey: '',
+        ),
+      );
+      expect(room.canJoinGroupCall, false);
+      expect(room.groupCallsEnabledForEveryone, false);
+
+      room.setState(
+        Event(
+          senderId: '@test:example.com',
+          type: 'm.room.power_levels',
+          room: room,
+          eventId: '123a',
+          content: {
+            'events': {EventTypes.GroupCallMember: 27},
+            'state_default': 50,
+            'users_default': 49,
+          },
+          originServerTs: DateTime.now(),
+          stateKey: '',
+        ),
+      );
+      expect(room.canJoinGroupCall, true);
+      expect(room.groupCallsEnabledForEveryone, true);
+
+      // state_default 50 and user_default 0, use enableGroupCall
+      room.setState(
+        Event(
+          senderId: '@test:example.com',
+          type: 'm.room.power_levels',
+          room: room,
+          eventId: '123',
+          content: {
+            'state_default': 50,
+            'users': {'@test:fakeServer.notExisting': 100},
+            'users_default': 0,
+          },
+          originServerTs: DateTime.now(),
+          stateKey: '',
+        ),
+      );
+      expect(room.canJoinGroupCall, true); // because admin
+      expect(room.groupCallsEnabledForEveryone, false);
+      await room.enableGroupCalls();
+      expect(room.canJoinGroupCall, true);
+      expect(room.groupCallsEnabledForEveryone, true);
+
+      // state_default 50 and user_default unspecified, use enableGroupCall
+      room.setState(
+        Event(
+          senderId: '@test:example.com',
+          type: 'm.room.power_levels',
+          room: room,
+          eventId: '123',
+          content: {
+            'state_default': 50,
+            'users': {'@test:fakeServer.notExisting': 100},
+          },
+          originServerTs: DateTime.now(),
+          stateKey: '',
+        ),
+      );
+
+      expect(room.canJoinGroupCall, true); // because admin
+      expect(room.groupCallsEnabledForEveryone, false);
+      await room.enableGroupCalls();
+      expect(room.canJoinGroupCall, true);
+      expect(room.groupCallsEnabledForEveryone, true);
+
+      // state_default is 0 so users should be able to send state events
+      room.setState(
+        Event(
+          senderId: '@test:example.com',
+          type: 'm.room.power_levels',
+          room: room,
+          eventId: '123',
+          content: {
+            'state_default': 0,
+            'users': {'@test:fakeServer.notExisting': 100},
+          },
+          originServerTs: DateTime.now(),
+          stateKey: '',
+        ),
+      );
+      expect(room.canJoinGroupCall, true);
+      expect(room.groupCallsEnabledForEveryone, true);
+    });
+
+    test('group call participants count', () {
+      room.setState(
+        Event(
+          senderId: '@test1:example.com',
+          type: EventTypes.GroupCallMember,
+          room: room,
+          eventId: '1234177',
+          content: {
+            'memberships': [
+              CallMembership(
+                userId: '@test1:example.com',
+                callId: 'participants_count',
+                backend: MeshBackend(),
+                deviceId: '1111',
+                expiresTs: DateTime.now()
+                    .subtract(Duration(hours: 1))
+                    .millisecondsSinceEpoch,
+                roomId: room.id,
+                membershipId: voip.currentSessionId,
+                voip: voip,
+              ).toJson(),
+            ],
+          },
+          originServerTs: DateTime.now(),
+          stateKey: '@test1:example.com',
+        ),
+      );
+
+      expect(room.groupCallParticipantCount('participants_count', voip), 0);
+      expect(room.hasActiveGroupCall(voip), false);
+
+      room.setState(
+        Event(
+          senderId: '@test2:example.com',
+          type: EventTypes.GroupCallMember,
+          room: room,
+          eventId: '1234177',
+          content: {
+            'memberships': [
+              CallMembership(
+                userId: '@test2:example.com',
+                callId: 'participants_count',
+                backend: MeshBackend(),
+                deviceId: '1111',
+                expiresTs: DateTime.now()
+                    .add(Duration(hours: 1))
+                    .millisecondsSinceEpoch,
+                roomId: room.id,
+                membershipId: voip.currentSessionId,
+                voip: voip,
+              ).toJson(),
+            ],
+          },
+          originServerTs: DateTime.now(),
+          stateKey: '@test2:example.com',
+        ),
+      );
+      expect(room.groupCallParticipantCount('participants_count', voip), 1);
+      expect(room.hasActiveGroupCall(voip), true);
+
+      room.setState(
+        Event(
+          senderId: '@test3:example.com',
+          type: EventTypes.GroupCallMember,
+          room: room,
+          eventId: '1231234124123',
+          content: {
+            'memberships': [
+              CallMembership(
+                userId: '@test3:example.com',
+                callId: 'participants_count',
+                backend: MeshBackend(),
+                deviceId: '1111',
+                expiresTs: DateTime.now().millisecondsSinceEpoch,
+                roomId: room.id,
+                membershipId: voip.currentSessionId,
+                voip: voip,
+              ).toJson(),
+            ],
+          },
+          originServerTs: DateTime.now(),
+          stateKey: '@test3:example.com',
+        ),
+      );
+
+      expect(room.groupCallParticipantCount('participants_count', voip), 2);
+      expect(room.hasActiveGroupCall(voip), true);
+    });
+
+    group('application-agnostic membership tests', () {
+      test('CallMembership equality does not depend on application field', () {
+        final expiresTs = DateTime.now()
+            .add(Duration(hours: 1))
+            .millisecondsSinceEpoch;
+
+        final mem1 = CallMembership(
+          userId: '@alice:example.com',
+          callId: 'test_eq_call',
+          backend: MeshBackend(),
+          deviceId: 'DEVICE_A',
+          expiresTs: expiresTs,
+          roomId: room.id,
+          membershipId: 'session1',
+          voip: voip,
+          application: 'm.call',
+          scope: 'm.room',
+        );
+        final mem2 = CallMembership(
+          userId: '@alice:example.com',
+          callId: 'test_eq_call',
+          backend: MeshBackend(),
+          deviceId: 'DEVICE_A',
+          expiresTs: expiresTs,
+          roomId: room.id,
+          membershipId: 'session1',
+          voip: voip,
+          application: 'com.custom.app',
+          scope: 'm.room',
+        );
+
+        expect(mem1, equals(mem2));
+      });
+
+      test(
+        'onMemberStateChanged counts participants regardless of their application',
+        () async {
+          final groupCall = GroupCallSession.withAutoGenId(
+            room,
+            voip,
+            MeshBackend(),
+            'm.call',
+            'm.room',
+            'test_app_agnostic',
+          );
+          await MeshBackend().initLocalStream(groupCall);
+          groupCall.setState(GroupCallState.entered);
+
+          room.setState(
+            Event(
+              room: room,
+              eventId: 'local_mem_app_test',
+              originServerTs: DateTime.now(),
+              type: EventTypes.GroupCallMember,
+              content: {
+                'memberships': [
+                  CallMembership(
+                    userId: matrix.userID!,
+                    roomId: room.id,
+                    callId: 'test_app_agnostic',
+                    application: 'm.call',
+                    scope: 'm.room',
+                    backend: MeshBackend(),
+                    deviceId: matrix.deviceID!,
+                    expiresTs: DateTime.now()
+                        .add(Duration(hours: 1))
+                        .millisecondsSinceEpoch,
+                    membershipId: voip.currentSessionId,
+                    voip: voip,
+                  ).toJson(),
+                ],
+              },
+              senderId: matrix.userID!,
+              stateKey: matrix.userID,
+            ),
+          );
+
+          // Remote user joins with a different application value
+          room.setState(
+            Event(
+              room: room,
+              eventId: 'remote_mem_app_test',
+              originServerTs: DateTime.now(),
+              type: EventTypes.GroupCallMember,
+              content: {
+                'memberships': [
+                  CallMembership(
+                    userId: '@remoteuser:example.com',
+                    roomId: room.id,
+                    callId: 'test_app_agnostic',
+                    application: 'com.example.upgraded',
+                    scope: 'm.room',
+                    backend: MeshBackend(),
+                    deviceId: 'REMOTE_DEVICE',
+                    expiresTs: DateTime.now()
+                        .add(Duration(hours: 1))
+                        .millisecondsSinceEpoch,
+                    membershipId: 'remoteSession',
+                    voip: voip,
+                  ).toJson(),
+                ],
+              },
+              senderId: '@remoteuser:example.com',
+              stateKey: '@remoteuser:example.com',
+            ),
+          );
+
+          await groupCall.onMemberStateChanged();
+
+          expect(groupCall.participants.length, 2);
+          expect(
+            groupCall.participants.any((p) => p.userId == matrix.userID!),
+            isTrue,
+          );
+          expect(
+            groupCall.participants.any(
+              (p) => p.userId == '@remoteuser:example.com',
+            ),
+            isTrue,
+          );
+        },
+      );
+
+      test(
+        'sendMemberStateEvent resend loop keeps firing after call is entered',
+        () async {
+          final shortTimerVoip = VoIP(
+            matrix,
+            MockWebRTCDelegate(),
+            timeouts: CallTimeouts(
+              updateExpireTsTimerDuration: Duration(milliseconds: 50),
+            ),
+          );
+
+          final groupCall = GroupCallSession.withAutoGenId(
+            room,
+            shortTimerVoip,
+            MeshBackend(),
+            'm.call',
+            'm.room',
+            'test_resend_timer',
+          );
+
+          FakeMatrixApi.calledEndpoints.clear();
+
+          await groupCall.enter();
+
+          // 1 send from enter() itself
+          final countAfterEnter = FakeMatrixApi.calledEndpoints.entries
+              .where((e) => e.key.contains('/state/com.famedly.call.member/'))
+              .fold<int>(0, (sum, e) => sum + e.value.length);
+
+          // Wait long enough for the 50ms timer to fire at least twice more
+          await Future.delayed(Duration(milliseconds: 200));
+
+          final countAfterWait = FakeMatrixApi.calledEndpoints.entries
+              .where((e) => e.key.contains('/state/com.famedly.call.member/'))
+              .fold<int>(0, (sum, e) => sum + e.value.length);
+
+          // The periodic timer should have fired and called sendMemberStateEvent
+          // at least twice beyond the initial call from enter()
+          expect(countAfterWait, greaterThan(countAfterEnter + 1));
+
+          await groupCall.leave();
+        },
+      );
+
+      test(
+        'delayed event canceller is cleaned up when removeFamedlyCallMemberEvent is called',
+        () async {
+          const callId = 'test_delayed_cleanup';
+
+          // Simulate a delayed event canceller that was set up for this call
+          voip.delayedEventCancellers['${room.id}|$callId|m.room'] =
+              DelayedEventCanceller(
+                delayedEventId: 'fake_delayed_event_id',
+                restartTimer: Timer.periodic(
+                  Duration(hours: 1),
+                  (_) {}, // intentionally long; will be cancelled
+                ),
+              );
+
+          expect(
+            voip.delayedEventCancellers.containsKey(
+              '${room.id}|$callId|m.room',
+            ),
+            isTrue,
+          );
+
+          // removeFamedlyCallMemberEvent will try to cancel the delayed event
+          // via manageDelayedEvent. Since the fake client doesn't support the
+          // msc4140 endpoint, that call throws and the catch block removes the
+          // canceller from the map.
+          await room.removeFamedlyCallMemberEvent(callId, voip);
+
+          expect(
+            voip.delayedEventCancellers.containsKey(
+              '${room.id}|$callId|m.room',
+            ),
+            isFalse,
+          );
+        },
+      );
+
+      test(
+        'delayed leave heartbeat stops when the delayed event is gone (M_NOT_FOUND)',
+        () async {
+          const callId = 'test_delayed_not_found';
+
+          // advertise msc4140 support via the cached versions response
+          await matrix.database.cacheCustomObject('get_versions', {
+            'versions': ['v1.1', 'v1.2', 'v1.11'],
+            'unstable_features': {'org.matrix.msc4140': true},
+          });
+
+          final api = FakeMatrixApi.currentApi!;
+          // no already scheduled delayed events
+          api.api['GET']!['/client/unstable/org.matrix.msc4140/delayed_events'] =
+              (req) => {'delayed_events': []};
+          // the delayed leave state event returns a known delay id
+          api.api['PUT']!['/client/v3/rooms/${Uri.encodeComponent(room.id)}/state/${Uri.encodeComponent(EventTypes.GroupCallMember)}/${Uri.encodeComponent(matrix.userID!)}?org.matrix.msc4140.delay=400'] =
+              (req) => {'delay_id': 'faildelayid'};
+          // every restart heartbeat fails because the delayed event is gone
+          var restartCalls = 0;
+          api.api['POST']!['/client/unstable/org.matrix.msc4140/delayed_events/faildelayid'] =
+              (req) {
+                restartCalls++;
+                return {
+                  'errcode': 'M_NOT_FOUND',
+                  'error': 'Delayed event not found',
+                };
+              };
+
+          final shortTimerVoip = VoIP(
+            matrix,
+            MockWebRTCDelegate(),
+            timeouts: CallTimeouts(
+              delayedEventApplyLeave: Duration(milliseconds: 400),
+              delayedEventRestart: Duration(milliseconds: 50),
+            ),
+          );
+
+          await room.setFamedlyCallMemberEvent(
+            {'memberships': []},
+            shortTimerVoip,
+            callId,
+          );
+
+          expect(
+            shortTimerVoip.delayedEventCancellers.containsKey(
+              '${room.id}|$callId|m.room',
+            ),
+            isTrue,
+          );
+
+          // let the heartbeat fire; the M_NOT_FOUND response must stop the
+          // timer and remove the canceller instead of throwing unhandled
+          // errors forever
+          await Future.delayed(Duration(milliseconds: 300));
+
+          expect(shortTimerVoip.delayedEventCancellers, isEmpty);
+          expect(restartCalls, 1);
+        },
+      );
+
+      test(
+        'application change mid-call: sendMemberStateEvent still works and loop continues',
+        () async {
+          final shortTimerVoip = VoIP(
+            matrix,
+            MockWebRTCDelegate(),
+            timeouts: CallTimeouts(
+              updateExpireTsTimerDuration: Duration(milliseconds: 50),
+            ),
+          );
+
+          const callId = 'test_app_upgrade';
+
+          // Set up our own membership with application = 'm.call'
+          room.setState(
+            Event(
+              room: room,
+              eventId: 'own_mem_before_upgrade',
+              originServerTs: DateTime.now(),
+              type: EventTypes.GroupCallMember,
+              content: {
+                'memberships': [
+                  CallMembership(
+                    userId: matrix.userID!,
+                    roomId: room.id,
+                    callId: callId,
+                    application: 'm.call',
+                    scope: 'm.room',
+                    backend: MeshBackend(),
+                    deviceId: matrix.deviceID!,
+                    expiresTs: DateTime.now()
+                        .add(Duration(hours: 1))
+                        .millisecondsSinceEpoch,
+                    membershipId: shortTimerVoip.currentSessionId,
+                    voip: shortTimerVoip,
+                  ).toJson(),
+                ],
+              },
+              senderId: matrix.userID!,
+              stateKey: matrix.userID,
+            ),
+          );
+
+          final groupCall = GroupCallSession.withAutoGenId(
+            room,
+            shortTimerVoip,
+            MeshBackend(),
+            'm.call',
+            'm.room',
+            callId,
+          );
+
+          await groupCall.enter();
+          expect(groupCall.state, GroupCallState.entered);
+
+          // Simulate application upgrade
+          groupCall.application = 'com.example.upgraded';
+
+          FakeMatrixApi.calledEndpoints.clear();
+
+          // sendMemberStateEvent should still succeed after the application change
+          await expectLater(groupCall.sendMemberStateEvent(), completes);
+
+          // Resend timer should still be firing with the updated application
+          await Future.delayed(Duration(milliseconds: 200));
+
+          final stateEventCalls = FakeMatrixApi.calledEndpoints.entries
+              .where((e) => e.key.contains('/state/com.famedly.call.member/'))
+              .fold<int>(0, (sum, e) => sum + e.value.length);
+
+          // At least the explicit sendMemberStateEvent() call plus timer firings
+          expect(stateEventCalls, greaterThan(1));
+
+          await groupCall.leave();
+        },
+      );
+    });
+
+    test('call persists after sending invite', () async {
+      CallSession? incomingCall;
+
+      // incoming call should not be created yet
+      incomingCall = voip.calls[voip.currentCID];
+      expect(incomingCall, isNull);
+      expect(incomingCall?.pc, isNull);
+
+      // send invite for the call
+      final outgoingCall = await voip.inviteToCall(
+        room,
+        CallType.kVoice,
+        userId: '@alice:testing.com',
+      );
+
+      // acknowledge the invite
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: 'something',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      type: 'm.call.invite',
+                      content: {
+                        'lifetime': 60000,
+                        'call_id': outgoingCall.callId,
+                        'party_id': outgoingCall.localPartyId,
+                        'version': '1',
+                        'offer': {'type': 'offer', 'sdp': 'sdp'},
+                      },
+                      senderId: '@alice:testing.com',
+                      eventId: 'outgoingCallInviteEvent',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+
+      // incoming call pc should be created
+      // if this fails, the call was not properly created
+      incomingCall = voip.calls[voip.currentCID];
+      expect(incomingCall, isNotNull);
+      expect(incomingCall?.pc, isNotNull);
+    });
+
+    test(
+      'updates all room group calls when member-state handling mutates the map',
+      () async {
+        final firstGroupCall = MockMutatingGroupCallSession(
+          client: matrix,
+          room: room,
+          voip: voip,
+          backend: MeshBackend(),
+          groupCallId: 'group-call-a',
+          application: 'm.call',
+          scope: 'm.room',
+          onMemberStateChangedHook: () {
+            voip.setGroupCallById(
+              GroupCallSession(
+                client: matrix,
+                room: room,
+                voip: voip,
+                backend: MeshBackend(),
+                groupCallId: 'group-call-c',
+                application: 'm.call',
+                scope: 'm.room',
+              ),
+            );
+          },
+        );
+        final secondGroupCall = MockMutatingGroupCallSession(
+          client: matrix,
+          room: room,
+          voip: voip,
+          backend: MeshBackend(),
+          groupCallId: 'group-call-b',
+          application: 'm.call',
+          scope: 'm.room',
+        );
+
+        voip.setGroupCallById(firstGroupCall);
+        voip.setGroupCallById(secondGroupCall);
+
+        room.setState(
+          Event(
+            content: {'memberships': []},
+            type: EventTypes.GroupCallMember,
+            eventId: 'member-state-update',
+            senderId: '@alice:example.com',
+            originServerTs: DateTime.now(),
+            room: room,
+            stateKey: '@alice:example.com',
+          ),
+        );
+
+        await pumpEventQueue();
+
+        expect(firstGroupCall.onMemberStateChangedCalls, 1);
+        expect(secondGroupCall.onMemberStateChangedCalls, 1);
+        expect(
+          voip.groupCalls,
+          contains(VoipId(roomId: room.id, callId: 'group-call-c')),
+        );
+      },
+    );
+  });
+}

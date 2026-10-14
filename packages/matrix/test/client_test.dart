@@ -1,0 +1,1825 @@
+// SPDX-FileCopyrightText: 2019, 2020 Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:canonical_json/canonical_json.dart';
+import 'package:collection/collection.dart';
+import 'package:matrix/matrix.dart';
+import 'package:matrix/src/utils/client_init_exception.dart';
+import 'package:path/path.dart' show join;
+import 'package:test/test.dart';
+import 'package:vodozemac/vodozemac.dart' as vod;
+
+import 'fake_client.dart';
+import 'fake_database.dart';
+
+void main() {
+  // key @test:fakeServer.notExisting
+  const pickledOlmAccount =
+      'huxcPifHlyiQsX7cZeMMITbka3hLeUT3ss6DLL6dV7knaD4wgAYK6gcWknkixnX8C5KMIyxzytxiNqAOhDFRE5NsET8hr2dQ8OvXX7M95eQ7/3dPi7FkPUIbvneTSGgJYNDxJdHsDJ8OBHZ3BoqUJFDbTzFfVJjEzN4G9XQwPDafZ2p5WyerOK8Twj/rvk5N+ERmkt1XgVLQl66we/BO1ugTeM3YpDHm5lTzFUitJGTIuuONsKG9mmzdAmVUJ9YIrSxwmOBdegbGA+LAl5acg5VOol3KxRgZUMJQRQ58zpBAs72oauHizv1QVoQ7uIUiCUeb9lym+TEjmApvhru/1CPHU90K5jHNZ57wb/4V9VsqBWuoNibzDWG35YTFLcx0o+1lrCIjm1QjuC0777G+L1HNw5wnppV3z/k0YujjuPS3wvOA30TjHg';
+  const identityKey = '7rvl3jORJkBiK4XX1e5TnGnqz068XfYJ0W++Ml63rgk';
+  const fingerprintKey = 'gjL//fyaFHADt9KBADGag8g7F8Up78B/K1zXeiEPLJo';
+
+  group('client path', () {
+    late Client clientOnPath;
+
+    final dbPath = join(Directory.current.path, 'client_path_test.sqlite');
+
+    setUp(() async {
+      expect(
+        await File(dbPath).exists(),
+        false,
+        reason: '$dbPath should not exist',
+      );
+      clientOnPath = await getClient(databasePath: dbPath);
+      await clientOnPath.abortSync();
+      expect(await File(dbPath).exists(), true, reason: '$dbPath should exist');
+    });
+    test('logout', () async {
+      expect(await File(dbPath).exists(), true);
+      await clientOnPath.logout();
+      await clientOnPath.database.delete();
+      expect(await File(dbPath).exists(), false);
+    });
+  });
+
+  group('Export and Import', () {
+    test('exportDump and importDump', () async {
+      final client = await getClient();
+      final userId = client.userID;
+      final export = await client.exportDump();
+      expect(export != null, true);
+      expect(client.userID, null);
+      final importClient = Client('Import', database: await getDatabase());
+      await importClient.importDump(export!);
+      expect(importClient.userID, userId);
+    });
+  });
+
+  /// All Tests related to the Login
+  group('client mem', tags: 'olm', () {
+    late Client matrix;
+
+    /// Check if all Elements get created
+    setUp(() async {
+      matrix = await getClient();
+    });
+
+    test('barebones client login', () async {
+      final client = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: await getDatabase(),
+      );
+      expect(client.isLogged(), false);
+      final initStates = <InitState>{};
+      await client.init(onInitStateChanged: initStates.add);
+      expect(client.isLogged(), false);
+      expect(initStates, {InitState.initializing, InitState.finished});
+      initStates.clear();
+      await client.login(
+        LoginType.mLoginPassword,
+        token: 'abcd',
+        identifier: AuthenticationUserIdentifier(
+          user: '@test:fakeServer.notExisting',
+        ),
+        deviceId: 'GHTYAJCE',
+        onInitStateChanged: initStates.add,
+      );
+      expect(initStates, {
+        InitState.initializing,
+        InitState.settingUpEncryption,
+        InitState.loadingData,
+        InitState.waitingForFirstSync,
+        InitState.finished,
+      });
+
+      expect(client.isLogged(), true);
+
+      await client.logout();
+
+      expect(client.isLogged(), false);
+
+      await client.login(
+        LoginType.mLoginPassword,
+        token: 'abcd',
+        identifier: AuthenticationUserIdentifier(
+          user: '@test:fakeServer.notExisting',
+        ),
+        deviceId: 'GHTYAJCE',
+        onInitStateChanged: initStates.add,
+      );
+      expect(client.isLogged(), true);
+
+      await client.logout();
+
+      expect(client.isLogged(), false);
+    });
+
+    test('Login', () async {
+      matrix = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: await getDatabase(),
+      );
+      final eventUpdateListFuture = matrix.onTimelineEvent.stream.toList();
+      final toDeviceUpdateListFuture = matrix.onToDeviceEvent.stream.toList();
+      var presenceCounter = 0;
+      var accountDataCounter = 0;
+      matrix.onPresenceChanged.stream.listen((CachedPresence data) {
+        presenceCounter++;
+      });
+      // ignore: deprecated_member_use_from_same_package
+      matrix.onAccountData.stream.listen((BasicEvent data) {
+        accountDataCounter++;
+      });
+
+      expect(matrix.homeserver, null);
+
+      try {
+        await matrix.checkHomeserver(
+          Uri.parse('https://fakeserver.wrongaddress'),
+        );
+      } catch (exception) {
+        expect(exception.toString().isNotEmpty, true);
+      }
+      await matrix.checkHomeserver(
+        Uri.parse('https://fakeserver.notexisting'),
+        checkWellKnown: false,
+      );
+      expect(matrix.homeserver.toString(), 'https://fakeserver.notexisting');
+
+      final available = await matrix.checkUsernameAvailability('testuser');
+      expect(available, true);
+
+      final loginStateFuture = matrix.onLoginStateChanged.stream.first;
+      final syncFuture = matrix.onSync.stream.first;
+
+      await matrix.init(
+        newToken: 'abcd',
+        newUserID: '@test:fakeServer.notExisting',
+        newHomeserver: matrix.homeserver,
+        newDeviceName: 'Text Matrix Client',
+        newDeviceID: 'GHTYAJCE',
+        newOlmAccount: pickledOlmAccount,
+      );
+
+      final loginState = await loginStateFuture;
+      final sync = await syncFuture;
+
+      // to ensure our state doesn't get overwritten once we manually inject SyncUpdates
+      await matrix.abortSync();
+
+      expect(loginState, LoginState.loggedIn);
+      expect(matrix.onSync.value != null, true);
+      expect(matrix.encryptionEnabled, true);
+      expect(matrix.identityKey, identityKey);
+      expect(matrix.fingerprintKey, fingerprintKey);
+
+      expect(sync.nextBatch == matrix.prevBatch, true);
+
+      expect(matrix.accountData.length, 10);
+      expect(
+        matrix.getDirectChatFromUserId('@bob:example.com'),
+        '!726s6s6q:example.com',
+      );
+      expect(matrix.rooms[1].directChatMatrixID, '@bob:example.com');
+      expect(matrix.directChats, matrix.accountData['m.direct']?.content);
+      // ignore: deprecated_member_use_from_same_package
+      expect(matrix.presences.length, 1);
+      expect(matrix.rooms[1].ephemerals.length, 2);
+      expect(matrix.rooms[1].typingUsers.length, 1);
+      expect(matrix.rooms[1].typingUsers[0].id, '@alice:example.com');
+      expect(matrix.rooms[1].roomAccountData.length, 2);
+      expect(matrix.rooms[1].encrypted, true);
+      expect(
+        matrix.rooms[1].encryptionAlgorithm,
+        Client.supportedGroupEncryptionAlgorithms.first,
+      );
+      expect(
+        matrix
+            .rooms[1]
+            .receiptState
+            .global
+            .otherUsers['@alice:example.com']
+            ?.ts,
+        1436451550453,
+      );
+      expect(
+        matrix
+            .rooms[1]
+            .receiptState
+            .global
+            .otherUsers['@alice:example.com']
+            ?.eventId,
+        '\$7365636s6r6432:example.com',
+      );
+
+      final inviteRoom = matrix.rooms.singleWhere(
+        (room) => room.membership == Membership.invite,
+      );
+      expect(inviteRoom.name, 'My Room Name');
+      expect(inviteRoom.states[EventTypes.RoomMember]?.length, 1);
+      expect(matrix.rooms.length, 3);
+      expect(
+        matrix.rooms[1].canonicalAlias,
+        "#famedlyContactDiscovery:${matrix.userID!.split(":")[1]}",
+      );
+      expect(
+        // ignore: deprecated_member_use_from_same_package
+        matrix.presences['@alice:example.com']?.presence,
+        PresenceType.online,
+      );
+      expect(presenceCounter, 1);
+      expect(accountDataCounter, 10);
+
+      expect(matrix.userDeviceKeys.keys.toSet(), {
+        '@alice:example.com',
+        '@othertest:fakeServer.notExisting',
+        '@test:fakeServer.notExisting',
+      });
+      expect(matrix.userDeviceKeys['@alice:example.com']?.outdated, false);
+      expect(matrix.userDeviceKeys['@alice:example.com']?.deviceKeys.length, 2);
+      expect(
+        matrix
+            .userDeviceKeys['@alice:example.com']
+            ?.deviceKeys['JLAFKJWSCS']
+            ?.verified,
+        false,
+      );
+
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': 'fakesync',
+          'device_lists': {
+            'changed': ['@alice:example.com'],
+            'left': ['@bob:example.com'],
+          },
+        }),
+      );
+      await Future.delayed(Duration(milliseconds: 50));
+      expect(matrix.userDeviceKeys.length, 3);
+      expect(matrix.userDeviceKeys['@alice:example.com']?.outdated, true);
+
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': 'fakesync',
+          'rooms': {
+            'join': {
+              '!726s6s6q:example.com': {
+                'state': {
+                  'events': [
+                    {
+                      'sender': '@alice:example.com',
+                      'type': 'm.room.canonical_alias',
+                      'content': {'alias': ''},
+                      'state_key': '',
+                      'origin_server_ts': 1417731086799,
+                      'event_id': '66697273743033:example.com',
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      await Future.delayed(Duration(milliseconds: 50));
+
+      expect(
+        matrix.getRoomByAlias(
+          "#famedlyContactDiscovery:${matrix.userID!.split(":")[1]}",
+        ),
+        null,
+      );
+
+      await matrix.onTimelineEvent.close();
+
+      final eventUpdateList = await eventUpdateListFuture;
+
+      expect(eventUpdateList.length, 2);
+
+      expect(eventUpdateList[0].type, 'm.room.message');
+      expect(eventUpdateList[0].roomId, '!726s6s6q:example.com');
+
+      expect(eventUpdateList[1].type, 'm.room.message');
+      expect(eventUpdateList[1].roomId, '!726s6s6f:example.com');
+
+      expect(
+        matrix
+            .getRoomById('!726s6s6q:example.com')
+            ?.roomAccountData['org.example.custom.room.config']
+            ?.type,
+        'org.example.custom.room.config',
+      );
+      expect(
+        matrix
+            .getRoomById('!726s6s6q:example.com')
+            ?.receiptState
+            .global
+            .otherUsers['@alice:example.com']!
+            .eventId,
+        '\$7365636s6r6432:example.com',
+      );
+      expect(
+        matrix
+            .getRoomById('!726s6s6q:example.com')
+            ?.roomAccountData['m.tag']
+            ?.type,
+        'm.tag',
+      );
+
+      expect(
+        matrix
+            .getRoomById('!726s6s6q:example.com')
+            ?.ephemerals['m.typing']
+            ?.content,
+        {
+          'user_ids': ['@alice:example.com'],
+        },
+      );
+
+      expect(
+        matrix
+            .getRoomById('!726s6s6q:example.com')
+            ?.ephemerals['m.receipt']
+            ?.content,
+        {
+          '\$7365636s6r6432:example.com': {
+            'm.read': {
+              '@alice:example.com': {'ts': 1436451550453},
+            },
+          },
+        },
+      );
+
+      await matrix.onToDeviceEvent.close();
+
+      final deviceeventUpdateList = await toDeviceUpdateListFuture;
+
+      expect(deviceeventUpdateList.length, 2);
+
+      expect(deviceeventUpdateList[0].type, 'm.new_device');
+
+      expect(deviceeventUpdateList[1].type, 'm.room_key');
+    });
+
+    test('recentEmoji', () async {
+      final emojis = matrix.recentEmojis;
+
+      expect(emojis.length, 2);
+
+      expect(emojis['👍️'], 1);
+      expect(emojis['🖇️'], 0);
+
+      await matrix.addRecentEmoji('🦙');
+      // To check if the emoji is properly added, we need to wait for a sync roundtrip
+    });
+
+    test('accountData', () async {
+      final content = {'bla': 'blub'};
+
+      const key = 'abc def!/_-';
+      await matrix.setAccountData(matrix.userID!, key, content);
+      final dbContent = await matrix.database.getAccountData();
+
+      expect(matrix.accountData[key]?.content, content);
+      expect(dbContent[key]?.content, content);
+    });
+
+    test('roomAccountData', () async {
+      final content = {'bla': 'blub'};
+
+      const key = 'abc def!/_-';
+      const roomId = '!726s6s6q:example.com';
+      await matrix.setAccountDataPerRoom(matrix.userID!, roomId, key, content);
+      final roomFromList = (await matrix.database.getRoomList(
+        matrix,
+      )).firstWhere((room) => room.id == roomId);
+      final roomFromDb = await matrix.database.getSingleRoom(matrix, roomId);
+
+      expect(
+        matrix.getRoomById(roomId)?.roomAccountData[key]?.content,
+        content,
+      );
+      expect(roomFromList.roomAccountData[key]?.content, content);
+      expect(
+        roomFromDb?.roomAccountData[key]?.content,
+        content,
+        skip: 'The single room function does not load account data',
+      );
+    });
+
+    test('Logout', () async {
+      final loginStateFuture = matrix.onLoginStateChanged.stream.first;
+      await matrix.logout();
+
+      expect(matrix.accessToken == null, true);
+      expect(matrix.homeserver == null, true);
+      expect(matrix.userID == null, true);
+      expect(matrix.deviceID == null, true);
+      expect(matrix.deviceName == null, true);
+      expect(matrix.prevBatch == null, true);
+
+      final loginState = await loginStateFuture;
+      expect(loginState, LoginState.loggedOut);
+    });
+
+    test('Login again but break server when trying to logout', () async {
+      matrix = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: await getDatabase(),
+      );
+
+      expect(matrix.homeserver, null);
+
+      try {
+        await matrix.checkHomeserver(
+          Uri.parse('https://fakeserver.wrongaddress'),
+        );
+      } catch (exception) {
+        expect(exception.toString().isNotEmpty, true);
+      }
+      await matrix.checkHomeserver(
+        Uri.parse('https://fakeserver.notexisting'),
+        checkWellKnown: false,
+      );
+      expect(matrix.homeserver.toString(), 'https://fakeserver.notexisting');
+
+      final available = await matrix.checkUsernameAvailability('testuser');
+      expect(available, true);
+
+      final loginStateFuture = matrix.onLoginStateChanged.stream.first;
+      final syncFuture = matrix.onSync.stream.first;
+
+      await matrix.init(
+        newToken: 'abcd',
+        newUserID: '@test:fakeServer.notExisting',
+        newHomeserver: matrix.homeserver,
+        newDeviceName: 'Text Matrix Client',
+        newDeviceID: 'GHTYAJCE',
+        newOlmAccount: pickledOlmAccount,
+      );
+
+      await Future.delayed(Duration(milliseconds: 50));
+
+      final loginState = await loginStateFuture;
+      final sync = await syncFuture;
+
+      expect(loginState, LoginState.loggedIn);
+      expect(matrix.onSync.value != null, true);
+      expect(matrix.encryptionEnabled, true);
+
+      expect(matrix.identityKey, identityKey);
+      expect(matrix.fingerprintKey, fingerprintKey);
+
+      expect(sync.nextBatch == matrix.prevBatch, true);
+    });
+
+    test('Logout but this time server is dead', () async {
+      final oldapi = FakeMatrixApi.currentApi?.api;
+      expect(
+        (FakeMatrixApi.currentApi?.api['PUT']?.keys.where(
+          (element) => element.startsWith('/client/v3/room_keys/keys?version'),
+        ))?.length,
+        1,
+      );
+      // not a huge fan, open to ideas
+      FakeMatrixApi.currentApi?.api = {};
+      // random sanity test to test if the test to test the breaking server hack works.
+      expect(
+        (FakeMatrixApi.currentApi?.api['PUT']?.keys.where(
+          (element) => element.startsWith('/client/v3/room_keys/keys?version'),
+        ))?.length,
+        null,
+      );
+      try {
+        await matrix.logout();
+      } catch (e) {
+        Logs().w(
+          'Ignore red warnings for this test, test is to check if database is cleared even if server breaks ',
+        );
+      }
+
+      expect(matrix.accessToken == null, true);
+      expect(matrix.homeserver == null, true);
+      expect(matrix.userID == null, true);
+      expect(matrix.deviceID == null, true);
+      expect(matrix.deviceName == null, true);
+      expect(matrix.prevBatch == null, true);
+
+      FakeMatrixApi.currentApi?.api = oldapi!;
+    });
+
+    test('init() with access token', () async {
+      final client = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: await getDatabase(),
+      );
+      await client.init(
+        newToken: 'abcd1234',
+        newHomeserver: Uri.parse('https://fakeserver.notexisting'),
+      );
+      expect(client.isLogged(), true);
+      expect(client.userID, 'alice@example.com');
+      expect(client.deviceID, 'ABCDEFGH');
+      await client.dispose();
+    });
+
+    test('init() with waitUntilLoadCompletedLoaded does not hang', () async {
+      final client = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: await getDatabase(),
+      );
+      await client
+          .init(
+            newToken: 'abcd',
+            newUserID: '@test:fakeServer.notExisting',
+            newHomeserver: Uri.parse('https://fakeserver.notexisting'),
+            newDeviceName: 'Test Client',
+            newDeviceID: 'TESTDEVICE',
+            waitUntilLoadCompletedLoaded: true,
+            waitForFirstSync: false,
+          )
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () =>
+                throw StateError('init() timed out - likely stuck'),
+          );
+      expect(client.isLogged(), true);
+      await client.dispose();
+    });
+
+    test('Login', () async {
+      matrix = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: await getDatabase(),
+      );
+
+      final (_, _, _, authMetadata) = await matrix.checkHomeserver(
+        Uri.parse('https://fakeserver.notexisting'),
+        checkWellKnown: false,
+        fetchAuthMetadata: true,
+      );
+      expect(
+        authMetadata?.issuer.toString(),
+        'https://fakeserver.notexisting/',
+      );
+
+      final loginResp = await matrix.login(
+        LoginType.mLoginPassword,
+        identifier: AuthenticationUserIdentifier(user: 'test'),
+        password: '1234',
+      );
+
+      expect(loginResp.userId.isNotEmpty, true);
+    });
+
+    test('setAvatar', () async {
+      final testFile = MatrixFile(bytes: Uint8List(0), name: 'file.jpeg');
+      await matrix.setAvatar(testFile);
+    });
+
+    test('setMuteAllPushNotifications', () async {
+      await matrix.setMuteAllPushNotifications(false);
+    });
+
+    test('createSpace', () async {
+      await matrix.createSpace(
+        name: 'space',
+        topic: 'My test space',
+        spaceAliasName: '#myspace:example.invalid',
+        invite: ['@alice:example.invalid'],
+        roomVersion: '3',
+      );
+    });
+
+    test('sync state event in-memory handling', () async {
+      const roomId = '!726s6s6q:example.com';
+      final room = matrix.getRoomById(roomId)!;
+      // put an important state event in-memory
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': 'fakesync',
+          'rooms': {
+            'join': {
+              roomId: {
+                'state': {
+                  'events': [
+                    <String, dynamic>{
+                      'sender': '@alice:example.com',
+                      'type': 'm.room.name',
+                      'content': <String, dynamic>{'name': 'foxies'},
+                      'state_key': '',
+                      'origin_server_ts': 1417731086799,
+                      'event_id': '66697273743033:example.com',
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(room.getState('m.room.name')?.content['name'], 'foxies');
+
+      // drop an unimportant state event from in-memory handling
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': 'fakesync',
+          'rooms': {
+            'join': {
+              roomId: {
+                'state': {
+                  'events': [
+                    <String, dynamic>{
+                      'sender': '@alice:example.com',
+                      'type': 'com.famedly.custom',
+                      'content': <String, dynamic>{'name': 'foxies'},
+                      'state_key': '',
+                      'origin_server_ts': 1417731086799,
+                      'event_id': '66697273743033:example.com',
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(room.getState('com.famedly.custom'), null);
+
+      // persist normal room messages
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': 'fakesync',
+          'rooms': {
+            'join': {
+              roomId: {
+                'timeline': {
+                  'events': [
+                    <String, dynamic>{
+                      'sender': '@alice:example.com',
+                      'type': 'm.room.message',
+                      'content': <String, dynamic>{
+                        'msgtype': 'm.text',
+                        'body': 'meow',
+                      },
+                      'origin_server_ts': 1417731086799,
+                      'event_id': '\$last:example.com',
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(room.lastEvent!.content['body'], 'meow');
+
+      // ignore edits
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': 'fakesync',
+          'rooms': {
+            'join': {
+              roomId: {
+                'timeline': {
+                  'events': [
+                    <String, dynamic>{
+                      'sender': '@alice:example.com',
+                      'type': 'm.room.message',
+                      'content': <String, dynamic>{
+                        'msgtype': 'm.text',
+                        'body': '* floooof',
+                        'm.new_content': <String, dynamic>{
+                          'msgtype': 'm.text',
+                          'body': 'floooof',
+                        },
+                        'm.relates_to': <String, dynamic>{
+                          'rel_type': 'm.replace',
+                          'event_id': '\$other:example.com',
+                        },
+                      },
+                      'origin_server_ts': 1417731086799,
+                      'event_id': '\$edit:example.com',
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(room.lastEvent!.content['body'], 'meow');
+
+      // accept edits to the last event
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': 'fakesync',
+          'rooms': {
+            'join': {
+              roomId: {
+                'timeline': {
+                  'events': [
+                    <String, dynamic>{
+                      'sender': '@alice:example.com',
+                      'type': 'm.room.message',
+                      'content': <String, dynamic>{
+                        'msgtype': 'm.text',
+                        'body': '* floooof',
+                        'm.new_content': <String, dynamic>{
+                          'msgtype': 'm.text',
+                          'body': 'floooof',
+                        },
+                        'm.relates_to': <String, dynamic>{
+                          'rel_type': 'm.replace',
+                          'event_id': '\$last:example.com',
+                        },
+                      },
+                      'origin_server_ts': 1417731086799,
+                      'event_id': '\$edit:example.com',
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(room.lastEvent!.content['body'], '* floooof');
+
+      // Older state event should not overwrite current state events
+      room.partial = false;
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: '',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(
+                state: [
+                  MatrixEvent(
+                    type: EventTypes.RoomMember,
+                    content: {'displayname': 'Alice Catgirl'},
+                    senderId: '@alice:example.com',
+                    eventId: 'oldEventId',
+                    stateKey: '@alice:example.com',
+                    originServerTs: DateTime.now().subtract(
+                      const Duration(days: 365 * 30),
+                    ),
+                  ),
+                ],
+              ),
+            },
+          ),
+        ),
+        direction: Direction.b,
+      );
+      room.partial = true;
+      expect(room.getParticipants().first.id, '@alice:example.com');
+      expect(room.getParticipants().first.displayName, 'Alice Margatroid');
+
+      // accepts a consecutive edit
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': 'fakesync',
+          'rooms': {
+            'join': {
+              roomId: {
+                'timeline': {
+                  'events': [
+                    <String, dynamic>{
+                      'sender': '@alice:example.com',
+                      'type': 'm.room.message',
+                      'content': <String, dynamic>{
+                        'msgtype': 'm.text',
+                        'body': '* foxies',
+                        'm.new_content': <String, dynamic>{
+                          'msgtype': 'm.text',
+                          'body': 'foxies',
+                        },
+                        'm.relates_to': <String, dynamic>{
+                          'rel_type': 'm.replace',
+                          'event_id': '\$last:example.com',
+                        },
+                      },
+                      'origin_server_ts': 1417731086799,
+                      'event_id': '\$edit2:example.com',
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(room.lastEvent!.content['body'], '* foxies');
+    });
+
+    test('set prev_batch when invite then join', () async {
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': '1',
+          'rooms': {
+            'invite': {
+              'new_room_id': {
+                'invite_state': {
+                  'events': [
+                    MatrixEvent(
+                      eventId: '0',
+                      type: EventTypes.RoomCreate,
+                      content: {'body': '0'},
+                      senderId: '@alice:example.com',
+                      stateKey: '@alice:example.com',
+                      originServerTs: DateTime.now(),
+                    ).toJson(),
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(
+        matrix.rooms.singleWhereOrNull(
+          (element) => element.id == 'new_room_id',
+        ),
+        isNotNull,
+      );
+
+      final newRoom = matrix.getRoomById('new_room_id')!;
+
+      expect(newRoom.prev_batch, null);
+
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': '3',
+          'rooms': {
+            'join': {
+              'new_room_id': {
+                'timeline': {
+                  'events': [
+                    MatrixEvent(
+                      eventId: '2',
+                      type: EventTypes.RoomCreate,
+                      content: {'body': '2'},
+                      senderId: '@alice:example.com',
+                      stateKey: '@alice:example.com',
+                      originServerTs: DateTime.now(),
+                    ).toJson(),
+                  ],
+                  'prev_batch': '1',
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      final timeline = await newRoom.getTimeline();
+      expect(newRoom.prev_batch, '1');
+      expect(timeline.events.length, 1);
+      expect(timeline.events.first.eventId, '2');
+
+      await matrix.handleSync(
+        SyncUpdate.fromJson({
+          'next_batch': '4',
+          'rooms': {
+            'join': {
+              'new_room_id': {
+                'timeline': {
+                  'events': [
+                    MatrixEvent(
+                      eventId: '3',
+                      type: EventTypes.Message,
+                      content: {'body': '3'},
+                      senderId: '@alice2:example.com',
+                      stateKey: '@alice2:example.com',
+                      originServerTs: DateTime.now(),
+                    ).toJson(),
+                  ],
+                  'prev_batch': '2',
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(newRoom.prev_batch, '1');
+      expect(timeline.events.length, 2);
+      expect(timeline.events.last.eventId, '2');
+      expect(timeline.events.first.eventId, '3');
+
+      if (timeline.canRequestHistory) {
+        await timeline.requestHistory();
+      }
+      expect(newRoom.prev_batch, 'emptyHistoryResponse');
+      expect(timeline.events.length, 3);
+      expect(timeline.events.last.eventId, '0');
+      expect(timeline.events.first.eventId, '3');
+
+      while (timeline.canRequestHistory) {
+        await timeline.requestHistory();
+      }
+      expect(newRoom.prev_batch, null);
+      expect(timeline.events.length, 3);
+      expect(timeline.events.last.eventId, '0');
+      expect(timeline.events.first.eventId, '3');
+    });
+
+    test('getProfileFromUserId', () async {
+      final cachedProfile = await matrix.getUserProfile('@getme:example.com');
+      expect(cachedProfile.outdated, false);
+      expect(cachedProfile.avatarUrl.toString(), 'mxc://test');
+      expect(cachedProfile.displayname, 'You got me');
+
+      final profile = await matrix.getProfileFromUserId('@getme:example.com');
+      expect(profile.avatarUrl.toString(), 'mxc://test');
+      expect(profile.displayName, 'You got me');
+
+      final aliceProfile = await matrix.getUserProfile('@alice:example.com');
+      expect(aliceProfile.outdated, false);
+      expect(aliceProfile.avatarUrl.toString(), 'mxc://test');
+      expect(aliceProfile.displayname, 'Alice M');
+      await matrix.handleSync(
+        SyncUpdate(
+          nextBatch: '',
+          rooms: RoomsUpdate(
+            join: {
+              matrix.rooms.first.id: JoinedRoomUpdate(
+                timeline: TimelineUpdate(
+                  events: [
+                    MatrixEvent(
+                      eventId: 'abcd',
+                      type: EventTypes.RoomMember,
+                      content: {'membership': 'join'},
+                      senderId: '@alice:example.com',
+                      stateKey: '@alice:example.com',
+                      originServerTs: DateTime.now(),
+                    ),
+                  ],
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      expect(matrix.onUserProfileUpdate.value, '@alice:example.com');
+      final cachedProfileFromDb = await matrix.database.getUserProfile(
+        '@alice:example.com',
+      );
+      expect(cachedProfileFromDb?.outdated, true);
+    });
+    test('joinAfterInviteMembership', () async {
+      final client = await getClient();
+      await client.abortSync();
+      client.rooms.clear();
+      await client.database.clearCache();
+
+      await client.handleSync(
+        SyncUpdate.fromJson(
+          jsonDecode(
+            '{"next_batch":"s198510_227245_8_1404_23586_11_51065_267416_0_2639","rooms":{"invite":{"!bWEUQDujMKwjxkCXYr:tim-alpha.staging.famedly.de":{"invite_state":{"events":[{"type":"m.room.create","content":{"type":"de.gematik.tim.roomtype.default.v1","room_version":"10","creator":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":""},{"type":"m.room.encryption","content":{"algorithm":"m.megolm.v1.aes-sha2"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":""},{"type":"m.room.join_rules","content":{"join_rule":"invite"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":""},{"type":"m.room.member","content":{"membership":"join","displayname":"Tóboggen, Veronika Freifrau"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de"},{"type":"m.room.member","content":{"is_direct":true,"membership":"invite","displayname":"Düsterbehn-Hardenbergshausen, Michael von"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de"}]}}}},"presence":{"events":[{"type":"m.presence","content":{"presence":"online","last_active_ago":5948,"currently_active":true},"sender":"@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de"}]},"device_one_time_keys_count":{"signed_curve25519":66},"device_unused_fallback_key_types":["signed_curve25519"],"org.matrix.msc2732.device_unused_fallback_key_types":["signed_curve25519"]}',
+          ),
+        ),
+      );
+      await client.handleSync(
+        SyncUpdate.fromJson(
+          jsonDecode(
+            '{"next_batch":"s198511_227245_8_1404_23588_11_51066_267416_0_2639","account_data":{"events":[{"type":"m.direct","content":{"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de":["!bWEUQDujMKwjxkCXYr:tim-alpha.staging.famedly.de"]}}]},"device_one_time_keys_count":{"signed_curve25519":65},"device_unused_fallback_key_types":["signed_curve25519"],"org.matrix.msc2732.device_unused_fallback_key_types":["signed_curve25519"]}',
+          ),
+        ),
+      );
+      await client.handleSync(
+        SyncUpdate.fromJson(
+          jsonDecode(
+            '{"next_batch":"s198512_227245_8_1404_23588_11_51066_267416_0_2639","rooms":{"join":{"!bWEUQDujMKwjxkCXYr:tim-alpha.staging.famedly.de":{"summary":{"m.heroes":["@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de"],"m.joined_member_count":2,"m.invited_member_count":0},"state":{"events":[{"type":"m.room.create","content":{"type":"de.gematik.tim.roomtype.default.v1","room_version":"10","creator":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"","event_id":"\$qSgXGXjly6p5Kwbdb_PMBC_EF7nzHDbM23mvJFVeoiE","origin_server_ts":1709565579735,"unsigned":{"age":2255}}]},"timeline":{"events":[{"type":"m.room.member","content":{"membership":"join","displayname":"Tóboggen, Veronika Freifrau"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","event_id":"\$rQzxxTrSd9Y0koxIGlkalPAV_lwu94jLOA-8PSunY24","origin_server_ts":1709565579871,"unsigned":{"age":2119}},{"type":"m.room.power_levels","content":{"users":{"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de":100,"@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de":100},"users_default":0,"events":{"m.room.name":50,"m.room.power_levels":100,"m.room.history_visibility":100,"m.room.canonical_alias":50,"m.room.avatar":50,"m.room.tombstone":100,"m.room.server_acl":100,"m.room.encryption":100},"events_default":0,"state_default":50,"ban":50,"kick":50,"redact":50,"invite":0,"historical":100},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"","event_id":"\$d6sgGs8PmkAbC3Iw3CkPT1QSub2zFTTvytegOxkPYPs","origin_server_ts":1709565579966,"unsigned":{"age":2024}},{"type":"m.room.join_rules","content":{"join_rule":"invite"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"","event_id":"\$EnA2Podch5181X4G1ZX34zaFGS_V4ZCZzLkBEfS_qyg","origin_server_ts":1709565579979,"unsigned":{"age":2011}},{"type":"m.room.history_visibility","content":{"history_visibility":"shared"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"","event_id":"\$6tNNo6ZkpZZrHrn8ZjXhMqI0CNv-VNNBw4R0h3_O-Tc","origin_server_ts":1709565579979,"unsigned":{"age":2011}},{"type":"m.room.guest_access","content":{"guest_access":"can_join"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"","event_id":"\$ViuL_LpN1sY9oYcGwycNjtp6FcGj__smUg8mzj3oa2o","origin_server_ts":1709565579980,"unsigned":{"age":2010}},{"type":"m.room.encryption","content":{"algorithm":"m.megolm.v1.aes-sha2"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"","event_id":"\$_e0az7OP7D78QU7DItiRAtlHlZmA07B5wenR93x5V1E","origin_server_ts":1709565579981,"unsigned":{"age":2009}},{"type":"m.room.member","content":{"is_direct":true,"membership":"invite","displayname":"Düsterbehn-Hardenbergshausen, Michael von"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","state_key":"@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de","event_id":"\$4sZ3CF67SUh0n5WG0ZKS47Epj9B_d842RJjnrQmUKQo","origin_server_ts":1709565580185,"unsigned":{"age":1805}},{"type":"m.room.notsoencrypted","content":{"algorithm":"m.megolm.v1.aes-sha2","ciphertext":"AwgAEpACEZw8Ymg99Yfl7VsXRIdczlQ3+YSJ6te3o6ka/XXP0h4ZsgR2bu1Q8puQ77fOpwX5dPnrrCi5SQg9Zv5/u+0QbFV4FKE/k03Vxao/tiswb6wST14x9kYkwViOrZe7fzg7VF9tCi8U88TqxGsPDDOVjO+WNxG8I9ldP1zvPsxYzVSyGPhaB5E+q6llwlXcQ56wvpf7Ke7gX4Ly2Dlxa8Bmy7aUSCBoWAt/xFRdzCOsE9qI8oxzuvk4RF0H/7bY+4DkGTsP1rIYgA7Q0JueIFb47Yu6pK26BCKo1yPAR8qvpe8vGBICm4slMbKaJN4RqBHtR0zc12E5DXud91o3mArqTksv1NEbI1F4XgDREl76WBw8a7MafDSuun09JuWpGxzPHvLVOUVny6tTJPRutsZLkmnTeMTiXnsPexUiY7UTYlzOMeeoUSTDuJXJz6CM+gSc52CiKoHK/gE","device_id":"TNLOYXJFXM","sender_key":"e9W0gpUcSEKOQ8P/xIdroHUpP7yG4EjQfueiAngESRk","session_id":"hhZ8TBs9Xp0dmuvC6XpDBYsAKnTqb8WiBhZMzHcbBXI"},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","event_id":"\$KKIZX8cuB3S3uzS7CDtRlTkcaJRW73e2HW2NuW6OTEg","origin_server_ts":1709565580991,"unsigned":{"age":999}},{"type":"m.room.member","content":{"membership":"join","displayname":"Düsterbehn-Hardenbergshausen, Michael von"},"sender":"@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de","state_key":"@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de","event_id":"\$UNSLEyhC_93oQlt0tWoai4CCd3LH2GJJexM0WN2wxCA","origin_server_ts":1709565581813,"unsigned":{"replaces_state":"\$4sZ3CF67SUh0n5WG0ZKS47Epj9B_d842RJjnrQmUKQo","prev_content":{"is_direct":true,"membership":"invite","displayname":"Düsterbehn-Hardenbergshausen, Michael von"},"prev_sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","age":177}},{"type":"m.room.member","content":{"membership":"join","displayname":"Düsterbehn-Hardenbergshausen, Michael von"},"sender":"@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de","state_key":"@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de","event_id":"\$UNSLEyhC_93oQlt0tWoai4CCd3LH2GJJexM0WN2wxCA","origin_server_ts":1709565581813,"unsigned":{"replaces_state":"\$4sZ3CF67SUh0n5WG0ZKS47Epj9B_d842RJjnrQmUKQo","prev_content":{"is_direct":true,"membership":"invite","displayname":"Düsterbehn-Hardenbergshausen, Michael von"},"prev_sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de","age":177}}],"limited":true,"prev_batch":"s198503_227245_8_1404_23588_11_51066_267416_0_2639"},"ephemeral":{"events":[]},"account_data":{"events":[]},"unread_notifications":{"highlight_count":0,"notification_count":0}}}},"presence":{"events":[{"type":"m.presence","content":{"presence":"online","last_active_ago":843,"currently_active":true},"sender":"@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de"}]},"device_lists":{"changed":["@duesterbehn-hardenbergshausen_michael_von:tim-alpha.staging.famedly.de","@toboggen_veronika_freifrau:tim-alpha.staging.famedly.de"],"left":[]},"device_one_time_keys_count":{"signed_curve25519":65},"device_unused_fallback_key_types":["signed_curve25519"],"org.matrix.msc2732.device_unused_fallback_key_types":["signed_curve25519"]}',
+          ),
+        ),
+      );
+      //await client.handleSync(SyncUpdate.fromJson(jsonDecode('')));
+      final room = client.getRoomById(
+        '!bWEUQDujMKwjxkCXYr:tim-alpha.staging.famedly.de',
+      )!;
+      await room.postLoad();
+      final participants = await room.requestParticipants();
+
+      expect(
+        participants.where((u) => u.membership == Membership.join).length,
+        2,
+      );
+
+      await client.abortSync();
+      client.rooms.clear();
+      await client.database.clearCache();
+      await client.dispose(closeDatabase: true);
+    });
+    test('leaveThenInvite should be invited', () async {
+      // Synapse includes a room in both invite and leave if you leave and get
+      // reinvited while you are offline. The other direction only contains the
+      // room in leave. Verify that we actually store the invite in the first
+      // case. See also
+      // https://github.com/famedly/product-management/issues/2283
+      final client = await getClient();
+      await client.abortSync();
+      client.rooms.clear();
+      await client.database.clearCache();
+
+      const roomId = '!inviteLeaveRoom:example.com';
+      await client.handleSync(
+        SyncUpdate(
+          nextBatch: 'ABCDEF',
+          rooms: RoomsUpdate(
+            invite: {
+              roomId: InvitedRoomUpdate(
+                inviteState: [
+                  StrippedStateEvent(
+                    type: EventTypes.RoomMember,
+                    senderId: '@bob:example.com',
+                    stateKey: client.userID,
+                    content: {'membership': 'invite'},
+                  ),
+                ],
+              ),
+            },
+            leave: {
+              roomId: LeftRoomUpdate(
+                state: [
+                  MatrixEvent(
+                    type: EventTypes.RoomMember,
+                    senderId: client.userID!,
+                    stateKey: client.userID,
+                    originServerTs: DateTime.now(),
+                    eventId:
+                        '\$abcdefwsjaskdfabsjfhabfsjgbahsjfkgbasjffsajfgsfd',
+                    content: {'membership': 'leave'},
+                  ),
+                ],
+              ),
+            },
+          ),
+        ),
+      );
+
+      final room = client.getRoomById(roomId);
+
+      expect(room?.membership, Membership.invite);
+
+      await client.abortSync();
+      client.rooms.clear();
+      await client.database.clearCache();
+      await client.dispose(closeDatabase: true);
+    });
+    test('ownProfile', () async {
+      final client = await getClient();
+      await client.abortSync();
+      client.rooms.clear();
+      await client.database.clearCache();
+      await client.handleSync(
+        SyncUpdate.fromJson(
+          jsonDecode(
+            '{"next_batch":"s82_571_2_6_39_1_2_34_1","account_data":{"events":[{"type":"m.push_rules","content":{"global":{"underride":[{"conditions":[{"kind":"event_match","key":"type","pattern":"m.call.invite"}],"actions":["notify",{"set_tweak":"sound","value":"ring"},{"set_tweak":"highlight","value":false}],"rule_id":".m.rule.call","default":true,"enabled":true},{"conditions":[{"kind":"room_member_count","is":"2"},{"kind":"event_match","key":"type","pattern":"m.room.message"}],"actions":["notify",{"set_tweak":"sound","value":"default"},{"set_tweak":"highlight","value":false}],"rule_id":".m.rule.room_one_to_one","default":true,"enabled":true},{"conditions":[{"kind":"room_member_count","is":"2"},{"kind":"event_match","key":"type","pattern":"m.room.encrypted"}],"actions":["notify",{"set_tweak":"sound","value":"default"},{"set_tweak":"highlight","value":false}],"rule_id":".m.rule.encrypted_room_one_to_one","default":true,"enabled":true},{"conditions":[{"kind":"event_match","key":"type","pattern":"m.room.message"}],"actions":["notify",{"set_tweak":"highlight","value":false}],"rule_id":".m.rule.message","default":true,"enabled":true},{"conditions":[{"kind":"event_match","key":"type","pattern":"m.room.encrypted"}],"actions":["notify",{"set_tweak":"highlight","value":false}],"rule_id":".m.rule.encrypted","default":true,"enabled":true},{"conditions":[{"kind":"event_match","key":"type","pattern":"im.vector.modular.widgets"},{"kind":"event_match","key":"content.type","pattern":"jitsi"},{"kind":"event_match","key":"state_key","pattern":"*"}],"actions":["notify",{"set_tweak":"highlight","value":false}],"rule_id":".im.vector.jitsi","default":true,"enabled":true}],"sender":[],"room":[],"content":[{"actions":["notify",{"set_tweak":"sound","value":"default"},{"set_tweak":"highlight"}],"pattern":"056d6976-fb61-47cf-86f0-147387461565","rule_id":".m.rule.contains_user_name","default":true,"enabled":true}],"override":[{"conditions":[],"actions":["dont_notify"],"rule_id":".m.rule.master","default":true,"enabled":false},{"conditions":[{"kind":"event_match","key":"content.msgtype","pattern":"m.notice"}],"actions":["dont_notify"],"rule_id":".m.rule.suppress_notices","default":true,"enabled":true},{"conditions":[{"kind":"event_match","key":"type","pattern":"m.room.member"},{"kind":"event_match","key":"content.membership","pattern":"invite"},{"kind":"event_match","key":"state_key","pattern":"@056d6976-fb61-47cf-86f0-147387461565:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de"}],"actions":["notify",{"set_tweak":"sound","value":"default"},{"set_tweak":"highlight","value":false}],"rule_id":".m.rule.invite_for_me","default":true,"enabled":true},{"conditions":[{"kind":"event_match","key":"type","pattern":"m.room.member"}],"actions":["dont_notify"],"rule_id":".m.rule.member_event","default":true,"enabled":true},{"conditions":[{"kind":"contains_display_name"}],"actions":["notify",{"set_tweak":"sound","value":"default"},{"set_tweak":"highlight"}],"rule_id":".m.rule.contains_display_name","default":true,"enabled":true},{"conditions":[{"kind":"event_match","key":"content.body","pattern":"@room"},{"kind":"sender_notification_permission","key":"room"}],"actions":["notify",{"set_tweak":"highlight","value":true}],"rule_id":".m.rule.roomnotif","default":true,"enabled":true},{"conditions":[{"kind":"event_match","key":"type","pattern":"m.room.tombstone"},{"kind":"event_match","key":"state_key","pattern":""}],"actions":["notify",{"set_tweak":"highlight","value":true}],"rule_id":".m.rule.tombstone","default":true,"enabled":true},{"conditions":[{"kind":"event_match","key":"type","pattern":"m.reaction"}],"actions":["dont_notify"],"rule_id":".m.rule.reaction","default":true,"enabled":true}]},"device":{}}}]},"presence":{"events":[{"type":"m.presence","sender":"@056d6976-fb61-47cf-86f0-147387461565:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"presence":"online","last_active_ago":43,"currently_active":true}}]},"device_one_time_keys_count":{"signed_curve25519":66},"org.matrix.msc2732.device_unused_fallback_key_types":["signed_curve25519"],"device_unused_fallback_key_types":["signed_curve25519"],"rooms":{"join":{"!MEgZosbiZqjSjbHFqI:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de":{"timeline":{"events":[{"type":"m.room.member","sender":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"membership":"join","displayname":"Lars Kaiser"},"state_key":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","origin_server_ts":1647296944593,"unsigned":{"age":545455},"event_id":"\$mk9kFUEAKBZJgarWApLyYqOZQQocLIVV8tWp_gJEZFU"},{"type":"m.room.power_levels","sender":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"users":{"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de":100},"users_default":0,"events":{"m.room.name":50,"m.room.power_levels":100,"m.room.history_visibility":100,"m.room.canonical_alias":50,"m.room.avatar":50,"m.room.tombstone":100,"m.room.server_acl":100,"m.room.encryption":100},"events_default":0,"state_default":50,"ban":50,"kick":50,"redact":50,"invite":50,"historical":100},"state_key":"","origin_server_ts":1647296944690,"unsigned":{"age":545358},"event_id":"\$3wL2YgVNQzgfl8y_ksi3BPMqRs94jb_m0WRonL1HNpY"},{"type":"m.room.canonical_alias","sender":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"alias":"#user-discovery:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de"},"state_key":"","origin_server_ts":1647296944806,"unsigned":{"age":545242},"event_id":"\$yXaVETL9F4jSN9rpRNyT_kUoctzD07n5Z4AIHziP7DQ"},{"type":"m.room.join_rules","sender":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"join_rule":"public"},"state_key":"","origin_server_ts":1647296944894,"unsigned":{"age":545154},"event_id":"\$jBDHhgpNqr125eWUsGVw4r7ZG2hgr0BTzzR77S-ubvY"},{"type":"m.room.history_visibility","sender":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"history_visibility":"shared"},"state_key":"","origin_server_ts":1647296944965,"unsigned":{"age":545083},"event_id":"\$kMessP7gAphUKW7mzOLlJT6NT8IsVGPmGir3_1uBNCE"},{"type":"m.room.name","sender":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"name":"User Discovery"},"state_key":"","origin_server_ts":1647296945062,"unsigned":{"age":544986},"event_id":"\$Bo9Ut_0vcr3FuxCRye4IHEMxUxIIcSwc-ePnMzx-hYU"},{"type":"m.room.member","sender":"@test:fakeServer.notExisting","content":{"membership":"join","displayname":"1c2e5c2b-f958-45a5-9fcb-eef3969c31df"},"state_key":"@test:fakeServer.notExisting","origin_server_ts":1647296989893,"unsigned":{"age":500155},"event_id":"\$fYCf2qtlHwzcdLgwjHb2EOdStv3isAlIUy2Esh5qfVE"},{"type":"m.room.member","sender":"@test:fakeServer.notExisting","content":{"membership":"join","displayname":"Some First Name Some Last Name"},"state_key":"@test:fakeServer.notExisting","origin_server_ts":1647296990076,"unsigned":{"replaces_state":"\$fYCf2qtlHwzcdLgwjHb2EOdStv3isAlIUy2Esh5qfVE","prev_content":{"membership":"join","displayname":"1c2e5c2b-f958-45a5-9fcb-eef3969c31df"},"prev_sender":"@test:fakeServer.notExisting","age":499972},"event_id":"\$3Ut97nFBgOtsrnRPW-pqr28z7ETNMttj7GcjkIv4zWw"},{"type":"m.room.member","sender":"@056d6976-fb61-47cf-86f0-147387461565:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"membership":"join","displayname":"056d6976-fb61-47cf-86f0-147387461565"},"state_key":"@056d6976-fb61-47cf-86f0-147387461565:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","origin_server_ts":1647297489154,"unsigned":{"age":894},"event_id":"\$6EsjHSLQDVDW9WDH1c5Eu57VaPGZmOPtNRjCjtWPLV0"},{"type":"m.room.member","sender":"@056d6976-fb61-47cf-86f0-147387461565:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"membership":"join","displayname":"Another User"},"state_key":"@056d6976-fb61-47cf-86f0-147387461565:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","origin_server_ts":1647297489290,"unsigned":{"replaces_state":"\$6EsjHSLQDVDW9WDH1c5Eu57VaPGZmOPtNRjCjtWPLV0","prev_content":{"membership":"join","displayname":"056d6976-fb61-47cf-86f0-147387461565"},"prev_sender":"@056d6976-fb61-47cf-86f0-147387461565:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","age":758},"event_id":"\$dtQblqCbjr3TGc3WmrQ4YTkHaXJ2PcO0TAYDr9K7iQc"}],"prev_batch":"t2-62_571_2_6_39_1_2_34_1","limited":true},"state":{"events":[{"type":"m.room.create","sender":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de","content":{"m.federate":false,"room_version":"9","creator":"@8640f1e6-a824-4f9c-9924-2d8fc40bc030:c3d35860-36fe-45d1-8e16-936cf50513fb.gedisa-staging.famedly.de"},"state_key":"","origin_server_ts":1647296944511,"unsigned":{"age":545537},"event_id":"\$PAWKKULBVOLnqfrAAtXZz8tHEPXXjgRVbJJLifwQWbE"}]},"account_data":{"events":[]},"ephemeral":{"events":[]},"unread_notifications":{"notification_count":0,"highlight_count":0},"summary":{"m.joined_member_count":3,"m.invited_member_count":0},"org.matrix.msc2654.unread_count":0}}}}',
+          ),
+        ),
+      );
+      final profile = await client.getUserProfile(client.userID!);
+      expect(profile.displayname, 'Some First Name Some Last Name');
+      expect(profile.outdated, false);
+      await client.dispose(closeDatabase: true);
+    });
+    test('sendToDeviceEncrypted', () async {
+      FakeMatrixApi.calledEndpoints.clear();
+
+      await matrix.sendToDeviceEncrypted(
+        matrix.userDeviceKeys['@alice:example.com']!.deviceKeys.values.toList(),
+        'm.message',
+        {'msgtype': 'm.text', 'body': 'Hello world'},
+      );
+      expect(
+        FakeMatrixApi.calledEndpoints.keys.any(
+          (k) => k.startsWith('/client/v3/sendToDevice/m.room.encrypted'),
+        ),
+        true,
+      );
+    });
+    test('sendToDeviceEncryptedChunked', () async {
+      FakeMatrixApi.calledEndpoints.clear();
+      await matrix.sendToDeviceEncryptedChunked(
+        matrix.userDeviceKeys['@alice:example.com']!.deviceKeys.values.toList(),
+        'm.message',
+        {'msgtype': 'm.text', 'body': 'Hello world'},
+      );
+      await Future.delayed(Duration(milliseconds: 100));
+      expect(
+        FakeMatrixApi.calledEndpoints.keys
+            .where(
+              (k) => k.startsWith('/client/v3/sendToDevice/m.room.encrypted'),
+            )
+            .length,
+        1,
+      );
+
+      final deviceKeys = <DeviceKeys>[];
+      for (var i = 0; i < 30; i++) {
+        final account = vod.Account();
+        final keys = account.identityKeys;
+        const userId = '@testuser:example.org';
+        final deviceId = 'DEVICE$i';
+        final keyObj = {
+          'user_id': userId,
+          'device_id': deviceId,
+          'algorithms': [
+            'm.olm.v1.curve25519-aes-sha2',
+            'm.megolm.v1.aes-sha2',
+          ],
+          'keys': {
+            'curve25519:$deviceId': keys.curve25519.toBase64(),
+            'ed25519:$deviceId': keys.ed25519.toBase64(),
+          },
+        };
+        final signature = account.sign(
+          String.fromCharCodes(canonicalJson.encode(keyObj)),
+        );
+        keyObj['signatures'] = {
+          userId: {'ed25519:$deviceId': signature.toBase64()},
+        };
+        deviceKeys.add(DeviceKeys.fromJson(keyObj, matrix));
+      }
+      FakeMatrixApi.calledEndpoints.clear();
+      await matrix.sendToDeviceEncryptedChunked(deviceKeys, 'm.message', {
+        'msgtype': 'm.text',
+        'body': 'Hello world',
+      });
+      // it should send the first chunk right away
+      expect(
+        FakeMatrixApi.calledEndpoints.keys
+            .where(
+              (k) => k.startsWith('/client/v3/sendToDevice/m.room.encrypted'),
+            )
+            .length,
+        1,
+      );
+      await Future.delayed(Duration(milliseconds: 100));
+      expect(
+        FakeMatrixApi.calledEndpoints.keys
+            .where(
+              (k) => k.startsWith('/client/v3/sendToDevice/m.room.encrypted'),
+            )
+            .length,
+        2,
+      );
+    });
+    test('send to_device queue', () async {
+      // we test:
+      // send fox --> fail
+      // send raccoon --> fox & raccoon sent
+      // send bunny --> only bunny sent
+      final client = await getClient();
+      FakeMatrixApi.failToDevice = true;
+      final foxContent = {
+        '@fox:example.org': {
+          '*': {'fox': 'hole'},
+        },
+      };
+      final raccoonContent = {
+        '@fox:example.org': {
+          '*': {'raccoon': 'mask'},
+        },
+      };
+      final bunnyContent = {
+        '@fox:example.org': {
+          '*': {'bunny': 'burrow'},
+        },
+      };
+      await client
+          .sendToDevice('foxies', 'floof_txnid', foxContent)
+          .catchError((e) => null); // ignore the error
+      FakeMatrixApi.failToDevice = false;
+      FakeMatrixApi.calledEndpoints.clear();
+      await client.sendToDevice('raccoon', 'raccoon_txnid', raccoonContent);
+      expect(
+        json.decode(
+          FakeMatrixApi
+              .calledEndpoints['/client/v3/sendToDevice/foxies/floof_txnid']?[0],
+        )['messages'],
+        foxContent,
+      );
+      expect(
+        json.decode(
+          FakeMatrixApi
+              .calledEndpoints['/client/v3/sendToDevice/raccoon/raccoon_txnid']?[0],
+        )['messages'],
+        raccoonContent,
+      );
+      FakeMatrixApi.calledEndpoints.clear();
+      await client.sendToDevice('bunny', 'bunny_txnid', bunnyContent);
+      expect(
+        FakeMatrixApi
+            .calledEndpoints['/client/v3/sendToDevice/foxies/floof_txnid'],
+        null,
+      );
+      expect(
+        FakeMatrixApi
+            .calledEndpoints['/client/v3/sendToDevice/raccoon/raccoon_txnid'],
+        null,
+      );
+      expect(
+        json.decode(
+          FakeMatrixApi
+              .calledEndpoints['/client/v3/sendToDevice/bunny/bunny_txnid']?[0],
+        )['messages'],
+        bunnyContent,
+      );
+      await client.dispose(closeDatabase: true);
+    });
+    test('send to_device queue multiple', () async {
+      // we test:
+      // send fox --> fail
+      // send raccoon --> fail
+      // send bunny --> all sent
+      final client = await getClient();
+      await client.abortSync();
+
+      FakeMatrixApi.failToDevice = true;
+      final foxContent = {
+        '@fox:example.org': {
+          '*': {'fox': 'hole'},
+        },
+      };
+      final raccoonContent = {
+        '@fox:example.org': {
+          '*': {'raccoon': 'mask'},
+        },
+      };
+      final bunnyContent = {
+        '@fox:example.org': {
+          '*': {'bunny': 'burrow'},
+        },
+      };
+      await client
+          .sendToDevice('foxies', 'floof_txnid', foxContent)
+          .catchError((e) => null); // ignore the error
+
+      await FakeMatrixApi.firstWhereValue(
+        '/client/v3/sendToDevice/foxies/floof_txnid',
+      );
+      FakeMatrixApi.calledEndpoints.clear();
+
+      await client
+          .sendToDevice('raccoon', 'raccoon_txnid', raccoonContent)
+          .catchError((e) => null);
+
+      await FakeMatrixApi.firstWhereValue(
+        '/client/v3/sendToDevice/foxies/floof_txnid',
+      );
+
+      FakeMatrixApi.calledEndpoints.clear();
+      FakeMatrixApi.failToDevice = false;
+
+      await client.sendToDevice('bunny', 'bunny_txnid', bunnyContent);
+
+      await FakeMatrixApi.firstWhereValue(
+        '/client/v3/sendToDevice/foxies/floof_txnid',
+      );
+      await FakeMatrixApi.firstWhereValue(
+        '/client/v3/sendToDevice/bunny/bunny_txnid',
+      );
+      final foxcall = FakeMatrixApi
+          .calledEndpoints['/client/v3/sendToDevice/foxies/floof_txnid']?[0];
+      expect(foxcall != null, true);
+      expect(json.decode(foxcall)['messages'], foxContent);
+
+      final racooncall = FakeMatrixApi
+          .calledEndpoints['/client/v3/sendToDevice/raccoon/raccoon_txnid']?[0];
+      expect(racooncall != null, true);
+      expect(json.decode(racooncall)['messages'], raccoonContent);
+
+      final bunnycall = FakeMatrixApi
+          .calledEndpoints['/client/v3/sendToDevice/bunny/bunny_txnid']?[0];
+      expect(bunnycall != null, true);
+      expect(json.decode(bunnycall)['messages'], bunnyContent);
+
+      await client.dispose(closeDatabase: true);
+    });
+    test('startDirectChat', () async {
+      await matrix.startDirectChat('@alice:example.com', waitForSync: false);
+
+      expect(
+        json.decode(
+          FakeMatrixApi.calledEndpoints['/client/v3/createRoom']?.last,
+        ),
+        {
+          'initial_state': [
+            {
+              'content': {'algorithm': 'm.megolm.v1.aes-sha2'},
+              'type': 'm.room.encryption',
+            },
+          ],
+          'invite': ['@alice:example.com'],
+          'is_direct': true,
+          'preset': 'trusted_private_chat',
+        },
+      );
+    });
+
+    test('createGroupChat', () async {
+      await matrix.createGroupChat(groupName: 'Testgroup', waitForSync: false);
+
+      expect(
+        json.decode(
+          FakeMatrixApi.calledEndpoints['/client/v3/createRoom']?.last,
+        ),
+        {
+          'initial_state': [
+            {
+              'content': {'algorithm': 'm.megolm.v1.aes-sha2'},
+              'type': 'm.room.encryption',
+            },
+          ],
+          'name': 'Testgroup',
+          'preset': 'private_chat',
+        },
+      );
+
+      await matrix.createGroupChat(
+        groupName: 'Testgroup',
+        waitForSync: false,
+        groupCall: true,
+        powerLevelContentOverride: {'events_default': 12},
+      );
+
+      expect(
+        json.decode(
+          FakeMatrixApi.calledEndpoints['/client/v3/createRoom']?.last,
+        ),
+        {
+          'initial_state': [
+            {
+              'content': {'algorithm': 'm.megolm.v1.aes-sha2'},
+              'type': 'm.room.encryption',
+            },
+          ],
+          'name': 'Testgroup',
+          'power_level_content_override': {
+            'events_default': 12,
+            'events': {'com.famedly.call.member': 12},
+          },
+          'preset': 'private_chat',
+        },
+      );
+
+      await matrix.createGroupChat(
+        groupName: 'Testgroup',
+        waitForSync: false,
+        groupCall: true,
+        powerLevelContentOverride: {
+          'events_default': 12,
+          'events': {'com.famedly.call.member': 14},
+        },
+      );
+
+      expect(
+        json.decode(
+          FakeMatrixApi.calledEndpoints['/client/v3/createRoom']?.last,
+        ),
+        {
+          'initial_state': [
+            {
+              'content': {'algorithm': 'm.megolm.v1.aes-sha2'},
+              'type': 'm.room.encryption',
+            },
+          ],
+          'name': 'Testgroup',
+          'power_level_content_override': {
+            'events_default': 12,
+            'events': {'com.famedly.call.member': 14},
+          },
+          'preset': 'private_chat',
+        },
+      );
+
+      await matrix.createGroupChat(
+        groupName: 'Testgroup',
+        waitForSync: false,
+        groupCall: true,
+      );
+
+      expect(
+        json.decode(
+          FakeMatrixApi.calledEndpoints['/client/v3/createRoom']?.last,
+        ),
+        {
+          'initial_state': [
+            {
+              'content': {'algorithm': 'm.megolm.v1.aes-sha2'},
+              'type': 'm.room.encryption',
+            },
+          ],
+          'name': 'Testgroup',
+          'power_level_content_override': {
+            'events': {'com.famedly.call.member': 0},
+          },
+          'preset': 'private_chat',
+        },
+      );
+    });
+    test('Test the fake store api', () async {
+      final database = await getDatabase();
+      final client1 = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: database,
+      );
+
+      await client1.init(
+        newToken: 'abc123',
+        newUserID: '@test:fakeServer.notExisting',
+        newHomeserver: Uri.parse('https://fakeServer.notExisting'),
+        newDeviceName: 'Text Matrix Client',
+        newDeviceID: 'GHTYAJCE',
+        newOlmAccount: pickledOlmAccount,
+      );
+
+      await client1.abortSync();
+
+      expect(client1.isLogged(), true);
+      expect(client1.rooms.length, 3);
+
+      final client2 = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: database,
+      );
+
+      await client2.init();
+
+      await client2.abortSync();
+
+      expect(client2.isLogged(), true);
+      expect(client2.accessToken, client1.accessToken);
+      expect(client2.userID, client1.userID);
+      expect(client2.homeserver, client1.homeserver);
+      expect(client2.deviceID, client1.deviceID);
+      expect(client2.deviceName, client1.deviceName);
+      expect(client2.rooms.length, 3);
+      if (client2.encryptionEnabled) {
+        expect(
+          client2.encryption?.fingerprintKey,
+          client1.encryption?.fingerprintKey,
+        );
+        expect(
+          client2.encryption?.identityKey,
+          client1.encryption?.identityKey,
+        );
+        expect(client2.rooms[1].id, client1.rooms[1].id);
+      }
+
+      await client1.logout();
+      await client2.logout();
+    });
+    test('changePassword', () async {
+      await matrix.changePassword('1234', oldPassword: '123456');
+    });
+    test('ignoredUsers', () async {
+      expect(matrix.ignoredUsers, []);
+      matrix.accountData['m.ignored_user_list'] = BasicEvent(
+        type: 'm.ignored_user_list',
+        content: {
+          'ignored_users': {'@charley:stupid.abc': {}},
+        },
+      );
+      expect(matrix.ignoredUsers, ['@charley:stupid.abc']);
+      await matrix.ignoreUser('@charley2:stupid.abc');
+      await matrix.unignoreUser('@charley:stupid.abc');
+    });
+    test('upload', () async {
+      final client = await getClient();
+      final response = await client.uploadContent(
+        Uint8List(0),
+        filename: 'file.jpeg',
+      );
+      expect(response.toString(), 'mxc://example.com/AQwafuaFswefuhsfAFAgsw');
+      expect(
+        await client.database.getFile(response) != null,
+        client.database.supportsFileStoring,
+      );
+      await client.dispose(closeDatabase: true);
+    });
+
+    test('refreshAccessToken', () async {
+      final client = await getClient();
+      expect(client.accessToken, 'abcd');
+      await client.refreshAccessToken();
+      expect(client.accessToken, 'a_new_token');
+      await client.dispose();
+    });
+
+    test('handleSoftLogout', () async {
+      final client = await getClient();
+      expect(client.accessToken, 'abcd');
+      var softLoggedOut = 0;
+      client.onSoftLogout = (client) {
+        softLoggedOut++;
+        return client.refreshAccessToken();
+      };
+      FakeMatrixApi.expectedAccessToken = 'a_new_token';
+      await client.oneShotSync();
+      await client.oneShotSync();
+      FakeMatrixApi.expectedAccessToken = null;
+      expect(client.accessToken, 'a_new_token');
+      expect(softLoggedOut, 1);
+      final storedClient = await client.database.getClient(client.clientName);
+      expect(storedClient?.tryGet<String>('token'), 'a_new_token');
+      expect(
+        storedClient?.tryGet<String>('refresh_token'),
+        'another_new_token',
+      );
+      await client.dispose();
+    });
+
+    test('object equality', () async {
+      final time1 = DateTime.fromMillisecondsSinceEpoch(1);
+      final time2 = DateTime.fromMillisecondsSinceEpoch(0);
+      final user1 = User(
+        '@user1:example.org',
+        room: Room(id: '!room1', client: matrix),
+      );
+      final user2 = User(
+        '@user2:example.org',
+        room: Room(id: '!room1', client: matrix),
+      );
+      // receipts
+      expect(Receipt(user1, time1) == Receipt(user1, time1), true);
+      expect(Receipt(user1, time1) == Receipt(user1, time2), false);
+      expect(Receipt(user1, time1) == Receipt(user2, time1), false);
+      // ignore: unrelated_type_equality_checks
+      expect(Receipt(user1, time1) == 'beep', false);
+      // users
+      expect(user1 == user1, true);
+      expect(user1 == user2, false);
+      expect(
+        user1 ==
+            User(
+              '@user1:example.org',
+              room: Room(id: '!room2', client: matrix),
+            ),
+        false,
+      );
+      expect(
+        user1 ==
+            User(
+              '@user1:example.org',
+              room: Room(id: '!room1', client: matrix),
+              membership: 'leave',
+            ),
+        false,
+      );
+      // ignore: unrelated_type_equality_checks
+      expect(user1 == 'beep', false);
+      // rooms
+      expect(
+        Room(id: '!room1', client: matrix) ==
+            Room(id: '!room1', client: matrix),
+        true,
+      );
+      expect(
+        Room(id: '!room1', client: matrix) ==
+            Room(id: '!room2', client: matrix),
+        false,
+      );
+      // ignore: unrelated_type_equality_checks
+      expect(Room(id: '!room1', client: matrix) == 'beep', false);
+    });
+
+    test('clearCache', () async {
+      final client = await getClient();
+      client.backgroundSync = true;
+      await client.clearCache();
+      await client.dispose();
+    });
+
+    test('dispose', () async {
+      await matrix.dispose(closeDatabase: true);
+    });
+
+    test('Database Migration', () async {
+      final firstDatabase = await getDatabase();
+      final firstClient = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: firstDatabase,
+      );
+      FakeMatrixApi.client = firstClient;
+      await firstClient.checkHomeserver(
+        Uri.parse('https://fakeServer.notExisting'),
+        checkWellKnown: false,
+      );
+      await firstClient.init(
+        newToken: 'abcd',
+        newUserID: '@test:fakeServer.notExisting',
+        newHomeserver: firstClient.homeserver,
+        newDeviceName: 'Text Matrix Client',
+        newDeviceID: 'GHTYAJCE',
+        newOlmAccount: pickledOlmAccount,
+      );
+      await Future.delayed(Duration(milliseconds: 200));
+      await firstClient.dispose(closeDatabase: false);
+
+      final newClient = Client(
+        'testclient',
+        httpClient: FakeMatrixApi(),
+        database: await getDatabase(),
+        legacyDatabaseBuilder: (_) => firstDatabase,
+      );
+      final initStates = <InitState>{};
+      await newClient.init(onInitStateChanged: initStates.add);
+      expect(initStates, {
+        InitState.initializing,
+        InitState.migratingDatabase,
+        InitState.settingUpEncryption,
+        InitState.finished,
+      });
+      await Future.delayed(Duration(milliseconds: 200));
+      expect(newClient.isLogged(), true);
+      await newClient.dispose(closeDatabase: false);
+
+      await firstDatabase.close();
+      final sameOldFirstDatabase = await getDatabase();
+      expect(await sameOldFirstDatabase.getClient('testclient'), null);
+    });
+
+    test('getEventByPushNotification', () async {
+      final client =
+          Client(
+              'testclient',
+              httpClient: FakeMatrixApi(),
+              database: await getDatabase(),
+            )
+            ..accessToken = '1234'
+            ..baseUri = Uri.parse('https://fakeserver.notexisting');
+      Event? event;
+      event = await client.getEventByPushNotification(
+        PushNotification(devices: []),
+      );
+      expect(event, null);
+
+      event = await client.getEventByPushNotification(
+        PushNotification(
+          devices: [],
+          eventId: '123',
+          roomId: '!localpart2:server.abc',
+          content: {'msgtype': 'm.text', 'body': 'Hello world'},
+          roomAlias: '#testalias:blaaa',
+          roomName: 'TestRoomName',
+          sender: '@alicyy:example.com',
+          senderDisplayName: 'AlicE',
+          type: 'm.room.message',
+        ),
+      );
+      expect(event?.eventId, '123');
+      expect(event?.body, 'Hello world');
+      expect(event?.senderId, '@alicyy:example.com');
+      expect(event?.senderFromMemoryOrFallback.calcDisplayname(), 'AlicE');
+      expect(event?.type, 'm.room.message');
+      expect(event?.messageType, 'm.text');
+      expect(event?.room.id, '!localpart2:server.abc');
+      expect(event?.room.name, 'TestRoomName');
+      expect(event?.room.canonicalAlias, '#testalias:blaaa');
+      final storedEvent = await client.database.getEventById(
+        '123',
+        event!.room,
+      );
+      expect(storedEvent?.eventId, event.eventId);
+
+      event = await client.getEventByPushNotification(
+        PushNotification(
+          devices: [],
+          eventId: '1234',
+          roomId: '!localpart:server.abc',
+        ),
+      );
+      expect(event?.eventId, '143273582443PhrSn:example.org');
+      expect(event?.room.id, '!localpart:server.abc');
+      expect(event?.body, 'This is an example text message');
+      expect(event?.messageType, 'm.text');
+      expect(event?.type, 'm.room.message');
+      final storedEvent2 = await client.database.getEventById(
+        '143273582443PhrSn:example.org',
+        event!.room,
+      );
+      expect(storedEvent2?.eventId, event.eventId);
+    });
+
+    test('Rooms and archived rooms getter', () async {
+      final client = await getClient();
+      await Future.delayed(Duration(milliseconds: 50));
+
+      expect(
+        client.rooms.length,
+        3,
+        reason:
+            'Count of invited+joined before loadArchive() rooms does not match',
+      );
+
+      await client.loadArchive();
+
+      expect(
+        client.rooms.length,
+        3,
+        reason: 'Count of invited+joined rooms does not match',
+      );
+
+      await client.dispose();
+    });
+
+    test('Client Init Exception', () async {
+      final customClient = Client(
+        'failclient',
+        database: await getMatrixSdkDatabase(),
+      );
+      try {
+        await customClient.init(
+          newToken: 'testtoken',
+          newDeviceID: 'testdeviceid',
+          newDeviceName: 'testdevicename',
+          newHomeserver: Uri.parse('https://test.server'),
+          newOlmAccount: 'abcd',
+          newUserID: '@user:server',
+        );
+        throw Exception('No exception?');
+      } on ClientInitException catch (error) {
+        expect(error.accessToken, 'testtoken');
+        expect(error.deviceId, 'testdeviceid');
+        expect(error.deviceName, 'testdevicename');
+        expect(error.homeserver, Uri.parse('https://test.server'));
+        expect(error.olmAccount, 'abcd');
+        expect(error.userId, '@user:server');
+        expect(
+          error.originalException.runtimeType.toString(),
+          'AnyhowException',
+        );
+      }
+      await customClient.dispose(closeDatabase: true);
+    });
+
+    test('default and custom rooms sorter', () {
+      final roomA = Room(id: '!roomA:example.com', client: matrix)
+        ..lastEvent = Event.fromJson({
+          'type': 'm.room.message',
+          'event_id': '\$evt_a',
+          'sender': '@test:fakeServer.notExisting',
+          'origin_server_ts': 1000,
+          'content': {'msgtype': 'm.text', 'body': 'message a'},
+        }, Room(id: '!roomA:example.com', client: matrix));
+
+      final roomB = Room(id: '!roomB:example.com', client: matrix)
+        ..lastEvent = Event.fromJson({
+          'type': 'm.room.message',
+          'event_id': '\$evt_b',
+          'sender': '@test:fakeServer.notExisting',
+          'origin_server_ts': 3000,
+          'content': {'msgtype': 'm.text', 'body': 'message b'},
+        }, Room(id: '!roomB:example.com', client: matrix));
+
+      final roomC = Room(id: '!roomC:example.com', client: matrix)
+        ..lastEvent = Event.fromJson({
+          'type': 'm.room.message',
+          'event_id': '\$evt_c',
+          'sender': '@test:fakeServer.notExisting',
+          'origin_server_ts': 2000,
+          'content': {'msgtype': 'm.text', 'body': 'message c'},
+        }, Room(id: '!roomC:example.com', client: matrix));
+
+      matrix.rooms.clear();
+      matrix.rooms.addAll([roomA, roomB, roomC]);
+
+      matrix.setCustomRoomSorter((a, b) => a.id.compareTo(b.id));
+      expect(matrix.rooms, [
+        roomA,
+        roomB,
+        roomC,
+      ], reason: 'Rooms sorted by custom sorter (alphabetically)');
+
+      matrix.setCustomRoomSorter(null);
+      expect(
+        matrix.rooms,
+        [roomB, roomC, roomA],
+        reason: 'Rooms should revert to default sort by latest event time',
+      );
+    });
+
+    tearDown(() async {
+      await matrix.dispose(closeDatabase: true);
+    });
+  });
+}
