@@ -12,6 +12,7 @@ concurrency:
 
 jobs:
   deploy_web:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -36,6 +37,7 @@ jobs:
           destination_dir: nightly
 
   deploy_playstore_internal:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     runs-on: ubuntu-latest
     concurrency:
       group: deploy_playstore

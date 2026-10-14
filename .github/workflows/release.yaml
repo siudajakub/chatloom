@@ -15,6 +15,7 @@ env:
 
 jobs:
   build_web:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -74,6 +75,7 @@ jobs:
           cname: fluffychat.im
 
   build_apk:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -106,6 +108,7 @@ jobs:
           asset_content_type: application/vnd.android.package-archive
 
   build_linux:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     strategy:
       matrix:
         arch: [ x64, arm64 ]
@@ -135,6 +138,7 @@ jobs:
           asset_content_type: application/gzip
 
   deploy_snapstore:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     strategy:
       matrix:
         arch: [ x64, arm64 ]
@@ -159,6 +163,7 @@ jobs:
           release: ${{ steps.channel.outputs.channel }}
 
   build_windows:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -182,6 +187,7 @@ jobs:
           asset_content_type: application/vnd.microsoft.portable-executable
 
   deploy_playstore:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     runs-on: ubuntu-latest
     concurrency:
       group: deploy_playstore
@@ -235,6 +241,7 @@ jobs:
           cd ..
 
   deploy_docker:
+    if: ${{ github.repository == 'krille-chan/fluffychat' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
