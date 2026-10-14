@@ -4,6 +4,7 @@ import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 
 import android.content.Context
+import chat.fluffy.fluffychat.round.TelegramRoundPlugin
 
 class MainActivity : FlutterFragmentActivity() {
 
@@ -24,6 +25,9 @@ class MainActivity : FlutterFragmentActivity() {
         var engine: FlutterEngine? = null
         fun provideEngine(context: Context): FlutterEngine {
             val eng = engine ?: FlutterEngine(context, emptyArray(), true, false)
+            if (!eng.plugins.has(TelegramRoundPlugin::class.java)) {
+                eng.plugins.add(TelegramRoundPlugin())
+            }
             engine = eng
             return eng
         }
