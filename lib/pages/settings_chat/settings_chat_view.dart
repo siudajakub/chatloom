@@ -7,9 +7,9 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:fluffychat/widgets/settings_switch_list_tile.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -32,7 +32,7 @@ class SettingsChatView extends StatelessWidget {
       ),
       body: ListTileTheme(
         iconColor: theme.textTheme.bodyLarge!.color,
-        child: MaxWidthBody(
+        child: NotionSettingsBody(
           child: Column(
             children: [
               SettingsSwitchListTile.adaptive(

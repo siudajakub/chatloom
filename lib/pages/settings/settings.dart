@@ -33,6 +33,14 @@ class Settings extends StatefulWidget {
 class SettingsController extends State<Settings> {
   Future<Profile>? profileFuture;
   bool profileUpdated = false;
+  Client? _profileClient;
+  int _accountRevision = 0;
+
+  bool _isCurrentClient(Client client, int revision) =>
+      mounted &&
+      revision == _accountRevision &&
+      identical(_profileClient, client) &&
+      identical(Matrix.of(context).client, client);
 
   void updateProfile() => setState(() {
     profileUpdated = true;
@@ -41,35 +49,41 @@ class SettingsController extends State<Settings> {
 
   Future<void> setDisplaynameAction() async {
     final l10n = L10n.of(context);
-    final matrix = Matrix.of(context);
-    final profile = await profileFuture;
-    if (!mounted) return;
+    final client = Matrix.of(context).client;
+    final revision = _accountRevision;
+    Profile? profile;
+    try {
+      profile = await profileFuture;
+    } catch (_) {
+      if (!_isCurrentClient(client, revision)) return;
+    }
+    if (!_isCurrentClient(client, revision)) return;
     final input = await showTextInputDialog(
       useRootNavigator: false,
       context: context,
       title: l10n.editDisplayname,
       okLabel: l10n.ok,
       cancelLabel: l10n.cancel,
-      initialText: profile?.displayName ?? matrix.client.userID!.localpart,
+      initialText: profile?.displayName ?? client.userID!.localpart,
     );
     if (input == null) return;
-    if (!mounted) return;
+    if (!_isCurrentClient(client, revision)) return;
     final success = await showFutureLoadingDialog(
       context: context,
-      future: () => matrix.client.setProfileField(
-        matrix.client.userID!,
-        'displayname',
-        {'displayname': input},
-      ),
+      future: () => client.setProfileField(client.userID!, 'displayname', {
+        'displayname': input,
+      }),
     );
-    if (success.error == null) {
+    if (success.error == null && _isCurrentClient(client, revision)) {
       updateProfile();
     }
   }
 
   Future<void> logoutAction() async {
     final l10n = L10n.of(context);
-    final matrix = Matrix.of(context);
+    final client = Matrix.of(context).client;
+    final revision = _accountRevision;
+    if (!_isCurrentClient(client, revision)) return;
     final consent = await showOkCancelAlertDialog(
       useRootNavigator: false,
       context: context,
@@ -80,20 +94,26 @@ class SettingsController extends State<Settings> {
       cancelLabel: l10n.cancel,
     );
     if (consent != OkCancelResult.ok) return;
-    if (!mounted) return;
-    await showFutureLoadingDialog(
+    if (!_isCurrentClient(client, revision)) return;
+    final result = await showFutureLoadingDialog(
       context: context,
-      future: () => matrix.client.logout(),
+      future: client.logout,
     );
-    if (!mounted) return;
+    if (result.error != null || !_isCurrentClient(client, revision)) return;
     context.go('/');
   }
 
   Future<void> setAvatarAction() async {
     final l10n = L10n.of(context);
-    final matrix = Matrix.of(context);
-    final profile = await profileFuture;
-    if (!mounted) return;
+    final client = Matrix.of(context).client;
+    final revision = _accountRevision;
+    Profile? profile;
+    try {
+      profile = await profileFuture;
+    } catch (_) {
+      if (!_isCurrentClient(client, revision)) return;
+    }
+    if (!_isCurrentClient(client, revision)) return;
     final actions = [
       if (PlatformInfos.isMobile)
         AdaptiveModalAction(
@@ -124,13 +144,13 @@ class SettingsController extends State<Settings> {
             actions: actions,
           );
     if (action == null) return;
-    if (!mounted) return;
+    if (!_isCurrentClient(client, revision)) return;
     if (action == AvatarAction.remove) {
       final success = await showFutureLoadingDialog(
         context: context,
-        future: () => matrix.client.setAvatar(null),
+        future: () => client.setAvatar(null),
       );
-      if (success.error == null) {
+      if (success.error == null && _isCurrentClient(client, revision)) {
         updateProfile();
       }
       return;
@@ -143,55 +163,63 @@ class SettingsController extends State<Settings> {
             : ImageSource.gallery,
         imageQuality: 50,
       );
-      if (result == null) return;
+      if (result == null || !_isCurrentClient(client, revision)) return;
       file = MatrixFile(bytes: await result.readAsBytes(), name: result.path);
     } else {
-      if (!mounted) return;
+      if (!_isCurrentClient(client, revision)) return;
       final result = await selectFiles(context, type: FileType.image);
       final pickedFile = result.firstOrNull;
-      if (pickedFile == null) return;
+      if (pickedFile == null || !_isCurrentClient(client, revision)) return;
       file = MatrixFile(
         bytes: await pickedFile.readAsBytes(),
         name: pickedFile.name,
       );
     }
-    if (!mounted) return;
+    if (!_isCurrentClient(client, revision)) return;
     final success = await showFutureLoadingDialog(
       context: context,
-      future: () => matrix.client.setAvatar(file),
+      future: () => client.setAvatar(file),
     );
-    if (success.error == null) {
+    if (success.error == null && _isCurrentClient(client, revision)) {
       updateProfile();
     }
   }
 
-  @override
-  void initState() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => checkBootstrap());
-
-    super.initState();
-  }
-
-  Future<void> checkBootstrap() async {
-    final client = Matrix.of(context).client;
+  Future<void> checkBootstrap({Client? account, int? accountRevision}) async {
+    if (!mounted) return;
+    final client = account ?? Matrix.of(context).client;
+    final revision = accountRevision ?? _accountRevision;
+    if (!_isCurrentClient(client, revision)) return;
     if (!client.encryptionEnabled) return;
     if (!client.isLogged()) return;
-    await client.accountDataLoading;
-    await client.userDeviceKeysLoading;
-    if (client.prevBatch == null) {
-      await client.onSync.stream.first;
-    }
+    try {
+      await client.accountDataLoading;
+      if (!_isCurrentClient(client, revision)) return;
+      await client.userDeviceKeysLoading;
+      if (!_isCurrentClient(client, revision)) return;
+      if (client.prevBatch == null) {
+        await client.onSync.stream.first;
+        if (!_isCurrentClient(client, revision)) return;
+      }
 
-    final state = await client.getCryptoIdentityState();
-    if (!mounted) return;
-    setState(() {
-      cryptoIdentityConnected = state.initialized && state.connected;
-    });
+      final state = await client.getCryptoIdentityState();
+      if (!_isCurrentClient(client, revision)) return;
+      setState(() {
+        cryptoIdentityConnected = state.initialized && state.connected;
+      });
+    } catch (_) {
+      if (_isCurrentClient(client, revision)) {
+        setState(() => cryptoIdentityConnected = null);
+      }
+    }
   }
 
   bool? cryptoIdentityConnected;
 
   Future<void> firstRunBootstrapAction([_]) async {
+    final client = Matrix.of(context).client;
+    final revision = _accountRevision;
+    if (!_isCurrentClient(client, revision)) return;
     if (cryptoIdentityConnected == true) {
       final action = await showOkCancelAlertDialog(
         context: context,
@@ -202,17 +230,36 @@ class SettingsController extends State<Settings> {
         isDestructive: true,
       );
       if (action != OkCancelResult.ok) return;
-      if (!mounted) return;
+      if (!_isCurrentClient(client, revision)) return;
       await context.push('/backup?reset=true');
+      if (_isCurrentClient(client, revision)) {
+        await checkBootstrap(account: client, accountRevision: revision);
+      }
       return;
     }
+    if (!_isCurrentClient(client, revision)) return;
     await context.push('/backup');
-    checkBootstrap();
+    if (_isCurrentClient(client, revision)) {
+      await checkBootstrap(account: client, accountRevision: revision);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final client = Matrix.of(context).client;
+    if (!identical(_profileClient, client)) {
+      _profileClient = client;
+      _accountRevision++;
+      profileFuture = null;
+      profileUpdated = false;
+      cryptoIdentityConnected = null;
+      final revision = _accountRevision;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_isCurrentClient(client, revision)) {
+          unawaited(checkBootstrap(account: client, accountRevision: revision));
+        }
+      });
+    }
     profileFuture ??= client.getProfileFromUserId(client.userID!);
     return SettingsView(this);
   }

@@ -5,7 +5,7 @@
 
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_password/settings_password.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -21,7 +21,7 @@ class SettingsPasswordView extends StatelessWidget {
       appBar: AppBar(title: Text(L10n.of(context).changePassword)),
       body: ListTileTheme(
         iconColor: theme.colorScheme.onSurface,
-        child: MaxWidthBody(
+        child: NotionSettingsBody(
           child: Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(

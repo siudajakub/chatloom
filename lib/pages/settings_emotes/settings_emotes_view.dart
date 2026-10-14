@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:fluffychat/widgets/mxc_image_viewer.dart';
 import 'package:flutter/services.dart';
@@ -154,7 +154,7 @@ class EmotesSettingsView extends StatelessWidget {
                 ),
               ),
       ),
-      body: MaxWidthBody(
+      body: NotionSettingsBody(
         child: Column(
           mainAxisSize: .min,
           crossAxisAlignment: .stretch,
