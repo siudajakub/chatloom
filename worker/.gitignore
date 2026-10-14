@@ -1,0 +1,8 @@
+.dart_tool/
+build/
+.runtime/
+*.sqlite*
+*.secret
+config.local.json
+credentials.json
+!pubspec.lock

@@ -1,0 +1,24 @@
+name: personal_worker
+description: Silent personal Matrix feature service.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: '>=3.11.1 <4.0.0'
+dependencies:
+  personal_core:
+    path: ../packages/personal_core
+  matrix:
+    path: ../packages/matrix
+  vodozemac: 0.8.0
+  sqlite3: ^3.0.0
+  sqflite_common_ffi: ^2.4.2
+  http: ^1.6.0
+  path: ^1.9.1
+  crypto: ^3.0.6
+dev_dependencies:
+  test: ^1.26.0
+  lints: ^6.0.0
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlcipher
