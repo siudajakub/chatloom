@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/utils/string_color.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:fluffychat/widgets/presence_builder.dart';
 import 'package:material_ui/material_ui.dart';
@@ -40,25 +40,12 @@ class Avatar extends StatelessWidget {
     super.key,
   });
 
-  String _calcFallbackLetters() {
-    final name = this.name?.trim();
-    if (name == null || name.isEmpty) return '@';
-    final words = name.split(' ');
-    if (words.length <= 1) return name.substring(0, 1);
-    return '${words.first.substring(0, 1)}${words.last.substring(0, 1)}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    final fallbackLetters = _calcFallbackLetters();
-
-    final noPic =
-        mxContent == null ||
-        mxContent.toString().isEmpty ||
-        mxContent.toString() == 'null';
-    final borderRadius = this.borderRadius ?? BorderRadius.circular(size / 2);
+    final borderRadius =
+        this.borderRadius ?? BorderRadius.circular(NotionTokens.avatarRadius);
     final presenceUserId = this.presenceUserId;
     final container = Stack(
       children: [
@@ -77,6 +64,7 @@ class Avatar extends StatelessWidget {
                 ),
             clipBehavior: Clip.antiAlias,
             child: MxcImage(
+              usePlaceholderOnError: true,
               client: client,
               borderRadius: borderRadius,
               key: ValueKey(mxContent.toString()),
@@ -85,34 +73,13 @@ class Avatar extends StatelessWidget {
               fit: BoxFit.cover,
               width: size,
               height: size,
-              placeholder: (_) => noPic
-                  ? Container(
-                      decoration: BoxDecoration(
-                        color:
-                            backgroundColor ??
-                            fallbackLetters.colorScheme.primaryContainer,
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        fallbackLetters,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontFamily: 'RobotoMono',
-                          color:
-                              textColor ??
-                              fallbackLetters.colorScheme.onPrimaryContainer,
-                          fontWeight: FontWeight.bold,
-                          fontSize: (size / 2.5).roundToDouble(),
-                        ),
-                      ),
-                    )
-                  : Center(
-                      child: Icon(
-                        Icons.person_2,
-                        color: theme.colorScheme.tertiary,
-                        size: size / 1.5,
-                      ),
-                    ),
+              placeholder: (_) => NotionInitialAvatar(
+                name: name,
+                size: size,
+                backgroundColor: backgroundColor,
+                textColor: textColor,
+                icon: icon,
+              ),
             ),
           ),
         ),
