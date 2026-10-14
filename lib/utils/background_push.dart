@@ -11,13 +11,15 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
 
-//<GOOGLE_SERVICES>import 'package:fcm_shared_isolate/fcm_shared_isolate.dart';
+import 'package:fcm_shared_isolate/fcm_shared_isolate.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/main.dart';
+import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:fluffychat/widgets/fluffy_chat_app.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -56,14 +58,15 @@ class BackgroundPush {
   final pendingTests = <String, Completer<void>>{};
   bool firebaseEnabled = false;
 
-  //<GOOGLE_SERVICES>final firebase = FcmSharedIsolate();
+  final firebase = FcmSharedIsolate();
 
   DateTime? lastReceivedPush;
 
   bool upAction = false;
 
   Future<void> _init() async {
-    //<GOOGLE_SERVICES>firebaseEnabled = true;
+    PersonalPrivacy.installLogging();
+    firebaseEnabled = PlatformInfos.isAndroid;
     try {
       mainIsolateReceivePort?.listen((message) async {
         try {
@@ -111,17 +114,11 @@ class BackgroundPush {
         onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
       );
       Logs().v('Flutter Local Notifications initialized');
-      //<GOOGLE_SERVICES>firebase.setListeners(
-      //<GOOGLE_SERVICES>  onMessage: (message) => pushHelper(
-      //<GOOGLE_SERVICES>    PushNotification.fromJson(
-      //<GOOGLE_SERVICES>       message.tryGetMap<String, Object>('data') ?? message,
-      //<GOOGLE_SERVICES>    ),
-      //<GOOGLE_SERVICES>    clients: clients,
-      //<GOOGLE_SERVICES>    l10n: l10n,
-      //<GOOGLE_SERVICES>    activeRoomId: matrix?.activeRoomId,
-      //<GOOGLE_SERVICES>    flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
-      //<GOOGLE_SERVICES>  ),
-      //<GOOGLE_SERVICES>);
+      if (firebaseEnabled) {
+        firebase.setListeners(
+          onMessage: handleFcmMessage,
+        );
+      }
       if (Platform.isAndroid) {
         await UnifiedPush.initialize(
           onNewEndpoint: _newUpEndpoint,
@@ -162,7 +159,7 @@ class BackgroundPush {
     String? token,
   }) async {
     if (PlatformInfos.isIOS) {
-      //<GOOGLE_SERVICES>await firebase.requestPermission();
+      await firebase.requestPermission();
     }
     if (PlatformInfos.isAndroid && !isIntegrationTest) {
       _flutterLocalNotificationsPlugin
@@ -192,6 +189,15 @@ class BackgroundPush {
       return;
     }
 
+    final ownFcmGateway =
+        gatewayUrl == AppSettings.pushNotificationsGatewayUrl.value &&
+        token == _fcmToken;
+    final gatewayNonce = ownFcmGateway
+        ? await const FlutterSecureStorage().read(key: 'personal_gateway_nonce')
+        : null;
+    if (ownFcmGateway && (gatewayNonce == null || gatewayNonce.isEmpty)) {
+      throw StateError('Gateway device registration required');
+    }
     if (pushers.any(
       (currentPusher) =>
           currentPusher.pushkey == token &&
@@ -200,38 +206,22 @@ class BackgroundPush {
           currentPusher.kind == 'http' &&
           currentPusher.appId == thisAppId &&
           currentPusher.appDisplayName == appDisplayName &&
-          currentPusher.deviceDisplayName == client.deviceName &&
+          currentPusher.deviceDisplayName ==
+              (client.deviceName ?? appDisplayName) &&
           currentPusher.lang == 'en' &&
           currentPusher.data.url.toString() == gatewayUrl &&
           currentPusher.data.format ==
               AppSettings.pushNotificationsPusherFormat.value &&
           currentPusher.data.additionalProperties['data_message'] ==
-              pusherDataMessageFormat,
+              pusherDataMessageFormat &&
+          currentPusher.data.additionalProperties['gateway_nonce'] ==
+              gatewayNonce,
     )) {
       Logs().i('[Push] Pusher already set for ${client.deviceID}');
       return;
     }
 
     if (!client.isLogged()) return;
-
-    final legacyPushers = pushers.where(
-      (pusher) =>
-          pusher.appId == thisAppId || // To migrate older app-id format:
-          ((pusher.appId == 'chat.fluffy.fluffychat.data_message' ||
-                  pusher.appId == 'chat.fluffy.fluffychat') &&
-              pusher.pushkey == token),
-    );
-    for (final pusher in legacyPushers) {
-      try {
-        await client.deletePusher(pusher);
-        Logs().i('[Push] Removed legacy pusher for ${client.deviceID}');
-      } catch (err) {
-        Logs().w(
-          '[Push] Failed to remove old pusher for ${client.deviceID}',
-          err,
-        );
-      }
-    }
 
     Logs().i('Need to set new pusher for ${client.clientName}');
     try {
@@ -240,7 +230,7 @@ class BackgroundPush {
           pushkey: token,
           appId: thisAppId,
           appDisplayName: appDisplayName,
-          deviceDisplayName: PlatformInfos.appDisplayName,
+          deviceDisplayName: client.deviceName ?? appDisplayName,
           lang: 'en',
           data: PusherData(
             url: Uri.parse(gatewayUrl),
@@ -248,15 +238,39 @@ class BackgroundPush {
             additionalProperties: {
               'client_name': client.clientName,
               'data_message': pusherDataMessageFormat,
+              'gateway_nonce': ?gatewayNonce,
             },
           ),
           kind: 'http',
         ),
         append: true,
       );
+      for (final old in pushers.where(
+        (p) => p.appId == thisAppId && p.pushkey != token,
+      )) {
+        await client.deletePusher(old);
+      }
     } catch (e, s) {
       Logs().e('[Push] Unable to set pushers', e, s);
     }
+  }
+
+  Future<void> handleFcmMessage(Map<String, dynamic> message) async {
+    final data = message.tryGetMap<String, Object>('data') ?? message;
+    if (data['personal_wake'] == 'reminder') {
+      await personalReminderWake(
+        clients: clients,
+        plugin: _flutterLocalNotificationsPlugin,
+      );
+      return;
+    }
+    await pushHelper(
+      PushNotification.fromJson(data),
+      clients: clients,
+      l10n: l10n,
+      activeRoomId: matrix?.activeRoomId,
+      flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
+    );
   }
 
   final pusherDataMessageFormat = Platform.isAndroid;
@@ -341,13 +355,13 @@ class BackgroundPush {
     }
     if (_fcmToken?.isEmpty ?? true) {
       if (PlatformInfos.isIOS) {
-        //<GOOGLE_SERVICES>await firebase.requestPermission();
+        await firebase.requestPermission();
       }
       const max = 5;
       for (var i = 0; i < max; i++) {
         try {
           await Future.delayed(const Duration(seconds: 1));
-          //<GOOGLE_SERVICES>_fcmToken = await firebase.getToken();
+          _fcmToken = await firebase.getToken();
           if (_fcmToken != null) break;
         } catch (e, s) {
           Logs().w(

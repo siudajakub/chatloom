@@ -7,10 +7,10 @@ import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_notifications/push_rule_extensions.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:fluffychat/utils/background_push.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/push_helper.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:fluffychat/widgets/settings_switch_list_tile.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
@@ -47,7 +47,7 @@ class SettingsNotificationsView extends StatelessWidget {
         centerTitle: FluffyThemes.isColumnMode(context),
         title: Text(L10n.of(context).notifications),
       ),
-      body: MaxWidthBody(
+      body: NotionSettingsBody(
         child: StreamBuilder(
           stream: Matrix.of(context).client.onSync.stream.where(
             (syncUpdate) =>

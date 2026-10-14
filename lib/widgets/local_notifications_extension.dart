@@ -3,10 +3,14 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/client_download_content_extension.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/notification_eligibility.dart';
+import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/round_video/telegram_media_protocol.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:fluffychat/widgets/fluffy_chat_app.dart';
@@ -24,11 +28,50 @@ extension LocalNotificationsExtension on MatrixState {
     ..load();
 
   Future<void> showLocalNotification(Event event) async {
+    if (isTelegramMediaControl(event.type)) return;
+    if (PersonalPrivacy.isJournal(event.room)) {
+      final target = await PersonalPrivacy.reminderTarget(event);
+      if (target != null && !kIsWeb) {
+        await PersonalClient.of(event.room.client).presentReminder(
+          event,
+          () => FlutterLocalNotificationsPlugin().show(
+            id: ('reminder_${event.content['entityId']}').hashCode,
+            title: 'Personal Chat',
+            body: 'Masz przypomnienie o rozmowie.',
+            notificationDetails: const NotificationDetails(
+              android: AndroidNotificationDetails(
+                AppConfig.pushNotificationsChannelId,
+                'Przypomnienia',
+                importance: Importance.high,
+                visibility: NotificationVisibility.private,
+              ),
+              macOS: DarwinNotificationDetails(),
+            ),
+            payload: FluffyChatPushPayload(
+              event.room.client.clientName,
+              target.id,
+              null,
+            ).toString(),
+          ),
+        );
+      }
+      return;
+    }
+    final personal = PersonalClient.of(event.room.client);
+    await personal.load();
+    if (!await personalNotificationEligible(
+      event,
+      InboxProjection(personal).metadataFor(event.room),
+    )) {
+      return;
+    }
+
     if (event.type == RtcNotificationContent.eventType &&
         event.tryParseRtcNotificationContent()?.notificationType == .ring) {
       final context =
           FluffyChatApp.router.routerDelegate.navigatorKey.currentContext ??
           this.context;
+      if (!context.mounted) return;
       showDialog<bool>(
         context: context,
         builder: (_) => IncomingCallDialog(event: event),
@@ -40,6 +83,7 @@ extension LocalNotificationsExtension on MatrixState {
       });
     }
 
+    if (!mounted) return;
     final l10n = L10n.of(context);
     final roomId = event.room.id;
     if (activeRoomId == roomId) {
@@ -48,56 +92,13 @@ extension LocalNotificationsExtension on MatrixState {
       }
     }
 
-    final title = event.room.getLocalizedDisplayname(
-      MatrixLocals(L10n.of(context)),
-    );
-    final body = await event.calcLocalizedBody(
-      MatrixLocals(L10n.of(context)),
-      withSenderNamePrefix:
-          !event.room.isDirectChat ||
-          event.room.lastEvent?.senderId == client.userID,
-      plaintextBody: true,
-      hideReply: true,
-      hideEdit: true,
-      removeMarkdown: true,
-    );
-    final avatarUrl = event.room.avatar;
-
-    const size = 128;
-    const thumbnailMethod = ThumbnailMethod.crop;
-
-    if (avatarUrl != null) {
-      // Pre-cache so that we can later just set the thumbnail uri as icon:
-      try {
-        await client.downloadMxcCached(
-          avatarUrl,
-          width: size,
-          height: size,
-          thumbnailMethod: thumbnailMethod,
-          isThumbnail: true,
-          rounded: true,
-        );
-      } catch (e, s) {
-        Logs().d('Unable to pre-download avatar for web notification', e, s);
-      }
-    }
-
+    const title = 'Personal Chat';
+    const body = 'Open the app to read your message.';
+    if (!mounted) return;
     if (kIsWeb) {
-      final thumbnailUri = await avatarUrl?.getThumbnailUri(
-        client,
-        width: size,
-        height: size,
-        method: thumbnailMethod,
-      );
-
       if (AppSettings.webNotificationSound.value) _audioPlayer.play();
 
-      html.Notification(
-        title,
-        body: body,
-        icon: thumbnailUri?.toString(),
-        tag: event.room.id,
-      );
+      html.Notification(title, body: body, tag: event.room.id);
       return;
     }
 

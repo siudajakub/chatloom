@@ -9,6 +9,7 @@ import 'dart:ui';
 
 import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -58,6 +59,7 @@ Future<void> waitForPushIsolateDone() async {
 Future<void> notificationTapBackground(
   NotificationResponse notificationResponse,
 ) async {
+  PersonalPrivacy.installLogging();
   final sendPort = IsolateNameServer.lookupPortByName(
     AppConfig.mainIsolatePortName,
   );
@@ -177,11 +179,10 @@ Future<void> notificationTap(
       }
       switch (actionType) {
         case FluffyChatNotificationActions.markAsRead:
-          await room.setReadMarker(
-            payload.eventId ?? room.lastEvent!.eventId,
-            mRead: payload.eventId ?? room.lastEvent!.eventId,
-            public: AppSettings.sendPublicReadReceipts.value,
-          );
+          final readEvent = payload.eventId ?? room.lastEvent?.eventId;
+          if (readEvent != null) {
+            await PersonalPrivacy.markRead(room, readEvent, manual: true);
+          }
         case FluffyChatNotificationActions.reply:
           final input = notificationResponse.input;
           if (input == null || input.isEmpty) {
