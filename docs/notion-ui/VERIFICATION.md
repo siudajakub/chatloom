@@ -1,0 +1,63 @@
+# Notion dark v2 — local delivery, 2026-10-13
+
+The approved five-screen interface is implemented in the isolated current-source checkout `$PERSONAL_CHAT_ROOT/client-worktrees/notion-ui`. Three screen agents and the coordinator integrated production presenters with the existing controllers. The original `client/` was read-only throughout.
+
+Inbox has private ordered pinned shortcuts, a flat Messages list, a floating Settings/Search/network dock, any-source merged filtering, account-bound selection, and explicit public discovery. Typing stays local; Clear, outside/Back/Escape dismissal, focus restoration, sync retry, invitations, spaces, archive, unread and drafts remain available. The merged-person draft is included in the Drafts view.
+
+Ordinary and merged conversations have a compact identity/details header, authored rows, inline media, manual transcription and a rectangular composer. Existing replies, reactions, edits, selection, pagination, encrypted media, schedules and durable outbox remain connected. IME candidates cannot submit. The merged microphone opens the existing source recorder with a frozen source/account guard; during a source-locked reply its helper requires cancelling that reply first. Reply attachments and round controls remain available through their existing source-bound paths.
+
+Details and settings use real private metadata, three source notification states, loaded/paged media and existing account/security/recovery/device routes. Incognito in details is a read-only device status linking to global Settings. Native Mute uses the source's fully muted rule; request acknowledgement waits for actual rule sync. Private mutation pending does not disable native notification settings. Account changes reset profile, recovery, metadata listeners and account-management caches; old dialogs/pickers/bootstrap completions cannot mutate the newly selected account.
+
+The app explicitly selects English. User content, identifiers and protocol values are unchanged. Roboto Regular/Medium/Bold and its license are bundled from the installed Flutter SDK, and the default theme is neutral dark. Existing light/system, accent, text-size, wallpaper and private appearance preferences remain reachable. No runtime stock-photo or font requests were introduced.
+
+## Evidence and limits
+
+| Check | Result | Evidence / exact scope |
+|---|---|---|
+| Immutable dirty-source BASE | PASS, 1,101 files and archive hashes verified | `integration-three-way.json`; archive retains its original 0444 mode |
+| Locked dependency resolution | PASS; five added SVG graph packages, no existing version changes | `dependency-delta.json`, `svg-dependency.log` |
+| Production presentation tests | PASS, 34 tests | `widget-final-valid-captures.log`; copied, hashed production presenters plus unchanged core, fictional adapters |
+| Production round widget/controller regressions | PASS, 27 tests | `round-widgets-final.log`; capture/gesture/playback fixtures and existing privacy/TTL controls |
+| Core/storage/outbox/privacy/capability regressions | PASS, 82 core tests plus 11 standalone suites | `personal-regressions.log`; SQLCipher/wrong-key/fail-closed, source routing, crash/retry and HTTP privacy fixtures |
+| Application analyzer | PASS with `--no-fatal-infos`, zero errors/warnings; 88 style infos remain | `analyze-complete.log`; exact final totals retained in log |
+| Diff whitespace | PASS | `git diff --check` |
+| Android release attempt with pub | BLOCKED at package signing after Dart/native compilation | `android-release-delivery.log`; isolated checkout lacks `android/key.properties` / release `storeFile` |
+| Full app graph widget/controller/adapter runner | BLOCKED before tests execute | Native `webcrypto` CMake hook requires the missing Xcode platform SDK; native-tools PATH retry attempted, without disabling hooks |
+| Signed APK, phone installation, original reintegration, deployment | NOT RUN | No signing inputs copied, dummy key, install, commit, push or deployment |
+| Real account/history/recovery/E2EE, physical media/Telegram round-trip, FCM/push/Doze/battery | NOT RUN | No account/private message read, real recipient or device test was authorized/exercised |
+
+Android Firebase configuration is absent in this isolated checkout. Build progress does not confirm Firebase availability, push delivery or account correctness. Full-graph tests under `*_controller_test.dart` and `*_adapter_test.dart` remain saved and analyzed; they are excluded from the separate presenter harness and remain NOT RUN, rather than counted among the 34 passes.
+
+## Visual verification
+
+[Offline comparison gallery](evidence/visual-comparison.html) pairs the five approved references with actual production presenters. Reference SVG view boxes exclude exterior/frame/generated OS chrome using explicitly estimated content bounds in `reference-crop-estimates.json`. The 390 × 844 target is independent of the reference raster dimensions. No automated pixel-equality score or live-app acceptance is claimed.
+
+Sixteen PNGs were rendered and opened for inspection: the five main surfaces at 390 × 844; scrolled detail privacy and Settings preferences; 320/360/412/430 widths; 200% text; empty/many pins; keyboard/error merged composition; and the existing production two-column layout at 900/1200 widths. `screenshots/manifest.json` records dimensions, 2× capture ratio and SHA-256. Raw OS safe areas are blank; there is no fake status bar, home indicator or phone frame.
+
+Approved fictional portrait/café pixels are loaded only into the disposable capture package as image data. They are absent from production assets; actual app avatars/media use the existing permitted SDK/private loaders and initials fallback. The screenshots do not seed contacts, messages, network accounts or success states. English fixture names/messages/counts are illustrative. Larger text reflows property/value rows and the dock while preserving touch targets. Details and settings scroll to expose the complete hierarchy instead of compressing it into the mock's raster aspect ratio. Empty send is visibly disabled.
+
+An initial renderer pass lacked test fonts/icons; those malformed images were replaced after loading production fonts/MaterialIcons. A later asset/scroll restoration capture race was corrected by waiting for image decoding and explicitly setting capture positions. Final valid images supersede those earlier files. These repairs changed evidence mechanics, not application transport.
+
+## Safe integration
+
+`integration-three-way.json` compares immutable BASE, this UI checkout and the current original code. `ui-against-base.patch` is the textual redesign delta against BASE, not against upstream HEAD. New asset hashes and paths accompany it. The source-only delta archive is for reviewed staging; never unpack it over the original checkout.
+
+The final inventory records 60 changed UI files plus 43 new source/assets/tests/helpers, 19 original files changed since BASE, and 10 overlapping paths. All 103 delta archive members were checked against their recorded hashes. Before reintegration, obtain the Android owner's explicit path release, take a fresh code-only original inventory, and reconcile each overlap in staging. Verify the current original hash immediately before every write. Keep newer round/FCM/privacy/outbox work and regenerate platform outputs normally. The UI checkout has not imported post-BASE Android changes; its passing checks apply to its preserved functional snapshot.
+
+Protected SDK/core/storage/media/outbox/worker/push/native source is byte-identical to BASE where inventoried, except eleven separately verified English-copy-only files. Mixed conversation presentation/controller hunks were reviewed for source/account/reply/round invariants. Private configs, signing material, runtime databases and credentials are absent from the delta. No source was copied from the older Skiff functional checkout.
+
+## Reproduce
+
+From the isolated checkout, run one Flutter job at a time:
+
+```sh
+rtk python3 scripts/verify-notion-ui.py --flutter $PERSONAL_CHAT_ROOT/spikes/toolchains/flutter-3.47.4/bin/flutter
+rtk python3 scripts/verify-round-widgets.py --flutter $PERSONAL_CHAT_ROOT/spikes/toolchains/flutter-3.47.4/bin/flutter
+rtk python3 scripts/verify-personal.py --dart $PERSONAL_CHAT_ROOT/spikes/toolchains/flutter-3.47.4/bin/dart
+rtk $PERSONAL_CHAT_ROOT/spikes/toolchains/flutter-3.47.4/bin/flutter analyze --no-pub --no-fatal-infos lib test/notion
+rtk python3 scripts/notion-integration-report.py
+```
+
+The exact pinned SVG package usage was checked against [flutter_svg's official package documentation](https://pub.dev/packages/flutter_svg). Only its local original vector assets are used.
+
+The inherited homeserver unread-notification count can include source control events; control-neutral server counts remain an unverified account/bridge boundary. The UI preserves the existing truthful count source.

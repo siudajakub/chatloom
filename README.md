@@ -1,3 +1,5 @@
+> This private fork is **Personal Chat**. Start with [README.personal.md](README.personal.md) for setup, features and verification boundaries. The upstream README and licenses are preserved below.
+
 <!--
 SPDX-FileCopyrightText: 2019-Present Christian Kußowski
 SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
