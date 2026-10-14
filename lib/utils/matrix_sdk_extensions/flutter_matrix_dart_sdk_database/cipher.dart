@@ -1,88 +1,47 @@
 // SPDX-FileCopyrightText: 2019-Present Christian Kußowski
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
-//
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:convert';
-import 'dart:math';
-
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/client_manager.dart';
+import 'package:fluffychat/personal/storage/cipher_policy.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:matrix/matrix.dart';
 
 const _passwordStorageKey = 'database_password';
+final _cipherPolicy = CipherPolicy(const _SecureKeyVault());
 
-Future<String?> getDatabaseCipher() async {
-  String? password;
+/// A failure never creates a plaintext fallback or deletes an existing key.
+Future<String> getDatabaseCipher({bool requireExisting = false}) =>
+    getProtectedStorageCipher(
+      _passwordStorageKey,
+      requireExisting: requireExisting,
+    );
 
-  const iosOptions = IOSOptions(groupId: 'group.im.fluffychat.app');
+Future<String> getProtectedStorageCipher(
+  String key, {
+  bool requireExisting = false,
+}) => _cipherPolicy.load(key, requireExisting: requireExisting);
 
-  try {
-    password = await FlutterSecureStorage(
-      iOptions: iosOptions,
-    ).read(key: _passwordStorageKey, iOptions: iosOptions);
-    if (password != null) return password;
+class _SecureKeyVault implements KeyVault {
+  const _SecureKeyVault();
 
-    if (PlatformInfos.isIOS) {
-      final legacyPassword = await FlutterSecureStorage().read(
-        key: _passwordStorageKey,
-      );
-      if (legacyPassword != null) {
-        Logs().i('Migrate database key location on iOS...');
-        await FlutterSecureStorage().delete(key: _passwordStorageKey);
-        await FlutterSecureStorage(iOptions: iosOptions).write(
-          key: _passwordStorageKey,
-          value: legacyPassword,
-          iOptions: iosOptions,
-        );
-        return legacyPassword;
-      }
+  static const _options = IOSOptions(groupId: 'group.im.fluffychat.app');
+
+  FlutterSecureStorage get _storage =>
+      const FlutterSecureStorage(iOptions: _options);
+
+  @override
+  Future<String?> read(String key) async {
+    final value = await _storage.read(key: key, iOptions: _options);
+    if (value != null || !PlatformInfos.isIOS) return value;
+    // Preserve the legacy key as well: migration is a copy, never deletion.
+    final legacy = await const FlutterSecureStorage().read(key: key);
+    if (legacy != null) {
+      await _storage.write(key: key, value: legacy, iOptions: _options);
     }
-
-    final rng = Random.secure();
-    final list = Uint8List(32);
-    list.setAll(0, Iterable.generate(list.length, (i) => rng.nextInt(256)));
-    final newPassword = base64UrlEncode(list);
-    await FlutterSecureStorage(
-      iOptions: iosOptions,
-    ).write(key: _passwordStorageKey, value: newPassword, iOptions: iosOptions);
-    // workaround for if we just wrote to the key and it still doesn't exist
-    password = await FlutterSecureStorage(
-      iOptions: iosOptions,
-    ).read(key: _passwordStorageKey, iOptions: iosOptions);
-    if (password == null) throw MissingPluginException();
-    return password;
-  } on MissingPluginException catch (e) {
-    FlutterSecureStorage(
-      iOptions: iosOptions,
-    ).delete(key: _passwordStorageKey, iOptions: iosOptions).catchError((_) {});
-    Logs().w('Database encryption is not supported on this platform', e);
-    _sendNoEncryptionWarning(e);
-  } catch (e, s) {
-    FlutterSecureStorage(
-      iOptions: iosOptions,
-    ).delete(key: _passwordStorageKey, iOptions: iosOptions).catchError((_) {});
-    Logs().w('Unable to init database encryption', e, s);
-    _sendNoEncryptionWarning(e);
+    return legacy;
   }
-  return null;
-}
 
-Future<void> _sendNoEncryptionWarning(Object exception) async {
-  final isStored = AppSettings.noEncryptionWarningShown.value;
-
-  if (isStored == true) return;
-
-  final l10n = await lookupL10n(PlatformDispatcher.instance.locale);
-  ClientManager.sendInitNotification(
-    l10n.noDatabaseEncryption,
-    exception.toString(),
-  );
-
-  await AppSettings.noEncryptionWarningShown.setItem(true);
+  @override
+  Future<void> write(String key, String value) =>
+      _storage.write(key: key, value: value, iOptions: _options);
 }

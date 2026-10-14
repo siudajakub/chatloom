@@ -6,6 +6,9 @@
 import 'dart:io';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/media/protected_matrix_database.dart';
+import 'package:fluffychat/personal/storage/database_policy.dart';
+import 'package:fluffychat/personal/storage/storage_failure.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
@@ -20,9 +23,12 @@ import 'cipher.dart';
 
 Future<DatabaseApi> flutterMatrixSdkDatabaseBuilder(String clientName) async {
   try {
-    return await _constructDatabase(clientName);
-  } catch (e, s) {
-    Logs().wtf('Unable to construct database!', e, s);
+    return await preserveOnStorageFailure(() => _constructDatabase(clientName));
+  } catch (e) {
+    final failure = e is StorageFailure
+        ? e
+        : const StorageFailure(StorageFailureCode.databaseUnavailable);
+    Logs().e('Protected storage initialization failed: ${failure.code.name}');
 
     try {
       // Send error notification:
@@ -31,20 +37,18 @@ Future<DatabaseApi> flutterMatrixSdkDatabaseBuilder(String clientName) async {
       // the team ID has changed and te app can no longer access the database
       // key in the iOS keychain. This should be removed from 2.9.0 on.
       if (!PlatformInfos.isIOS) {
-        ClientManager.sendInitNotification(l10n.initAppError, e.toString());
+        ClientManager.sendInitNotification(
+          l10n.initAppError,
+          'Protected storage is unavailable (${failure.code.name}). '
+          'Your local data was preserved. Retry when secure storage is available.',
+        );
       }
-    } catch (e, s) {
-      Logs().e('Unable to send error notification', e, s);
+    } catch (_) {
+      Logs().e('Unable to show protected storage notification');
     }
 
-    // Delete database file:
-    if (!kIsWeb) {
-      final dbFile = File(await _getDatabasePath(clientName));
-      if (await dbFile.exists()) await dbFile.delete();
-    }
-
-    // Try again
-    return await _constructDatabase(clientName);
+    // Never delete the database or reset the encryption key after a failure.
+    throw failure;
   }
 }
 
@@ -78,29 +82,30 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
     return await MatrixSdkDatabase.init(clientName);
   }
 
-  final cipher = await getDatabaseCipher();
-
-  final fileStorageLocation = await getFileStorageLocation();
-
-  final path = await _getDatabasePath(clientName);
-
-  // import the SQLite / SQLCipher shared objects / dynamic libraries
+  // Path resolution can consult getDatabasesPath for an existing installation.
+  // Initialize the FFI factory before any global sqflite helper is called.
   final factory = createDatabaseFactoryFfi();
-
-  // required for [getDatabasesPath]
   databaseFactory = factory;
+  final path = await _resolveDatabasePath(clientName);
+  await requireEncryptedDatabaseFile(path);
+  final keyLock = await File(
+    join(dirname(path), 'matrix-key-init.lock'),
+  ).open(mode: FileMode.append);
+  late final String cipher;
+  try {
+    await keyLock.lock(FileLock.blockingExclusive);
+    cipher = await getDatabaseCipher(
+      requireExisting: await _hasExistingMatrixDatabase(dirname(path)),
+    );
+  } finally {
+    await keyLock.close();
+  }
 
-  // migrate from potential previous SQLite database path to current one
-  await _migrateLegacyLocation(path, clientName);
-
-  // in case we got a cipher, we use the encryption helper
-  // to manage SQLite encryption
-  final helper = cipher == null
-      ? null
-      : SQfLiteEncryptionHelper(factory: factory, path: path, cipher: cipher);
-
-  // check whether the DB is already encrypted and otherwise do so
-  await helper?.ensureDatabaseFileEncrypted();
+  final helper = SQfLiteEncryptionHelper(
+    factory: factory,
+    path: path,
+    cipher: cipher,
+  );
 
   final database = await factory.openDatabase(
     path,
@@ -108,17 +113,18 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
       version: 1,
       // most important : apply encryption when opening the DB
       onConfigure: (db) =>
-          helper?.applyPragmaKey(db, ensureIncrementalAutoVacuum: true),
+          helper.applyPragmaKey(db, ensureIncrementalAutoVacuum: true),
     ),
   );
 
-  return await MatrixSdkDatabase.init(
+  final matrixDatabase = ProtectedMatrixDatabase(
     clientName,
     database: database,
+    factory: factory,
     maxFileSize: 1000 * 1000 * 10,
-    fileStorageLocation: fileStorageLocation?.uri,
-    deleteFilesAfterDuration: const Duration(days: 30),
   );
+  await matrixDatabase.open();
+  return matrixDatabase;
 }
 
 Future<String> _getDatabaseDirectory() async {
@@ -144,25 +150,33 @@ Future<String> _getDatabasePath(String clientName) async {
   return join(databaseDirectory, '$clientName.sqlite');
 }
 
-Future<void> _migrateLegacyLocation(
-  String sqlFilePath,
-  String clientName,
-) async {
+Future<bool> _hasExistingMatrixDatabase(String directory) async {
+  await for (final entry in Directory(directory).list(followLinks: false)) {
+    if (entry is File &&
+        entry.path.endsWith('.sqlite') &&
+        basename(entry.path) != 'personal_v1.sqlite') {
+      return true;
+    }
+  }
+  return false;
+}
+
+Future<String> _resolveDatabasePath(String clientName) async {
+  final sqlFilePath = await _getDatabasePath(clientName);
+  if (await File(sqlFilePath).exists()) return sqlFilePath;
   final oldPath = PlatformInfos.isDesktop
       ? (await getApplicationSupportDirectory()).path
       : PlatformInfos.isIOS
       ? (await getLibraryDirectory()).path
+      : PlatformInfos.isAndroid
+      // Android's legacy native database directory is beside files/, whereas
+      // the FFI default is a working-directory-relative desktop path.
+      ? join(dirname(dirname(sqlFilePath)), 'databases')
       : await getDatabasesPath();
 
   final oldFilePath = join(oldPath, '$clientName.sqlite');
-  if (oldFilePath == sqlFilePath) return;
-
-  final maybeOldFile = File(oldFilePath);
-  if (await maybeOldFile.exists()) {
-    Logs().i(
-      'Migrate legacy location for database from "$oldFilePath" to "$sqlFilePath"',
-    );
-    await maybeOldFile.copy(sqlFilePath);
-    await maybeOldFile.delete();
-  }
+  // Preserve a previous location without copying/deleting files implicitly.
+  if (await File(oldFilePath).exists()) return oldFilePath;
+  await Directory(dirname(sqlFilePath)).create(recursive: true);
+  return sqlFilePath;
 }
