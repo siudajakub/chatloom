@@ -1,0 +1,144 @@
+{
+  "date": "2026-10-13",
+  "scope": "Actual production presenters; fictional data; live account/native acceptance NOT RUN",
+  "production_presenter_hashes": {
+    "lib/config/themes.dart": "5d15157458569c58efe2ba7a1aaa29191ec83b2feabfbc6306f2e38f62cb3cc8",
+    "lib/pages/chat/notion_conversation.dart": "b55d5f0edaf1762871eed1ede6b830bdc635f3ad8818e3b74a0db499943b6dfd",
+    "lib/personal/ui/notion_chat_details_adapter.dart": "d868af9d999c8e7521d103af7970841d627d3605d82c816f6d51f09ec5dbc62f",
+    "lib/personal/ui/notion_chat_details_content.dart": "117d45abff7a15b86fc35e4cd010310cc18255610c2dfb4e2912b047baa0df4b",
+    "lib/personal/ui/notion_chat_details_notifications.dart": "f1309cc14860e9461c7b36f7fd840caf1ab4bf13b3b4935dd8a90e61b977fe78",
+    "lib/personal/ui/notion_chat_details_page.dart": "bb99659d53cac944886757a6eb679840ea790eccc13e45475b598692825b7fd5",
+    "lib/personal/ui/notion_inbox_dock.dart": "92460c331f42ad44cb6d9e31a650a1f9ccffa3ce88d30b9836e1001318f0a336",
+    "lib/personal/ui/notion_inbox_page.dart": "9139bf225fecbd6160e0ea23d0d7316a396efc801c58a26416aae0b99e2eda70",
+    "lib/personal/ui/notion_inbox_pins.dart": "0b90fd2f1b8f3b560c8dc3d03fc0c02f6bf76db33eba01cb13e4e4ad75e1a75a",
+    "lib/personal/ui/notion_inbox_row.dart": "6ae0955f4cb257749b01ed13608642142eb9e874c80c1de51b6e6824b1890dd8",
+    "lib/personal/ui/notion_network_adapter.dart": "ef141206cab343c42fb8472c7def888fad8df610f9f615e16fe0a95bcd6daf93",
+    "lib/personal/ui/notion_network_filter.dart": "2cbbbd695ef031018c8d4fdad7119721bdc80138a399925f7390a35f938961a6",
+    "lib/personal/ui/notion_network_selector.dart": "27940fb0e5eaf59b7b9d93f1a81a2579c2f9f0deca837fac8159f8ed2040ab47",
+    "lib/personal/ui/notion_search_controls.dart": "33272583dbc988072744a77deed3b490f2cd6416e13f3f79be09daa1870a22fb",
+    "lib/personal/ui/notion_settings_adapter.dart": "407c4dd61ba7464312d9ab38a153e7702b96d77f1ed5c4c8e50c22cc6e4db5a3",
+    "lib/personal/ui/notion_settings_body.dart": "24400789604616c4d559017a791e192261c0e8c3094ec2080a2f982c5d711c3a",
+    "lib/personal/ui/notion_settings_page.dart": "5c1faadb94eb5fdb6fbdbe48add04efcdf14e639316dde1aa9def3c060311995",
+    "lib/ui/notion/details_contract.dart": "58ebab2bf880859fc0365659e7c9f19bdc4997e0b2d9df2244298a8e0f3dfbf5",
+    "lib/ui/notion/initial_avatar.dart": "2177fe93f48f565e2050f216a4cd5c3c0f942671dc608dfa8c669d8eba28f83e",
+    "lib/ui/notion/metadata_actions.dart": "c3353dcef32eb452b4f2506b2844341502890c3661744c829cf6173825db7331",
+    "lib/ui/notion/notion.dart": "9d109c1d87ba769b881743ac16eb3ae304b41e0a1e4ee3b659570e21ccf829e2",
+    "lib/ui/notion/notion_theme.dart": "885a151562c1ec9e849896bb4c5e00a82fa92914e4f3ae094862d7eab658f09e",
+    "lib/widgets/layouts/two_column_layout.dart": "779069fbdebb1e522b2115842ad041c479bda199d4bafdcdc916cb39c764be7f"
+  },
+  "lineage": "Capture script verified production source hashes before and after tests; temporary harness manifest is currently unavailable. Current presenter hashes also match release-before inventory.",
+  "screenshots": [
+    {
+      "file": "chat-details-390-privacy.png",
+      "width_px": 780,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "43bbabd5a87451556e4c569654efa74b89aba6e47c568fdd6cde7e7728009e9f"
+    },
+    {
+      "file": "chat-details-390.png",
+      "width_px": 780,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "133d0763d8384eb08ea21ac3ed1318e82b6c0a86da6df4d8b4808931f7f5a24d"
+    },
+    {
+      "file": "conversation-390.png",
+      "width_px": 780,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "45ea0e35154186b5f94dd167fd1e1e19543fe44f3a9d5e924f2049b763d840b0"
+    },
+    {
+      "file": "details-320-large-text-pending.png",
+      "width_px": 640,
+      "height_px": 1280,
+      "capture_ratio": 2,
+      "sha256": "5fbacd0d5033f86d0ddda5d94611782ae838967bd0c9b5ea0291b847e699b4d4"
+    },
+    {
+      "file": "inbox-320-large-text.png",
+      "width_px": 640,
+      "height_px": 1280,
+      "capture_ratio": 2,
+      "sha256": "c76ce787cae16f3655b1a6218ea4cfc9ffe5707f69ee0b0ef3cab3abb56750d7"
+    },
+    {
+      "file": "inbox-360.png",
+      "width_px": 720,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "3c62a23fbbd2191400df8066d0e15f0d8bab7d0f4c1f14d01ba3818f06695cba"
+    },
+    {
+      "file": "inbox-390.png",
+      "width_px": 780,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "70deae9cda5c0736a77896ecdbf2ee51dbd49ae58a8f6ef5e7acc648b9582bbf"
+    },
+    {
+      "file": "inbox-412.png",
+      "width_px": 824,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "0668f8fbcb2ee2dbb74dcd76b4ced3912dae8c2b48dd75d27533df69ee80237d"
+    },
+    {
+      "file": "inbox-430-empty.png",
+      "width_px": 860,
+      "height_px": 1864,
+      "capture_ratio": 2,
+      "sha256": "f00c556d4bab01f9285f7b2e27d8811fc2930bb4e1eeb6547bd0708481799e01"
+    },
+    {
+      "file": "merged-430-keyboard-error.png",
+      "width_px": 860,
+      "height_px": 1864,
+      "capture_ratio": 2,
+      "sha256": "39b02ee84c824294ccd732b4d999f4f72980f9262912b86a10c1c8c74e684938"
+    },
+    {
+      "file": "network-filter-390.png",
+      "width_px": 780,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "cad3ac3575e9c8da3256a7ccbadd54e2e8eb30f82114dbebd20b02f6fe700441"
+    },
+    {
+      "file": "settings-390-preferences.png",
+      "width_px": 780,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "1a71940447f378a89250d0f2ba4b492bdb8ee30351bbfe5f41731766daa2f3bc"
+    },
+    {
+      "file": "settings-390.png",
+      "width_px": 780,
+      "height_px": 1688,
+      "capture_ratio": 2,
+      "sha256": "7429313bab9460357c35c2393403c22705bd73182f193ff3626f80af6b60f96c"
+    },
+    {
+      "file": "settings-430-large-text.png",
+      "width_px": 860,
+      "height_px": 1864,
+      "capture_ratio": 2,
+      "sha256": "65db0c12e9b7d754b7cc7f388f9572a0b842d58d05e8bed225893ab06ef10bb5"
+    },
+    {
+      "file": "split-1200.png",
+      "width_px": 2400,
+      "height_px": 1800,
+      "capture_ratio": 2,
+      "sha256": "06893885a23344e265e5eb54a7b208d1556c869fd30876d812e7b8b98235761d"
+    },
+    {
+      "file": "split-900.png",
+      "width_px": 1800,
+      "height_px": 1800,
+      "capture_ratio": 2,
+      "sha256": "dfde3d29b70648c03ea1e84d21a7e6386bff3984e7b41ea4b74a19503c118c23"
+    }
+  ]
+}
