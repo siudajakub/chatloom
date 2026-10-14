@@ -1,0 +1,8 @@
+name: personal_core
+description: Private personal client contracts and policies.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ">=3.11.1 <4.0.0"
+dev_dependencies:
+  test: ^1.26.0
