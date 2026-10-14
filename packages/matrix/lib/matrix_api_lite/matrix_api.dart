@@ -1,0 +1,234 @@
+// SPDX-FileCopyrightText: 2019-Present Famedly GmbH
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
+
+import '../matrix_api_lite.dart';
+import 'generated/api.dart';
+
+// ignore: constant_identifier_names
+enum RequestType { GET, POST, PUT, DELETE }
+
+class MatrixApi extends Api {
+  /// The homeserver this client is communicating with.
+  Uri? get homeserver => baseUri;
+
+  set homeserver(Uri? uri) => baseUri = uri;
+
+  /// This is the access token for the matrix client. When it is undefined, then
+  /// the user needs to sign in first.
+  String? get accessToken => bearerToken;
+
+  set accessToken(String? token) => bearerToken = token;
+
+  @override
+  Never unexpectedResponse(http.BaseResponse response, Uint8List body) {
+    MatrixException? matrixException;
+    try {
+      matrixException = MatrixException.fromJson(
+        json.decode(utf8.decode(body)),
+      );
+    } catch (_) {} // Is not a MatrixException!
+
+    // Throw MatrixException if response contains 'errcode' (error) or
+    // 'session'/'flows' (UIA challenge).
+    if (matrixException != null &&
+        (matrixException.raw.containsKey('errcode') ||
+            matrixException.raw.containsKey('session') ||
+            matrixException.raw.containsKey('flows'))) {
+      throw matrixException;
+    }
+
+    super.unexpectedResponse(response, body);
+  }
+
+  @override
+  Never bodySizeExceeded(int expected, int actual) {
+    throw EventTooLarge(expected, actual);
+  }
+
+  MatrixApi({Uri? homeserver, String? accessToken, super.httpClient})
+    : super(baseUri: homeserver, bearerToken: accessToken);
+
+  /// Used for all Matrix json requests using the [c2s API](https://matrix.org/docs/spec/client_server/r0.6.0.html).
+  ///
+  /// Throws: FormatException, MatrixException
+  ///
+  /// You must first set [this.homeserver] and for some endpoints also
+  /// [this.accessToken] before you can use this! For example to send a
+  /// message to a Matrix room with the id '!fjd823j:example.com' you call:
+  /// ```
+  /// final resp = await request(
+  ///   RequestType.PUT,
+  ///   '/r0/rooms/!fjd823j:example.com/send/m.room.message/$txnId',
+  ///   data: {
+  ///     'msgtype': 'm.text',
+  ///     'body': 'hello'
+  ///   }
+  ///  );
+  /// ```
+  ///
+  Future<Map<String, Object?>> request(
+    RequestType type,
+    String action, {
+    dynamic data = '',
+    String contentType = 'application/json',
+    Map<String, Object?>? query,
+  }) async {
+    if (homeserver == null) {
+      throw ('No homeserver specified.');
+    }
+    dynamic json;
+    (data is! String) ? json = jsonEncode(data) : json = data;
+    if (data is List<int> || action.startsWith('/media/v3/upload')) json = data;
+
+    final url = homeserver!.resolveUri(
+      Uri(path: '_matrix$action', queryParameters: query),
+    );
+
+    final headers = <String, String>{};
+    if (type == RequestType.PUT || type == RequestType.POST) {
+      headers['Content-Type'] = contentType;
+    }
+    if (accessToken != null) {
+      headers['Authorization'] = 'Bearer $accessToken';
+    }
+
+    late http.Response resp;
+    Map<String, Object?>? jsonResp = <String, Object?>{};
+
+    switch (type) {
+      case RequestType.GET:
+        resp = await httpClient.get(url, headers: headers);
+        break;
+      case RequestType.POST:
+        resp = await httpClient.post(url, body: json, headers: headers);
+        break;
+      case RequestType.PUT:
+        resp = await httpClient.put(url, body: json, headers: headers);
+        break;
+      case RequestType.DELETE:
+        resp = await httpClient.delete(url, headers: headers);
+        break;
+    }
+    var respBody = resp.body;
+    try {
+      respBody = utf8.decode(resp.bodyBytes);
+    } catch (_) {
+      // No-OP
+    }
+    if (resp.statusCode >= 500 && resp.statusCode < 600) {
+      throw Exception(respBody);
+    }
+    var jsonString = String.fromCharCodes(respBody.runes);
+    if (jsonString.startsWith('[') && jsonString.endsWith(']')) {
+      jsonString = '{"chunk":$jsonString}';
+    }
+    jsonResp =
+        jsonDecode(jsonString)
+            as Map<String, Object?>?; // May throw FormatException
+
+    if (resp.statusCode >= 400 && resp.statusCode < 500) {
+      throw MatrixException(resp);
+    }
+
+    return jsonResp!;
+  }
+
+  /// This endpoint allows the creation, modification and deletion of pushers
+  /// for this user ID. The behaviour of this endpoint varies depending on the
+  /// values in the JSON body.
+  ///
+  /// See [deletePusher] to issue requests with `kind: null`.
+  ///
+  /// https://matrix.org/docs/spec/client_server/r0.6.1#post-matrix-client-r0-pushers-set
+  Future<void> postPusher(Pusher pusher, {bool? append}) async {
+    final data = pusher.toJson();
+    if (append != null) {
+      data['append'] = append;
+    }
+    await request(RequestType.POST, '/client/v3/pushers/set', data: data);
+    return;
+  }
+
+  /// Variant of postPusher operation that deletes pushers by setting `kind: null`.
+  ///
+  /// https://matrix.org/docs/spec/client_server/r0.6.1#post-matrix-client-r0-pushers-set
+  Future<void> deletePusher(PusherId pusher) async {
+    final data = PusherData.fromJson(pusher.toJson()).toJson();
+    data['kind'] = null;
+    await request(RequestType.POST, '/client/v3/pushers/set', data: data);
+    return;
+  }
+
+  /// Variant of updateDevice operation that deletes the device displayname by
+  /// setting `display_name: null`.
+  Future<void> deleteDeviceDisplayName(String deviceId) async {
+    await request(
+      RequestType.PUT,
+      '/client/v3/devices/${Uri.encodeComponent(deviceId)}',
+      data: {'display_name': null},
+    );
+    return;
+  }
+
+  /// This API provides credentials for the client to use when initiating
+  /// calls.
+  @override
+  Future<TurnServerCredentials> getTurnServer() async {
+    final json = await request(RequestType.GET, '/client/v3/voip/turnServer');
+
+    // fix invalid responses from synapse
+    // https://github.com/matrix-org/synapse/pull/10922
+    final ttl = json['ttl'];
+    if (ttl is double) {
+      json['ttl'] = ttl.toInt();
+    }
+
+    return TurnServerCredentials.fromJson(json);
+  }
+
+  @Deprecated('Use [deleteRoomKeyBySessionId] instead')
+  Future<RoomKeysUpdateResponse> deleteRoomKeysBySessionId(
+    String roomId,
+    String sessionId,
+    String version,
+  ) async {
+    return deleteRoomKeyBySessionId(roomId, sessionId, version);
+  }
+
+  @Deprecated('Use [deleteRoomKeyBySessionId] instead')
+  Future<RoomKeysUpdateResponse> putRoomKeysBySessionId(
+    String roomId,
+    String sessionId,
+    String version,
+    KeyBackupData data,
+  ) async {
+    return putRoomKeyBySessionId(roomId, sessionId, version, data);
+  }
+
+  @Deprecated('Use [getRoomKeyBySessionId] instead')
+  Future<KeyBackupData> getRoomKeysBySessionId(
+    String roomId,
+    String sessionId,
+    String version,
+  ) async {
+    return getRoomKeyBySessionId(roomId, sessionId, version);
+  }
+}
+
+class EventTooLarge implements Exception {
+  int maxSize, actualSize;
+  EventTooLarge(this.maxSize, this.actualSize);
+}
+
+@Deprecated('Use PublishedRoomsChunk instead')
+typedef PublicRoomsChunk = PublishedRoomsChunk;
+
+@Deprecated('Use SpaceRoomsChunk\$1 or SpaceRoomsChunk\$2 instead')
+typedef SpaceRoomsChunk = SpaceRoomsChunk$2;
