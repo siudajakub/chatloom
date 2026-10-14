@@ -94,27 +94,35 @@ extension InitWithRestoreExtension on Client {
         assert(hasBackup);
         if (hasBackup) {
           Logs().v('Store session in backup');
-          storage?.write(
-            key: storageKey,
-            value: SessionBackup(
-              olmAccount: encryption?.pickledOlmAccount,
-              accessToken: accessToken,
-              deviceId: deviceId,
-              homeserver: homeserver,
-              deviceName: deviceName,
-              userId: userId,
-            ).toString(),
-          );
+          try {
+            await storage?.write(
+              key: storageKey,
+              value: SessionBackup(
+                olmAccount: encryption?.pickledOlmAccount,
+                accessToken: accessToken,
+                deviceId: deviceId,
+                homeserver: homeserver,
+                deviceName: deviceName,
+                userId: userId,
+              ).toString(),
+            );
+          } catch (error) {
+            // A backup failure must not restart an already initialized session.
+            Logs().e('Session backup unavailable: ${error.runtimeType}');
+          }
         }
       }
-    } catch (e, s) {
-      Logs().wtf('Client init failed!', e, s);
+    } catch (e) {
+      Logs().e('Client init failed: ${e.runtimeType}');
       final l10n = await lookupL10n(PlatformDispatcher.instance.locale);
       final sessionBackupString = await storage?.read(key: storageKey);
       if (sessionBackupString == null) {
         ClientManager.sendInitNotification(
           l10n.initAppError,
-          l10n.sessionLostBody(AppConfig.newIssueUrl.toString(), e.toString()),
+          l10n.sessionLostBody(
+            AppConfig.newIssueUrl.toString(),
+            e.runtimeType.toString(),
+          ),
         );
         rethrow;
       }
@@ -138,14 +146,17 @@ extension InitWithRestoreExtension on Client {
           l10n.initAppError,
           l10n.restoreSessionBody(
             AppConfig.newIssueUrl.toString(),
-            e.toString(),
+            e.runtimeType.toString(),
           ),
         );
-      } catch (e, s) {
-        Logs().wtf('Restore client failed!', e, s);
+      } catch (e) {
+        Logs().e('Restore client failed: ${e.runtimeType}');
         ClientManager.sendInitNotification(
           l10n.initAppError,
-          l10n.sessionLostBody(AppConfig.newIssueUrl.toString(), e.toString()),
+          l10n.sessionLostBody(
+            AppConfig.newIssueUrl.toString(),
+            e.runtimeType.toString(),
+          ),
         );
         rethrow;
       }

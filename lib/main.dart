@@ -4,11 +4,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
+import 'dart:io' show Directory;
 import 'dart:isolate';
 import 'dart:ui';
 
 import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/personal/media/media_access.dart';
+import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
@@ -20,6 +23,7 @@ import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_html/universal_html.dart' as web;
 
@@ -64,12 +68,32 @@ void main(List<String> args) => runZonedGuarded(() async {
   // widget bindings are initialized already.
   WidgetsFlutterBinding.ensureInitialized();
 
+  PersonalPrivacy.installLogging();
+  if (!kIsWeb) {
+    try {
+      final temporary = await getTemporaryDirectory();
+      for (final folder in [
+        'personal_audio',
+        'personal_video',
+        'personal_media',
+      ]) {
+        await MediaAccess.open(
+          directory: Directory('${temporary.path}/$folder'),
+        );
+      }
+    } catch (error) {
+      Logs().w('private_media_cleanup_failed', error.runtimeType.toString());
+    }
+  }
+
+  ErrorReporter.startupPhase = 'settings';
   final store = await AppSettings.init();
   Logs().i('Welcome to ${AppSettings.applicationName.value} <3');
 
   kEnableMatrixSdkBenchmarks = AppSettings.benchmarksInLogs.value;
 
   if (!_vodozemacInitialized) {
+    ErrorReporter.startupPhase = 'crypto';
     await vod.init(
       wasmPath: './assets/assets/vodozemac/${AppConfig.vodozemacVersion}/',
     );
@@ -85,6 +109,7 @@ void main(List<String> args) => runZonedGuarded(() async {
       AppLifecycleState.detached == WidgetsBinding.instance.lifecycleState) {
     await ForegroundServices.startService('background_push');
 
+    ErrorReporter.startupPhase = 'background_clients';
     final clients = await ClientManager.getClients(store: store);
 
     // Do not send online presences when app is in background fetch mode.
@@ -104,12 +129,14 @@ void main(List<String> args) => runZonedGuarded(() async {
     return;
   }
 
+  ErrorReporter.startupPhase = 'clients';
   final clients = await ClientManager.getClients(store: store);
 
   // Started in foreground mode.
   Logs().i(
     '${AppSettings.applicationName.value} started in foreground mode. Rendering GUI...',
   );
+  ErrorReporter.startupPhase = 'gui';
   await startGui(clients, store);
 }, ErrorReporter.onFlutterError);
 
@@ -171,10 +198,13 @@ class AppStarter with WidgetsBindingObserver {
     // Switching to foreground mode needs to reenable send online sync presence.
     for (final client in clients) {
       client.backgroundSync = true;
-      client.syncPresence = PresenceType.online;
+      client.syncPresence = PersonalPrivacy.policy.allowOnlinePresence
+          ? PresenceType.online
+          : PresenceType.offline;
     }
-    startGui(clients, store);
-    // We must make sure that the GUI is only started once.
+    // Claim startup before its first await and release the one-shot observer.
     guiStarted = true;
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(startGui(clients, store));
   }
 }

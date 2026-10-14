@@ -7,6 +7,8 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/privacy_transport.dart';
 import 'package:fluffychat/utils/custom_http_client.dart';
 import 'package:fluffychat/utils/custom_image_resizer.dart';
 import 'package:fluffychat/utils/init_with_restore.dart';
@@ -29,6 +31,10 @@ abstract class ClientManager {
   static Future<List<Client>> getClients({
     bool initialize = true,
     required SharedPreferences store,
+    @visibleForTesting
+    Future<Client> Function(String, SharedPreferences)? clientFactory,
+    @visibleForTesting
+    Future<void> Function(Client, void Function())? initializeClient,
   }) async {
     final clientNames = <String>{};
     try {
@@ -43,35 +49,44 @@ abstract class ClientManager {
       await store.setStringList(clientNamespace, clientNames.toList());
     }
     final clients = await Future.wait(
-      clientNames.map((name) => createClient(name, store)),
+      clientNames.map((name) => (clientFactory ?? createClient)(name, store)),
     );
+    final failedClients = <Client>{};
     if (initialize) {
       await Future.wait(
-        clients.map(
-          (client) => client
-              .initWithRestore(
-                onMigration: () async {
-                  final l10n = await lookupL10n(
-                    PlatformDispatcher.instance.locale,
-                  );
-                  sendInitNotification(
-                    l10n.databaseMigrationTitle,
-                    l10n.databaseMigrationBody,
-                  );
-                },
-              )
-              .catchError(
-                (e, s) => Logs().e('Unable to initialize client', e, s),
-              ),
-        ),
+        clients.map((client) async {
+          Future<void> onMigration() async {
+            final l10n = await lookupL10n(PlatformDispatcher.instance.locale);
+            await sendInitNotification(
+              l10n.databaseMigrationTitle,
+              l10n.databaseMigrationBody,
+            );
+          }
+
+          try {
+            if (initializeClient != null) {
+              await initializeClient(client, onMigration);
+            } else {
+              await client.initWithRestore(onMigration: onMigration);
+            }
+          } catch (error) {
+            failedClients.add(client);
+            Logs().e(
+              'client_initialization_failed',
+              error.runtimeType.toString(),
+            );
+          }
+        }),
       );
     }
-    if (clients.length > 1 && clients.any((c) => !c.isLogged())) {
-      final loggedOutClients = clients.where((c) => !c.isLogged()).toList();
+    // A failed database/key restore is not a logout. Keep its namespace so
+    // the existing encrypted session can be retried on the next launch.
+    if (initialize && clients.length > 1) {
+      final loggedOutClients = clients
+          .where((c) => !c.isLogged() && !failedClients.contains(c))
+          .toList();
       for (final client in loggedOutClients) {
-        Logs().w(
-          'Multi account is enabled but client ${client.userID} is not logged in. Removing...',
-        );
+        Logs().w('Removing a logged-out multi-account client.');
         clientNames.remove(client.clientName);
         clients.remove(client);
       }
@@ -118,15 +133,25 @@ abstract class ClientManager {
     final shareKeysWith = AppSettings.shareKeysWith.value;
     final enableSoftLogout = AppSettings.enableSoftLogout.value;
 
-    return Client(
+    PersonalPrivacy.installLogging();
+    final client = Client(
       clientName,
-      httpClient: CustomHttpClient.createHTTPClient(),
+      httpClient: PrivacyHttpClient(
+        CustomHttpClient.createHTTPClient(),
+        incognito: () => PersonalPrivacy.policy.incognito,
+      ),
       verificationMethods: {
         KeyVerificationMethod.numbers,
         if (kIsWeb || PlatformInfos.isMobile || PlatformInfos.isLinux)
           KeyVerificationMethod.emoji,
       },
       importantStateEvents: <String>{
+        'pl.personal.client.journal.v1',
+        'm.bridge',
+        'uk.half-shot.bridge',
+        'com.beeper.bridge',
+        'com.beeper.room_features',
+        'pl.personal.chat.telegram.media_capabilities',
         // To make room emotes work
         'im.ponies.room_emotes',
         // To display call state in chat list
@@ -135,14 +160,14 @@ abstract class ClientManager {
       customImageResizer: PlatformInfos.supportsCustomImageResizer
           ? customImageResizer
           : null,
-      logLevel: Level.verbose,
+      logLevel: Level.warning,
       database: await flutterMatrixSdkDatabaseBuilder(clientName),
       supportedLoginTypes: {
         AuthenticationTypes.password,
         AuthenticationTypes.sso,
       },
       nativeImplementations: nativeImplementations,
-      defaultNetworkRequestTimeout: const Duration(minutes: 30),
+      defaultNetworkRequestTimeout: const Duration(seconds: 60),
       enableDehydratedDevices: true,
       shareKeysWith:
           ShareKeysWith.values.singleWhereOrNull(
@@ -154,6 +179,11 @@ abstract class ClientManager {
         seconds: AppSettings.sendTimelineEventTimeout.value,
       ),
     );
+    if (!PersonalPrivacy.policy.allowOnlinePresence) {
+      client.syncPresence = PresenceType.offline;
+    }
+    PersonalPrivacy.bind(client);
+    return client;
   }
 
   static WindowsInitializationSettings get windowsNotificationSettings =>

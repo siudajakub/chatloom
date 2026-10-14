@@ -3,11 +3,19 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
+import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/media/media_access.dart';
+import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
+import 'package:fluffychat/pages/chat/events/round_mini_player.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/init_with_restore.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
@@ -24,6 +32,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_html/html.dart' as html;
@@ -86,6 +95,17 @@ class MatrixState extends State<Matrix> {
       widget.clients.indexWhere((client) => client.userID == matrixId);
 
   void setActiveClient(Client? cl) {
+    if (cl != client) {
+      PersonalPrivacy.invalidatePlayedIntents();
+      unawaited(
+        RoundPlaybackCoordinator.shared
+            .stopAll(suspend: false)
+            .catchError((Object _) {}),
+      );
+      unawaited(
+        RoundCaptureController.interruptActive().catchError((Object _) {}),
+      );
+    }
     final i = widget.clients.indexWhere((c) => c == cl);
     if (i != -1) {
       _activeClient = i;
@@ -140,6 +160,53 @@ class MatrixState extends State<Matrix> {
   Client? _loginClientCandidate;
 
   AudioPlayer? audioPlayer;
+  RoundPlaybackHandle? audioPlaybackHandle;
+  RoundPlaybackHandle reserveAudio() => audioPlaybackHandle ??=
+      RoundPlaybackCoordinator.shared.register(pause:() async {
+        final current=audioPlayer;
+        if(current==null) { await closeAudioPlayer(); }
+        else { await current.pause(); }
+      },stop:closeAudioPlayer);
+  Future<void> playAudio() async {
+    final player = audioPlayer;
+    if (player == null) return;
+    final handle = reserveAudio();
+    if ((handle.isCurrent || await handle.acquireAudible()) &&
+        handle.isCurrent &&
+        identical(player, audioPlayer)) {
+      unawaited(player.play().catchError((Object _) {}));
+    }
+  }
+
+  ManagedMediaFile? audioLease;
+  int audioRequestGeneration = 0;
+  MediaAccess? _audioAccess;
+  Future<MediaAccess> get audioMediaAccess async =>
+      _audioAccess ??= await MediaAccess.open(
+        directory: Directory(
+          '${(await getTemporaryDirectory()).path}/personal_audio',
+        ),
+      );
+  Future<void> closeAudioPlayer({bool invalidateRequests = true}) async {
+    if (invalidateRequests) audioRequestGeneration++;
+    final player = audioPlayer;
+    final lease = audioLease;
+    audioPlaybackHandle?.dispose();
+    audioPlaybackHandle = null;
+    audioPlayer = null;
+    audioLease = null;
+    voiceMessageEventId.value = null;
+    try {
+      try {
+        await player?.stop();
+      } finally {
+        await player?.dispose();
+      }
+    } finally {
+      await lease?.close();
+    }
+  }
+
   final ValueNotifier<String?> voiceMessageEventId = ValueNotifier(null);
 
   Future<Client> getLoginClient() async {
@@ -177,6 +244,7 @@ class MatrixState extends State<Matrix> {
   final onRoomKeyRequestSub = <String, StreamSubscription>{};
   final onKeyVerificationRequestSub = <String, StreamSubscription>{};
   final onNotification = <String, StreamSubscription>{};
+  final onPersonalReminder = <String, StreamSubscription>{};
   final onLogoutSub = <String, StreamSubscription<LoginState>>{};
   final onUiaRequest = <String, StreamSubscription<UiaRequest>>{};
 
@@ -258,6 +326,8 @@ class MatrixState extends State<Matrix> {
           final loggedInWithMultipleClients = widget.clients.length > 1;
 
           _cancelSubs(c.clientName);
+          PersonalPrivacy.forget(c);
+          PersonalClient.of(c).dispose();
           widget.clients.remove(c);
           ClientManager.removeClientNameFromStore(c.clientName, store);
           InitWithRestoreExtension.deleteSessionBackup(name);
@@ -281,6 +351,16 @@ class MatrixState extends State<Matrix> {
           FluffyChatApp.router.go('/');
         });
     onUiaRequest[name] ??= c.onUiaRequest.stream.listen(uiaRequestHandler);
+    if (!kIsWeb && c.isLogged()) {
+      final personal = PersonalClient.of(c);
+      onPersonalReminder[name] ??= personal.changes.listen((_) {
+        for (final event in personal.dueReminderEvents) {
+          unawaited(showLocalNotification(event).catchError((Object _) {}));
+        }
+      });
+      unawaited(personal.load());
+    }
+
     if (PlatformInfos.isWeb || PlatformInfos.isDesktop) {
       FlutterLocalNotificationsPlugin().initialize(
         settings: InitializationSettings(
@@ -298,7 +378,8 @@ class MatrixState extends State<Matrix> {
         ),
       );
       c.onSync.stream.first.then((s) {
-        html.Notification.requestPermission();
+        if (!mounted || !widget.clients.contains(c) || !c.isLogged()) return;
+        if (kIsWeb) html.Notification.requestPermission();
         onNotification[name] ??= c.onNotification.stream.listen(
           showLocalNotification,
         );
@@ -307,6 +388,8 @@ class MatrixState extends State<Matrix> {
   }
 
   void _cancelSubs(String name) {
+    onPersonalReminder.remove(name)?.cancel();
+    onUiaRequest.remove(name)?.cancel();
     onRoomKeyRequestSub[name]?.cancel();
     onRoomKeyRequestSub.remove(name);
     onKeyVerificationRequestSub[name]?.cancel();
@@ -354,13 +437,13 @@ class MatrixState extends State<Matrix> {
   }
 
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final foreground =
-        state != AppLifecycleState.inactive &&
-        state != AppLifecycleState.paused;
+    final foreground = state == AppLifecycleState.resumed;
     for (final client in widget.clients) {
-      client.syncPresence = state == AppLifecycleState.resumed
-          ? null
-          : PresenceType.unavailable;
+      client.syncPresence = PersonalPrivacy.policy.allowOnlinePresence
+          ? (state == AppLifecycleState.resumed
+                ? null
+                : PresenceType.unavailable)
+          : PresenceType.offline;
       if (PlatformInfos.isMobile) {
         client.backgroundSync = foreground;
         client.requestHistoryOnLimitedTimeline = !foreground;
@@ -371,8 +454,19 @@ class MatrixState extends State<Matrix> {
 
   @override
   void dispose() {
+    unawaited(
+      RoundPlaybackCoordinator.shared.stopAll().catchError((Object _) {}),
+    );
+    for (final client in widget.clients) {
+      unawaited(TelegramRoundService.closeFor(client));
+    }
+    closeAudioPlayer();
     _listener?.dispose();
 
+    for (final sub in onPersonalReminder.values) {
+      sub.cancel();
+    }
+    onPersonalReminder.clear();
     for (final sub in onRoomKeyRequestSub.values) {
       sub.cancel();
     }
@@ -401,7 +495,35 @@ class MatrixState extends State<Matrix> {
 
   @override
   Widget build(BuildContext context) {
-    return Provider(create: (_) => this, child: widget.child);
+    return Provider(
+      create: (_) => this,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          widget.child ?? const SizedBox.shrink(),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: MediaQuery.viewInsetsOf(context).bottom + 80,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: RoundMiniPlayer(
+                  onOpenSource: (event) {
+                    if (client != event.room.client)
+                      setActiveClient(event.room.client);
+                    FluffyChatApp.router.go(
+                    '/rooms/${Uri.encodeComponent(event.room.id)}?event=${Uri.encodeComponent(event.eventId)}',
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> dehydrateAction(BuildContext context) async {
