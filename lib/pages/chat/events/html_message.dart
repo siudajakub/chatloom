@@ -1,0 +1,745 @@
+// SPDX-FileCopyrightText: 2019-Present Christian Kußowski
+// SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'package:collection/collection.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/code_highlight_theme.dart';
+import 'package:fluffychat/utils/event_checkbox_extension.dart';
+import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:flutter_linkify/flutter_linkify.dart';
+import 'package:highlight/highlight.dart' show highlight;
+import 'package:html/dom.dart' as dom;
+import 'package:html/parser.dart' as parser;
+import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
+
+import '../../../utils/url_launcher.dart';
+
+class HtmlMessage extends StatelessWidget {
+  final String html;
+  final Room room;
+  final Color textColor;
+  final double fontSize;
+  final TextStyle linkStyle;
+  final void Function(LinkableElement) onOpen;
+  final String? eventId;
+  final Set<Event>? checkboxCheckedEvents;
+
+  const HtmlMessage({
+    super.key,
+    required this.html,
+    required this.room,
+    required this.fontSize,
+    required this.linkStyle,
+    this.textColor = Colors.black,
+    required this.onOpen,
+    this.eventId,
+    this.checkboxCheckedEvents,
+  });
+
+  /// Keep in sync with: https://spec.matrix.org/latest/client-server-api/#mroommessage-msgtypes
+  static const Set<String> allowedHtmlTags = {
+    'font',
+    'del',
+    's',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'blockquote',
+    'p',
+    'a',
+    'ul',
+    'ol',
+    'sup',
+    'sub',
+    'li',
+    'b',
+    'i',
+    'u',
+    'strong',
+    'em',
+    'strike',
+    'code',
+    'hr',
+    'br',
+    'div',
+    'table',
+    'thead',
+    'tbody',
+    'tr',
+    'th',
+    'td',
+    'caption',
+    'pre',
+    'span',
+    'img',
+    'details',
+    'summary',
+    // Not in the allowlist of the matrix spec yet but should be harmless:
+    'ruby',
+    'rp',
+    'rt',
+    'html',
+    'body',
+  };
+
+  static const Set<String> ignoredHtmlTags = {'mx-reply'};
+
+  /// We add line breaks before these tags:
+  static const Set<String> blockHtmlTags = {
+    'p',
+    'ul',
+    'ol',
+    'pre',
+    'div',
+    'table',
+    'details',
+    'blockquote',
+  };
+
+  /// We add line breaks before these tags:
+  static const Set<String> fullLineHtmlTag = {
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'li',
+  };
+
+  /// Adding line breaks before block elements.
+  List<InlineSpan> _renderWithLineBreaks(
+    dom.NodeList nodes,
+    BuildContext context, {
+    int depth = 1,
+  }) {
+    final onlyElements = nodes.whereType<dom.Element>().toList();
+    return [
+      for (var i = 0; i < nodes.length; i++) ...[
+        // Actually render the node child:
+        _renderHtml(nodes[i], context, depth: depth + 1),
+        // Add linebreaks between blocks:
+        if (nodes[i] is dom.Element &&
+            onlyElements.indexOf(nodes[i] as dom.Element) <
+                onlyElements.length - 1) ...[
+          if (blockHtmlTags.contains((nodes[i] as dom.Element).localName))
+            const TextSpan(text: '\n\n'),
+          if (fullLineHtmlTag.contains((nodes[i] as dom.Element).localName))
+            const TextSpan(text: '\n'),
+        ],
+      ],
+    ];
+  }
+
+  InlineSpan _renderCodeBlockNode(dom.Node node) {
+    if (node is! dom.Element) {
+      return TextSpan(text: node.text);
+    }
+    final style =
+        atomOneDarkTheme[node.className.split('-').last] ??
+        atomOneDarkTheme['root'];
+
+    return TextSpan(
+      children: node.nodes.map(_renderCodeBlockNode).toList(),
+      style: style,
+    );
+  }
+
+  /// Transforms a Node to an InlineSpan.
+  InlineSpan _renderHtml(dom.Node node, BuildContext context, {int depth = 1}) {
+    // We must not render elements nested more than 100 elements deep:
+    if (depth >= 100) return const TextSpan();
+
+    if (node is dom.Element &&
+        ignoredHtmlTags.contains(node.localName?.toLowerCase())) {
+      return const TextSpan();
+    }
+
+    // This is a text node or not permitted node, so we render it as text:
+    if (node is! dom.Element || !allowedHtmlTags.contains(node.localName)) {
+      var text = node.text ?? '';
+      // Single linebreak nodes between Elements are ignored:
+      if (text == '\n') text = '';
+
+      return LinkifySpan(
+        text: text,
+        options: const LinkifyOptions(humanize: false),
+        linkStyle: linkStyle,
+        onOpen: onOpen,
+      );
+    }
+
+    switch (node.localName) {
+      case 'br':
+        return const TextSpan(text: '\n');
+      case 'a':
+        final href = node.attributes['href'];
+        if (href == null) continue block;
+        final matrixId = node.attributes['href']
+            ?.parseIdentifierIntoParts()
+            ?.primaryIdentifier;
+        if (matrixId != null) {
+          if (matrixId.sigil == '@') {
+            final user = room.unsafeGetUserFromMemoryOrFallback(matrixId);
+            return WidgetSpan(
+              child: MatrixPill(
+                key: Key('user_pill_$matrixId'),
+                name: user.calcDisplayname(),
+                avatar: user.avatarUrl,
+                uri: href,
+                outerContext: context,
+                fontSize: fontSize,
+                color: linkStyle.color,
+              ),
+            );
+          }
+          if (matrixId.sigil == '#' || matrixId.sigil == '!') {
+            final room = matrixId.sigil == '!'
+                ? this.room.client.getRoomById(matrixId)
+                : this.room.client.getRoomByAlias(matrixId);
+            return WidgetSpan(
+              child: MatrixPill(
+                name: room?.getLocalizedDisplayname() ?? matrixId,
+                avatar: room?.avatar,
+                uri: href,
+                outerContext: context,
+                fontSize: fontSize,
+                color: linkStyle.color,
+              ),
+            );
+          }
+        }
+        return WidgetSpan(
+          child: Tooltip(
+            message: href,
+            child: InkWell(
+              splashColor: Colors.transparent,
+              onTap: () => UrlLauncher(context, href, node.text).launchUrl(),
+              child: Text.rich(
+                TextSpan(
+                  children: _renderWithLineBreaks(
+                    node.nodes,
+                    context,
+                    depth: depth,
+                  ),
+                  style: linkStyle,
+                ),
+                style: const TextStyle(height: 1.25),
+              ),
+            ),
+          ),
+        );
+      case 'li':
+        if (!{'ol', 'ul'}.contains(node.parent?.localName)) {
+          continue block;
+        }
+        final eventId = this.eventId;
+
+        final isCheckbox = node.className == 'task-list-item';
+        final checkboxIndex = isCheckbox
+            ? node.rootElement
+                      .getElementsByClassName('task-list-item')
+                      .indexOf(node) +
+                  1
+            : null;
+        final checkedByReaction = !isCheckbox
+            ? null
+            : checkboxCheckedEvents?.firstWhereOrNull(
+                (event) => event.checkedCheckboxId == checkboxIndex,
+              );
+        final staticallyChecked =
+            isCheckbox && node.children.first.attributes['checked'] == 'true';
+
+        return WidgetSpan(
+          child: Padding(
+            padding: EdgeInsetsDirectional.only(start: fontSize),
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  if (!isCheckbox) ...[
+                    if (node.parent?.localName == 'ul')
+                      const TextSpan(text: '• '),
+                    if (node.parent?.localName == 'ol')
+                      TextSpan(
+                        text:
+                            '${(node.parent?.nodes.whereType<dom.Element>().toList().indexOf(node) ?? 0) + (int.tryParse(node.parent?.attributes['start'] ?? '1') ?? 1)}. ',
+                      ),
+                  ],
+                  if (node.className == 'task-list-item')
+                    WidgetSpan(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        child: SizedBox.square(
+                          dimension: fontSize + 2,
+                          child: CupertinoCheckbox(
+                            checkColor: textColor,
+                            side: BorderSide(color: textColor),
+                            activeColor: textColor.withAlpha(64),
+                            value:
+                                staticallyChecked || checkedByReaction != null,
+                            onChanged:
+                                eventId == null ||
+                                    checkboxIndex == null ||
+                                    staticallyChecked ||
+                                    !room.canSendDefaultMessages ||
+                                    (checkedByReaction != null &&
+                                        checkedByReaction.senderId !=
+                                            room.client.userID)
+                                ? null
+                                : (_) => showFutureLoadingDialog(
+                                    context: context,
+                                    future: () => checkedByReaction != null
+                                        ? room.redactEvent(
+                                            checkedByReaction.eventId,
+                                          )
+                                        : room.checkCheckbox(
+                                            eventId,
+                                            checkboxIndex,
+                                          ),
+                                  ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ..._renderWithLineBreaks(node.nodes, context, depth: depth),
+                ],
+                style: TextStyle(fontSize: fontSize, color: textColor),
+              ),
+            ),
+          ),
+        );
+      case 'blockquote':
+        return WidgetSpan(
+          child: Container(
+            padding: const EdgeInsetsDirectional.only(start: 8.0),
+            decoration: BoxDecoration(
+              border: BorderDirectional(
+                start: BorderSide(color: textColor, width: 5),
+              ),
+            ),
+            child: Text.rich(
+              TextSpan(
+                children: _renderWithLineBreaks(
+                  node.nodes,
+                  context,
+                  depth: depth,
+                ),
+              ),
+              style: TextStyle(
+                fontStyle: FontStyle.italic,
+                fontSize: fontSize,
+                color: textColor,
+              ),
+            ),
+          ),
+        );
+      case 'code':
+        final isInline = node.parent?.localName != 'pre';
+        final lang =
+            node.className
+                .split(' ')
+                .singleWhereOrNull(
+                  (className) => className.startsWith('language-'),
+                )
+                ?.split('language-')
+                .last ??
+            'md';
+        final highlightedHtml = highlight
+            .parse(node.text, language: lang)
+            .toHtml();
+        final element = parser.parse(highlightedHtml).body;
+        if (element == null) {
+          return const TextSpan(text: 'Unable to render code block!');
+        }
+
+        return WidgetSpan(
+          child: Material(
+            color: atomOneBackgroundColor,
+            shape: RoundedRectangleBorder(
+              side: const BorderSide(color: hightlightTextColor),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Padding(
+              padding: isInline
+                  ? const EdgeInsets.symmetric(horizontal: 4.0)
+                  : const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+              child: Text.rich(
+                TextSpan(children: [_renderCodeBlockNode(element)]),
+                selectionColor: hightlightTextColor.withAlpha(128),
+              ),
+            ),
+          ),
+        );
+      case 'img':
+        final mxcUrl = Uri.tryParse(node.attributes['src'] ?? '');
+        if (mxcUrl == null || mxcUrl.scheme != 'mxc') {
+          return TextSpan(text: node.attributes['alt']);
+        }
+
+        final width = double.tryParse(node.attributes['width'] ?? '');
+        final height = double.tryParse(node.attributes['height'] ?? '');
+        const defaultDimension = 64.0;
+        final actualWidth = width ?? height ?? defaultDimension;
+        final actualHeight = height ?? width ?? defaultDimension;
+
+        return WidgetSpan(
+          child: SizedBox(
+            width: actualWidth,
+            height: actualHeight,
+            child: MxcImage(
+              uri: mxcUrl,
+              width: actualWidth,
+              height: actualHeight,
+              isThumbnail: (actualWidth * actualHeight) > (256 * 256),
+            ),
+          ),
+        );
+      case 'table':
+        return WidgetSpan(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Table(
+              defaultColumnWidth: const IntrinsicColumnWidth(),
+              border: TableBorder.all(color: textColor.withAlpha(100)),
+              children: node.nodes
+                  .whereType<dom.Element>()
+                  .expand(
+                    (e) =>
+                        e.localName == 'thead' ||
+                            e.localName == 'tbody' ||
+                            e.localName == 'tfoot'
+                        ? e.nodes.whereType<dom.Element>()
+                        : [e],
+                  )
+                  .where((e) => e.localName == 'tr')
+                  .map(
+                    (tr) => TableRow(
+                      children: tr.nodes
+                          .whereType<dom.Element>()
+                          .where(
+                            (e) => e.localName == 'td' || e.localName == 'th',
+                          )
+                          .map(
+                            (cell) => Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 3,
+                              ),
+                              child: Text.rich(
+                                TextSpan(
+                                  children: _renderWithLineBreaks(
+                                    cell.nodes,
+                                    context,
+                                    depth: depth,
+                                  ),
+                                  style: cell.localName == 'th'
+                                      ? const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        )
+                                      : null,
+                                ),
+                                style: TextStyle(
+                                  fontSize: fontSize,
+                                  color: textColor,
+                                ),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        );
+      case 'thead':
+      case 'tbody':
+      case 'tfoot':
+      case 'tr':
+      case 'th':
+      case 'td':
+      case 'caption':
+        // These are handled by the 'table' case above; if encountered
+        // outside a table, render children inline as fallback.
+        return TextSpan(
+          children: _renderWithLineBreaks(node.nodes, context, depth: depth),
+        );
+      case 'hr':
+        return const WidgetSpan(child: Divider());
+      case 'details':
+        var obscure = true;
+        return WidgetSpan(
+          child: StatefulBuilder(
+            builder: (context, setState) => InkWell(
+              splashColor: Colors.transparent,
+              onTap: () => setState(() {
+                obscure = !obscure;
+              }),
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    WidgetSpan(
+                      child: Icon(
+                        obscure ? Icons.arrow_right : Icons.arrow_drop_down,
+                        size: fontSize * 1.2,
+                        color: textColor,
+                      ),
+                    ),
+                    if (obscure)
+                      ...node.nodes
+                          .where(
+                            (node) =>
+                                node is dom.Element &&
+                                node.localName == 'summary',
+                          )
+                          .map(
+                            (node) => _renderHtml(node, context, depth: depth),
+                          )
+                    else
+                      ..._renderWithLineBreaks(
+                        node.nodes,
+                        context,
+                        depth: depth,
+                      ),
+                  ],
+                ),
+                style: TextStyle(fontSize: fontSize, color: textColor),
+              ),
+            ),
+          ),
+        );
+      case 'span':
+        if (!node.attributes.containsKey('data-mx-spoiler')) {
+          continue block;
+        }
+        var obscure = true;
+        return WidgetSpan(
+          child: StatefulBuilder(
+            builder: (context, setState) => InkWell(
+              splashColor: Colors.transparent,
+              onTap: () => setState(() {
+                obscure = !obscure;
+              }),
+              child: Text.rich(
+                TextSpan(
+                  children: _renderWithLineBreaks(
+                    node.nodes,
+                    context,
+                    depth: depth,
+                  ),
+                ),
+                style: TextStyle(
+                  fontSize: fontSize,
+                  color: textColor,
+                  backgroundColor: obscure ? textColor : null,
+                ),
+              ),
+            ),
+          ),
+        );
+      block:
+      default:
+        return TextSpan(
+          style: switch (node.localName) {
+            'body' => TextStyle(fontSize: fontSize, color: textColor),
+            'a' => linkStyle,
+            'strong' => const TextStyle(fontWeight: FontWeight.bold),
+            'em' || 'i' => const TextStyle(fontStyle: FontStyle.italic),
+            'del' || 's' || 'strikethrough' => const TextStyle(
+              decoration: TextDecoration.lineThrough,
+            ),
+            'u' => const TextStyle(decoration: TextDecoration.underline),
+            'h1' => TextStyle(fontSize: fontSize * 1.6, height: 2),
+            'h2' => TextStyle(fontSize: fontSize * 1.5, height: 2),
+            'h3' => TextStyle(fontSize: fontSize * 1.4, height: 2),
+            'h4' => TextStyle(fontSize: fontSize * 1.3, height: 1.75),
+            'h5' => TextStyle(fontSize: fontSize * 1.2, height: 1.75),
+            'h6' => TextStyle(fontSize: fontSize * 1.1, height: 1.5),
+            'span' => TextStyle(
+              color:
+                  node.attributes['color']?.hexToColor ??
+                  node.attributes['data-mx-color']?.hexToColor ??
+                  textColor,
+              backgroundColor: node.attributes['data-mx-bg-color']?.hexToColor,
+            ),
+            'sup' => const TextStyle(
+              fontFeatures: [FontFeature.superscripts()],
+            ),
+            'sub' => const TextStyle(fontFeatures: [FontFeature.subscripts()]),
+            _ => null,
+          },
+          children: _renderWithLineBreaks(node.nodes, context, depth: depth),
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final element = parser.parse(html).body ?? dom.Element.html('');
+    final configuredMaxLines = AppSettings.messagePreviewMaxLines.value;
+    final maxLines = configuredMaxLines <= 0 ? null : configuredMaxLines;
+    final span = _renderHtml(element, context);
+    final style = TextStyle(fontSize: fontSize, color: textColor);
+
+    if (maxLines == null) {
+      return Text.rich(
+        span,
+        style: style,
+        selectionColor: textColor.withAlpha(128),
+      );
+    }
+
+    // Heuristic: if plain text has enough newlines or length, it will overflow.
+    final plainText = element.text;
+    final lineCount = '\n'.allMatches(plainText).length + 1;
+    final likelyOverflows =
+        lineCount > maxLines || plainText.length > maxLines * 50;
+
+    if (!likelyOverflows) {
+      return Text.rich(
+        span,
+        style: style,
+        selectionColor: textColor.withAlpha(128),
+      );
+    }
+
+    return _CollapsibleText(
+      span: span,
+      style: style,
+      maxLines: maxLines,
+      textColor: textColor,
+      linkColor: linkStyle.color ?? textColor,
+      fontSize: fontSize,
+    );
+  }
+}
+
+class _CollapsibleText extends StatefulWidget {
+  final InlineSpan span;
+  final TextStyle style;
+  final int maxLines;
+  final Color textColor;
+  final Color linkColor;
+  final double fontSize;
+
+  const _CollapsibleText({
+    required this.span,
+    required this.style,
+    required this.maxLines,
+    required this.textColor,
+    required this.linkColor,
+    required this.fontSize,
+  });
+
+  @override
+  State<_CollapsibleText> createState() => _CollapsibleTextState();
+}
+
+class _CollapsibleTextState extends State<_CollapsibleText> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = L10n.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedSize(
+          duration: FluffyThemes.animationDuration,
+          curve: FluffyThemes.animationCurve,
+          alignment: AlignmentDirectional.topStart,
+          child: Text.rich(
+            widget.span,
+            style: widget.style,
+            maxLines: _expanded ? null : widget.maxLines,
+            overflow: _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+            selectionColor: widget.textColor.withAlpha(128),
+          ),
+        ),
+        Center(
+          child: TextButton.icon(
+            onPressed: () => setState(() => _expanded = !_expanded),
+            style: TextButton.styleFrom(foregroundColor: widget.linkColor),
+            icon: Icon(_expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down),
+            label: Text(_expanded ? l10n.showLess : l10n.showMore),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class MatrixPill extends StatelessWidget {
+  final String name;
+  final BuildContext outerContext;
+  final Uri? avatar;
+  final String uri;
+  final double? fontSize;
+  final Color? color;
+
+  const MatrixPill({
+    super.key,
+    required this.name,
+    required this.outerContext,
+    this.avatar,
+    required this.uri,
+    required this.fontSize,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      splashColor: Colors.transparent,
+      onTap: UrlLauncher(outerContext, uri).launchUrl,
+      child: Text.rich(
+        TextSpan(
+          children: [
+            WidgetSpan(
+              child: Padding(
+                padding: const EdgeInsetsDirectional.only(end: 4.0),
+                child: Avatar(mxContent: avatar, name: name, size: 16),
+              ),
+            ),
+            TextSpan(
+              text: name,
+              style: TextStyle(
+                color: color,
+                decorationColor: color,
+                decoration: TextDecoration.underline,
+                fontSize: fontSize,
+                height: 1.25,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+extension on String {
+  Color? get hexToColor {
+    var hexCode = this;
+    if (hexCode.startsWith('#')) hexCode = hexCode.substring(1);
+    if (hexCode.length == 6) hexCode = 'FF$hexCode';
+    final colorValue = int.tryParse(hexCode, radix: 16);
+    return colorValue == null ? null : Color(colorValue);
+  }
+}
+
+extension on dom.Element {
+  dom.Element get rootElement => parent?.rootElement ?? this;
+}

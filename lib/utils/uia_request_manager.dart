@@ -1,0 +1,110 @@
+// SPDX-FileCopyrightText: 2019-Present Christian Kußowski
+// SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'dart:async';
+
+import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:fluffychat/widgets/fluffy_chat_app.dart';
+import 'package:fluffychat/widgets/matrix.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+extension UiaRequestManager on MatrixState {
+  Future uiaRequestHandler(UiaRequest uiaRequest) async {
+    final l10n = L10n.of(context);
+    final navigatorContext =
+        FluffyChatApp.router.routerDelegate.navigatorKey.currentContext ??
+        context;
+    try {
+      if (uiaRequest.state != UiaRequestState.waitForUser ||
+          uiaRequest.nextStages.isEmpty) {
+        Logs().d('Uia Request Stage: ${uiaRequest.state}');
+        return;
+      }
+      final stage = uiaRequest.nextStages.first;
+      Logs().d('Uia Request Stage: $stage');
+      switch (stage) {
+        case AuthenticationTypes.password:
+          final input =
+              cachedPassword ??
+              (await showTextInputDialog(
+                context: navigatorContext,
+                title: l10n.pleaseEnterYourPassword,
+                okLabel: l10n.ok,
+                cancelLabel: l10n.cancel,
+                minLines: 1,
+                maxLines: 1,
+                obscureText: true,
+                hintText: '******',
+              ));
+          if (input == null || input.isEmpty) {
+            return uiaRequest.cancel();
+          }
+          return await uiaRequest.completeStage(
+            AuthenticationPassword(
+              session: uiaRequest.session,
+              password: input,
+              identifier: AuthenticationUserIdentifier(user: client.userID!),
+            ),
+          );
+        case AuthenticationTypes.dummy:
+          return await uiaRequest.completeStage(
+            AuthenticationData(
+              type: AuthenticationTypes.dummy,
+              session: uiaRequest.session,
+            ),
+          );
+        default:
+          final stageUrl = uiaRequest.params
+              .tryGetMap<String, Object?>(stage)
+              ?.tryGet<String>('url');
+          final fallbackUrl = client.homeserver!.replace(
+            path: '/_matrix/client/v3/auth/$stage/fallback/web',
+            queryParameters: {'session': uiaRequest.session},
+          );
+          final url = stageUrl != null
+              ? (Uri.tryParse(stageUrl) ?? fallbackUrl)
+              : fallbackUrl;
+
+          final consent = await showOkCancelAlertDialog(
+            useRootNavigator: false,
+            title: l10n.pleaseFollowInstructionsOnWeb,
+            context: navigatorContext,
+            okLabel: l10n.open,
+            cancelLabel: l10n.cancel,
+          );
+          if (consent != OkCancelResult.ok) return uiaRequest.cancel();
+
+          launchUrl(url, mode: LaunchMode.inAppBrowserView);
+          final completer = Completer();
+          final listener = AppLifecycleListener(onResume: completer.complete);
+          await completer.future;
+          listener.dispose();
+
+          return await uiaRequest.completeStage(
+            AuthenticationData(
+              session: uiaRequest.session,
+              type: stageUrl == null ? null : stage,
+            ),
+          );
+      }
+    } catch (e, s) {
+      Logs().e('Error while background UIA', e, s);
+      return uiaRequest.cancel(e is Exception ? e : Exception(e));
+    }
+  }
+}
+
+class UiaException implements Exception {
+  final String reason;
+
+  UiaException(this.reason);
+
+  @override
+  String toString() => reason;
+}

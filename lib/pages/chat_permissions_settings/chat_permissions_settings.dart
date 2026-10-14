@@ -1,0 +1,78 @@
+// SPDX-FileCopyrightText: 2019-Present Christian Kußowski
+// SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat_permissions_settings/chat_permissions_settings_view.dart';
+import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:fluffychat/widgets/matrix.dart';
+import 'package:fluffychat/widgets/permission_slider_dialog.dart';
+import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
+
+class ChatPermissionsSettings extends StatefulWidget {
+  const ChatPermissionsSettings({super.key});
+
+  @override
+  ChatPermissionsSettingsController createState() =>
+      ChatPermissionsSettingsController();
+}
+
+class ChatPermissionsSettingsController extends State<ChatPermissionsSettings> {
+  String? get roomId => GoRouterState.of(context).pathParameters['roomid'];
+  Future<void> editPowerLevel(
+    BuildContext context,
+    String key,
+    int currentLevel, {
+    int? newLevel,
+    String? category,
+  }) async {
+    final room = Matrix.of(context).client.getRoomById(roomId!)!;
+    if (!room.canSendEvent(EventTypes.RoomPowerLevels)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(L10n.of(context).noPermission)));
+      return;
+    }
+    newLevel ??= await showPermissionChooser(
+      context,
+      currentLevel: currentLevel,
+    );
+    if (newLevel == null) return;
+    if (!context.mounted) return;
+    final content = Map<String, dynamic>.from(
+      room.getState(EventTypes.RoomPowerLevels)!.content,
+    );
+    if (category != null) {
+      if (!content.containsKey(category)) {
+        content[category] = <String, dynamic>{};
+      }
+      content[category][key] = newLevel;
+    } else {
+      content[key] = newLevel;
+    }
+    await showFutureLoadingDialog(
+      context: context,
+      future: () => room.client.setRoomStateWithKey(
+        room.id,
+        EventTypes.RoomPowerLevels,
+        '',
+        content,
+      ),
+    );
+  }
+
+  Stream get onChanged => Matrix.of(context).client.onSync.stream.where(
+    (e) =>
+        (e.rooms?.join?.containsKey(roomId) ?? false) &&
+        (e.rooms!.join![roomId!]?.timeline?.events?.any(
+              (s) => s.type == EventTypes.RoomPowerLevels,
+            ) ??
+            false),
+  );
+
+  @override
+  Widget build(BuildContext context) => ChatPermissionsSettingsView(this);
+}

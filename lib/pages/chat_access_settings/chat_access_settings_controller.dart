@@ -1,0 +1,359 @@
+// SPDX-FileCopyrightText: 2019-Present Christian Kußowski
+// SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat_access_settings/chat_access_settings_page.dart';
+import 'package:fluffychat/utils/localized_exception_extension.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:fluffychat/widgets/matrix.dart';
+import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart' hide Visibility;
+import 'package:matrix/matrix.dart';
+
+class ChatAccessSettings extends StatefulWidget {
+  final String roomId;
+  const ChatAccessSettings({required this.roomId, super.key});
+
+  @override
+  State<ChatAccessSettings> createState() => ChatAccessSettingsController();
+}
+
+class ChatAccessSettingsController extends State<ChatAccessSettings> {
+  bool joinRulesLoading = false;
+  bool visibilityLoading = false;
+  bool historyVisibilityLoading = false;
+  bool guestAccessLoading = false;
+  Room get room => Matrix.of(context).client.getRoomById(widget.roomId)!;
+  Set<Room> get knownSpaceParents => {
+    ...room.client.rooms.where(
+      (space) =>
+          space.isSpace &&
+          space.spaceChildren.any((child) => child.roomId == room.id),
+    ),
+    ...room.spaceParents
+        .map((parent) => room.client.getRoomById(parent.roomId ?? ''))
+        .whereType<Room>(),
+  };
+
+  String get roomVersion =>
+      room
+          .getState(EventTypes.RoomCreate)!
+          .content
+          .tryGet<String>('room_version') ??
+      'Unknown';
+
+  /// Calculates which join rules are available based on the information on
+  /// https://spec.matrix.org/v1.11/rooms/#feature-matrix
+  List<JoinRules> get availableJoinRules {
+    final joinRules = Set<JoinRules>.from(JoinRules.values);
+
+    final roomVersionInt = int.tryParse(roomVersion);
+
+    // Knock is only supported for rooms up from version 7:
+    if (roomVersionInt != null && roomVersionInt <= 6) {
+      joinRules.remove(JoinRules.knock);
+    }
+
+    // Restricted is only supported for rooms up from version 8:
+    if (roomVersionInt != null && roomVersionInt <= 7) {
+      joinRules.remove(JoinRules.restricted);
+    }
+
+    // Knock-Restricted is only supported for rooms up from version 10:
+    if (roomVersionInt != null && roomVersionInt <= 9) {
+      joinRules.remove(JoinRules.knockRestricted);
+    }
+
+    if (knownSpaceParents.isEmpty) {
+      joinRules.remove(JoinRules.restricted);
+      joinRules.remove(JoinRules.knockRestricted);
+    }
+
+    // If an unsupported join rule is the current join rule, display it:
+    final currentJoinRule = room.joinRules;
+    if (currentJoinRule != null) joinRules.add(currentJoinRule);
+
+    return joinRules.toList();
+  }
+
+  Future<void> setJoinRule(JoinRules? newJoinRules) async {
+    if (newJoinRules == null) return;
+    setState(() {
+      joinRulesLoading = true;
+    });
+
+    try {
+      await room.setJoinRules(
+        newJoinRules,
+        allowConditionRoomIds:
+            {
+              JoinRules.restricted,
+              JoinRules.knockRestricted,
+            }.contains(newJoinRules)
+            ? knownSpaceParents.map((parent) => parent.id).toList()
+            : null,
+      );
+    } catch (e, s) {
+      Logs().w('Unable to change join rules', e, s);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          joinRulesLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> setHistoryVisibility(
+    HistoryVisibility? historyVisibility,
+  ) async {
+    if (historyVisibility == null) return;
+    setState(() {
+      historyVisibilityLoading = true;
+    });
+
+    try {
+      await room.setHistoryVisibility(historyVisibility);
+    } catch (e, s) {
+      Logs().w('Unable to change history visibility', e, s);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          historyVisibilityLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> setGuestAccess(GuestAccess? guestAccess) async {
+    if (guestAccess == null) return;
+    setState(() {
+      guestAccessLoading = true;
+    });
+
+    try {
+      await room.setGuestAccess(guestAccess);
+    } catch (e, s) {
+      Logs().w('Unable to change guest access', e, s);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          guestAccessLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> updateRoomAction() async {
+    final l10n = L10n.of(context);
+    final roomVersion = room
+        .getState(EventTypes.RoomCreate)!
+        .content
+        .tryGet<String>('room_version');
+    final capabilitiesResult = await showFutureLoadingDialog(
+      context: context,
+      future: () => room.client.getCapabilities(),
+    );
+    final capabilities = capabilitiesResult.result;
+    if (capabilities == null) return;
+    if (!mounted) return;
+    final newVersion = await showModalActionPopup<String>(
+      context: context,
+      title: l10n.replaceRoomWithNewerVersion,
+      cancelLabel: l10n.cancel,
+      actions: capabilities.mRoomVersions!.available.entries
+          .where((r) => r.key != roomVersion)
+          .map(
+            (version) => AdaptiveModalAction(
+              value: version.key,
+              label:
+                  '${version.key} (${version.value.toString().split('.').last})',
+            ),
+          )
+          .toList(),
+    );
+    if (newVersion == null) return;
+    if (!mounted) return;
+    final confirmUpgrade = await showOkCancelAlertDialog(
+      context: context,
+      okLabel: l10n.yes,
+      cancelLabel: l10n.cancel,
+      title: l10n.areYouSure,
+      message: l10n.roomUpgradeDescription,
+      isDestructive: true,
+    );
+    if (confirmUpgrade == OkCancelResult.cancel) {
+      return;
+    }
+    if (!mounted) return;
+    final result = await showFutureLoadingDialog(
+      context: context,
+      futureWithProgress: (onProgress) async {
+        final newRoomId = await room.client.upgradeRoom(room.id, newVersion);
+        var newRoom = room.client.getRoomById(newRoomId);
+        while (newRoom == null) {
+          await room.client.onSync.stream.first;
+          newRoom = room.client.getRoomById(newRoomId);
+        }
+
+        if ({
+          JoinRules.invite,
+          JoinRules.knock,
+          JoinRules.knockRestricted,
+        }.contains(room.joinRules)) {
+          final users = await room.requestParticipants([
+            Membership.join,
+            Membership.invite,
+          ]);
+          users.removeWhere((user) => user.id == room.client.userID);
+          for (final (i, user) in users.indexed) {
+            try {
+              Logs().v('Inviting...', user.id);
+              await newRoom.invite(user.id);
+              onProgress(i / users.length);
+            } on MatrixException catch (e) {
+              final retryAfterMs = e.retryAfterMs;
+              if (e.error != MatrixError.M_LIMIT_EXCEEDED ||
+                  retryAfterMs == null) {
+                rethrow;
+              }
+              Logs().d('Limit exceeded. Retry after $retryAfterMs');
+              await Future.delayed(Duration(milliseconds: retryAfterMs));
+              await newRoom.invite(user.id);
+              onProgress(i / users.length);
+            }
+          }
+        }
+      },
+    );
+    if (result.error != null) return;
+    if (!mounted) return;
+    context.go('/rooms/${room.id}');
+  }
+
+  Future<void> addAlias() async {
+    final l10n = L10n.of(context);
+    final domain = room.client.userID?.domain;
+    if (domain == null) {
+      throw Exception('userID or domain is null! This should never happen.');
+    }
+
+    final input = await showTextInputDialog(
+      context: context,
+      title: l10n.editRoomAliases,
+      prefixText: '#',
+      suffixText: domain,
+      hintText: l10n.alias,
+    );
+    if (!mounted) return;
+    final aliasLocalpart = input?.trim();
+    if (aliasLocalpart == null || aliasLocalpart.isEmpty) return;
+    final alias = '#$aliasLocalpart:$domain';
+
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () => room.client.setRoomAlias(alias, room.id),
+    );
+    if (result.error != null) return;
+    if (!mounted) return;
+    setState(() {});
+
+    if (!room.canChangeStateEvent(EventTypes.RoomCanonicalAlias)) return;
+
+    final canonicalAliasConsent = await showOkCancelAlertDialog(
+      context: context,
+      title: l10n.setAsCanonicalAlias,
+      message: alias,
+      okLabel: l10n.yes,
+      cancelLabel: l10n.no,
+    );
+    if (!mounted) return;
+
+    final altAliases =
+        room
+            .getState(EventTypes.RoomCanonicalAlias)
+            ?.content
+            .tryGetList<String>('alt_aliases')
+            ?.toSet() ??
+        {};
+    if (room.canonicalAlias.isNotEmpty) altAliases.add(room.canonicalAlias);
+    altAliases.add(alias);
+    if (canonicalAliasConsent == OkCancelResult.ok) {
+      altAliases.remove(alias);
+    } else {
+      altAliases.remove(room.canonicalAlias);
+    }
+
+    await showFutureLoadingDialog(
+      context: context,
+      future: () => room.client
+          .setRoomStateWithKey(room.id, EventTypes.RoomCanonicalAlias, '', {
+            'alias': canonicalAliasConsent == OkCancelResult.ok
+                ? alias
+                : room.canonicalAlias,
+            if (altAliases.isNotEmpty) 'alt_aliases': altAliases.toList(),
+          }),
+    );
+  }
+
+  Future<void> deleteAlias(String alias) async {
+    await showFutureLoadingDialog(
+      context: context,
+      future: () => room.client.deleteRoomAlias(alias),
+    );
+    setState(() {});
+  }
+
+  Future<void> setChatVisibilityOnDirectory(bool? visibility) async {
+    if (visibility == null) return;
+    setState(() {
+      visibilityLoading = true;
+    });
+
+    try {
+      await room.client.setRoomVisibilityOnDirectory(
+        room.id,
+        visibility: visibility == true ? Visibility.public : Visibility.private,
+      );
+      setState(() {});
+    } catch (e, s) {
+      Logs().w('Unable to change visibility', e, s);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          visibilityLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ChatAccessSettingsPageView(this);
+  }
+}
