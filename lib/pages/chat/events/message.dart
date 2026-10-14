@@ -10,13 +10,15 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat/notion_conversation.dart';
+import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/utils/string_color.dart';
 import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/member_actions_popup_menu_button.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -103,57 +105,32 @@ class Message extends StatelessWidget {
       return StateMessage(event);
     }
 
-    final client = Matrix.of(context).client;
+    final client = event.room.client;
     final ownMessage = event.senderId == client.userID;
-    final alignment = ownMessage ? Alignment.topRight : Alignment.topLeft;
+    const alignment = Alignment.topLeft;
 
-    var color = theme.colorScheme.surfaceContainerHigh;
-    final displayTime =
-        event.type == EventTypes.RoomCreate ||
-        previousEvent == null ||
-        !event.originServerTs.sameEnvironment(previousEvent!.originServerTs);
-
-    final nextEventSameSender =
-        nextEvent != null &&
-        {EventTypes.Message, EventTypes.Sticker}.contains(nextEvent!.type) &&
-        nextEvent!.senderId == event.senderId &&
-        nextEvent!.originServerTs.sameEnvironment(event.originServerTs);
-
-    final previousEventSameSender =
-        previousEvent != null &&
-        {
-          EventTypes.Message,
-          EventTypes.Sticker,
-        }.contains(previousEvent!.type) &&
-        previousEvent!.senderId == event.senderId &&
-        previousEvent!.originServerTs.sameEnvironment(event.originServerTs);
-
-    final textColor = ownMessage
-        ? theme.onBubbleColor
+    var color = Colors.transparent;
+    final privatePalette = InboxProjection(
+      PersonalClient.of(event.room.client),
+    ).metadataFor(event.room).theme;
+    final privateColor = ownMessage
+        ? privatePalette?.outgoingColor
+        : privatePalette?.incomingColor;
+    // A deliberately chosen private palette remains a local preference; the
+    // default authored timeline has no incoming/outgoing bubble fill.
+    final textColor = privateColor is int
+        ? (Color(privateColor).computeLuminance() > 0.179
+              ? Colors.black87
+              : Colors.white)
         : theme.colorScheme.onSurface;
-
-    final linkColor = ownMessage
-        ? theme.brightness == Brightness.light
-              ? theme.colorScheme.primaryFixed
-              : theme.colorScheme.onTertiaryContainer
+    final linkColor = privateColor is int
+        ? textColor
         : theme.colorScheme.primary;
-
-    final rowMainAxisAlignment = ownMessage
-        ? MainAxisAlignment.end
-        : MainAxisAlignment.start;
+    const rowMainAxisAlignment = MainAxisAlignment.start;
 
     final displayEvent = event.getDisplayEvent(timeline);
-    const hardCorner = Radius.circular(3);
-    const roundedCorner = Radius.circular(AppConfig.borderRadius);
-    final borderRadius = BorderRadius.only(
-      topLeft: !ownMessage ? hardCorner : roundedCorner,
-      topRight: ownMessage && nextEventSameSender ? hardCorner : roundedCorner,
-      bottomLeft: !ownMessage && previousEventSameSender
-          ? hardCorner
-          : roundedCorner,
-      bottomRight: ownMessage ? hardCorner : roundedCorner,
-    );
-    const avatarSize = Avatar.defaultSize;
+    final borderRadius = BorderRadius.circular(NotionTokens.radius);
+    const avatarSize = 36.0;
     final noBubble =
         ({
           MessageTypes.Video,
@@ -163,10 +140,8 @@ class Message extends StatelessWidget {
         event.fileDescription == null &&
         !event.redacted);
 
-    if (ownMessage) {
-      color = displayEvent.status.isError
-          ? Colors.redAccent
-          : theme.bubbleColor;
+    if (privateColor is int && !displayEvent.status.isError) {
+      color = Color(privateColor);
     }
 
     final sentReactions = <String>{};
@@ -235,16 +210,14 @@ class Message extends StatelessWidget {
             maxWidth: FluffyThemes.maxTimelineWidth,
           ),
           padding: EdgeInsets.only(
-            left: 8.0,
-            right: 8.0,
-            top: nextEventSameSender ? 1.0 : 8.0,
-            bottom: previousEventSameSender || previousEvent == null
-                ? 1.0
-                : 8.0,
+            left: NotionTokens.inset,
+            right: NotionTokens.inset,
+            top: 10,
+            bottom: 10,
           ),
           child: Column(
             mainAxisSize: .min,
-            crossAxisAlignment: ownMessage ? .end : .start,
+            crossAxisAlignment: .start,
             children: <Widget>[
               Stack(
                 clipBehavior: Clip.none,
@@ -292,14 +265,13 @@ class Message extends StatelessWidget {
                             onPressed: () => onSelect(event),
                           ),
                         )
-                      else if (nextEventSameSender || ownMessage)
-                        SizedBox(width: avatarSize)
                       else
                         FutureBuilder<User?>(
                           future: event.fetchSenderUser(),
                           builder: (context, snapshot) {
                             final user = snapshot.data ?? sender;
                             return Avatar(
+                              client: event.room.client,
                               mxContent: user.avatarUrl,
                               name: user.calcDisplayname(),
                               onTap: () => showMemberActionsPopupMenu(
@@ -308,86 +280,50 @@ class Message extends StatelessWidget {
                                 onMention: onMention,
                               ),
                               size: avatarSize,
-                              presenceUserId: user.stateKey,
-                              presenceBackgroundColor: wallpaperMode
-                                  ? Colors.transparent
-                                  : null,
                             );
                           },
                         ),
+                      const SizedBox(width: 16),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: .start,
                           mainAxisSize: .min,
                           children: [
-                            Padding(
-                              padding: EdgeInsets.only(left: 8.0),
-                              child: Row(
-                                mainAxisAlignment: ownMessage ? .end : .start,
-                                children: [
-                                  if (sender.powerLevel.role !=
-                                          PowerLevelRole.user &&
-                                      !nextEventSameSender &&
-                                      !ownMessage &&
-                                      !event.room.isDirectChat)
-                                    Padding(
-                                      padding: const EdgeInsets.only(
-                                        right: 2.0,
-                                      ),
-                                      child: Icon(
-                                        sender.powerLevel.role ==
-                                                PowerLevelRole.moderator
-                                            ? Icons.add_moderator_outlined
-                                            : Icons.admin_panel_settings,
-                                        size: 14,
-                                        color: theme
-                                            .colorScheme
-                                            .onPrimaryContainer,
-                                      ),
-                                    ),
-                                  if ((!nextEventSameSender) && !ownMessage)
-                                    FutureBuilder<User?>(
-                                      future: event.fetchSenderUser(),
-                                      builder: (context, snapshot) {
-                                        final displayname =
-                                            snapshot.data?.calcDisplayname() ??
-                                            sender.calcDisplayname();
-                                        return ConstrainedBox(
-                                          constraints: BoxConstraints(
-                                            maxWidth: 200,
-                                          ),
-                                          child: Text(
-                                            displayname,
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              color: event.room.isDirectChat
-                                                  ? Colors.transparent
-                                                  : (theme.brightness ==
-                                                            Brightness.light
-                                                        ? displayname
-                                                              .colorScheme
-                                                              .primary
-                                                        : displayname
-                                                              .colorScheme
-                                                              .primaryContainer),
-                                              fontSize: 11,
-                                              shadows: event.room.isDirectChat
-                                                  ? null
-                                                  : wallpaperTextShadow,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                ],
-                              ),
+                            FutureBuilder<User?>(
+                              future: event.fetchSenderUser(),
+                              builder: (context, snapshot) =>
+                                  NotionAuthorHeading(
+                                    author: ownMessage
+                                        ? 'You'
+                                        : (snapshot.data ?? sender)
+                                              .calcDisplayname(),
+                                    time: selected
+                                        ? event.originServerTs
+                                              .localizedDetailedTime(context)
+                                        : event.originServerTs
+                                              .localizedTimeOfDay(context),
+                                    leading:
+                                        sender.powerLevel.role !=
+                                                PowerLevelRole.user &&
+                                            !event.room.isDirectChat
+                                        ? Icon(
+                                            sender.powerLevel.role ==
+                                                    PowerLevelRole.moderator
+                                                ? Icons.add_moderator_outlined
+                                                : Icons.admin_panel_settings,
+                                            size: 14,
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          )
+                                        : null,
+                                  ),
                             ),
+                            const SizedBox(height: 4),
 
                             Container(
                               alignment: alignment,
-                              padding: const EdgeInsets.only(left: 8),
+                              padding: EdgeInsets.zero,
                               child: GestureDetector(
                                 onDoubleTap:
                                     AppSettings.doubleTapToReact.value &&
@@ -449,10 +385,7 @@ class Message extends StatelessWidget {
                                     clipBehavior: Clip.antiAlias,
                                     child: BubbleBackground(
                                       colors: colors,
-                                      ignore:
-                                          noBubble ||
-                                          !ownMessage ||
-                                          MediaQuery.highContrastOf(context),
+                                      ignore: true,
                                       scrollController: scrollController,
                                       child: Container(
                                         decoration: BoxDecoration(
@@ -559,33 +492,18 @@ class Message extends StatelessWidget {
                               child: !hasReactions
                                   ? const SizedBox.shrink()
                                   : Container(
-                                      alignment: ownMessage
-                                          ? Alignment.centerRight
-                                          : Alignment.centerLeft,
+                                      alignment: Alignment.centerLeft,
                                       padding: EdgeInsets.only(
                                         top: 1.0,
-                                        left: 8.0,
-                                        right: ownMessage ? 0 : 12.0,
+                                        left: 0,
+                                        right: 0,
                                       ),
                                       child: MessageReactions(event, timeline),
                                     ),
                             ),
-                            Row(
-                              mainAxisAlignment: ownMessage ? .end : .start,
+                            Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
-                                const SizedBox(width: 8),
-                                if (event.status.isSent &&
-                                    (displayTime ||
-                                        !previousEventSameSender ||
-                                        selected))
-                                  Text(
-                                    ' ${selected ? event.originServerTs.localizedDetailedTime(context) : event.originServerTs.localizedTimeOfDay(context)}',
-                                    style: TextStyle(
-                                      color: eventStateTextColor,
-                                      fontSize: 11,
-                                      shadows: wallpaperTextShadow,
-                                    ),
-                                  ),
                                 if (isEdited) ...[
                                   Text(' ', style: TextStyle(fontSize: 11)),
                                   Text(
@@ -645,9 +563,7 @@ class Message extends StatelessWidget {
                               ],
                             ),
                             Align(
-                              alignment: ownMessage
-                                  ? Alignment.bottomRight
-                                  : Alignment.bottomLeft,
+                              alignment: Alignment.bottomLeft,
                               child: AnimatedSize(
                                 duration: FluffyThemes.animationDuration,
                                 curve: FluffyThemes.animationCurve,

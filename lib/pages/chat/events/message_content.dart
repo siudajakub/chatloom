@@ -8,10 +8,14 @@ import 'dart:math';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/events/poll.dart';
+import 'package:fluffychat/pages/chat/events/round_video_bridge_message.dart';
+import 'package:fluffychat/pages/chat/events/round_video_message.dart';
 import 'package:fluffychat/pages/chat/events/video_player.dart';
 import 'package:fluffychat/pages/image_viewer/image_viewer.dart';
+import 'package:fluffychat/personal/round_video/round_playback_queue.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart';
 
 import '../../../config/app_config.dart';
 import '../../../utils/event_checkbox_extension.dart';
@@ -50,6 +54,24 @@ class MessageContent extends StatelessWidget {
   Widget build(BuildContext context) {
     const fontSize = AppConfig.messageFontSize;
     final buttonTextColor = textColor;
+    if (event.redacted) {
+      return RedactionWidget(
+        event: event,
+        buttonTextColor: buttonTextColor,
+        onInfoTab: onInfoTab,
+        fontSize: fontSize,
+      );
+    }
+    final mediaPolicy = RoundMediaPolicy.fromContent(event.content);
+    // This precedes every media branch, including protected bridge notices.
+    // Never construct an ordinary thumbnail/player for limited media.
+    if (!event.redacted && !mediaPolicy.canPlay) {
+      return RoundVideoMessage(
+        event,
+        textColor: textColor,
+        showThumbnail: false,
+      );
+    }
     switch (event.type) {
       case EventTypes.Message:
       case EventTypes.Encrypted:
@@ -72,7 +94,7 @@ class MessageContent extends StatelessWidget {
             var fit = event.messageType == MessageTypes.Sticker
                 ? BoxFit.contain
                 : BoxFit.cover;
-            if (w != null && h != null) {
+            if (w != null && h != null && w > 0 && h > 0) {
               fit = BoxFit.contain;
               if (w > h) {
                 width = maxSize;
@@ -119,6 +141,20 @@ class MessageContent extends StatelessWidget {
               linkColor: linkColor,
             );
           case MessageTypes.Video:
+            if (RoundVideoDescriptor.fromContent(
+                  event.content,
+                  redacted: event.redacted,
+                ) !=
+                null) {
+              return RoundVideoBridgeMessage(
+                event,
+                textColor: textColor,
+                continuationQueue: RoundPlaybackQueue.after(
+                  event,
+                  timeline.events,
+                ),
+              );
+            }
             return EventVideoPlayer(
               event,
               textColor: textColor,
@@ -132,9 +168,9 @@ class MessageContent extends StatelessWidget {
               linkColor: linkColor,
             );
           case MessageTypes.Location:
-            final geoUri = Uri.tryParse(
-              event.content.tryGet<String>('geo_uri')!,
-            );
+            if (event.redacted) continue textmessage;
+            final geoValue = event.content.tryGet<String>('geo_uri');
+            final geoUri = geoValue == null ? null : Uri.tryParse(geoValue);
             if (geoUri != null && geoUri.scheme == 'geo') {
               final latlong = geoUri.path
                   .split(';')
@@ -144,7 +180,11 @@ class MessageContent extends StatelessWidget {
                   .toList();
               if (latlong.length == 2 &&
                   latlong.first != null &&
-                  latlong.last != null) {
+                  latlong.last != null &&
+                  latlong.first!.isFinite &&
+                  latlong.last!.isFinite &&
+                  latlong.first!.abs() <= 90 &&
+                  latlong.last!.abs() <= 180) {
                 return MapBubble(
                   onTap: () =>
                       UrlLauncher(context, geoUri.toString()).launchUrl(),
@@ -179,7 +219,7 @@ class MessageContent extends StatelessWidget {
                 !event.isRichMessage && bigEmojis.contains(event.body);
 
             return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(vertical: 2),
               child: HtmlMessage(
                 html: html,
                 textColor: textColor,
@@ -226,7 +266,7 @@ class MessageContent extends StatelessWidget {
               ),
               icon: '📞',
               textColor: buttonTextColor,
-              onPressed: () => onInfoTab!(event),
+              onPressed: () => onInfoTab?.call(event),
               fontSize: fontSize,
             );
           },
@@ -243,7 +283,7 @@ class MessageContent extends StatelessWidget {
               ),
               icon: 'ℹ️',
               textColor: buttonTextColor,
-              onPressed: () => onInfoTab!(event),
+              onPressed: () => onInfoTab?.call(event),
               fontSize: fontSize,
             );
           },
@@ -282,7 +322,7 @@ class RedactionWidget extends StatelessWidget {
               : L10n.of(context).redactedByBecause(redactedBy, reason),
           icon: '🗑️',
           textColor: buttonTextColor.withAlpha(128),
-          onPressed: () => onInfoTab!(event),
+          onPressed: () => onInfoTab?.call(event),
           fontSize: fontSize,
         );
       },

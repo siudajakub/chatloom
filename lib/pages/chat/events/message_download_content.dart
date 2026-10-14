@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/pages/chat/events/file_send_status_indicator.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
@@ -34,7 +35,7 @@ class MessageDownloadContent extends StatelessWidget {
                   ?.tryGet<String>('mimetype')
                   ?.toUpperCase() ??
               'UNKNOWN');
-    final sizeString = event.sizeString ?? '?MB';
+    final sizeString = event.sizeString ?? 'Size unavailable';
     final fileDescription = event.fileDescription;
     final fileSendingStatus = event.fileSendingStatus;
     return Column(
@@ -45,11 +46,17 @@ class MessageDownloadContent extends StatelessWidget {
         Material(
           color: Colors.transparent,
           child: InkWell(
-            borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+            borderRadius: BorderRadius.circular(NotionTokens.radius),
             onTap: () => event.saveFile(context),
             child: Container(
               width: 400,
-              padding: const EdgeInsets.all(16.0),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(NotionTokens.radius),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+              padding: const EdgeInsets.all(12),
               child: Row(
                 mainAxisSize: .min,
                 spacing: 16,
@@ -59,12 +66,10 @@ class MessageDownloadContent extends StatelessWidget {
                       fileSendingStatus: fileSendingStatus,
                     )
                   else
-                    CircleAvatar(
-                      backgroundColor: textColor.withAlpha(32),
-                      child: Icon(
-                        Icons.file_download_outlined,
-                        color: textColor,
-                      ),
+                    Icon(
+                      Icons.insert_drive_file_outlined,
+                      color: textColor,
+                      size: 28,
                     ),
                   Flexible(
                     child: Column(
@@ -81,7 +86,7 @@ class MessageDownloadContent extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          '$sizeString | $filetype',
+                          '$sizeString · $filetype',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(color: textColor, fontSize: 10),

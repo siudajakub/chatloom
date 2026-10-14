@@ -80,6 +80,7 @@ class FluffyChatApp extends StatelessWidget {
           ...GlobalMaterialLocalizations.delegates,
           ...GlobalCupertinoLocalizations.delegates,
         ],
+        locale: const Locale('en'),
         supportedLocales: L10n.supportedLocales,
         routerConfig: router,
         builder: (context, child) => AppLockWidget(

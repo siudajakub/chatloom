@@ -13,6 +13,7 @@ import 'package:fluffychat/pages/chat/encryption_info.dart';
 import 'package:fluffychat/pages/chat/events/message.dart';
 import 'package:fluffychat/pages/chat/seen_by_row.dart';
 import 'package:fluffychat/pages/chat/typing_indicators.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/account_config.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -20,7 +21,6 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix_api_lite/model/event_types.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 
-import '../../config/app_config.dart';
 import '../../utils/date_time_extension.dart';
 
 class ChatEventList extends StatelessWidget {
@@ -58,11 +58,15 @@ class ChatEventList extends StatelessWidget {
     return SelectionArea(
       child: MediaQuery(
         data: MediaQuery.of(context).copyWith(
-          textScaler: TextScaler.linear(AppSettings.fontSizeFactor.value),
+          textScaler: TextScaler.linear(
+            MediaQuery.textScalerOf(
+              context,
+            ).scale(AppSettings.fontSizeFactor.value),
+          ),
         ),
         child: ListView.custom(
           padding: EdgeInsets.only(
-            top: 8 + MediaQuery.paddingOf(context).top,
+            top: 8,
             bottom:
                 8 +
                 (controller.inputBarHeight ??
@@ -167,31 +171,20 @@ class ChatEventList extends StatelessWidget {
                   mainAxisSize: .min,
                   children: [
                     if (!isCollapsed && displayDate)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8.0, bottom: 16.0),
-                        child: Center(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 4.0),
-                            child: Material(
-                              borderRadius: BorderRadius.circular(
-                                AppConfig.borderRadius * 2,
-                              ),
-                              color: theme.colorScheme.inverseSurface.withAlpha(
-                                200,
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8.0,
-                                  vertical: 2.0,
-                                ),
-                                child: Text(
-                                  event.originServerTs.localizedDate(context),
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: theme.colorScheme.onInverseSurface,
-                                  ),
-                                ),
-                              ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            NotionTokens.inset,
+                            8,
+                            NotionTokens.inset,
+                            8,
+                          ),
+                          child: Text(
+                            event.originServerTs.localizedDate(context),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
                         ),

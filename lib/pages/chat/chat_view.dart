@@ -5,6 +5,7 @@
 
 import 'dart:ui' as ui;
 
+import 'package:async/async.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
@@ -14,10 +15,14 @@ import 'package:fluffychat/pages/chat/chat_app_bar_title.dart';
 import 'package:fluffychat/pages/chat/chat_event_list.dart';
 import 'package:fluffychat/pages/chat/pinned_events.dart';
 import 'package:fluffychat/pages/chat/reply_display.dart';
+import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/personal_hub.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/account_config.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:fluffychat/widgets/chat_settings_popup_menu.dart';
+import 'package:fluffychat/utils/sync_status_localization.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
@@ -47,7 +52,7 @@ class ChatView extends StatelessWidget {
         exceptionContext: ExceptionContext.joinRoom,
       );
     }
-    final bottomSheetPadding = FluffyThemes.isColumnMode(context) ? 16.0 : 8.0;
+    final bottomSheetPadding = FluffyThemes.isColumnMode(context) ? 16.0 : 12.0;
     final scrollUpBannerEventId = controller.scrollUpBannerEventId;
 
     final accountConfig = Matrix.of(context).client.applicationAccountConfig;
@@ -68,13 +73,26 @@ class ChatView extends StatelessWidget {
         }
       },
       child: StreamBuilder(
-        stream: controller.room.client.onRoomState.stream
-            .where((update) => update.roomId == controller.room.id)
-            .rateLimit(const Duration(seconds: 1)),
+        stream: StreamGroup.merge<Object>([
+          controller.room.client.onRoomState.stream.where(
+            (update) => update.roomId == controller.room.id,
+          ),
+          controller.room.client.onSyncStatus.stream,
+        ]).rateLimit(const Duration(seconds: 1)),
         builder: (context, snapshot) => FutureBuilder(
           future: controller.loadTimelineFuture,
           builder: (BuildContext context, snapshot) {
-            var appbarBottomHeight = 0.0;
+            final scheduledSource = controller.room;
+            final sync = controller.room.client.onSyncStatus.value;
+            final showSyncNotice =
+                sync != null &&
+                (sync.status == SyncStatus.error ||
+                    controller.room.client.onSync.value == null ||
+                    controller.room.client.prevBatch == null);
+            final syncHeight = showSyncNotice
+                ? 32.0 * MediaQuery.textScalerOf(context).scale(1)
+                : 0.0;
+            var appbarBottomHeight = syncHeight;
             final activeThreadId = controller.activeThreadId;
             if (activeThreadId != null) {
               appbarBottomHeight += ChatAppBarListTile.fixedHeight;
@@ -88,13 +106,19 @@ class ChatView extends StatelessWidget {
             }
             return Scaffold(
               key: Key('chat_page'),
-              extendBodyBehindAppBar: true,
+              backgroundColor:
+                  InboxProjection(
+                        PersonalClient.of(controller.room.client),
+                      ).metadataFor(controller.room).theme?.backgroundColor ==
+                      null
+                  ? null
+                  : Color(
+                      InboxProjection(
+                        PersonalClient.of(controller.room.client),
+                      ).metadataFor(controller.room).theme!.backgroundColor!,
+                    ),
+              extendBodyBehindAppBar: false,
               appBar: AppBar(
-                shape: FluffyThemes.isColumnMode(context)
-                    ? Border(
-                        bottom: BorderSide(color: theme.dividerColor, width: 1),
-                      )
-                    : null,
                 actionsIconTheme: IconThemeData(
                   color: controller.selectedEvents.isEmpty
                       ? null
@@ -103,8 +127,14 @@ class ChatView extends StatelessWidget {
                 backgroundColor: controller.selectedEvents.isEmpty
                     ? controller.activeThreadId != null
                           ? theme.colorScheme.secondaryContainer
-                          : theme.colorScheme.surface.withAlpha(240)
+                          : theme.colorScheme.surface
                     : theme.colorScheme.tertiaryContainer,
+                toolbarHeight: NotionTokens.headerHeight,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                shape: Border(
+                  bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+                ),
                 automaticallyImplyLeading: false,
                 leading: controller.selectMode
                     ? IconButton(
@@ -122,7 +152,11 @@ class ChatView extends StatelessWidget {
                       )
                     : FluffyThemes.isColumnMode(context)
                     ? null
-                    : const Center(child: BackButton()),
+                    : IconButton(
+                        icon: const Icon(Icons.chevron_left),
+                        tooltip: 'Back',
+                        onPressed: () => Navigator.maybePop(context),
+                      ),
                 titleSpacing: FluffyThemes.isColumnMode(context) ? 24 : 0,
                 title: ChatAppBarTitle(controller),
                 actions: [
@@ -254,13 +288,27 @@ class ChatView extends StatelessWidget {
                           ),
                         ),
                       )
-                    else if (controller.room.hasPermissionForMatrixRtcCall &&
+                    else if (controller.room.states['m.bridge'] == null &&
+                        controller.room.states['uk.half-shot.bridge'] == null &&
+                        controller.room.hasPermissionForMatrixRtcCall &&
                         controller.supportLiveKitCalls)
                       IconButton(
                         icon: Icon(Icons.call_outlined),
                         onPressed: controller.startOrJoinVideoCall,
                       ),
-                    ChatSettingsPopupMenu(controller.room, true),
+                    RoomPersonalButton(
+                      room: scheduledSource,
+                      composer: controller.sendController,
+                      readCutoff: () => controller.personalSeenEventId,
+                      replyEvent: () => controller.replyEvent,
+                      isEditing: () => controller.editEvent != null,
+                      threadRootEventId: () => controller.activeThreadId,
+                      threadLastEventId: () => controller.threadLastEventId,
+                      isCurrentSource: () => controller.mounted &&
+                          identical(controller.room, scheduledSource),
+                      clearScheduledReply: controller.cancelReplyEventAction,
+                      includeChatSettings: true,
+                    ),
                   ],
                 ],
                 bottom: PreferredSize(
@@ -268,6 +316,34 @@ class ChatView extends StatelessWidget {
                   child: Column(
                     mainAxisSize: .min,
                     children: [
+                      if (showSyncNotice)
+                        SizedBox(
+                          height: syncHeight,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  sync.status == SyncStatus.error
+                                      ? Icons.sync_problem_outlined
+                                      : Icons.sync_outlined,
+                                  size: 16,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    sync.calcLocalizedString(context),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       PinnedEvents(controller),
                       if (activeThreadId != null)
                         SizedBox(
@@ -366,7 +442,12 @@ class ChatView extends StatelessWidget {
                           ),
                         GestureDetector(
                           onTap: controller.clearSingleSelectedEvent,
-                          child: ChatEventList(controller: controller),
+                          child:
+                              snapshot.hasError && controller.timeline == null
+                              ? ChatTimelineLoadError(
+                                  onRetry: controller.retryLoadTimeline,
+                                )
+                              : ChatEventList(controller: controller),
                         ),
                         Positioned(
                           bottom: 0,
@@ -375,17 +456,7 @@ class ChatView extends StatelessWidget {
                           child: SizeChangedLayoutNotifier(
                             child: Container(
                               key: controller.inputBarKey,
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    theme.colorScheme.surface.withAlpha(0),
-                                    theme.colorScheme.surface,
-                                    theme.colorScheme.surface,
-                                  ],
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                ),
-                              ),
+                              color: theme.colorScheme.surface,
                               alignment: Alignment.center,
                               child: Container(
                                 margin: EdgeInsets.all(bottomSheetPadding),
@@ -413,7 +484,9 @@ class ChatView extends StatelessWidget {
                                             : theme
                                                   .colorScheme
                                                   .surfaceContainer,
-                                        borderRadius: BorderRadius.circular(32),
+                                        borderRadius: BorderRadius.circular(
+                                          NotionTokens.radius,
+                                        ),
                                         child:
                                             controller.room.isAbandonedDMRoom ==
                                                 true
@@ -490,4 +563,22 @@ class ChatView extends StatelessWidget {
       ),
     );
   }
+}
+
+class ChatTimelineLoadError extends StatelessWidget {
+  final VoidCallback onRetry;
+
+  const ChatTimelineLoadError({required this.onRetry, super.key});
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Could not load this conversation.'),
+        const SizedBox(height: 12),
+        FilledButton(onPressed: onRetry, child: const Text('Try again')),
+      ],
+    ),
+  );
 }

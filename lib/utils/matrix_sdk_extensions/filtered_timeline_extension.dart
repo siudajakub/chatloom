@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/personal/round_video/telegram_media_protocol.dart';
 import 'package:matrix/matrix.dart';
 
 extension VisibleInGuiExtension on List<Event> {
@@ -52,6 +53,7 @@ extension IsStateExtension on Event {
   }.contains(type);
 
   bool get isKnownHiddenStates =>
+      isTelegramMediaControl(type) ||
       {PollEventContent.responseType}.contains(type) ||
       type.startsWith('m.key.verification.');
 }
