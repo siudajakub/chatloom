@@ -1,0 +1,44 @@
+[Unit]
+Description=Personal Chat Matrix push gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=personalpush
+Group=personalpush
+WorkingDirectory=/opt/personal-push-gateway
+LoadCredential=gateway-config.json:/etc/personal-push/config.json
+LoadCredential=fcm-service-account.json:/etc/personal-push/fcm-service-account.json
+# Optional worker reminder relay; also set reminder_credential_file in config.
+# LoadCredential=reminder-relay.json:/etc/personal-push/reminder-relay.json
+RuntimeDirectory=personal-push-gateway
+RuntimeDirectoryMode=0700
+ExecStartPre=/opt/personal-push-gateway/.venv/bin/python /opt/personal-push-gateway/prepare_credentials.py
+ExecStartPre=/opt/personal-push-gateway/.venv/bin/python /opt/personal-push-gateway/gateway.py --config /run/personal-push-gateway/gateway-config.json --check
+ExecStart=/opt/personal-push-gateway/.venv/bin/python /opt/personal-push-gateway/gateway.py --config /run/personal-push-gateway/gateway-config.json
+Restart=on-failure
+RestartSec=10
+UMask=0077
+StateDirectory=personal-push-gateway
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+TasksMax=32
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+{
+  "project_id": "replace-own-firebase-project",
+  "service_account_file": "/run/credentials/personal-push-gateway.service/fcm-service-account.json",
+  "state_directory": "/var/lib/personal-push-gateway",
+  "bind": "127.0.0.1",
+  "port": 8088,
+  "max_body_bytes": 16384,
+  "max_devices": 8,
+  "rate_per_minute": 120,
+  "max_concurrency": 8,
+  "request_timeout_seconds": 8,
+  "provider_timeout_seconds": 8,
+  "dedup_seconds": 86400,
+  "max_dedup_entries": 20000,
+  "registrations": []
+}

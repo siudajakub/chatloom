@@ -1,0 +1,8 @@
+# Verified against official PyPI metadata during this implementation.
+google-auth==2.59.1
+# Locked transitive versions validated in the isolated test venv.
+cffi==2.1.1
+cryptography==50.0.2
+pyasn1==0.6.4
+pyasn1_modules==0.4.2
+pycparser==3.0
