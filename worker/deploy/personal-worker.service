@@ -1,0 +1,34 @@
+[Unit]
+Description=Personal silent Matrix feature worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=personalworker
+Group=personalworker
+WorkingDirectory=/opt/personal-worker
+ExecStart=/opt/personal-worker/bundle/bin/worker run /etc/personal-worker/config.json
+LoadCredential=credentials.json:/etc/personal-worker/credentials.json
+StateDirectory=personal-worker
+StateDirectoryMode=0700
+RuntimeDirectory=personal-worker
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/personal-worker /run/personal-worker
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
