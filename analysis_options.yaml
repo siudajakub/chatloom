@@ -37,7 +37,7 @@ linter:
     - use_colored_box
 
 plugins:
-  dart_code_linter: latest
+  dart_code_linter: '4.4.0'
 
 analyzer:
   errors:

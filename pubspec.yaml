@@ -15,12 +15,15 @@ environment:
   sdk: ">=3.11.1 <4.0.0"
 
 dependencies:
+  personal_core:
+    path: packages/personal_core
   archive: ^4.3.0
   async: ^2.13.1
   badges: ^4.0.1
   blurhash_dart: ^1.2.1
   chewie: ^1.17.2
   collection: ^1.18.0
+  crypto: ^3.0.7
   crop_image: ^1.0.17
   cross_file: ^0.3.5
   cupertino_ui: ^1.1.1
@@ -63,10 +66,8 @@ dependencies:
   lottie: ^3.6.1
   managed_configurations: ^1.2.0
   material_ui: 1.4.0
-  matrix: #^11.0.0
-    git:
-      url: https://github.com/famedly/matrix-dart-sdk.git
-      ref: main
+  matrix:
+    path: packages/matrix
   media_kit_libs_linux: ^1.2.1
   media_kit_libs_windows_audio: ^1.0.9
   mime: ^2.1.0
@@ -90,7 +91,8 @@ dependencies:
   shared_preferences: ^2.5.5
   slugify: ^2.0.0
   sqflite_common_ffi: ^2.4.3
-  swipe_to_action: ^0.3.0
+  swipe_to_action:
+    path: packages/swipe_to_action
   unifiedpush: ^6.2.0
   unifiedpush_ui: ^0.2.0
   universal_html: ^2.3.0
@@ -98,6 +100,8 @@ dependencies:
   uuid: ^4.6.0
   video_player: ^2.14.0
   wakelock_plus: ^1.8.0
+  fcm_shared_isolate: 3.0.0
+  flutter_svg: 2.3.0
 
 dev_dependencies:
   dart_code_linter: ^4.4.0
@@ -112,9 +116,20 @@ dev_dependencies:
 flutter:
   generate: true
   uses-material-design: true
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/notion/fonts/Roboto-Regular.ttf
+          weight: 400
+        - asset: assets/notion/fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/notion/fonts/Roboto-Bold.ttf
+          weight: 700
   assets:
     - assets/
     - assets/logo/mini/
+    - assets/notion/pinned/
+    - assets/notion/fonts/
     - assets/sounds/
     - assets/vodozemac/0.8.1/
 
