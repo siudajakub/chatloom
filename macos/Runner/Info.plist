@@ -14,6 +14,9 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleURLTypes</key>
+	<array><dict><key>CFBundleURLName</key><string>pl.personal.chat</string>
+	<key>CFBundleURLSchemes</key><array><string>pl.personal.chat</string><string>pl.personal.chat.auth</string></array></dict></array>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,7 +28,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSLocationUsageDescription</key>
-	<string>Share your location with your contacts in FluffyChat.</string>
+	<string>Share your location with your contacts in Personal Chat.</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
