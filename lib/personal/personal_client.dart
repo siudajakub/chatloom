@@ -4,10 +4,14 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:fluffychat/personal/capabilities.dart';
+import 'package:fluffychat/personal/diagnostics.dart';
 import 'package:fluffychat/personal/immediate_outbox.dart';
+import 'package:fluffychat/personal/journal_replay_batch.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/performance_probe.dart';
 import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 import 'package:fluffychat/personal/storage/personal_store.dart';
+import 'package:fluffychat/personal/worker_readiness.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
@@ -29,23 +33,68 @@ class PersonalClient extends ChangeNotifier {
     }
   }
 
-  PersonalClient._(this.client);
+  PersonalClient._(this.client) : _openStore = PersonalStore.open;
+  @visibleForTesting
+  PersonalClient.forTesting(
+    this.client, {
+    required Future<PersonalStore> Function() openStore,
+  }) : _openStore = openStore;
+  final Future<PersonalStore> Function() _openStore;
+  String? _localAccountId;
+  PrivateSyncFailure? syncFailure;
+  PersonalDiagnostic? diagnostic;
+
+  void _checkActive() {
+    if (_disposed ||
+        (_localAccountId != null && client.userID != _localAccountId)) {
+      throw StateError('Private client is closed');
+    }
+  }
+
+  void _setFailure(Object error, PersonalFailurePhase phase) {
+    if (_disposed ||
+        (_localAccountId != null && client.userID != _localAccountId)) {
+      return;
+    }
+    diagnostic = PersonalDiagnostic.from(error, phase);
+    syncFailure = privateSyncFailure(error, phase);
+    problem = syncFailure!.message;
+    _journalReady = false;
+    notifyListeners();
+  }
+
+  void _clearFailure() {
+    problem = null;
+    syncFailure = null;
+    diagnostic = null;
+  }
+
   PersonalStore? _store;
   PersonalReplica? _replica;
   Future<void>? _localLoading;
   Future<void>? _attaching;
   Future<void>? _draining;
+  // A Matrix ACK makes this journal event durable. Waiting for the worker's
+  // result must not resend every pending command on each unrelated sync.
+  final _publishedCommands = <String>{};
   bool _disposed = false;
   bool _journalReady = false;
   Future<void>? _loading;
+  Future<void>? _connecting;
   Timeline? _timeline;
   StreamSubscription? _sync;
+  Future<void>? _syncing;
+  bool _syncPending = false;
+  bool _syncReplayRequested = false;
   bool _replaying = false;
   Future<void>? _replayCompletion;
   bool _replayAgain = false;
+  final _acceptedResultEvents = <String>{};
+  String? _journalTrustFingerprint;
   Room? journal;
   String? problem;
-  DateTime? heartbeatAt;
+  WorkerReadiness? workerReadiness;
+  DateTime? get heartbeatAt => workerReadiness?.receivedAt;
   final _emptyValues = <String, Map<String, dynamic>>{};
   final _emptyRevisions = <String, int>{};
   final _emptyTranscripts = <String, TranscriptionJob>{};
@@ -86,13 +135,17 @@ class PersonalClient extends ChangeNotifier {
   }
 
   Future<void> _drain() async {
+    _publishedCommands.removeWhere((id) => !pending.containsKey(id));
     for (final id in List<String>.from(pending.keys)) {
       if (!ready || _disposed) return;
+      if (_publishedCommands.contains(id)) continue;
       final op = await _replica!.markPublishing(id);
       if (op == null) continue;
       try {
         await _publish(op);
-      } catch (_) {
+        _publishedCommands.add(id);
+      } catch (error) {
+        _setFailure(error, PersonalFailurePhase.journalPublish);
         throw StateError('Publication deferred');
       }
     }
@@ -108,16 +161,20 @@ class PersonalClient extends ChangeNotifier {
     }
   }
 
-  String get _prefix => 'account:${client.userID}:';
+  String get _prefix => 'account:${_localAccountId ?? client.userID}:';
   bool get ready =>
       !_disposed &&
+      (_localAccountId == null || client.userID == _localAccountId) &&
       _journalReady &&
       _store != null &&
       journal != null &&
       problem == null;
   bool get workerOnline =>
-      heartbeatAt != null &&
-      DateTime.now().difference(heartbeatAt!) < const Duration(minutes: 3);
+      ready && (workerReadiness?.freshAt(DateTime.now()) ?? false);
+  String get workerReadinessDescription => !ready
+      ? 'Worker readiness is unknown until private sync is available.'
+      : workerReadiness?.describe(DateTime.now()) ??
+            'No authenticated worker heartbeat. Pair the worker and verify its session.';
   ConversationRef ref(Room r) => ConversationRef(
     accountId: client.userID!,
     roomId: r.id,
@@ -147,36 +204,68 @@ class PersonalClient extends ChangeNotifier {
   Future<void> loadLocal() => _ensureLocal();
 
   Future<void> _ensureLocal() async {
-    if (_disposed) throw StateError('Private client is closed');
+    _checkActive();
     final loading = _localLoading ??= _openLocal();
     try {
       await loading;
-    } catch (_) {
+    } catch (error) {
+      _setFailure(error, PersonalFailurePhase.localStorage);
       // A transient storage failure must not poison every later draft/send.
       if (identical(_localLoading, loading)) _localLoading = null;
       rethrow;
     }
-    if (_disposed) throw StateError('Private client is closed');
+    _checkActive();
   }
 
   Future<void> _openLocal() async {
     if (client.userID == null) {
       throw StateError('A signed-in account is required');
     }
-    _store ??= await PersonalStore.open();
+    _localAccountId ??= client.userID;
+    if (_store == null) {
+      final opened = await _openStore();
+      try {
+        _checkActive();
+      } catch (_) {
+        await opened.close();
+        rethrow;
+      }
+      _store = opened;
+    }
     final store = _store!;
     final replica = PersonalReplica(
-      read: (key) => store.get('$_prefix$key'),
-      write: (key, value) => store.put('$_prefix$key', value),
+      read: (key) {
+        _checkActive();
+        return store.get('$_prefix$key');
+      },
+      write: (key, value) {
+        _checkActive();
+        return store.put('$_prefix$key', value);
+      },
       newOperationId: () => const Uuid().v4(),
       clock: DateTime.now,
       onChanged: notifyListeners,
     );
-    final records = await store.readPrefix(_prefix);
-    final local = {
-      for (final entry in records.entries)
-        entry.key.substring(_prefix.length): entry.value,
-    };
+    // Seen markers and immediate media/text outboxes can grow independently
+    // from private metadata. They are read by their owners on demand, rather
+    // than decoded and retained again during every private-client startup.
+    final local = <String, Map<String, dynamic>>{};
+    for (final namespace in [
+      'replica:',
+      'value:',
+      'transcript:',
+      'schedule:',
+      'reminder:',
+      'pending:',
+      'conflict:',
+    ]) {
+      _checkActive();
+      final records = await store.readPrefix('$_prefix$namespace');
+      _checkActive();
+      for (final entry in records.entries) {
+        local[entry.key.substring(_prefix.length)] = entry.value;
+      }
+    }
     replica.restore(local);
     final entities = <String>{};
     final oldValues = <String, Map<String, dynamic>>{};
@@ -215,6 +304,7 @@ class PersonalClient extends ChangeNotifier {
       }
     }
     for (final entity in entities) {
+      _checkActive();
       await replica.importLegacy(
         entity,
         value: oldValues[entity],
@@ -225,7 +315,9 @@ class PersonalClient extends ChangeNotifier {
         conflict: oldConflicts[entity],
       );
     }
+    _checkActive();
     _replica = replica;
+    if (syncFailure == PrivateSyncFailure.storageUnavailable) _clearFailure();
     notifyListeners();
   }
 
@@ -236,69 +328,113 @@ class PersonalClient extends ChangeNotifier {
   }
 
   void _installSync() {
-    _sync ??= client.onSync.stream.listen((_) {
-      unawaited(_onSync());
+    _checkActive();
+    _sync ??= client.onSync.stream.listen((update) {
+      unawaited(_onSync(update));
     });
   }
 
-  Future<void> _onSync() async {
-    if (_disposed || _replica == null) return;
+  Future<void> _onSync(SyncUpdate update) {
+    if (_disposed || _replica == null) return Future<void>.value();
+    _syncPending = true;
+    final id = journal?.id;
+    _syncReplayRequested |=
+        id != null &&
+        (update.rooms?.join?.containsKey(id) == true ||
+            update.rooms?.leave?.containsKey(id) == true);
+    // Stream.listen does not await async callbacks. Retain at most one active
+    // pass plus a merged wake, including journal activity arriving during I/O.
+    return _syncing ??= _drainSync();
+  }
+
+  Future<void> _drainSync() async {
     try {
+      while (_syncPending && !_disposed) {
+        _syncPending = false;
+        final replayRequested = _syncReplayRequested;
+        _syncReplayRequested = false;
+        await _syncOnce(replayRequested: replayRequested);
+      }
+    } finally {
+      _syncing = null;
+    }
+  }
+
+  Future<void> _syncOnce({required bool replayRequested}) async {
+    try {
+      _checkActive();
       _findJournal();
-      if (journal == null) return;
-      if (_timeline == null || problem != null) {
+      if (journal == null) {
+        _setFailure(
+          StateError('Private journal is not configured'),
+          PersonalFailurePhase.journalDiscovery,
+        );
+        return;
+      }
+      if (_attaching != null) {
+        await _attaching;
+      } else if (_timeline == null || problem != null) {
         await _attach();
       } else {
+        // Still validate membership on empty syncs; only history replay is skipped.
+        await _validate();
+      }
+      // Also replay activity that arrived after attach's initial replay but
+      // before its pending-publication await finished.
+      if (replayRequested ||
+          _journalTrustFingerprint != _trustFingerprint()) {
         await _replay();
       }
       if (ready) await stagePending();
-    } catch (_) {
-      problem = 'Private sync is paused. Check your connection and try again.';
-      notifyListeners();
+    } catch (error) {
+      _setFailure(error, PersonalFailurePhase.journalReplay);
     }
   }
 
-  Future<void> load() => _loading ??= _load();
-  Future<void> retry() async {
-    if (_replica == null) {
-      _loading = null;
-      _localLoading = null;
-    }
-    await _ensureLocal();
-    _installSync();
-    await client.accountDataLoading?.timeout(const Duration(seconds: 15));
-    _findJournal();
-    if (journal != null) await _attach();
+  Future<void> load() => _startLoad(const Duration(seconds: 3));
+  Future<void> retry() => _startLoad(const Duration(seconds: 15));
+
+  Future<void> _startLoad(Duration timeout) {
+    _checkActive();
+    return _loading ??= _load(timeout).whenComplete(() => _loading = null);
   }
 
-  Future<void> _load() async {
+  Future<void> _load(Duration timeout) async {
+    var phase = PersonalFailurePhase.localStorage;
     try {
       await _ensureLocal();
+      _checkActive();
       _installSync();
-      try {
-        await client.accountDataLoading?.timeout(const Duration(seconds: 3));
-      } on TimeoutException {
-        return;
+      phase = PersonalFailurePhase.journalDiscovery;
+      await client.accountDataLoading?.timeout(timeout);
+      _checkActive();
+      _findJournal();
+      if (journal == null) {
+        throw StateError('Private journal is not configured');
       }
-      final pointer = client.accountData[personalRoomMarker]?.content['roomId'];
-      journal = pointer is String ? client.getRoomById(pointer) : null;
-      journal ??= client.rooms.where(PersonalPrivacy.isJournal).firstOrNull;
-      if (journal != null) await _attach();
-    } catch (_) {
-      problem =
-          'Could not open encrypted private storage. Your data is preserved.';
+      phase = PersonalFailurePhase.journalValidation;
+      await _attach();
+    } catch (error) {
+      _setFailure(error, phase);
     }
     notifyListeners();
   }
 
-  Future<void> connect() async {
-    if (_replica == null && _localLoading != null) {
-      _loading = null;
-      _localLoading = null;
-    }
+  Future<void> connect() {
+    _checkActive();
+    return _connecting ??= _connect()
+        .catchError((Object error) {
+          _setFailure(error, PersonalFailurePhase.journalDiscovery);
+          throw error;
+        })
+        .whenComplete(() => _connecting = null);
+  }
+
+  Future<void> _connect() async {
     await _ensureLocal();
     _installSync();
     await client.accountDataLoading?.timeout(const Duration(seconds: 15));
+    _checkActive();
     _findJournal();
     if (_store == null) throw StateError('Encrypted storage unavailable');
     if (journal == null) {
@@ -317,7 +453,9 @@ class PersonalClient extends ChangeNotifier {
           ),
         ],
       );
+      _checkActive();
       await client.waitForRoomInSync(id, join: true);
+      _checkActive();
       journal = client.getRoomById(id);
       await client.setAccountData(client.userID!, personalRoomMarker, {
         'roomId': id,
@@ -334,19 +472,23 @@ class PersonalClient extends ChangeNotifier {
   }
 
   Future<void> _validate() async {
+    _checkActive();
     final room = journal;
     if (room == null || !room.encrypted || !PersonalPrivacy.isJournal(room)) {
       throw StateError('Invalid encrypted journal');
     }
     final members = await room.requestParticipants();
+    _checkActive();
     if (members.any(
       (m) =>
           (m.membership == Membership.join ||
               m.membership == Membership.invite) &&
           m.id != client.userID,
     )) {
-      problem = 'Private sync paused: the private room membership changed.';
-      notifyListeners();
+      _setFailure(
+        StateError('Unsafe journal membership'),
+        PersonalFailurePhase.journalValidation,
+      );
       throw StateError('Unsafe journal membership');
     }
   }
@@ -363,32 +505,60 @@ class PersonalClient extends ChangeNotifier {
   }
 
   Future<void> _attachOnce() async {
+    final measurement = PersonalPerformanceProbe.enabled
+        ? (Stopwatch()..start())
+        : null;
     _journalReady = false;
     await _validate();
-    await journal!.setPushRuleState(PushRuleState.dontNotify);
+    _checkActive();
+    final room = journal!;
+    await room.setPushRuleState(PushRuleState.dontNotify);
+    _checkActive();
     _timeline?.cancelSubscriptions();
-    _timeline = await journal!.getTimeline(
-      onUpdate: () => unawaited(_replay()),
+    final timeline = await room.getTimeline(
+      onUpdate: () {
+        // Initial pagination is replayed once after all pages have arrived.
+        if (!_disposed && _attaching == null) unawaited(_replay());
+      },
     );
+    try {
+      _checkActive();
+    } catch (_) {
+      timeline.cancelSubscriptions();
+      rethrow;
+    }
+    _timeline = timeline;
+    _acceptedResultEvents.clear();
     // Reconstruct durable history before replaying unsent commands.
     var pages = 0;
-    while (_timeline!.canRequestHistory) {
-      final before = _timeline!.events.map((event) => event.eventId).toSet();
-      await _timeline!.requestHistory(historyCount: 100);
-      final after = _timeline!.events.map((event) => event.eventId).toSet();
+    while (timeline.canRequestHistory) {
+      _checkActive();
+      final before = timeline.events.map((event) => event.eventId).toSet();
+      await timeline.requestHistory(historyCount: 100);
+      _checkActive();
+      final after = timeline.events.map((event) => event.eventId).toSet();
       if (after.length == before.length &&
           after.containsAll(before) &&
-          _timeline!.canRequestHistory) {
+          timeline.canRequestHistory) {
         throw StateError('Journal history pagination stalled');
       }
       if (++pages > 10000) {
         throw StateError('Journal history exceeds safe pagination limit');
       }
     }
-    problem = null;
+    _checkActive();
+    _clearFailure();
     await _replay();
+    _checkActive();
     _journalReady = problem == null;
     if (ready) await stagePending();
+    if (measurement != null) {
+      PersonalPerformanceProbe.emit('journal_attach', {
+        'elapsed_ms': measurement.elapsedMilliseconds,
+        'events': timeline.events.length,
+        'pages': pages,
+      });
+    }
   }
 
   bool _trusted(Event event) {
@@ -401,6 +571,17 @@ class PersonalClient extends ChangeNotifier {
           (d) => d.verified && d.curve25519Key == key,
         ) ??
         false;
+  }
+
+  String _trustFingerprint() {
+    final keys =
+        client.userDeviceKeys[client.userID]?.deviceKeys.values
+            .where((device) => device.verified)
+            .map((device) => device.curve25519Key)
+            .toList() ??
+        [];
+    keys.sort((a, b) => (a ?? '').compareTo(b ?? ''));
+    return jsonEncode([client.userID, keys]);
   }
 
   Future<void> _replay() async {
@@ -416,38 +597,31 @@ class PersonalClient extends ChangeNotifier {
     _replayCompletion = completion.future;
     try {
       await _validate();
+      _checkActive();
       do {
         _replayAgain = false;
-        final events = List<Event>.from(_timeline!.events)
-          ..sort((a, b) {
-            final c = a.originServerTs.compareTo(b.originServerTs);
-            return c != 0 ? c : a.eventId.compareTo(b.eventId);
-          });
-        for (final event in events) {
-          if (event.type != personalEventType ||
-              event.redacted ||
-              !_trusted(event)) {
-            continue;
-          }
-          PersonalOperation op;
-          try {
-            op = PersonalOperation.fromJson(event.content);
-          } catch (_) {
-            continue;
-          }
-          if (!op.kind.endsWith('.result') && op.kind != 'worker.heartbeat') {
-            continue;
-          }
-          if (op.kind == 'worker.heartbeat') {
-            heartbeatAt = event.originServerTs;
-            continue;
-          }
+        workerReadiness = null;
+        _journalTrustFingerprint = _trustFingerprint();
+        final batch = JournalReplayBatch(
+          _timeline!.events,
+          acceptedEventIds: _acceptedResultEvents,
+          trusted: _trusted,
+        );
+        final heartbeat = batch.heartbeat;
+        if (heartbeat != null) {
+          workerReadiness = WorkerReadiness.fromPayload(
+            Map<String, dynamic>.from(heartbeat.$2.payload),
+            heartbeat.$1.originServerTs,
+          );
+        }
+        for (final (event, op) in batch.results) {
+          _checkActive();
           await _replica!.acceptResult(op);
+          _acceptedResultEvents.add(event.eventId);
         }
       } while (_replayAgain && !_disposed);
-    } catch (_) {
-      problem =
-          'Check the connection, encryption keys and private room before syncing.';
+    } catch (error) {
+      _setFailure(error, PersonalFailurePhase.journalReplay);
     } finally {
       _replaying = false;
       _replayCompletion = null;
@@ -505,11 +679,17 @@ class PersonalClient extends ChangeNotifier {
 
   Future<void> _publish(PersonalOperation op) async {
     await _validate();
-    await journal!.sendEvent(
+    _checkActive();
+    final eventId = await journal!.sendEvent(
       op.toJson().cast<String, dynamic>(),
       type: personalEventType,
       txid: op.opId,
+      displayPendingEvent: false,
+      retryOnTransportFailure: false,
     );
+    if (eventId == null || !eventId.startsWith(r'$')) {
+      throw TimeoutException('Journal publication was not confirmed');
+    }
   }
 
   Future<PersonalOperation> command(
@@ -607,10 +787,20 @@ class PersonalClient extends ChangeNotifier {
     }
     _immediate ??= ImmediateOutbox(
       deviceId: client.deviceID!,
-      get: (key) => store.get('${_prefix}outbox:$key'),
-      put: (key, value) => store.put('${_prefix}outbox:$key', value),
-      delete: (key) => store.delete('${_prefix}outbox:$key'),
+      get: (key) {
+        _checkActive();
+        return store.get('${_prefix}outbox:$key');
+      },
+      put: (key, value) {
+        _checkActive();
+        return store.put('${_prefix}outbox:$key', value);
+      },
+      delete: (key) {
+        _checkActive();
+        return store.delete('${_prefix}outbox:$key');
+      },
       sendToTransport: (payload, txid) async {
+        _checkActive();
         final sourceRoom = client.getRoomById(payload['roomId'] as String);
         if (sourceRoom == null) {
           throw const ImmediateTransportRejected('sourceUnavailable');
@@ -619,6 +809,7 @@ class PersonalClient extends ChangeNotifier {
         final sourceReply = replyId == null
             ? null
             : await sourceRoom.getEventById(replyId);
+        _checkActive();
         if (replyId != null && sourceReply == null) {
           throw const ImmediateTransportRejected('replyUnavailable');
         }
@@ -715,10 +906,12 @@ class PersonalClient extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _instances.remove(client);
+    if (identical(_instances[client], this)) _instances.remove(client);
     _sync?.cancel();
     _timeline?.cancelSubscriptions();
+    _timeline = null;
     _store?.close();
+    _store = null;
     _changes.close();
     super.dispose();
   }
