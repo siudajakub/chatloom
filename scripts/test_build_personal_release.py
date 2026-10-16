@@ -240,5 +240,20 @@ class ReleaseSafetyTest(unittest.TestCase):
             release.validate_apk(apk, "apksigner", "aapt2", self.root)
 
 
+    def test_foreign_plugin_abi_is_rejected_even_with_arm64_flutter(self):
+        for abi in ("x86", "x86_64", "armeabi-v7a"):
+            with self.subTest(abi=abi):
+                apk = self.root / "mixed.apk"
+                with zipfile.ZipFile(apk, "w") as archive:
+                    for name in ("AndroidManifest.xml", "classes.dex",
+                                 "lib/arm64-v8a/libflutter.so",
+                                 f"lib/{abi}/libplugin.so"):
+                        archive.writestr(name, b"synthetic")
+                results = [f"Signer #1 certificate SHA-256 digest: {release.EXPECTED_CERTIFICATE}",
+                           "package: name='pl.personal.chat' versionCode='3568' versionName='2.10.0'"]
+                with patch.object(release, "run", side_effect=results), self.assertRaises(release.ReleaseError):
+                    release.validate_apk(apk, "apksigner", "aapt2", self.root)
+
+
 if __name__ == "__main__":
     unittest.main()

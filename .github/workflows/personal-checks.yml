@@ -4,10 +4,21 @@ on:
   push:
     branches: [main, personal/client]
   pull_request:
-    paths: ['lib/personal/**', 'packages/**', 'worker/**', 'push-gateway/**', 'test/personal/**']
+    paths:
+      - '.github/workflows/personal-checks.yml'
+      - 'scripts/**'
+      - 'lib/**'
+      - 'web/**'
+      - 'android/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'packages/**'
+      - 'worker/**'
+      - 'push-gateway/**'
+      - 'test/**'
 jobs:
   synthetic:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
@@ -15,17 +26,75 @@ jobs:
           sdk: 3.13.3
       - run: dart pub get
         working-directory: packages/personal_core
+      # Includes copied production media sources in independent processes under
+      # umask 0022/0000/0077 and failed-permission setup under umask 0777.
       - run: python3 scripts/verify-personal.py
+      - run: python3 scripts/verify-push-readiness.py --dart dart
+      - name: Actual SDK startup and credential policy regressions
+        working-directory: worker
+        run: |
+          dart pub get --enforce-lockfile
+          dart test test/config_test.dart test/sdk_startup_preservation_test.dart
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Pure account-free checks only: no Chrome, Playwright or live CDP.
+      - name: HTTP transport barrier classifier and lifecycle regressions
+        run: node --test scripts/browser_acceptance/test_transport_guard.mjs
+      - name: UI driver guard freshness and process generation regressions
+        run: python3 -W error -m unittest discover -s scripts/browser_acceptance -p test_ui_driver.py -v
       - run: python3 -m pip install -r push-gateway/requirements.txt
-      - run: python3 -m unittest discover -s push-gateway/tests -v
+      - run: python3 -W error::ResourceWarning -m unittest discover -s push-gateway/tests -v
 
   android_compile:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # Bounded to the Flutter 3.47.4 default, not every preinstalled NDK.
+      PERSONAL_ANDROID_NDK: '28.2.13676358'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.daemon=false'
     steps:
       - uses: actions/checkout@v4
+      - name: Budget ephemeral CI disk before installing the Flutter toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$GITHUB_WORKSPACE" /tmp
+          # Only disposable hosted-runner components unused by this Android job.
+          # This cleanup must never be copied to a developer machine or VPS.
+          for component in /usr/share/dotnet /usr/local/.ghcup /usr/local/share/powershell /usr/share/swift; do
+            if [[ -d "$component" ]]; then
+              sudo du -sh "$component"
+              sudo rm -rf -- "$component"
+            fi
+          done
+          # Keep the required Flutter NDK, remove other preinstalled NDKs only.
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [[ "$sdk_root" != /usr/local/lib/android/sdk ]]; then
+            echo 'Unexpected hosted-runner SDK root; refusing cleanup' >&2
+            exit 1
+          fi
+          if [[ -d "$sdk_root/ndk" ]]; then
+            for ndk in "$sdk_root"/ndk/*; do
+              [[ -d "$ndk" ]] || continue
+              if [[ "${ndk##*/}" != "$PERSONAL_ANDROID_NDK" ]]; then
+                sudo du -sh "$ndk"
+                sudo rm -rf -- "$ndk"
+              fi
+            done
+          fi
+          df -h "$GITHUB_WORKSPACE" /tmp
+          python3 - <<'PY'
+          import os, shutil
+          minimum = 28 * 1024**3
+          free = shutil.disk_usage(os.environ['GITHUB_WORKSPACE']).free
+          print(f'Available before toolchains: {free // 1024**3} GiB; required: 28 GiB')
+          if free < minimum:
+              raise SystemExit('Insufficient ephemeral runner disk budget')
+          PY
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -33,6 +102,60 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.47.4'
-      - run: flutter pub get
+          cache: false
+      - name: Resolve pinned application dependencies
+        run: flutter pub get
       - run: flutter analyze lib --no-fatal-infos
+      - name: Full application startup and Notion controller regressions
+        run: >-
+          flutter test --no-pub
+          test/client_manager_startup_regression_test.dart
+          test/client_startup_widget_test.dart
+          test/personal/personal_diagnostics_test.dart
+          test/personal/error_reporter_network_test.dart
+          test/personal/personal_client_startup_test.dart
+          test/personal/sdk_startup_preservation_test.dart
+          test/personal/bridge_conversation_identity_test.dart
+          test/notion/conversation_controller_test.dart
+          test/notion/settings_controller_test.dart
+          test/notion/settings_routes_controller_test.dart
+          test/notion/settings_widgets_test.dart
+          test/notion/inbox_controller_test.dart
+          test/notion/chat_preferences_controller_test.dart
+          test/notion/push_preferences_controller_test.dart
+          test/notion/details_adapter_test.dart
+          test/notion/inbox_widgets_test.dart
+          test/notion/conversation_widgets_test.dart
+          test/notion/two_column_accessibility_test.dart
+          test/personal/bridged_message_content_test.dart
+      - name: Require build headroom after dependencies and analysis
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$GITHUB_WORKSPACE" /tmp
+          python3 - <<'PY'
+          import os, shutil
+          minimum = 18 * 1024**3
+          free = shutil.disk_usage(os.environ['GITHUB_WORKSPACE']).free
+          print(f'Available before APK build: {free // 1024**3} GiB; required: 18 GiB')
+          if free < minimum:
+              raise SystemExit('Insufficient Android build headroom')
+          PY
+      # Keep pub enabled: native plugin registration must be regenerated.
       - run: flutter build apk --debug --target-platform android-arm64
+      - name: Report final disk usage
+        if: always()
+        run: df -h "$GITHUB_WORKSPACE" /tmp
+
+  web_compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.4'
+          cache: false
+      - run: flutter pub get --enforce-lockfile
+      # Compile gate only; account/E2EE/runtime web assets require separate acceptance.
+      - run: flutter build web --release --no-wasm-dry-run

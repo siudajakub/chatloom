@@ -52,7 +52,8 @@ SOURCE_FILES = (
 SOURCE_TREES = (
     "lib", "assets", "android/app/src", "packages/matrix/lib",
     "packages/matrix/hook", "packages/personal_core/lib", "scripts", "test",
-    "worker/lib", "worker/bin", "worker/test", "worker/scripts", "push-gateway/tests",
+    "worker/lib", "worker/bin", "worker/test", "worker/scripts", "worker/deploy",
+    "push-gateway/tests", ".github/workflows",
 )
 EXCLUDED_NAMES = {
     "google-services.json", "key.properties", "local.properties", "keys.json",
@@ -70,7 +71,10 @@ class ReleaseError(RuntimeError):
 
 def digest(path):
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        result = hashlib.sha256()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            result.update(chunk)
+        return result.hexdigest()
 
 
 def reject_symlinks(path, root):
@@ -181,9 +185,13 @@ def validate_apk(apk, apksigner, aapt, root, environment=None):
         names = set(archive.namelist())
         abis = sorted(name.split("/")[1] for name in names
                       if re.fullmatch(r"lib/[^/]+/libflutter\.so", name))
-        if "AndroidManifest.xml" not in names or "classes.dex" not in names or abis != ["arm64-v8a"]:
+        native_abis = sorted({name.split("/")[1] for name in names
+                              if re.fullmatch(r"lib/[^/]+/[^/]+\.so", name)})
+        if ("AndroidManifest.xml" not in names or "classes.dex" not in names
+                or abis != ["arm64-v8a"] or native_abis != ["arm64-v8a"]):
             raise ReleaseError("APK is missing Android inputs or its Flutter ABI is not arm64-v8a")
-    return {"certificate_sha256": certificate, "package": package, "flutter_lib_abis": abis}
+    return {"certificate_sha256": certificate, "package": package,
+            "flutter_lib_abis": abis, "native_lib_abis": native_abis}
 
 
 @contextmanager
@@ -290,8 +298,14 @@ def build_environment(project, sdk, jdk):
     environment["RUSTUP_HOME"] = str(toolchains / "rustup")
     environment["ANDROID_HOME"] = str(sdk)
     environment["ANDROID_SDK_ROOT"] = str(sdk)
+    # The venv launcher can retain a pre-relocation Python shebang. Use the
+    # bundled native CMake executable without changing the user's toolchain.
+    cmake_bins = sorted((toolchains / "native-tools/lib").glob(
+        "python*/site-packages/cmake/data/bin"))
+    cmake_path = [str(path) for path in cmake_bins if (path / "cmake").is_file()]
     environment["PATH"] = os.pathsep.join([
         str(jdk / "bin"), str(toolchains / "cargo/bin"),
+        *cmake_path,
         str(toolchains / "native-tools/bin"), environment.get("PATH", "/usr/bin:/bin"),
     ])
     return environment
