@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
 import 'package:fluffychat/pages/image_viewer/image_viewer.dart';
 import 'package:fluffychat/personal/merged_chat_page.dart' show SourceChatPage;
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:personal_core/personal_core.dart' show RoundMediaPolicy;
 import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
+import 'package:fluffychat/personal/ui/conversation_content_controller.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
@@ -12,16 +15,15 @@ import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
-bool _visible(Event event) =>
-    !event.redacted && event.type == EventTypes.Message;
-bool _media(Event event) =>
-    {
-      MessageTypes.Image,
-      MessageTypes.Video,
-      MessageTypes.File,
-      MessageTypes.Audio,
-    }.contains(event.messageType) ||
-    RegExp(r'https?://\S+').hasMatch(event.body);
+bool _thumbnailAllowed(Event event) =>
+    event.showThumbnail &&
+    event.hasThumbnail &&
+    RoundMediaPolicy.fromContent(event.content).canPlay;
+
+Widget _thumbnailPlaceholder(BuildContext context) => ColoredBox(
+  color: Theme.of(context).colorScheme.surfaceContainerHigh,
+  child: const Center(child: Icon(Icons.image_outlined)),
+);
 
 /// A bounded local preview. No total is inferred from a partial history page.
 class NotionLocalSharedPreview extends StatefulWidget {
@@ -33,69 +35,83 @@ class NotionLocalSharedPreview extends StatefulWidget {
 }
 
 class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
-  late Future<List<Event>> _events;
+  late ConversationContentController _history;
+  late String _scopeKey;
+  String _scope(List<Room> rooms) => rooms
+      .map((r) => (identityHashCode(r.client), r.client.userID, r.id))
+      .join('|');
+  void _create() {
+    _scopeKey = _scope(widget.rooms);
+    _history = ConversationContentController(
+      widget.rooms.map(MatrixContentSource.new).toList(),
+      unlocked: () => PersonalPrivacy.surfaceUnlocked,
+      privacyGeneration: () => PersonalPrivacy.surfaceGeneration,
+    );
+    _history.addListener(_updated);
+    _history.load();
+  }
+
+  void _updated() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
-    _events = _load();
+    _create();
   }
 
   @override
   void didUpdateWidget(NotionLocalSharedPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.rooms.map((r) => r.id).join('|') !=
-        widget.rooms.map((r) => r.id).join('|'))
-      _events = _load();
-  }
-
-  Future<List<Event>> _load() async {
-    if (!PersonalPrivacy.surfaceUnlocked) return [];
-    final entries = <Event>[];
-    for (final room in widget.rooms) {
-      entries.addAll(
-        await room.client.database.getEventList(room, start: 0, limit: 80),
-      );
+    if (_scopeKey != _scope(widget.rooms)) {
+      _history.dispose();
+      _create();
     }
-    if (!PersonalPrivacy.surfaceUnlocked) return [];
-    return entries.where(_visible).where(_media).toList()
-      ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
   }
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<List<Event>>(
-    future: _events,
-    builder: (context, snapshot) {
-      final secondary = Theme.of(context).colorScheme.onSurfaceVariant;
-      if (snapshot.hasError)
-        return TextButton(
-          onPressed: () => setState(() => _events = _load()),
-          child: const Text('Shared content could not load. Retry'),
-        );
-      if (!snapshot.hasData)
-        return const Padding(
-          padding: EdgeInsets.all(12),
-          child: LinearProgressIndicator(minHeight: 1),
-        );
-      final events = snapshot.data!;
-      if (events.isEmpty)
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-            'No shared content in the loaded local history.',
-            style: TextStyle(color: secondary, fontSize: 13),
+  void dispose() {
+    _history.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final events = _history.events.where(sharedMedia).take(3).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_history.busy) const LinearProgressIndicator(minHeight: 1),
+        if (_history.sources.any((s) => s.error != null))
+          TextButton(
+            onPressed: _history.busy
+                ? null
+                : () => _history.load(refresh: true),
+            child: const Text('Some shared content could not load. Retry'),
           ),
-        );
-      return SizedBox(
-        height: 92,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          itemCount: events.length.clamp(0, 3),
-          separatorBuilder: (_, _) => const SizedBox(width: 8),
-          itemBuilder: (context, index) => _SharedPreviewBlock(events[index]),
-        ),
-      );
-    },
-  );
+        if (events.isEmpty && !_history.busy)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'No photos or videos in the loaded local history.',
+              style: TextStyle(fontSize: 13),
+            ),
+          ),
+        if (events.isNotEmpty)
+          SizedBox(
+            height: 92,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: events.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, index) =>
+                  _SharedPreviewBlock(events[index]),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _SharedPreviewBlock extends StatelessWidget {
@@ -104,26 +120,31 @@ class _SharedPreviewBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final image =
-        event.messageType == MessageTypes.Image && event.showThumbnail;
-    return NotionSharedContentBlock(
-      label: image
-          ? 'Photo'
-          : event.messageType == MessageTypes.Audio
-          ? 'Voice message'
-          : event.body,
-      thumbnail: image
-          ? MxcImage(
-              event: event,
-              width: 144,
-              height: 92,
-              fit: BoxFit.cover,
-              isThumbnail: true,
-              animated: false,
-            )
-          : null,
-      audio: event.messageType == MessageTypes.Audio,
-      video: event.messageType == MessageTypes.Video,
-      onTap: () => _openEvent(context, event),
+        {MessageTypes.Image, MessageTypes.Video}.contains(event.messageType) &&
+        _thumbnailAllowed(event);
+    return SizedBox.square(
+      dimension: 92,
+      child: NotionSharedContentBlock(
+        label: image
+            ? '${event.messageType == MessageTypes.Video ? 'Video' : 'Photo'} · ${event.originServerTs.toLocal().toString().substring(0, 16)}'
+            : event.messageType == MessageTypes.Audio
+            ? 'Voice message'
+            : event.body,
+        thumbnail: image
+            ? MxcImage(
+                event: event,
+                width: 144,
+                height: 92,
+                fit: BoxFit.cover,
+                isThumbnail: true,
+                animated: false,
+                placeholder: _thumbnailPlaceholder,
+              )
+            : null,
+        audio: event.messageType == MessageTypes.Audio,
+        video: event.messageType == MessageTypes.Video,
+        onTap: () => _openEvent(context, event),
+      ),
     );
   }
 }
@@ -170,114 +191,173 @@ class NotionConversationContentPage extends StatefulWidget {
 class _NotionConversationContentPageState
     extends State<NotionConversationContentPage> {
   final _query = TextEditingController();
-  final _events = <String, Event>{};
-  final _offsets = <String, int>{};
-  final _localEnd = <String>{};
-  final _remoteEnd = <String>{};
-  final _cursors = <String, String?>{};
-  bool _loading = false;
-  late bool _mediaOnly;
-  String? _error;
+  late ConversationContentController _history;
+  late String _scopeKey;
+  late Client _account;
+  int _tab = 0;
+  final _subscriptions = <StreamSubscription>[];
+  bool _remoteAllowed = false;
+  String? _autoSignature;
+  String _scope(List<Room> rooms) => rooms
+      .map((r) => (identityHashCode(r.client), r.client.userID, r.id))
+      .join('|');
   @override
   void initState() {
     super.initState();
-    _mediaOnly = widget.initialMedia;
-    _loadLocal();
+    _account = Matrix.of(context).client;
+    _createHistory();
+  }
+
+  void _createHistory() {
+    _scopeKey = _scope(widget.rooms);
+    _history = ConversationContentController(
+      widget.rooms.map(MatrixContentSource.new).toList(),
+      unlocked: () =>
+          PersonalPrivacy.surfaceUnlocked &&
+          identical(Matrix.of(context).client, _account),
+      privacyGeneration: () => PersonalPrivacy.surfaceGeneration,
+    );
+    for (final state in _history.sources) {
+      final source = state.source as MatrixContentSource;
+      for (final stream in [
+        source.room.client.onTimelineEvent.stream,
+        source.room.client.onHistoryEvent.stream,
+      ]) {
+        _subscriptions.add(
+          stream
+              .where((e) => e.roomId == source.room.id)
+              .listen((e) => _history.accept(source, e)),
+        );
+      }
+    }
+    _history.addListener(_updated);
+    final history = _history;
+    () async {
+      for (var page = 0; page < 3; page++) {
+        await history.load();
+        if (!mounted ||
+            !identical(history, _history) ||
+            history.localEnd ||
+            history.sources.any((s) => s.error != null))
+          return;
+      }
+    }();
+  }
+
+  void _updated() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void didUpdateWidget(NotionConversationContentPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_scopeKey != _scope(widget.rooms)) {
+      for (final sub in _subscriptions) {
+        sub.cancel();
+      }
+      _subscriptions.clear();
+      _history.dispose();
+      _remoteAllowed = false;
+      _autoSignature = null;
+      _query.clear();
+      _tab = 0;
+      _account = Matrix.of(context).client;
+      _createHistory();
+    }
   }
 
   @override
   void dispose() {
+    for (final sub in _subscriptions) {
+      sub.cancel();
+    }
+    _history.dispose();
     _query.dispose();
     super.dispose();
   }
 
-  Future<void> _loadLocal() async {
-    if (_loading || !PersonalPrivacy.surfaceUnlocked) return;
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      for (final room in widget.rooms) {
-        if (_localEnd.contains(room.id)) continue;
-        final offset = _offsets[room.id] ?? 0;
-        final page = await room.client.database.getEventList(
-          room,
-          start: offset,
-          limit: 80,
-        );
-        if (!mounted || !PersonalPrivacy.surfaceUnlocked) return;
-        for (final event in page.where(_visible)) {
-          _events['${room.id}:${event.eventId}'] = event;
-        }
-        _offsets[room.id] = offset + page.length;
-        if (page.length < 80) _localEnd.add(room.id);
-        if (page.any((e) => e.type == EventTypes.RoomCreate))
-          _remoteEnd.add(room.id);
-      }
-    } catch (_) {
-      if (mounted)
-        _error =
-            'Local history could not load. Retry without clearing your results.';
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _loadEarlier() async {
-    if (_loading || !PersonalPrivacy.surfaceUnlocked) return;
-    // This explicit action downloads history. Search text is matched locally
-    // and is never sent to a server-side directory or search endpoint.
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      for (final room in widget.rooms) {
-        if (_remoteEnd.contains(room.id)) continue;
-        final page = await room.searchEvents(
-          nextBatch: _cursors[room.id] ?? room.prev_batch,
-          limit: 80,
-          searchFunc: _visible,
-        );
-        if (!mounted || !PersonalPrivacy.surfaceUnlocked) return;
-        for (final event in page.events) {
-          _events['${room.id}:${event.eventId}'] = event;
-        }
-        _cursors[room.id] = page.nextBatch;
-        if (page.nextBatch == null) _remoteEnd.add(room.id);
-      }
-    } catch (_) {
-      if (mounted)
-        _error =
-            'Earlier history could not load. Your loaded results are still available.';
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
+  Widget _footer() => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 20),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_history.encrypted > 0)
+          const Text(
+            'Some encrypted history is unavailable. Encryption keys may be needed.',
+          ),
+        if (_history.encrypted > 0)
+          TextButton(
+            onPressed: _history.busy ? null : _history.retryEncrypted,
+            child: const Text('Retry encrypted items'),
+          ),
+        for (final state in _history.sources.where((s) => s.error != null))
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              '${widget.rooms.length > 1 ? '${state.source.name}: ' : ''}${state.error}',
+            ),
+          ),
+        if (!_history.localEnd)
+          TextButton.icon(
+            onPressed: _history.busy ? null : () => _history.load(),
+            icon: const Icon(Icons.expand_more),
+            label: const Text('Load more local history'),
+          ),
+        if (!_history.remoteEnd) ...[
+          const Text(
+            'Only loaded history is shown. Older history is downloaded only when requested. Search stays on this device.',
+            style: TextStyle(fontSize: 12),
+          ),
+          TextButton.icon(
+            onPressed: _history.busy
+                ? null
+                : () {
+                    _remoteAllowed = true;
+                    _history.load(remote: true);
+                  },
+            icon: const Icon(Icons.history_outlined),
+            label: const Text('Load older history'),
+          ),
+        ],
+        if (_history.sources.any((s) => s.error != null))
+          TextButton(
+            onPressed: _history.busy
+                ? null
+                : () => _history.load(remote: _history.localEnd),
+            child: const Text('Retry'),
+          ),
+      ],
+    ),
+  );
+  String _date(Event event) =>
+      '${widget.rooms.length > 1 ? '${event.room.getLocalizedDisplayname()} · ' : ''}${event.originServerTs.toLocal().toString().substring(0, 16)}';
   @override
   Widget build(BuildContext context) {
     final query = _query.text.trim().toLowerCase();
-    final events =
-        _events.values
-            .where(_visible)
-            .where((e) => !_mediaOnly || _media(e))
-            .where((e) => query.isEmpty || e.body.toLowerCase().contains(query))
-            .toList()
-          ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
-    final secondary = Theme.of(context).colorScheme.onSurfaceVariant;
-    final localComplete = _localEnd.length == widget.rooms.length;
+    final events = _history.events
+        .where(sharedVisible)
+        .where(
+          (e) =>
+              query.isEmpty ||
+              '${e.body} ${sharedLinks(e).join(' ')}'.toLowerCase().contains(
+                query,
+              ),
+        )
+        .toList();
+    final links = [
+      for (final event in events)
+        for (final url in sharedLinks(event)) (event, url),
+    ];
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          _mediaOnly ? 'Shared content' : 'Search this conversation',
+          widget.initialMedia ? 'Shared content' : 'Search this conversation',
           style: const TextStyle(fontSize: 17),
         ),
       ),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
+          constraints: const BoxConstraints(maxWidth: 960),
           child: Column(
             children: [
               Padding(
@@ -285,17 +365,14 @@ class _NotionConversationContentPageState
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      widget.name,
-                      style: TextStyle(fontSize: 13, color: secondary),
-                    ),
+                    Text(widget.name, style: const TextStyle(fontSize: 13)),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _query,
                       onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
-                        hintText: _mediaOnly
-                            ? 'Search loaded media, files & links'
+                        hintText: widget.initialMedia
+                            ? 'Search loaded content'
                             : 'Search local messages',
                         prefixIcon: const Icon(Icons.search_outlined),
                         suffixIcon: _query.text.isEmpty
@@ -310,139 +387,81 @@ class _NotionConversationContentPageState
                               ),
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 12,
-                      children: [
-                        TextButton(
-                          onPressed: () => setState(() => _mediaOnly = false),
-                          child: Text(
-                            'Messages',
-                            style: TextStyle(
-                              fontWeight: !_mediaOnly
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                          ),
-                        ),
-                        TextButton(
-                          onPressed: () => setState(() => _mediaOnly = true),
-                          child: Text(
-                            'Media, files & links',
-                            style: TextStyle(
-                              fontWeight: _mediaOnly
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      '${events.length} matching items in loaded history',
-                      style: TextStyle(fontSize: 12, color: secondary),
-                    ),
                   ],
                 ),
               ),
-              if (_loading) const LinearProgressIndicator(minHeight: 1),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
-                  itemCount: events.length + 1,
-                  itemBuilder: (context, index) {
-                    if (index == events.length)
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (events.isEmpty && !_loading)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 24),
-                              child: Text(
-                                query.isEmpty
-                                    ? 'No items in the loaded history.'
-                                    : 'No matches in the loaded history.',
-                                style: TextStyle(color: secondary),
-                              ),
-                            ),
-                          if (_error != null)
-                            Semantics(
-                              liveRegion: true,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
+              if (widget.initialMedia)
+                Row(
+                  children: [
+                    for (final (index, title) in [
+                      'Media',
+                      'Files',
+                      'Links',
+                    ].indexed)
+                      Expanded(
+                        child: Semantics(
+                          selected: index == _tab,
+                          child: TextButton(
+                            onPressed: () => setState(() => _tab = index),
+                            child: Column(
+                              children: [
+                                Text(
+                                  title,
+                                  style: TextStyle(
+                                    fontWeight: index == _tab
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
                                 ),
-                                child: Text(_error!),
-                              ),
+                                const SizedBox(height: 8),
+                                Container(
+                                  height: 2,
+                                  color: index == _tab
+                                      ? Theme.of(context).colorScheme.primary
+                                      : Colors.transparent,
+                                ),
+                              ],
                             ),
-                          if (!localComplete)
-                            TextButton.icon(
-                              onPressed: _loading ? null : _loadLocal,
-                              icon: const Icon(Icons.expand_more),
-                              label: const Text('Load more local history'),
-                            )
-                          else if (_remoteEnd.length < widget.rooms.length) ...[
-                            Text(
-                              'Earlier messages can be downloaded from these sources. Your search stays on this device.',
-                              style: TextStyle(fontSize: 12, color: secondary),
-                            ),
-                            TextButton.icon(
-                              onPressed: _loading ? null : _loadEarlier,
-                              icon: const Icon(Icons.history_outlined),
-                              label: Text(
-                                _error == null
-                                    ? 'Download earlier history'
-                                    : 'Retry earlier history',
-                              ),
-                            ),
-                          ],
-                        ],
-                      );
-                    final event = events[index];
-                    final urls = RegExp(r'https?://\S+')
-                        .allMatches(event.body)
-                        .map((match) => match.group(0)!)
-                        .toList();
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          NotionListRow(
-                            leading: Icon(
-                              event.messageType == MessageTypes.Image
-                                  ? Icons.image_outlined
-                                  : event.messageType == MessageTypes.Audio
-                                  ? Icons.audio_file_outlined
-                                  : event.messageType == MessageTypes.File
-                                  ? Icons.description_outlined
-                                  : Icons.chat_bubble_outline,
-                            ),
-                            title: event.messageType == MessageTypes.Audio
-                                ? 'Voice message'
-                                : event.body,
-                            subtitle:
-                                '${widget.rooms.length > 1 ? '${event.room.getLocalizedDisplayname()} · ' : ''}${event.originServerTs.toLocal().toString().substring(0, 16)}',
-                            onTap: () => _openEvent(context, event),
                           ),
-                          if (event.messageType == MessageTypes.Image &&
-                              event.showThumbnail)
-                            _SharedPreviewBlock(event),
-                          for (final url in urls.take(3))
-                            TextButton.icon(
-                              onPressed: () =>
-                                  UrlLauncher(context, url).launchUrl(),
-                              icon: const Icon(Icons.link_outlined, size: 18),
-                              label: Text(
-                                url,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                        ],
+                        ),
                       ),
-                    );
-                  },
+                  ],
+                ),
+              if (_history.busy) const LinearProgressIndicator(minHeight: 1),
+              Expanded(
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: _scroll,
+                  child: IndexedStack(
+                    index: widget.initialMedia ? _tab : 1,
+                    children: [
+                      _mediaGrid(events),
+                      _list(
+                        widget.initialMedia
+                            ? events.where(sharedFile).toList()
+                            : events,
+                      ),
+                      ListView.builder(
+                        key: const PageStorageKey('content-links'),
+                        padding: const EdgeInsets.all(20),
+                        itemCount: links.length + 1,
+                        itemBuilder: (context, index) {
+                          if (index == links.length) return _end(links.isEmpty);
+                          final (event, url) = links[index];
+                          return NotionListRow(
+                            leading: const Icon(Icons.link_outlined),
+                            title: Uri.parse(url).host,
+                            subtitle:
+                                '$url\n${_linkContext(event)} · ${_date(event)}',
+                            onTap: () {
+                              if (PersonalPrivacy.surfaceUnlocked &&
+                                  !event.redacted)
+                                UrlLauncher(context, url).launchUrl();
+                            },
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -451,4 +470,176 @@ class _NotionConversationContentPageState
       ),
     );
   }
+
+  String _linkContext(Event event) {
+    final text = event.body
+        .replaceAll(RegExp(r'https?://\S+'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return text.length > 120 ? '${text.substring(0, 120)}…' : text;
+  }
+
+  bool _scroll(ScrollNotification notification) {
+    if (notification is! ScrollUpdateNotification ||
+        notification.metrics.extentAfter > 200 ||
+        _history.busy)
+      return false;
+    if (_history.sources.any((s) => s.error != null)) return false;
+    final signature = _history.sources
+        .map((s) => (s.localLimit, s.cursor, s.remoteEnd))
+        .join('|');
+    if (_autoSignature == signature) return false;
+    if (!_history.localEnd || (_remoteAllowed && !_history.remoteEnd)) {
+      _autoSignature = signature;
+      _history.load(remote: _history.localEnd);
+    }
+    return false;
+  }
+
+  Widget _end(bool empty) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (empty && !_history.busy)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Text('No matches in the loaded history.'),
+        ),
+      _footer(),
+    ],
+  );
+  Widget _list(List<Event> events) => ListView.builder(
+    key: const PageStorageKey('content-files'),
+    padding: const EdgeInsets.all(20),
+    itemCount: events.length + 1,
+    itemBuilder: (context, index) {
+      if (index == events.length) return _end(events.isEmpty);
+      final event = events[index];
+      final info = event.content['info'];
+      final size = info is Map && info['size'] is num
+          ? ' · ${((info['size'] as num) / 1024).ceil()} KB'
+          : '';
+      return NotionListRow(
+        leading: Icon(
+          event.messageType == MessageTypes.Audio
+              ? Icons.audio_file_outlined
+              : Icons.description_outlined,
+        ),
+        title: event.content['filename'] is String
+            ? event.content['filename'] as String
+            : event.body.isEmpty
+            ? 'Shared file'
+            : event.body,
+        subtitle:
+            '${event.messageType == MessageTypes.Audio ? 'Audio · ' : ''}${info is Map && info['mimetype'] is String ? '${info['mimetype']} · ' : ''}${info is Map && info['duration'] is num ? '${Duration(milliseconds: (info['duration'] as num).toInt()).inMinutes}:${(Duration(milliseconds: (info['duration'] as num).toInt()).inSeconds % 60).toString().padLeft(2, '0')} · ' : ''}${_date(event)}$size',
+        onTap: () => _openEvent(context, event),
+      );
+    },
+  );
+  Widget _mediaGrid(List<Event> events) => LayoutBuilder(
+    builder: (context, constraints) {
+      final columns =
+          (constraints.maxWidth /
+                  (MediaQuery.textScalerOf(context).scale(1) > 1.5 ? 150 : 120))
+              .floor()
+              .clamp(2, 6);
+      final months = <String, List<Event>>{};
+      for (final event in events.where(sharedMedia)) {
+        final date = event.originServerTs.toLocal().toString().substring(0, 7);
+        (months[date] ??= []).add(event);
+      }
+      return CustomScrollView(
+        key: const PageStorageKey('content-media'),
+        slivers: [
+          for (final month in months.entries) ...[
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+              sliver: SliverToBoxAdapter(child: Text(month.key)),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              sliver: SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  crossAxisSpacing: 4,
+                  mainAxisSpacing: 4,
+                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final event = month.value[index];
+                  final video = event.messageType == MessageTypes.Video;
+                  return Semantics(
+                    label: '${video ? 'Video' : 'Photo'}, ${_date(event)}',
+                    button: true,
+                    child: InkWell(
+                      onTap: () => _openEvent(context, event),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (_thumbnailAllowed(event))
+                            MxcImage(
+                              event: event,
+                              width: 240,
+                              height: 240,
+                              fit: BoxFit.cover,
+                              isThumbnail: true,
+                              animated: false,
+                              placeholder: _thumbnailPlaceholder,
+                            )
+                          else
+                            ColoredBox(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHigh,
+                              child: Icon(
+                                video
+                                    ? Icons.videocam_outlined
+                                    : Icons.image_outlined,
+                              ),
+                            ),
+                          if (video)
+                            Align(
+                              alignment: Alignment.bottomRight,
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: Container(
+                                  color: Colors.black54,
+                                  padding: const EdgeInsets.all(3),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.play_circle_outline,
+                                        color: Colors.white,
+                                        size: 18,
+                                      ),
+                                      if (event.infoMap['duration'] is num) ...[
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '${Duration(milliseconds: (event.infoMap['duration'] as num).toInt()).inSeconds}s',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                }, childCount: month.value.length),
+              ),
+            ),
+          ],
+          SliverPadding(
+            padding: const EdgeInsets.all(20),
+            sliver: SliverToBoxAdapter(child: _end(months.isEmpty)),
+          ),
+        ],
+      );
+    },
+  );
 }

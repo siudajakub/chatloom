@@ -4,6 +4,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:collection/collection.dart';
 
@@ -73,6 +74,39 @@ class Timeline {
 
   // We confirmed, that there are no more events to load from the database.
   bool _fetchedAllDatabaseEvents = false;
+  String? _lastDatabaseEventId;
+
+  Future<List<Event>> _olderDatabaseEvents(int count) async {
+    if (count <= 0) return const [];
+    // Event count is not an offset: SENDING is appended outside the DB limit,
+    // and missing records or a concurrent sync can shift that count further.
+    final ids = await room.client.database.getEventIdList(room);
+    final oldest =
+        _lastDatabaseEventId ??
+        events.where((e) => e.status.isSynced).lastOrNull?.eventId;
+    var offset = oldest == null ? 0 : ids.indexOf(oldest) + 1;
+    final existing = events.map((e) => e.eventId).toSet();
+    final result = <Event>[];
+    // Missing stored rows still consume IDs, never imply remote EOF.
+    for (var page = 0; page < 3 && offset < ids.length; page++) {
+      final end = min(offset + count, ids.length);
+      // Resolve the captured IDs themselves. Re-reading by numeric offset here
+      // could race a sync insertion between the ID read and the event read.
+      final batch = await Future.wait(
+        ids
+            .sublist(offset, end)
+            .map((id) => room.client.database.getEventById(id, room)),
+      );
+      result.addAll(
+        batch.whereType<Event>().where((e) => existing.add(e.eventId)),
+      );
+      _lastDatabaseEventId = ids[end - 1];
+      offset = end;
+      if (result.isNotEmpty) break;
+    }
+    _fetchedAllDatabaseEvents = offset >= ids.length;
+    return result;
+  }
 
   bool get canRequestHistory {
     if (!{Membership.join, Membership.leave}.contains(room.membership)) {
@@ -143,13 +177,19 @@ class Timeline {
   }) async {
     onUpdate?.call();
 
+    final previousDatabaseId = _lastDatabaseEventId;
+    final previousDatabaseEnd = _fetchedAllDatabaseEvents;
     try {
       // Look up for events in the database first. With fragmented view, we should delete the database cache
       final eventsFromStore = isFragmentedTimeline
           ? null
+          : direction == Direction.b
+          ? await _olderDatabaseEvents(historyCount)
           : await room.client.database.getEventList(
               room,
-              start: events.length,
+              // The database's offset addresses synced IDs only. Pending,
+              // failed and accepted local echoes live in its SENDING fragment.
+              start: events.where((event) => event.status.isSynced).length,
               limit: historyCount,
             );
 
@@ -184,8 +224,7 @@ class Timeline {
             onInsert?.call(i);
           }
         }
-      } else {
-        _fetchedAllDatabaseEvents = true;
+      } else if (isFragmentedTimeline || _fetchedAllDatabaseEvents) {
         Logs().i('No more events found in the store. Request from server...');
 
         if (isFragmentedTimeline || inMemoryOnly) {
@@ -209,6 +248,10 @@ class Timeline {
           }
         }
       }
+    } catch (_) {
+      _lastDatabaseEventId = previousDatabaseId;
+      _fetchedAllDatabaseEvents = previousDatabaseEnd;
+      rethrow;
     } finally {
       _collectHistoryUpdates = false;
       isRequestingHistory = false;

@@ -3,11 +3,12 @@ import 'dart:async';
 
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/pages/chat_details/chat_details.dart';
-import 'package:fluffychat/pages/chat_details/participant_list_item.dart';
+import 'package:fluffychat/personal/capabilities.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
+import 'package:fluffychat/personal/ui/notion_network_filter.dart';
 import 'package:fluffychat/personal/organization_page.dart';
 import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/personal_hub.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_content.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_notifications.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
@@ -41,21 +42,7 @@ String notionNotificationLabel(PushRuleState state) => switch (state) {
   PushRuleState.dontNotify => 'Muted',
 };
 String? _text(Object? value) => value is String ? value : null;
-String notionNetworkName(String network) => switch (network.toLowerCase()) {
-  'whatsapp' => 'WhatsApp',
-  'telegram' => 'Telegram',
-  'slack' => 'Slack',
-  'discord' => 'Discord',
-  'signal' => 'Signal',
-  'instagram' => 'Instagram',
-  'facebook' || 'messenger' => 'Messenger',
-  'matrix' => 'Matrix',
-  'unknown' => 'Unknown network',
-  _ =>
-    network.isEmpty
-        ? 'Unknown network'
-        : '${network[0].toUpperCase()}${network.substring(1)}',
-};
+String notionNetworkName(String network) => notionNetworkLabel(network);
 
 /// Source and person scopes are explicit. A merged page never runs a native
 /// room action on its representative room on behalf of the person.
@@ -156,9 +143,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
   }
 
   Future<void> _hub() async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(builder: (_) => PersonalHub(client: personal.client)),
-    );
+    await context.push('/rooms/settings/sync');
     _refresh();
   }
 
@@ -249,11 +234,24 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     );
   }
 
+  Future<void> _privatePreferences() async {
+    final available = sources;
+    if (available.isEmpty ||
+        !identical(Matrix.of(context).client, personal.client))
+      return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) =>
+            ChatPreferencesPage(personal: personal, room: available.first),
+      ),
+    );
+  }
+
   Future<void> _notifications(Room room) async {
     final state = await showDialog<PushRuleState>(
       context: context,
       builder: (context) => SimpleDialog(
-        title: const Text('Notifications for this source'),
+        title: const Text('Account notifications · Beeper / Matrix'),
         children: [
           for (final value in PushRuleState.values)
             SimpleDialogOption(
@@ -282,7 +280,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
       await _sourceDetails(room);
       return;
     }
-    final id = room.directChatMatrixID;
+    final id = room.directChatMatrixIDForDisplay;
     if (id == null) {
       await context.push('/rooms/${room.id}/details/members');
       return;
@@ -332,7 +330,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                 for (final source in sources)
                   NotionListRow(
                     leading: const Icon(Icons.language_outlined),
-                    title: notionNetworkName(PersonalClient.networkOf(source)),
+                    title: notionNetworkName(
+                      projection.classifier.classify(source).network,
+                    ),
                     subtitle: source.getLocalizedDisplayname(),
                     onTap: () {
                       Navigator.pop(context);
@@ -365,15 +365,6 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 NotionListRow(
-                  leading: const Icon(Icons.tune_outlined),
-                  title: 'Private organization & avatar',
-                  subtitle: 'Labels, private appearance and archive',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _organize();
-                  },
-                ),
-                NotionListRow(
                   leading: const Icon(Icons.sync_outlined),
                   title: 'Private tools & sync',
                   onTap: () {
@@ -392,7 +383,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                   ),
                 if (widget.room != null) ...[
                   if (widget.room!.canonicalAlias.isNotEmpty ||
-                      widget.room!.directChatMatrixID != null)
+                      widget.room!.directChatMatrixIDForDisplay != null)
                     NotionListRow(
                       leading: const Icon(Icons.qr_code_outlined),
                       title: 'Share contact',
@@ -402,19 +393,10 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                           this.context,
                           widget.room!.canonicalAlias.isNotEmpty
                               ? widget.room!.canonicalAlias
-                              : widget.room!.directChatMatrixID!,
+                              : widget.room!.directChatMatrixIDForDisplay!,
                         );
                       },
                     ),
-                  NotionListRow(
-                    leading: const Icon(Icons.logout_outlined),
-                    title: 'Leave this source',
-                    subtitle: 'Changes your membership on the network',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _leave(widget.room!);
-                    },
-                  ),
                 ],
               ],
             ),
@@ -455,22 +437,19 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         !_busy &&
         !waiting &&
         NotionMetadataActions.canEdit(personal, entity);
-    final labelKeys = room == null
-        ? metadata.labelIds
-        : projection.labelsFor(room);
-    final labels = labelKeys
-        .map((key) => personal.values[key]?['name'])
-        .whereType<String>()
-        .toList();
     final name =
         metadata.nickname ??
         _text(personal.values['nickname:$entity']?['name']) ??
         group?.name ??
         room!.getLocalizedDisplayname();
     final network = group == null
-        ? notionNetworkName(PersonalClient.networkOf(room!))
-        : group.members
-              .map((m) => notionNetworkName(m.network))
+        ? notionNetworkName(projection.classifier.classify(room!).network)
+        : sources
+              .map(
+                (source) => notionNetworkName(
+                  projection.classifier.classify(source).network,
+                ),
+              )
               .toSet()
               .join(' · ');
     final sourceRows = <Widget>[
@@ -482,7 +461,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         for (final source in sources)
           NotionListRow(
             leading: const Icon(Icons.language_outlined),
-            title: notionNetworkName(PersonalClient.networkOf(source)),
+            title: notionNetworkName(
+              projection.classifier.classify(source).network,
+            ),
             subtitle:
                 '${source.getLocalizedDisplayname()} · ${notionNotificationLabel(source.pushRuleState)}',
             onTap: () => _sourceDetails(source),
@@ -494,6 +475,44 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
       ],
       if (room != null) ...[
         NotionListRow(
+          leading: const Icon(Icons.notifications_outlined),
+          title: 'Account notifications · Beeper / Matrix',
+          subtitle:
+              '${notionNotificationLabel(room.pushRuleState)} · changes affect other clients',
+          onTap: _native?.canEdit == true ? () => _notifications(room) : null,
+        ),
+        NotionListRow(
+          leading: const Icon(Icons.info_outline),
+          title: 'Conversation capabilities',
+          onTap: () => showDialog<void>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Conversation capabilities'),
+              content: SizedBox(
+                width: 460,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final feature in BridgeFeature.values)
+                      ListTile(
+                        title: Text(feature.name),
+                        subtitle: Text(
+                          RoomCapabilities.forFeature(feature, room).reason,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        NotionListRow(
           leading: const Icon(Icons.lock_outline),
           title: 'Encryption & recovery',
           subtitle: room.encrypted
@@ -501,7 +520,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               : 'Matrix transport is not encrypted · the source-network hop has its own security',
           onTap: () => context.push('/rooms/${room.id}/encryption'),
         ),
-        if (!room.isDirectChat) ...[
+        if (!room.isDirectChatForDisplay) ...[
           NotionListRow(
             leading: const Icon(Icons.visibility_outlined),
             title: 'Access & visibility',
@@ -534,14 +553,15 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                 ? widget.controller?.setTopicAction
                 : null,
           ),
-        if (!room.isDirectChat && room.canChangeStateEvent(EventTypes.RoomName))
+        if (!room.isDirectChatForDisplay &&
+            room.canChangeStateEvent(EventTypes.RoomName))
           NotionListRow(
             leading: const Icon(Icons.edit_outlined),
             title: 'Rename network room',
             subtitle: 'Changes the name for everyone on this source',
             onTap: widget.controller?.setDisplaynameAction,
           ),
-        if (!room.isDirectChat &&
+        if (!room.isDirectChatForDisplay &&
             room.canChangeStateEvent(EventTypes.RoomAvatar))
           NotionListRow(
             leading: const Icon(Icons.photo_camera_outlined),
@@ -554,7 +574,13 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           title: 'Participants',
           onTap: () => context.push('/rooms/${room.id}/details/members'),
         ),
-        ...room.getParticipants().take(10).map(ParticipantListItem.new),
+        const Divider(),
+        NotionListRow(
+          leading: const Icon(Icons.logout_outlined),
+          title: 'Leave this source',
+          subtitle: 'Changes your membership on the network',
+          onTap: () => _leave(room),
+        ),
       ],
     ];
     return NotionChatDetailsPage(
@@ -581,11 +607,10 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                   ),
           ),
         ),
-        label: labels.isEmpty ? null : labels.join(', '),
         nickname: metadata.nickname,
         notifications: room == null
             ? 'Choose a source'
-            : notionNotificationLabel(room.pushRuleState),
+            : privateNotificationLabel(projection.notificationModeFor(room)),
         pinned: metadata.pinOrder != null,
         incognito: AppSettings.personalIncognito.value,
         pending: _busy || waiting,
@@ -609,21 +634,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                 NotionConversationContentPage(rooms: sources, name: name),
           ),
         ),
-        mute: room == null
-            ? _sources
-            : _native?.canEdit != true
-            ? null
-            : () => _writeNotifications(
-                room,
-                room.pushRuleState == PushRuleState.dontNotify
-                    ? PushRuleState.notify
-                    : PushRuleState.dontNotify,
-              ),
-        notifications: room == null
-            ? _sources
-            : _native?.canEdit != true
-            ? null
-            : () => _notifications(room),
+        preferences: sources.isEmpty ? null : _privatePreferences,
+        mute: room == null ? _sources : _privatePreferences,
+        notifications: room == null ? _sources : _privatePreferences,
         pin: canEdit
             ? (value) => _run(
                 () => NotionMetadataActions.setPinned(personal, entity, value),

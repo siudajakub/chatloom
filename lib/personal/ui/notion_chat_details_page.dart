@@ -60,30 +60,51 @@ class NotionChatDetailsPage extends StatelessWidget {
             key: const PageStorageKey('notion-chat-details'),
             padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ClipRRect(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final stacked =
+                      constraints.maxWidth < 440 &&
+                      MediaQuery.textScalerOf(context).scale(16) > 24;
+                  final avatar = ClipRRect(
                     borderRadius: BorderRadius.circular(
                       NotionTokens.avatarRadius,
                     ),
                     child: SizedBox.square(dimension: 64, child: data.avatar),
-                  ),
-                  const SizedBox(width: 18),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(data.name, style: NotionTokens.title),
-                        const SizedBox(height: 8),
-                        NotionValueTag(
-                          data.network,
-                          icon: Icons.language_outlined,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                  );
+                  final identity = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        data.name,
+                        style: stacked
+                            ? NotionTokens.title.copyWith(fontSize: 22)
+                            : NotionTokens.title,
+                      ),
+                      const SizedBox(height: 8),
+                      NotionValueTag(
+                        data.network,
+                        icon: Icons.language_outlined,
+                      ),
+                    ],
+                  );
+                  return stacked
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            avatar,
+                            const SizedBox(height: 16),
+                            identity,
+                          ],
+                        )
+                      : Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            avatar,
+                            const SizedBox(width: 18),
+                            Expanded(child: identity),
+                          ],
+                        );
+                },
               ),
               const SizedBox(height: 18),
               Wrap(
@@ -101,17 +122,20 @@ class NotionChatDetailsPage extends StatelessWidget {
                     color: Theme.of(context).dividerColor,
                   ),
                   TextButton.icon(
+                    onPressed: actions.media,
+                    icon: const Icon(Icons.photo_library_outlined, size: 22),
+                    label: const Text('Shared content'),
+                  ),
+                  TextButton.icon(
                     onPressed: actions.mute,
                     icon: const Icon(
-                      Icons.notifications_off_outlined,
+                      Icons.notifications_none_outlined,
                       size: 22,
                     ),
                     label: Text(
                       data.notifications == 'Choose a source'
                           ? 'Choose a source'
-                          : data.notifications == 'Muted'
-                          ? 'Unmute'
-                          : 'Mute',
+                          : 'Notifications',
                     ),
                   ),
                 ],
@@ -127,35 +151,6 @@ class NotionChatDetailsPage extends StatelessWidget {
                     ),
                   ),
                 ),
-              const NotionDetailsSection(title: 'About'),
-              NotionPropertyRow(
-                label: 'Network',
-                value: Text(data.network, style: NotionTokens.body),
-              ),
-              NotionPropertyRow(
-                label: 'Label',
-                value: data.label == null
-                    ? Text('No label', style: TextStyle(color: secondary))
-                    : Align(
-                        alignment: Alignment.centerLeft,
-                        child: NotionValueTag(data.label!),
-                      ),
-              ),
-              NotionPropertyRow(
-                label: 'Nickname',
-                value: Text(
-                  data.nickname ?? data.name,
-                  style: NotionTokens.body,
-                ),
-                onTap: pending ? null : actions.nickname,
-              ),
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'Nickname and labels are private preferences.',
-                  style: TextStyle(fontSize: 12, color: secondary),
-                ),
-              ),
               const NotionDetailsSection(title: 'Shared content'),
               NotionListRow(
                 leading: const Icon(Icons.image_outlined),
@@ -169,7 +164,26 @@ class NotionChatDetailsPage extends StatelessWidget {
                     : null,
               ),
               if (data.sharedContent != null) data.sharedContent!,
-              const NotionDetailsSection(title: 'Chat settings'),
+              const NotionDetailsSection(title: 'Conversation'),
+              NotionPropertyRow(
+                label: 'Nickname',
+                value: Text(
+                  data.nickname ?? 'Source network name',
+                  style: NotionTokens.body,
+                ),
+                onTap: pending ? null : actions.nickname,
+              ),
+              Text(
+                'Your nickname is private.',
+                style: TextStyle(fontSize: 12, color: secondary),
+              ),
+              if (actions.preferences != null)
+                NotionListRow(
+                  leading: const Icon(Icons.tune),
+                  title: 'Visibility & notifications',
+                  subtitle: 'Ignore, restore or override network rules',
+                  onTap: actions.preferences,
+                ),
               NotionListRow(
                 leading: const Icon(Icons.notifications_none_outlined),
                 title: 'Notifications',
@@ -286,7 +300,9 @@ class NotionSharedContentBlock extends StatelessWidget {
   Widget build(BuildContext context) => Semantics(
     button: onTap != null,
     label:
-        '${onTap == null ? 'Shared' : 'Open shared'} ${thumbnail != null
+        '${onTap == null ? 'Shared' : 'Open shared'} ${video
+            ? 'video'
+            : thumbnail != null
             ? 'photo'
             : audio
             ? 'audio'

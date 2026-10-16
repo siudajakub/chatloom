@@ -211,8 +211,12 @@ class NotionCompactChatHeader extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) => Semantics(
+    container: true,
     button: true,
     label: 'Chat details for $name',
+    excludeSemantics: true,
+    enabled: onDetails != null,
+    onTap: onDetails,
     child: InkWell(
       onTap: onDetails,
       borderRadius: BorderRadius.circular(5),

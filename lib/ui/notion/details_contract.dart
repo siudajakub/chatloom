@@ -38,6 +38,7 @@ class NotionConversationDetailsActions {
   final ValueChanged<bool>? pin;
   final VoidCallback? privacy;
   final VoidCallback? appearance;
+  final VoidCallback? preferences;
   final VoidCallback? nickname;
   final VoidCallback? media;
   final VoidCallback? archive;
@@ -50,6 +51,7 @@ class NotionConversationDetailsActions {
     this.pin,
     this.privacy,
     this.appearance,
+    this.preferences,
     this.nickname,
     this.media,
     this.archive,

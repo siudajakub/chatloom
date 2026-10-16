@@ -5,6 +5,7 @@ import 'package:fluffychat/personal/personal_client.dart';
 abstract final class NotionMetadataActions {
   static bool canEdit(PersonalClient personal, String entity) =>
       personal.ready &&
+      !personal.conflicts.containsKey('org:$entity') &&
       !personal.pending.values.any((op) => op.entityId == 'org:$entity');
 
   static Future<void> setPinned(
