@@ -5,6 +5,7 @@ import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:vodozemac/vodozemac.dart' as vod;
+import 'package:http/http.dart' as http;
 import 'config.dart';
 import 'ports.dart';
 
@@ -28,7 +29,10 @@ void sanitizeLogs() {
   Logs().nativeColors = false;
 }
 
-Future<Client> openSession(WorkerConfig config) async {
+Future<Client> openSession(
+  WorkerConfig config, {
+  http.Client? httpClient,
+}) async {
   sanitizeLogs();
   final credentials = readCredentials(config);
   final cipher = credentials['databaseCipher'] as String;
@@ -84,6 +88,7 @@ Future<Client> openSession(WorkerConfig config) async {
   final client = Client(
     'personal-feature-worker',
     database: sdkDatabase,
+    httpClient: httpClient,
     logLevel: Level.error,
     receiptsPublicByDefault: false,
     shareKeysWith: ShareKeysWith.crossVerified,
@@ -93,7 +98,13 @@ Future<Client> openSession(WorkerConfig config) async {
   );
   client.syncPresence = PresenceType.offline;
   try {
-    await client.init();
+    await client.init(
+      waitForFirstSync: false,
+      preserveSessionOnInitFailure: true,
+    );
+    // Keep network failures outside local restore so they cannot clear the
+    // encrypted session, while retaining the worker's fresh-sync startup gate.
+    if (client.isLogged()) await client.firstSyncReceived;
   } catch (_) {
     await client.dispose();
     throw const WorkerFailure('session_init_failed');

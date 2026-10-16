@@ -15,6 +15,8 @@ class WorkerConfig {
   final String nativeLibraryDirectory;
   final Uri? reminderRelayUrl;
   final bool requireCodecSandbox;
+  final bool allowConversationSends;
+  final String? localSourceSocket;
   WorkerConfig({
     required this.stateDirectory,
     required this.temporaryDirectory,
@@ -24,6 +26,8 @@ class WorkerConfig {
     required this.nativeLibraryDirectory,
     this.reminderRelayUrl,
     this.requireCodecSandbox = false,
+    this.allowConversationSends = true,
+    this.localSourceSocket,
   });
   factory WorkerConfig.read(String filename) {
     final value =
@@ -32,6 +36,12 @@ class WorkerConfig {
     final temporary = value['temporaryDirectory'] as String;
     final credential = value['credentialsPath'] as String;
     final relayValue = value['reminderRelayUrl'] as String?;
+    final sourceSocket = value['localSourceSocket'] as String?;
+    if (sourceSocket != null &&
+        (!path.isAbsolute(sourceSocket) ||
+            !path.isWithin('/run', sourceSocket))) {
+      throw const WorkerFailure('invalid_local_source_socket');
+    }
     final relay = relayValue == null || relayValue.isEmpty
         ? null
         : Uri.parse(relayValue);
@@ -49,6 +59,8 @@ class WorkerConfig {
       credentialsPath: credential,
       reminderRelayUrl: relay,
       requireCodecSandbox: value['requireCodecSandbox'] as bool? ?? false,
+      allowConversationSends: value['allowConversationSends'] as bool? ?? true,
+      localSourceSocket: sourceSocket,
       journalRoomId: value['journalRoomId'] as String? ?? '',
       trustedDeviceIds: (value['trustedDeviceIds'] as List? ?? [])
           .cast<String>(),

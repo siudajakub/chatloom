@@ -7,7 +7,8 @@ import 'reminder_reply.dart';
 
 class MatrixFeatureTransport implements FeatureTransport {
   final Client client;
-  MatrixFeatureTransport(this.client);
+  final bool allowConversationSends;
+  MatrixFeatureTransport(this.client, {this.allowConversationSends = true});
   @override
   String get accountId => client.userID!;
   @override
@@ -118,6 +119,9 @@ class MatrixFeatureTransport implements FeatureTransport {
     Map<String, dynamic> content,
     String transactionId,
   ) async {
+    if (!allowConversationSends) {
+      throw const WorkerFailure('conversation_sends_disabled');
+    }
     if (!verified) throw const WorkerFailure('device_verification_required');
     final selected = await room(target.conversation);
     if (selected.encrypted && !client.encryptionEnabled) {
@@ -145,6 +149,9 @@ class MatrixFeatureTransport implements FeatureTransport {
 
   @override
   Future<void> readAfterAcceptedReply(SendTarget target) async {
+    if (!allowConversationSends) {
+      throw const WorkerFailure('conversation_sends_disabled');
+    }
     final bound = target.readUpToEventId;
     if (bound == null) return;
     final selected = await room(target.conversation);

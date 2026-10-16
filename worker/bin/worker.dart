@@ -15,6 +15,8 @@ import 'package:personal_worker/src/runtime.dart';
 import 'package:personal_worker/src/store.dart';
 import 'package:personal_worker/src/transcriber.dart';
 import 'package:personal_worker/src/reminder_relay.dart';
+import 'package:personal_worker/src/transcription_check.dart';
+import 'package:personal_worker/src/local_sources.dart';
 
 Future<void> main(List<String> arguments) async {
   sanitizeLogs();
@@ -27,9 +29,10 @@ Future<void> main(List<String> arguments) async {
           'restore',
           'check',
           'native-check',
+          'transcribe-check',
         }.contains(arguments[0])) {
       stderr.writeln(
-        'Usage: worker <run|enroll|restore|check|native-check> /absolute/config.json',
+        'Usage: worker <run|enroll|restore|check|native-check|transcribe-check> /absolute/config.json',
       );
       exitCode = 64;
       return;
@@ -40,6 +43,19 @@ Future<void> main(List<String> arguments) async {
       path.join(config.stateDirectory, 'worker.lock'),
     ).openSync(mode: FileMode.append);
     sessionLock.lockSync(FileLock.exclusive);
+    if (arguments[0] == 'transcribe-check') {
+      final credentials = readCredentials(config);
+      final result = await checkTranscription(
+        stdin,
+        OpenAiTranscriber(
+          credentials['openaiApiKey'] as String? ?? '',
+          temporaryRoot: config.temporaryDirectory,
+          requireCodecSandbox: config.requireCodecSandbox,
+        ),
+      );
+      stdout.writeln(result);
+      return;
+    }
     if (arguments[0] == 'enroll') {
       await enroll(config);
       return;
@@ -77,7 +93,13 @@ Future<void> main(List<String> arguments) async {
       await client.roomsLoading;
       await client.accountDataLoading;
       await client.userDeviceKeysLoading;
-      final transport = MatrixFeatureTransport(client);
+      final matrixTransport = MatrixFeatureTransport(
+        client,
+        allowConversationSends: config.allowConversationSends,
+      );
+      final FeatureTransport transport = config.localSourceSocket == null
+          ? matrixTransport
+          : LocalSourceTransport(matrixTransport, config.localSourceSocket!);
       if (!transport.verified) {
         throw const WorkerFailure('device_verification_required');
       }
@@ -233,12 +255,15 @@ String secretInput(String label) {
 }
 
 Future<void> enroll(WorkerConfig config) async {
-  // Existing state is never reset or recreated by enrollment.
-  if (Directory(config.stateDirectory).existsSync() &&
+  // An interrupted login may leave an anonymous encrypted SDK database. Open
+  // it with its existing cipher; never replace credentials or reset its state.
+  final existingDatabase =
+      Directory(config.stateDirectory).existsSync() &&
       Directory(
         config.stateDirectory,
-      ).listSync().any((f) => f.path.endsWith('.sqlite'))) {
-    throw const WorkerFailure('existing_session_use_restore');
+      ).listSync().any((f) => f.path.endsWith('.sqlite'));
+  if (existingDatabase && !File(config.credentialsPath).existsSync()) {
+    throw const WorkerFailure('existing_session_credentials_required');
   }
   if (!File(config.credentialsPath).existsSync()) {
     final cipher = List.generate(
@@ -252,20 +277,25 @@ Future<void> enroll(WorkerConfig config) async {
   }
   final client = await openSession(config);
   try {
-    final server = secretInput('Matrix homeserver HTTPS URL');
-    final uri = Uri.parse(server);
-    if (uri.scheme != 'https') {
-      throw const WorkerFailure('https_homeserver_required');
+    if (File(path.join(config.stateDirectory, 'pairing.json')).existsSync()) {
+      throw const WorkerFailure('existing_session_use_restore');
     }
-    final user = secretInput('Matrix user ID');
-    final password = secretInput('Matrix password');
-    await client.checkHomeserver(uri);
-    await client.login(
-      LoginType.mLoginPassword,
-      identifier: AuthenticationUserIdentifier(user: user),
-      password: password,
-      initialDeviceDisplayName: 'Personal feature worker',
-    );
+    if (!client.isLogged()) {
+      final server = secretInput('Matrix homeserver HTTPS URL');
+      final uri = Uri.parse(server);
+      if (uri.scheme != 'https') {
+        throw const WorkerFailure('https_homeserver_required');
+      }
+      final user = secretInput('Matrix user ID');
+      final password = secretInput('Matrix password');
+      await client.checkHomeserver(uri);
+      await client.login(
+        LoginType.mLoginPassword,
+        identifier: AuthenticationUserIdentifier(user: user),
+        password: password,
+        initialDeviceDisplayName: 'Personal feature worker',
+      );
+    }
     final recovery = secretInput('Existing recovery key (no reset)');
     if (recovery.isEmpty) throw const WorkerFailure('recovery_required');
     await client.restoreCryptoIdentity(recovery);

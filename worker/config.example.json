@@ -1,10 +1,11 @@
 {
   "stateDirectory": "/var/lib/personal-worker",
   "temporaryDirectory": "/run/personal-worker/audio",
-  "credentialsPath": "/run/credentials/personal-worker.service/credentials.json",
+  "credentialsPath": "/run/personal-worker/credentials.json",
   "nativeLibraryDirectory": "/opt/personal-worker/bundle/lib",
   "journalRoomId": "SET_PRIVATELY_AFTER_PAIRING",
   "trustedDeviceIds": [],
   "reminderRelayUrl": null,
-  "requireCodecSandbox": false
+  "requireCodecSandbox": false,
+  "allowConversationSends": false
 }
