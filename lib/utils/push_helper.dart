@@ -163,14 +163,15 @@ Future<void> _tryPushHelper(
 
   // A removed account must never open a new database or fall back to another
   // account merely because a delayed push carries its old client name.
-  final availableClients = clients ??
+  final List<Client> availableClients = clients ??
       await work.wait(() => ClientManager.getClients(initialize: false, store: store));
-  final client = selectNotificationClient(availableClients, clientName, (client) => client.clientName);
+  final client = selectNotificationClient<Client>(availableClients, clientName, (client) => client.clientName);
   if (client == null) return;
 
   lastReceivedPushNotification[client.clientName] = DateTime.now();
 
-  l10n ??= await L10n.delegate.load(PlatformDispatcher.instance.locale);
+  final notificationL10n =
+      l10n ?? await L10n.delegate.load(PlatformDispatcher.instance.locale);
 
   Logs().v('Load event...');
   final event = await work.wait(() => client.getEventByPushNotification(
@@ -214,7 +215,7 @@ Future<void> _tryPushHelper(
       if (needsUpdateForSummaryNotification) {
         await work.wait(() => updateSummaryNotification(
           clientName: client.clientName,
-          l10n: l10n,
+          l10n: notificationL10n,
           flutterLocalNotificationsPlugin: flutterLocalNotificationsPlugin,
         ));
       }
@@ -287,7 +288,7 @@ Future<void> _tryPushHelper(
     projection.notificationModeFor(event.room) == PersonalNotificationMode.all,
   );
   if (incomingCall) {
-    await work.wait(() => _showIncomingCall(event, l10n!, work));
+    await work.wait(() => _showIncomingCall(event, notificationL10n, work));
     return;
   }
   await work.wait(() => flutterLocalNotificationsPlugin.show(
@@ -297,7 +298,7 @@ Future<void> _tryPushHelper(
     notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         AppConfig.pushNotificationsChannelId,
-        l10n.incomingMessages,
+        notificationL10n.incomingMessages,
         importance: Importance.high,
         priority: Priority.high,
         visibility: NotificationVisibility.private,
@@ -305,7 +306,7 @@ Future<void> _tryPushHelper(
         actions: [
           AndroidNotificationAction(
             FluffyChatNotificationActions.markAsRead.name,
-            l10n.markAsRead,
+            notificationL10n.markAsRead,
           ),
         ],
       ),
