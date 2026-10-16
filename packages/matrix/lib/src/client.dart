@@ -1848,6 +1848,9 @@ class Client extends MatrixApi {
   /// an error?
   int syncErrorTimeoutSec = 3;
 
+  /// Opt in to exponential retry delays; other SDK consumers retain their base.
+  int syncErrorMaxTimeoutSec = 3;
+
   bool _initLock = false;
 
   /// Fetches the corresponding Event object from a notification including a
@@ -2059,6 +2062,10 @@ class Client extends MatrixApi {
     bool waitForFirstSync = true,
     bool waitUntilLoadCompletedLoaded = true,
 
+    /// Startup-only restore mode: keep persisted data on failure, await every
+    /// local loader, and leave network synchronization outside initialization.
+    bool preserveSessionOnInitFailure = false,
+
     /// Will be called if the app performs a migration task from the [legacyDatabaseBuilder]
     @Deprecated('Use onInitStateChanged and listen to `InitState.migration`.')
     void Function()? onMigration,
@@ -2066,6 +2073,15 @@ class Client extends MatrixApi {
     /// To track what actually happens you can set a callback here.
     void Function(InitState)? onInitStateChanged,
   }) async {
+    if (preserveSessionOnInitFailure &&
+        (waitForFirstSync ||
+            !waitUntilLoadCompletedLoaded ||
+            onLoginStateChanged.value == LoginState.loggedIn ||
+            onLoginStateChanged.value == LoginState.softLoggedOut)) {
+      throw ClientInitPreconditionError(
+        'Preserving startup restore requires local loading, no first sync, and no active session.',
+      );
+    }
     if (newToken != null && homeserver == null && newHomeserver == null) {
       throw ClientInitPreconditionError(
         'init() can not be performed with an access token when no homeserver was specified.',
@@ -2241,12 +2257,21 @@ class Client extends MatrixApi {
       presences.clear();
       if (waitUntilLoadCompletedLoaded) {
         onInitStateChanged?.call(InitState.loadingData);
-        await userDeviceKeysLoading;
-        await roomsLoading;
-        await _accountDataLoading;
+        // Observe every loader immediately so a second failing future cannot
+        // escape while the first one is still being awaited.
+        await Future.wait<dynamic>([
+          if (userDeviceKeysLoading != null) userDeviceKeysLoading!,
+          if (roomsLoading != null) roomsLoading!,
+          if (_accountDataLoading != null) _accountDataLoading!,
+        ]);
       }
 
       _initLock = false;
+      if (preserveSessionOnInitFailure) {
+        // The final startup callback must succeed before the account becomes
+        // usable; its failure must not leave a logged-in runtime without crypto.
+        onInitStateChanged?.call(InitState.finished);
+      }
       onLoginStateChanged.add(LoginState.loggedIn);
       Logs().i(
         'Successfully connected as ${userID.localpart} with $homeserver',
@@ -2258,13 +2283,15 @@ class Client extends MatrixApi {
         onInitStateChanged?.call(InitState.waitingForFirstSync);
         await firstSyncReceived;
       }
-      onInitStateChanged?.call(InitState.finished);
+      if (!preserveSessionOnInitFailure) {
+        onInitStateChanged?.call(InitState.finished);
+      }
       return;
     } on ClientInitPreconditionError {
       onInitStateChanged?.call(InitState.error);
       rethrow;
     } catch (e, s) {
-      Logs().wtf('Client initialization failed', e, s);
+      Logs().wtf('Client initialization failed');
       onLoginStateChanged.addError(e, s);
       onInitStateChanged?.call(InitState.error);
       final clientInitException = ClientInitException(
@@ -2276,7 +2303,19 @@ class Client extends MatrixApi {
         deviceName: deviceName,
         olmAccount: olmAccount,
       );
-      await clear(reason: SessionClearReason.initFailed);
+      if (preserveSessionOnInitFailure) {
+        // A startup restore failure is not logout. In particular, never reach
+        // clear()'s database.clear/delete fallback while storage is unavailable.
+        final resumeBackgroundSync = _backgroundSync;
+        await abortSync();
+        _backgroundSync = resumeBackgroundSync;
+        await encryption?.dispose();
+        _encryption = null;
+        _rooms = [];
+        _eventsPendingDecryption.clear();
+      } else {
+        await clear(reason: SessionClearReason.initFailed);
+      }
       throw clientInitException;
     } finally {
       _initLock = false;
@@ -2325,7 +2364,9 @@ class Client extends MatrixApi {
 
   bool _backgroundSync = true;
   Future<void>? _currentSync;
-  Future<void> _retryDelay = Future.value();
+  Timer? _syncRetryTimer;
+  int _syncFailures = 0;
+  bool _lastSyncFailed = false;
 
   bool get syncPending => _currentSync != null;
 
@@ -2336,7 +2377,10 @@ class Client extends MatrixApi {
   /// in the sync loop.
   set backgroundSync(bool enabled) {
     _backgroundSync = enabled;
+    _syncRetryTimer?.cancel();
+    _syncRetryTimer = null;
     if (_backgroundSync) {
+      _syncFailures = 0;
       runInRoot(() async => _sync());
     }
   }
@@ -2344,17 +2388,37 @@ class Client extends MatrixApi {
   /// Immediately start a sync and wait for completion.
   /// If there is an active sync already, wait for the active sync instead.
   Future<void> oneShotSync({Duration? timeout}) {
+    // Push wakes and explicit retries must never wait behind an offline timer.
+    _syncRetryTimer?.cancel();
+    _syncRetryTimer = null;
+    _syncFailures = 0;
     return _sync(timeout: timeout);
   }
 
   /// Pass a timeout to set how long the server waits before sending an empty response.
   /// (Corresponds to the timeout param on the /sync request.)
   Future<void> _sync({Duration? timeout}) {
+    _syncRetryTimer?.cancel();
+    _syncRetryTimer = null;
     final currentSync = _currentSync ??= _innerSync(timeout: timeout)
         .whenComplete(() {
           _currentSync = null;
           if (_backgroundSync && isLogged() && !_disposed) {
-            unawaited(_sync());
+            if (_lastSyncFailed) {
+              final base = max(0, syncErrorTimeoutSec);
+              final seconds = min(
+                max(base, syncErrorMaxTimeoutSec),
+                base * (1 << min(_syncFailures++, 6)),
+              );
+              _syncRetryTimer = Timer(Duration(seconds: seconds), () {
+                _syncRetryTimer = null;
+                if (_backgroundSync && isLogged() && !_disposed && !_aborted) {
+                  unawaited(_sync());
+                }
+              });
+            } else {
+              unawaited(_sync());
+            }
           }
         });
     return currentSync;
@@ -2430,8 +2494,7 @@ class Client extends MatrixApi {
   /// Pass a timeout to set how long the server waits before sending an empty response.
   /// (Corresponds to the timeout param on the /sync request.)
   Future<void> _innerSync({Duration? timeout}) async {
-    await _retryDelay;
-    _retryDelay = Future.delayed(Duration(seconds: syncErrorTimeoutSec));
+    _lastSyncFailed = false;
     if (!isLogged() || _disposed || _aborted) return;
     try {
       if (_initLock) {
@@ -2520,9 +2583,10 @@ class Client extends MatrixApi {
         await processToDeviceQueue();
       } catch (_) {} // we want to dispose any errors this throws
 
-      _retryDelay = Future.value();
+      _syncFailures = 0;
       onSyncStatus.add(SyncStatusUpdate(SyncStatus.finished));
     } on MatrixException catch (e, s) {
+      _lastSyncFailed = true;
       onSyncStatus.add(
         SyncStatusUpdate(
           SyncStatus.error,
@@ -2548,6 +2612,7 @@ class Client extends MatrixApi {
         }
       }
     } on SyncConnectionException catch (e, s) {
+      _lastSyncFailed = true;
       Logs().w('Syncloop failed: Client has not connection to the server');
       onSyncStatus.add(
         SyncStatusUpdate(
@@ -2557,6 +2622,7 @@ class Client extends MatrixApi {
       );
     } catch (e, s) {
       if (!isLogged() || _disposed || _aborted) return;
+      _lastSyncFailed = true;
       Logs().e('Error during processing events', e, s);
       onSyncStatus.add(
         SyncStatusUpdate(
