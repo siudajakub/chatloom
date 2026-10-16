@@ -11,6 +11,7 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/utils/client_manager.dart';
+import 'package:fluffychat/utils/notification_client_routing.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
@@ -42,7 +43,9 @@ extension NotificationResponseJson on NotificationResponse {
       actionId: json['actionId'] as String?,
       input: json['input'] as String?,
       payload: json['payload'] as String?,
-      data: json['data'] as Map<String, dynamic>,
+      data: json['data'] is Map
+          ? Map<String, dynamic>.from(json['data'] as Map)
+          : const <String, dynamic>{},
     );
   }
 }
@@ -72,40 +75,64 @@ Future<void> notificationTapBackground(
     'Main isolate no up - Create temporary client for notification tap intend!',
   );
 
-  final pushIsolateReceivePort = ReceivePort();
-  IsolateNameServer.registerPortWithName(
-    pushIsolateReceivePort.sendPort,
-    AppConfig.pushIsolatePortName,
+  // Opening a notification without a running UI has no background action.
+  // Validate before opening storage or initializing crypto/network resources.
+  if (notificationResponse.notificationResponseType !=
+      NotificationResponseType.selectedNotificationAction) return;
+  final action = FluffyChatNotificationActions.values.singleWhereOrNull(
+    (action) => action.name == notificationResponse.actionId,
   );
-
-  if (!_vodInitialized) {
-    await vod.init();
-    _vodInitialized = true;
-  }
-  final store = await AppSettings.init();
-
+  if (action == null ||
+      action == FluffyChatNotificationActions.open ||
+      action == FluffyChatNotificationActions.enterCall) return;
   final payload = FluffyChatPushPayload.fromString(
     notificationResponse.payload ?? '',
   );
-  final clientName = payload.clientName;
-  final client = clientName == null
-      ? (await ClientManager.getClients(store: store, initialize: false)).first
-      : (await ClientManager.createClient(clientName, store));
-  await client.abortSync();
-  await client.init(
-    waitForFirstSync: false,
-    waitUntilLoadCompletedLoaded: false,
-  );
+  if (payload.roomId == null) return;
+  if (action == FluffyChatNotificationActions.reply &&
+      (notificationResponse.input?.isEmpty ?? true)) return;
 
-  if (!client.isLogged()) {
-    throw Exception('Notification tab in background but not logged in!');
+  final pushIsolateReceivePort = ReceivePort();
+  final ownsPort = IsolateNameServer.registerPortWithName(
+    pushIsolateReceivePort.sendPort,
+    AppConfig.pushIsolatePortName,
+  );
+  if (!ownsPort) {
+    pushIsolateReceivePort.close();
+    Logs().w('[Push] background_action_busy');
+    return;
   }
+  Client? client;
   try {
+    if (!_vodInitialized) {
+      await vod.init();
+      _vodInitialized = true;
+    }
+    final store = await AppSettings.init();
+    final names = store.getStringList(ClientManager.clientNamespace) ?? [];
+    final clientName = selectNotificationClient(names, payload.clientName, (name) => name);
+    if (clientName == null) return;
+    client = await ClientManager.createClient(clientName, store);
+    client.backgroundSync = false;
+    await client.init(
+      waitForFirstSync: false,
+      waitUntilLoadCompletedLoaded: true,
+      preserveSessionOnInitFailure: true,
+    );
+    if (!client.isLogged()) return;
     await notificationTap(notificationResponse, clients: [client]);
+  } catch (error) {
+    Logs().w('[Push] background_action_failed', error.runtimeType.toString());
   } finally {
-    await client.dispose(closeDatabase: false);
-    pushIsolateReceivePort.sendPort.send('DONE');
-    IsolateNameServer.removePortNameMapping(AppConfig.pushIsolatePortName);
+    try {
+      await client?.dispose();
+    } finally {
+      if (IsolateNameServer.lookupPortByName(AppConfig.pushIsolatePortName) ==
+          pushIsolateReceivePort.sendPort) {
+        IsolateNameServer.removePortNameMapping(AppConfig.pushIsolatePortName);
+      }
+      pushIsolateReceivePort.close();
+    }
   }
   return;
 }
@@ -123,13 +150,11 @@ Future<void> notificationTap(
   final payload = FluffyChatPushPayload.fromString(
     notificationResponse.payload ?? '',
   );
-  final client =
-      clients.firstWhereOrNull(
-        (client) => client.clientName == payload.clientName,
-      ) ??
-      clients.first;
+  if (payload.roomId == null) return;
+  final client = selectNotificationClient(clients, payload.clientName, (client) => client.clientName);
+  if (client == null || !client.isLogged()) return;
 
-  updateSummaryNotification(
+  await updateSummaryNotification(
     flutterLocalNotificationsPlugin: FlutterLocalNotificationsPlugin(),
     clientName: client.clientName,
     l10n: await lookupL10n(PlatformDispatcher.instance.locale),
