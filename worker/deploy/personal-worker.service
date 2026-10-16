@@ -8,6 +8,7 @@ Type=simple
 User=personalworker
 Group=personalworker
 WorkingDirectory=/opt/personal-worker
+ExecStartPre=/usr/bin/python3 /opt/personal-worker/prepare_credentials.py
 ExecStart=/opt/personal-worker/bundle/bin/worker run /etc/personal-worker/config.json
 LoadCredential=credentials.json:/etc/personal-worker/credentials.json
 StateDirectory=personal-worker

@@ -1,6 +1,6 @@
 {
   "project_id": "replace-own-firebase-project",
-  "service_account_file": "/run/credentials/personal-push-gateway.service/fcm-service-account.json",
+  "service_account_file": "/run/personal-push-gateway/fcm-service-account.json",
   "state_directory": "/var/lib/personal-push-gateway",
   "bind": "127.0.0.1",
   "port": 8088,

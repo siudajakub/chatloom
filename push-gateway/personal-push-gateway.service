@@ -10,7 +10,8 @@ Group=personalpush
 WorkingDirectory=/opt/personal-push-gateway
 LoadCredential=gateway-config.json:/etc/personal-push/config.json
 LoadCredential=fcm-service-account.json:/etc/personal-push/fcm-service-account.json
-# Optional worker reminder relay; also set reminder_credential_file in config.
+# Optional worker reminder relay; set reminder_credential_file in config to
+# /run/personal-push-gateway/reminder-relay.json. Preparer refuses mismatches.
 # LoadCredential=reminder-relay.json:/etc/personal-push/reminder-relay.json
 RuntimeDirectory=personal-push-gateway
 RuntimeDirectoryMode=0700
