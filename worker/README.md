@@ -14,7 +14,7 @@ For Linux without ffmpeg/ffprobe, run `bash scripts/setup-media-runtime.sh /abso
 
 For development, load the generated `runtime.env` with `set -a; . /absolute/project/runtime/runtime.env; set +a`. `FFMPEG_PATH` selects the exact wheel binary and an empty `FFPROBE_PATH` explicitly uses the duration fallback. Constructor paths take precedence over these variables; otherwise names are resolved through PATH. `runtime.json` records the pinned package version, actual FFmpeg version and SHA-256 of the executable.
 
-When ffprobe is absent, the worker decodes the selected audio with the same configured ffmpeg binary into a null output and derives duration from validated machine-readable `out_time_us` progress ending in `progress=end`. It does not invent duration or claim that ffprobe exists. Malformed audio, failed conversion, cancellation, oversized output and process timeouts stop before any provider upload and clean the plaintext work directory. A configurable process timeout defaults to ten minutes.
+When ffprobe is absent, the worker decodes the selected audio with the same configured ffmpeg binary into mono 16 kHz signed 16-bit PCM and derives duration by counting complete samples in the stdout stream without retaining them. This avoids FFmpeg 6 progress timestamps that can undercount the final packet. It does not invent duration or claim that ffprobe exists. Malformed audio, failed conversion, cancellation, oversized output and process timeouts stop before any provider upload and clean the plaintext work directory. A configurable process timeout defaults to ten minutes.
 
 Every probe, decode and conversion restricts input protocols to `file,pipe` and demuxers to `ogg,mp3,wav,mov,aac,matroska,webm,flac`; playlists and network-backed formats are rejected. Media children start without the parent's environment and receive only PATH, so provider keys, HOME and service credentials are not inherited. Tests include a disguised playlist with local HTTP canary and private-file reference, and verify zero fetches/uploads, as well as a child-environment witness. The flags follow [FFmpeg format](https://ffmpeg.org/ffmpeg-formats.html#Format-Options) and [protocol](https://ffmpeg.org/ffmpeg-protocols.html) documentation.
 
@@ -34,6 +34,14 @@ The app creates a private encrypted room with `pl.personal.client.journal.v1` st
 
 Only then start `worker run CONFIG`. The systemd unit is a deployment template; these files do not install or start a service. A worker lock protects all session commands before SDK initialization. The deployment template uses a dedicated account, encrypted state, systemd credentials, private transient storage and no access to Beeper/Hermes service secrets.
 
+## systemd credentials preparation
+
+Install Python 3 and `deploy/prepare_credentials.py` as `/opt/personal-worker/prepare_credentials.py` alongside the Linux bundle in an authorized deployment. Keep `/etc/personal-worker/credentials.json` root-owned mode 0600. The unit's `LoadCredential` feeds `CREDENTIALS_DIRECTORY`; `ExecStartPre` reads only that credential and creates `/run/personal-worker/credentials.json` mode 0600 inside the service-owned 0700 `RuntimeDirectory`. Set `credentialsPath` to that runtime path, as in `config.example.json`. Do not point the owner-only application validator at a systemd file exposed as 0440. Enrollment/restore outside systemd requires a separate private operational config pointing to its existing owner-only credential, since the transient copy exists only during service startup.
+
+The preparer accepts regular single-link source files owned by root or the service UID, mode 0400/0440/0600 (0440 requires a service group); it refuses writable/shared directories, symlinks, unexpected owners/modes and inputs over 65536 bytes. Directory descriptors pin input/output directories; bounded reads and atomic exclusive 0600 replacements prevent partial outputs and following destination links. Every input is validated before writing any output. Failure stops `ExecStartPre` with a fixed message containing no paths or secret values. The worker's strict application validator stays unchanged.
+
+Run both preparers' synthetic regressions from the client checkout: `rtk python3 -W error::ResourceWarning -m unittest discover -s push-gateway/tests -p test_prepare_credentials.py -v`. This covers 0440→0600, owner/group/mode, links/FIFO/oversize, missing inputs, repeated start, plus gateway initialization with/without the reminder relay. Linux/systemd acceptance and its exact command are in [credentials acceptance](../docs/personal/credentials-acceptance-2026-10-15.md). No preparer test proves enrollment or pairing.
+
 ## Wire contract
 
 All commands/results use the frozen `PersonalOperation` schema 1 and custom `personalEventType`. Result operations have unique IDs per transition and increasing entity revisions. ACK/status and job changes are persisted atomically; journal publication uses a stable Matrix transaction ID and a durable outbox. Failed publication resumes with the same transaction ID on the same worker device.
@@ -44,7 +52,7 @@ All commands/results use the frozen `PersonalOperation` schema 1 and custom `per
 * `metadata.put`: direct JSON value (a single `value` wrapper is also accepted). `metadata.delete` creates a tombstone. Conflicts preserve both `existingValue` and `proposedValue`, with neither silently replacing the other.
 * `worker.heartbeat`: health, verification state and pending count. No source IDs or messages in diagnostics or heartbeat.
 
-Automatic background work sends no typing, public/private read receipts or online presence. `syncPresence` is offline from initialization. A bound `readUpToEventId` is sent only after an explicitly authorized scheduled reply has been accepted; background audio processing and reminder scans never mark rooms read. No arbitrary Beeper Client API fallback exists.
+Automatic background work sends no typing, public/private read receipts or online presence. `syncPresence` is offline from initialization. A bound `readUpToEventId` is sent only after an explicitly authorized scheduled reply has been accepted; background audio processing and reminder scans never mark rooms read. No unconfigured Beeper Client API fallback exists. Explicitly enabled local sources use the restricted Unix-socket adapter described below.
 
 ## Reminder wake relay
 
@@ -75,3 +83,58 @@ Synthetic tests prove state machines, encrypted storage, cleanup, conversion, re
 A private encrypted journal can be decryptable by other authorized devices on the same Matrix account under standard SDK key sharing. Hiding it in this client's inbox does not hide it in official Beeper. Removing a device cannot recall keys or transcriptions already downloaded by that device.
 
 Source deletion: the worker checks fresh source-event metadata before a paid request and again before publishing its result. Unknown status (missing keys, 404 or network failure) does not prove deletion and never triggers another paid request automatically. After journal reconciliation, a bounded round-robin audit checks at most four explicitly requested transcript jobs every 30 seconds; it never sweeps room history or downloads audio. Confirmed redaction cancels inflight/completed jobs, publishes a durable `text:null` tombstone, and retries idempotent redactions of previous text-bearing private-journal results. Publication intents are stored before sending, so a lost ACK can still resolve the original event ID using the same transaction. This removes current server copies; it cannot recall text already downloaded/exported by another device.
+
+
+## Headless deployment acceptance
+
+`bundle/bin/worker transcribe-check /absolute/config.json < /private/voice.ogg`
+is an explicit paid probe of the exact bundled `OpenAiTranscriber`. It reads at
+most 64 MiB from stdin, converts OGG/Opus with the production codec pipeline,
+uses `gpt-transcribe`, and prints only status, model, duration, estimated cost
+and transcript character count. It does not initialize Matrix, enqueue jobs,
+persist text or publish messages. Run it with a separate private state and
+transient directory so it cannot contend with the daemon's session lock. Paid
+uncertainty is not retried; select recordings explicitly before invoking it.
+
+For transcription-only rollout set `allowConversationSends: false` (as in the
+example). The final Matrix transport then refuses both conversation sends and
+after-reply receipts before touching the session. Encrypted journal results
+remain available after enrollment and pairing. The default for existing configs
+which omit this field remains true, preserving scheduled-send behavior.
+A successful stdin probe proves the deployed codec/provider path, not private
+journal enrollment, trusted command ingestion, decryption or result delivery.
+
+
+## Explicit local Beeper sources
+
+Cloud Matrix does not expose the local bridge rooms ending in `:beeper.local`.
+Set `localSourceSocket` to `/run/personal-worker-source/source.sock` only when
+installing `deploy/local_sources.py` under the existing Beeper service account.
+The worker retains its separate verified Matrix device, SQLCipher state and
+E2EE command/result journal; no Beeper API token is copied to its credentials.
+The adapter has no OpenAI key. Its socket is 0660 inside a 0750 runtime directory,
+shared only with the worker group, and its service permits loopback networking.
+
+The adapter pins the existing loopback server, profile directory and current
+account, maps `(roomID,eventID)` exactly in a read-only index database, and calls
+`messages show --read-only` on that exact numeric message ID. Only ordinary,
+single-attachment audio voice notes are exportable. Deleted, disappearing,
+view-once, protected, unsupported and oversized inputs fail closed. The sole API
+write is `/v1/assets/download` for the selected attachment; file results must
+resolve inside Beeper's private directory. Metadata is checked again after
+materialization and after transfer to the worker. This currently does not
+provide local round-video transcription or generic local schedules/reminders.
+
+`deploy/admin.sh inspect|pair|enqueue|verify` runs offline administration under
+the worker account while the daemon is stopped. Pairing reuses an unambiguous
+self-only journal or creates the same private E2EE room/account-data pointer as
+the app. It pins a snapshot of the account's currently verified, valid devices;
+future devices require another explicit pairing operation. The HTTP guard
+refuses non-journal sends, plaintext sends, room joins/invites and read activity.
+`enqueue` accepts only the private, explicit manifest of at most three source
+references, uses deterministic transaction IDs, and never retries an uncertain
+paid job. `verify` fetches the accepted result events and checks fresh encrypted,
+authenticated decryption against the encrypted job ledger, without printing text.
+Use `session.sh enroll` to resume interrupted anonymous enrollment with the
+existing cipher; an already authenticated session is reused rather than logged
+in again. Existing paired state is never reset.

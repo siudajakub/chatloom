@@ -1,5 +1,9 @@
 # Notion dark v2 — local delivery, 2026-10-13
 
+Update 2026-10-16: unified settings categories, focused Personal pages, responsive navigation and offline/privacy regressions are recorded in [the settings unification report](../personal/settings-unification-2026-10-16.md). Earlier settings screenshots describe the superseded layout; new synthetic captures are kept separately.
+
+Update 2026-10-15, canonical `client/`: the previously blocked full app graph now executes with the real native hooks and CLT SDK. Final startup/controller/details/inbox-widget run: **39 PASS**, ten suites. Escape in inbox search now closes once and preserves active IME composition, with a failing-before/passing-after regression. Analyzer: zero errors/warnings, 80 existing infos. The earlier isolated-checkout results below remain historical. Logged-in browser acceptance is partial and its privacy gate remains open after four unclassified denied POST attempts and loss of CDP; the new web/APK runtime is NOT RUN. See [current report](../personal/logged-in-wave-2026-10-15.md).
+
 The approved five-screen interface is implemented in the isolated current-source checkout `$PERSONAL_CHAT_ROOT/client-worktrees/notion-ui`. Three screen agents and the coordinator integrated production presenters with the existing controllers. The original `client/` was read-only throughout.
 
 Inbox has private ordered pinned shortcuts, a flat Messages list, a floating Settings/Search/network dock, any-source merged filtering, account-bound selection, and explicit public discovery. Typing stays local; Clear, outside/Back/Escape dismissal, focus restoration, sync retry, invitations, spaces, archive, unread and drafts remain available. The merged-person draft is included in the Drafts view.
@@ -61,3 +65,20 @@ rtk python3 scripts/notion-integration-report.py
 The exact pinned SVG package usage was checked against [flutter_svg's official package documentation](https://pub.dev/packages/flutter_svg). Only its local original vector assets are used.
 
 The inherited homeserver unread-notification count can include source control events; control-neutral server counts remain an unverified account/bridge boundary. The UI preserves the existing truthful count source.
+
+## Conversation UX — 2026-10-16
+
+[Raport i dokładne granice dowodów](../personal/conversation-ux-2026-10-16.md): 306 app-graph PASS z native hooks, 25 captures/contrast PASS, końcowy adapter/paleta 7 PASS, presentation harness 120 PASS, Personal 98 core i suites PASS, analyzer 0 errors/0 warnings (151 info), web assets/worker oraz web release PASS. Liczniki przebiegów pokrywają się. Nowe faktyczne Message/MergedChatPage/CompactComposer captures: `artifacts/conversation-ux-2026-10-16/final-captures/` w głównym projekcie. Fizyczny runtime, konto, dostawa/push i deploy/install pozostają NOT RUN.
+
+## Chat rules — 2026-10-16
+
+Network/group visibility, Ignored/Technical categories and private notification rules are described in [the chat rules report](../personal/chat-rules-2026-10-16.md). These settings use the native encrypted journal; web has the corrected classifier and selectors without a plaintext preference store. Device, account delivery and deployment remain separate acceptance gates.
+
+## Compact voice player — 2026-10-16
+
+38 focused full-graph tests PASS with native hooks; 5 synthetic presentation captures; analyzer 0 errors / 0 warnings / 165 info (`--no-fatal-infos`); JS web release PASS. Verified in an isolated source copy because shared checkout build files changed during earlier runs. Voice sources match canonical client byte-for-byte. Physical codec/account/device acceptance remains NOT RUN. Evidence: `artifacts/voice-player-implementation-2026-10-16/RESULTS.json` in project root; report `docs/personal/compact-voice-player-2026-10-16.md`.
+
+
+## Profile content — 2026-10-16
+
+164 focused full-app-graph tests PASS with real native hooks/CMake, plus 10 supplementary overlapping details/interaction/capture checks and 21 final overlapping sync/redaction/source/transport regressions. 101 Personal core tests and storage/outbox/privacy/capability suites PASS. 29 production-presenter captures use fictional data; corrected profile-320/loading frames are indexed in the capture manifest. Analyzer: zero errors/warnings, 182 info. See [full scope, final transport/build results and Git-directory limitation](../personal/profile-content-2026-10-16.md). Real account/device/E2EE/history/push/CI/install/deploy remain NOT RUN.
