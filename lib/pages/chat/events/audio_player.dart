@@ -44,33 +44,73 @@ class AudioPlayerWidget extends StatefulWidget {
   AudioPlayerState createState() => AudioPlayerState();
 }
 
-enum AudioPlayerStatus { notDownloaded, downloading, downloaded }
-
 class AudioPlayerState extends State<AudioPlayerWidget> {
-  static const double buttonSize = 36;
-
-  AudioPlayerStatus status = AudioPlayerStatus.notDownloaded;
   double? _downloadProgress;
 
   late final MatrixState matrix;
-  String? _durationString;
+  bool _starting = false;
+  ScaffoldMessengerState? _messenger;
+
+  AudioPlayer? get _player =>
+      matrix.voiceMessageEventId.value == widget.event.eventId
+      ? matrix.audioPlayer
+      : null;
+
+  Duration? get _metadataDuration {
+    final audio = widget.event.content.tryGetMap<String, Object?>(
+      'org.matrix.msc1767.audio',
+    );
+    final value =
+        widget.event.content
+            .tryGetMap<String, Object?>('info')
+            ?.tryGet<int>('duration') ??
+        audio?.tryGet<int>('duration');
+    return value != null && value > 0 ? Duration(milliseconds: value) : null;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _messenger = ScaffoldMessenger.maybeOf(context);
+  }
+
+  void _clearBannersAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final messenger = _messenger;
+      if (messenger != null && messenger.mounted) {
+        messenger.clearMaterialBanners();
+      }
+    });
+  }
 
   @override
   void dispose() {
     super.dispose();
-    final audioPlayer = matrix.voiceMessageEventId.value != widget.event.eventId
+    final messenger = _messenger;
+    final event = widget.event;
+    final audioPlayer = matrix.voiceMessageEventId.value != event.eventId
         ? null
         : matrix.audioPlayer;
+    if (audioPlayer == null &&
+        matrix.voiceMessageEventId.value == event.eventId) {
+      unawaited(matrix.closeAudioPlayer());
+    }
     if (audioPlayer != null) {
       if (audioPlayer.playing && !audioPlayer.isAtEndPosition) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          ScaffoldMessenger.of(matrix.context).showMaterialBanner(
+          if (messenger == null ||
+              !messenger.mounted ||
+              matrix.audioPlayer != audioPlayer ||
+              matrix.voiceMessageEventId.value != event.eventId)
+            return;
+          messenger.showMaterialBanner(
             MaterialBanner(
               padding: EdgeInsets.zero,
               leading: StreamBuilder(
                 stream: audioPlayer.playerStateStream.asBroadcastStream(),
                 builder: (context, _) => IconButton(
                   onPressed: () {
+                    if (matrix.audioPlayer != audioPlayer) return;
                     if (audioPlayer.isAtEndPosition) {
                       audioPlayer.seek(Duration.zero);
                     } else if (audioPlayer.playing) {
@@ -88,10 +128,10 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
                 stream: audioPlayer.positionStream.asBroadcastStream(),
                 builder: (context, _) => GestureDetector(
                   onTap: () => FluffyChatApp.router.go(
-                    '/rooms/${widget.event.room.id}?event=${widget.event.eventId}',
+                    '/rooms/${event.room.id}?event=${event.eventId}',
                   ),
                   child: Text(
-                    '🎙️ ${audioPlayer.position.minuteSecondString} / ${audioPlayer.duration?.minuteSecondString} - ${widget.event.senderFromMemoryOrFallback.calcDisplayname()}',
+                    '🎙️ ${audioPlayer.position.minuteSecondString} / ${audioPlayer.duration?.minuteSecondString} - ${event.senderFromMemoryOrFallback.calcDisplayname()}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -100,13 +140,9 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
               actions: [
                 IconButton(
                   onPressed: () {
+                    if (matrix.audioPlayer != audioPlayer) return;
                     matrix.closeAudioPlayer();
-
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      ScaffoldMessenger.of(
-                        matrix.context,
-                      ).clearMaterialBanners();
-                    });
+                    _clearBannersAfterFrame();
                   },
                   icon: const Icon(Icons.close_outlined),
                 ),
@@ -121,176 +157,209 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
   }
 
   Future<void> _onButtonTap() async {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ScaffoldMessenger.of(matrix.context).clearMaterialBanners();
+    if (_starting) return;
+    setState(() {
+      _starting = true;
+      _downloadProgress = null;
     });
-    final currentPlayer =
-        matrix.voiceMessageEventId.value != widget.event.eventId
-        ? null
-        : matrix.audioPlayer;
-    if (currentPlayer != null && !currentPlayer.isAtEndPosition) {
-      if (currentPlayer.playing) {
-        currentPlayer.pause();
-      } else {
-        await matrix.playAudio();
-      }
-      return;
-    }
-
-    final request = ++matrix.audioRequestGeneration;
-    await matrix.closeAudioPlayer(invalidateRequests: false);
-    if (request != matrix.audioRequestGeneration || !mounted) return;
-    final playback = matrix.reserveAudio();
-    if (!await playback.acquireAudible() ||
-        !playback.isCurrent ||
-        request != matrix.audioRequestGeneration ||
-        !mounted)
-      return;
-    matrix.voiceMessageEventId.value = widget.event.eventId;
-    File? file;
-    ManagedMediaFile? pendingLease;
-    MatrixFile? matrixFile;
-
-    setState(() => status = AudioPlayerStatus.downloading);
     try {
-      final fileSize = widget.event.content
-          .tryGetMap<String, Object?>('info')
-          ?.tryGet<int>('size');
-      matrixFile = await widget.event.downloadAndDecryptAttachment(
-        onDownloadProgress: fileSize != null && fileSize > 0
-            ? (progress) {
-                final progressPercentage = progress / fileSize;
-                if (!mounted || request != matrix.audioRequestGeneration)
-                  return;
-                setState(() {
-                  _downloadProgress = progressPercentage < 1
-                      ? progressPercentage
-                      : null;
-                });
-              }
-            : null,
-      );
-
-      final attachmentUrl = widget.event.attachmentOrThumbnailMxcUrl();
-
-      if (!kIsWeb && attachmentUrl != null) {
-        final access = await matrix.audioMediaAccess;
-        final suffix = switch (matrixFile.mimeType.toLowerCase()) {
-          'audio/ogg' => '.ogg',
-          'audio/mp4' => '.m4a',
-          'audio/mpeg' => '.mp3',
-          'audio/wav' => '.wav',
-          _ => '.bin',
-        };
-        final lease = await access.create(matrixFile.bytes, extension: suffix);
-        pendingLease = lease;
-        file = lease.file;
-
-        if (Platform.isIOS &&
-            matrixFile.mimeType.toLowerCase() == 'audio/ogg') {
-          Logs().v('Convert ogg audio file for iOS...');
-          final convertedFile = pendingLease.derivedFile('.caf');
-          if (await convertedFile.exists() == false) {
-            await OggCafConverter().convertOggToCaf(
-              input: file.path,
-              output: convertedFile.path,
-            );
-          }
-          file = convertedFile;
+      _clearBannersAfterFrame();
+      final currentPlayer =
+          matrix.voiceMessageEventId.value != widget.event.eventId
+          ? null
+          : matrix.audioPlayer;
+      if (currentPlayer != null) {
+        if (currentPlayer.isAtEndPosition) {
+          await currentPlayer.seek(Duration.zero);
+          if (!mounted || _player != currentPlayer) return;
+          await matrix.playAudio();
+          return;
         }
+        if (currentPlayer.playing) {
+          await currentPlayer.pause();
+        } else {
+          await matrix.playAudio();
+        }
+        return;
       }
 
-      if (mounted && request == matrix.audioRequestGeneration)
-        setState(() {
-          status = AudioPlayerStatus.downloaded;
-        });
-    } catch (e, s) {
-      await pendingLease?.close();
-      if (request == matrix.audioRequestGeneration)
-        await matrix.closeAudioPlayer();
-      Logs().v('Could not download audio file', e, s);
-      if (!mounted) rethrow;
-      setState(() {
-        status = AudioPlayerStatus.notDownloaded;
-        _downloadProgress = null;
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
-      rethrow;
-    }
-    if (!context.mounted ||
-        !playback.isCurrent ||
-        request != matrix.audioRequestGeneration ||
-        matrix.voiceMessageEventId.value != widget.event.eventId) {
-      await pendingLease?.close();
-      return;
-    }
-    matrix.audioLease = pendingLease;
-
-    final audioPlayer = matrix.audioPlayer = AudioPlayer();
-    audioPlayer.processingStateStream
-        .firstWhere((s) => s == ProcessingState.completed)
-        .then((_) {
-          if (matrix.audioPlayer == audioPlayer) matrix.closeAudioPlayer();
-        })
-        .catchError((Object _) {});
-
-    try {
-      if (file != null) {
-        await audioPlayer.setFilePath(file.path);
-      } else {
-        await audioPlayer.setAudioSource(
-          AudioSource.uri(
-            Uri.dataFromBytes(matrixFile.bytes, mimeType: matrixFile.mimeType),
-          ),
-        );
-      }
-      if (!mounted ||
+      final request = ++matrix.audioRequestGeneration;
+      await matrix.closeAudioPlayer(invalidateRequests: false);
+      if (request != matrix.audioRequestGeneration || !mounted) return;
+      final playback = matrix.reserveAudio();
+      if (!await playback.acquireAudible() ||
           !playback.isCurrent ||
           request != matrix.audioRequestGeneration ||
-          matrix.audioPlayer != audioPlayer) {
+          !mounted)
+        return;
+      matrix.voiceMessageEventId.value = widget.event.eventId;
+      File? file;
+      ManagedMediaFile? pendingLease;
+      MatrixFile? matrixFile;
+
+      try {
+        final fileSize = widget.event.content
+            .tryGetMap<String, Object?>('info')
+            ?.tryGet<int>('size');
+        matrixFile = await widget.event.downloadAndDecryptAttachment(
+          onDownloadProgress: fileSize != null && fileSize > 0
+              ? (progress) {
+                  final progressPercentage = progress / fileSize;
+                  if (!mounted || request != matrix.audioRequestGeneration)
+                    return;
+                  setState(() {
+                    _downloadProgress = progressPercentage < 1
+                        ? progressPercentage
+                        : null;
+                  });
+                }
+              : null,
+        );
+
+        final attachmentUrl = widget.event.attachmentOrThumbnailMxcUrl();
+
+        if (!kIsWeb && attachmentUrl != null) {
+          final access = await matrix.audioMediaAccess;
+          final suffix = switch (matrixFile.mimeType.toLowerCase()) {
+            'audio/ogg' => '.ogg',
+            'audio/mp4' => '.m4a',
+            'audio/mpeg' => '.mp3',
+            'audio/wav' => '.wav',
+            _ => '.bin',
+          };
+          final lease = await access.create(
+            matrixFile.bytes,
+            extension: suffix,
+          );
+          pendingLease = lease;
+          file = lease.file;
+
+          if (Platform.isIOS &&
+              matrixFile.mimeType.toLowerCase() == 'audio/ogg') {
+            Logs().v('Convert ogg audio file for iOS...');
+            final convertedFile = pendingLease.derivedFile('.caf');
+            if (await convertedFile.exists() == false) {
+              await OggCafConverter().convertOggToCaf(
+                input: file.path,
+                output: convertedFile.path,
+              );
+            }
+            file = convertedFile;
+          }
+        }
+      } catch (e, s) {
+        await pendingLease?.close();
+        if (request == matrix.audioRequestGeneration)
+          await matrix.closeAudioPlayer();
+        Logs().v('Could not download audio file', e, s);
+        if (!mounted) return;
+        setState(() {
+          _downloadProgress = null;
+        });
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+        return;
+      }
+      if (!context.mounted ||
+          !playback.isCurrent ||
+          request != matrix.audioRequestGeneration ||
+          matrix.voiceMessageEventId.value != widget.event.eventId) {
         await pendingLease?.close();
         return;
       }
-      await matrix.playAudio();
-    } catch (_) {
-      if (matrix.audioPlayer == audioPlayer) {
-        await matrix.closeAudioPlayer();
-      } else {
-        await pendingLease?.close();
+      matrix.audioLease = pendingLease;
+
+      final audioPlayer = matrix.audioPlayer = AudioPlayer();
+      setState(() {});
+      audioPlayer.processingStateStream
+          .firstWhere((s) => s == ProcessingState.completed)
+          .then((_) {
+            if (matrix.audioPlayer == audioPlayer) matrix.closeAudioPlayer();
+          })
+          .catchError((Object _) {});
+
+      try {
+        if (file != null) {
+          await audioPlayer.setFilePath(file.path);
+        } else {
+          await audioPlayer.setAudioSource(
+            AudioSource.uri(
+              Uri.dataFromBytes(
+                matrixFile.bytes,
+                mimeType: matrixFile.mimeType,
+              ),
+            ),
+          );
+        }
+        if (!mounted ||
+            !playback.isCurrent ||
+            request != matrix.audioRequestGeneration ||
+            matrix.audioPlayer != audioPlayer) {
+          await pendingLease?.close();
+          return;
+        }
+        await matrix.playAudio();
+      } catch (_) {
+        if (matrix.audioPlayer == audioPlayer) {
+          await matrix.closeAudioPlayer();
+        } else {
+          await pendingLease?.close();
+        }
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not play this audio. Try again.'),
+            ),
+          );
       }
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not play this audio. Try again.'),
-          ),
-        );
+    } catch (_) {
+      if (mounted) _showPlaybackError();
+    } finally {
+      if (mounted) setState(() => _starting = false);
     }
   }
 
-  Future<void> _toggleSpeed() async {
-    final audioPlayer = matrix.audioPlayer;
-    if (audioPlayer == null) return;
-    switch (audioPlayer.speed) {
-      case 1.0:
-        await audioPlayer.setSpeed(1.25);
-        break;
-      case 1.25:
-        await audioPlayer.setSpeed(1.5);
-        break;
-      case 1.5:
-        await audioPlayer.setSpeed(2.0);
-        break;
-      case 2.0:
-        await audioPlayer.setSpeed(0.5);
-        break;
-      case 0.5:
-      default:
-        await audioPlayer.setSpeed(1.0);
-        break;
+  Future<void> _seek(AudioPlayer player, Duration position) async {
+    if (_player != player || _starting) return;
+    final duration = player.duration;
+    if (duration == null || duration <= Duration.zero) return;
+    try {
+      await player.seek(
+        Duration(
+          milliseconds: position.inMilliseconds.clamp(
+            0,
+            duration.inMilliseconds,
+          ),
+        ),
+      );
+    } catch (_) {
+      if (mounted && _player == player) _showPlaybackError();
     }
-    setState(() {});
+  }
+
+  void _showPlaybackError() {
+    final pl = Localizations.localeOf(context).languageCode == 'pl';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          pl
+              ? 'Nie udało się zmienić odtwarzania. Spróbuj ponownie.'
+              : 'Could not change playback. Try again.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleSpeed(AudioPlayer player) async {
+    if (_player != player || _starting) return;
+    const speeds = [1.0, 1.25, 1.5, 2.0, 0.5];
+    final next = speeds[(speeds.indexOf(player.speed) + 1) % speeds.length];
+    try {
+      await player.setSpeed(next);
+    } catch (_) {
+      if (mounted && _player == player) _showPlaybackError();
+    }
   }
 
   @override
@@ -300,17 +369,7 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
 
     if (matrix.voiceMessageEventId.value == widget.event.eventId &&
         matrix.audioPlayer != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        ScaffoldMessenger.of(matrix.context).clearMaterialBanners();
-      });
-    }
-
-    final durationInt = widget.event.content
-        .tryGetMap<String, Object?>('info')
-        ?.tryGet<int>('duration');
-    if (durationInt != null) {
-      final duration = Duration(milliseconds: durationInt);
-      _durationString = duration.minuteSecondString;
+      _clearBannersAfterFrame();
     }
   }
 
@@ -322,52 +381,80 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
           ? matrix.audioPlayer
           : null;
       final fileDescription = widget.event.fileDescription;
-      return StreamBuilder<Object>(
+      return StreamBuilder<Object?>(
         stream: audioPlayer == null
             ? null
-            : StreamGroup.merge([
+            : StreamGroup.merge<Object?>([
                 audioPlayer.positionStream.asBroadcastStream(),
                 audioPlayer.playerStateStream.asBroadcastStream(),
+                audioPlayer.durationStream.asBroadcastStream(),
+                audioPlayer.speedStream.asBroadcastStream(),
               ]),
         builder: (context, _) {
-          final duration =
-              audioPlayer?.duration?.inMilliseconds.toDouble() ?? 1.0;
-          final position =
-              audioPlayer?.position.inMilliseconds.toDouble() ?? 0.0;
+          final actualDuration = audioPlayer?.duration;
+          final total = actualDuration != null && actualDuration > Duration.zero
+              ? actualDuration
+              : _metadataDuration;
+          final duration = total?.inMilliseconds.toDouble() ?? 0;
+          final position = audioPlayer?.position.inMilliseconds.toDouble() ?? 0;
           final fraction = duration > 0
               ? (position / duration).clamp(0.0, 1.0)
               : 0.0;
+          final canSeek =
+              audioPlayer != null &&
+              actualDuration != null &&
+              actualDuration > Duration.zero &&
+              !_starting;
+          final loading =
+              _starting ||
+              audioPlayer?.processingState == ProcessingState.loading ||
+              audioPlayer?.processingState == ProcessingState.buffering;
+          final waveform = notionVoiceWaveform(
+            widget.event.content.tryGetMap<String, Object?>(
+              'org.matrix.msc1767.audio',
+            )?['waveform'],
+          );
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               NotionAudioFileBlock(
-                duration:
-                    audioPlayer?.position.minuteSecondString ??
-                    _durationString ??
-                    '–:–',
+                duration: total == null
+                    ? '–:–'
+                    : '${notionAudioTime(audioPlayer?.position ?? Duration.zero)} / ${notionAudioTime(total)}',
+                seekDuration: total,
+                waveform: waveform,
+                foregroundColor: widget.color,
                 progress: fraction,
                 playing:
                     audioPlayer?.playing == true &&
                     audioPlayer?.isAtEndPosition == false,
-                downloading: status == AudioPlayerStatus.downloading,
+                downloading: loading,
                 downloadProgress: _downloadProgress,
                 onPlay: _onButtonTap,
-                onSeek: audioPlayer == null
+                onSeek: !canSeek
                     ? null
-                    : (value) => audioPlayer.seek(
+                    : (value) => _seek(
+                        audioPlayer,
                         Duration(milliseconds: (duration * value).round()),
                       ),
-                onDownload: () => widget.event.saveFile(context),
-                speedAction: audioPlayer == null
+                onSeekBack: !canSeek
                     ? null
-                    : TextButton(
-                        onPressed: _toggleSpeed,
-                        child: Text(
-                          'Playback speed: ${audioPlayer.speed}×',
-                          style: const TextStyle(fontSize: 12),
-                        ),
+                    : () => _seek(
+                        audioPlayer,
+                        audioPlayer.position - const Duration(seconds: 10),
                       ),
+                onSeekForward: !canSeek
+                    ? null
+                    : () => _seek(
+                        audioPlayer,
+                        audioPlayer.position + const Duration(seconds: 10),
+                      ),
+                onDownload: () => widget.event.saveFile(context),
+                speed: audioPlayer?.speed ?? 1,
+                onSpeed: audioPlayer == null || _starting
+                    ? null
+                    : () => _toggleSpeed(audioPlayer),
               ),
               TranscriptPanel(event: widget.event),
               if (fileDescription != null)

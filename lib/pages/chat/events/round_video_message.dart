@@ -107,13 +107,21 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
 
   void _maybeThumbnail() {
     if (_player != null ||
+        _thumbnail != null ||
+        _thumbnailRequest != null ||
         !widget.showThumbnail ||
         !widget.isVisible ||
         !RoundMediaLoader.policyFor(widget.event).canPersist) {
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!_available) return;
+      if (!_available ||
+          _thumbnail != null ||
+          _thumbnailRequest != null ||
+          !widget.showThumbnail ||
+          !widget.isVisible) {
+        return;
+      }
       final generation = _generation;
       final event = widget.event;
       final request = _thumbnailRequest = RoundMediaCancellation(
@@ -127,6 +135,8 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         if (mounted && request.valid) setState(() => _thumbnail = thumbnail);
       } catch (_) {
         /* Thumbnail failure leaves the playable placeholder. */
+      } finally {
+        if (identical(_thumbnailRequest, request)) _thumbnailRequest = null;
       }
     });
   }
@@ -188,6 +198,8 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
   void _maybeAutoplay() {
     if (!widget.allowMutedAutoplay ||
         !widget.isVisible ||
+        _player == null ||
+        _media == null ||
         !RoundMediaLoader.policyFor(widget.event).canPersist) {
       return;
     }
@@ -319,13 +331,20 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
 
   Future<void> _start({required bool userInitiated}) async {
     if (!_available || _loading || _starting) return;
-    if (!userInitiated && !_viewportVisible) return;
+    // Scrolling may preview an already opened clip, but must never fetch its
+    // full encrypted attachment or initialize a codec just to show the row.
+    if (!userInitiated && (!_viewportVisible || _player == null)) return;
     if (userInitiated && _previewOwner == this) _previewOwner = null;
     _starting = true;
     final generation = _generation;
     final event = widget.event;
     try {
       if (userInitiated && !await _handle.acquireAudible()) return;
+      if (!_available ||
+          generation != _generation ||
+          (userInitiated && !_handle.isCurrent)) {
+        return;
+      }
       var player = _player;
       if (player == null) {
         setState(() {
@@ -375,6 +394,11 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         player = _player = _newPlayer(_media!, muted: false);
         player.addListener(_onPlayerChanged);
         await player.initialize();
+        if (!_available ||
+            generation != _generation ||
+            !identical(player, _player)) {
+          return;
+        }
         await player.setPlaybackSpeed(_speed);
         await player.seekTo(position);
       }
