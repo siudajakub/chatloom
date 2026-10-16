@@ -323,8 +323,8 @@ void main() {
       final executable = File('${directory.path}/oversize-ffmpeg');
       await executable.writeAsString('''#!/usr/bin/env python3
 import pathlib,sys
-if '-progress' in sys.argv:
-    print('out_time_us=1000000\\nprogress=end')
+if 's16le' in sys.argv:
+    sys.stdout.buffer.write(bytes(32000))
 else:
     target=pathlib.Path(sys.argv[-1].replace('%06d','000000'))
     with target.open('wb') as output: output.truncate(25000001)
@@ -462,8 +462,8 @@ else:
     await executable.writeAsString('''#!/usr/bin/env python3
 import json,os,pathlib,sys
 pathlib.Path(${jsonEncode(witness.path)}).write_text(json.dumps(sorted(os.environ)))
-if '-progress' in sys.argv:
-    print('out_time_us=1000000\\nprogress=end')
+if 's16le' in sys.argv:
+    sys.stdout.buffer.write(bytes(32000))
 else:
     pathlib.Path(sys.argv[-1].replace('%06d','000000')).write_bytes(b'fixture')
 ''');
@@ -519,51 +519,45 @@ else:
     await Process.run('chmod', ['600', file.path]);
     expect(() => requirePrivateFile(file.path), returnsNormally);
   });
-  test(
-    'incomplete duration progress is rejected without provider upload',
-    () async {
-      final directory = await Directory.systemTemp.createTemp(
-        'worker-progress-test-',
-      );
-      addTearDown(() => directory.delete(recursive: true));
-      final executable = File('${directory.path}/incomplete-ffmpeg');
-      await executable.writeAsString(
-        '#!/usr/bin/env python3\nprint("out_time_us=1000000\\nprogress=continue")\n',
-      );
-      await Process.run('chmod', ['700', executable.path]);
-      var calls = 0;
-      final service = OpenAiTranscriber(
-        'synthetic-key',
-        temporaryRoot: '${directory.path}/audio',
-        ffmpeg: executable.path,
-        ffprobe: '',
-        clientFactory: () => MockClient((_) async {
-          calls++;
-          return http.Response('{}', 200);
-        }),
-      );
-      await expectLater(
-        service.transcribe(
-          AudioSource(syntheticWav(), 'audio/wav'),
-          null,
-          Cancellation(),
-          (_, _) {},
+  test('incomplete PCM sample is rejected without provider upload', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'worker-progress-test-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final executable = File('${directory.path}/incomplete-ffmpeg');
+    await executable.writeAsString(
+      '#!/usr/bin/env python3\nimport sys\nsys.stdout.buffer.write(bytes(1))\n',
+    );
+    await Process.run('chmod', ['700', executable.path]);
+    var calls = 0;
+    final service = OpenAiTranscriber(
+      'synthetic-key',
+      temporaryRoot: '${directory.path}/audio',
+      ffmpeg: executable.path,
+      ffprobe: '',
+      clientFactory: () => MockClient((_) async {
+        calls++;
+        return http.Response('{}', 200);
+      }),
+    );
+    await expectLater(
+      service.transcribe(
+        AudioSource(syntheticWav(), 'audio/wav'),
+        null,
+        Cancellation(),
+        (_, _) {},
+      ),
+      throwsA(
+        isA<WorkerFailure>().having(
+          (failure) => failure.code,
+          'code',
+          'invalid_audio_duration',
         ),
-        throwsA(
-          isA<WorkerFailure>().having(
-            (failure) => failure.code,
-            'code',
-            'invalid_audio_duration',
-          ),
-        ),
-      );
-      expect(calls, 0);
-      expect(
-        await Directory('${directory.path}/audio').list().toList(),
-        isEmpty,
-      );
-    },
-  );
+      ),
+    );
+    expect(calls, 0);
+    expect(await Directory('${directory.path}/audio').list().toList(), isEmpty);
+  });
   test(
     'explicit codec sandbox requirement refuses before decode or provider upload',
     () async {

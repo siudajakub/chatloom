@@ -38,8 +38,9 @@ class OpenAiTranscriber implements Transcriber {
   Future<ProcessResult> _run(
     String executable,
     List<String> arguments,
-    Cancellation cancel,
-  ) async {
+    Cancellation cancel, {
+    bool countOutputBytes = false,
+  }) async {
     cancel.check();
     final process = await Process.start(
       executable,
@@ -51,7 +52,9 @@ class OpenAiTranscriber implements Transcriber {
     cancel.listen(() {
       if (active) process.kill(ProcessSignal.sigkill);
     });
-    final output = process.stdout.transform(utf8.decoder).join();
+    final output = countOutputBytes
+        ? process.stdout.fold<int>(0, (count, bytes) => count + bytes.length)
+        : process.stdout.transform(utf8.decoder).join();
     final error = process.stderr.drain<void>();
     try {
       final exit = await process.exitCode.timeout(processTimeout);
@@ -96,37 +99,40 @@ class OpenAiTranscriber implements Transcriber {
         }
       }
     }
-    // The official imageio wheel supplies ffmpeg, not ffprobe. Decode the audio
-    // completely using that exact binary and consume its machine-readable
-    // progress. Container duration strings can be missing or misleading.
-    final decoded = await _run(ffmpeg, [
-      '-nostdin',
-      '-hide_banner',
-      '-v',
-      'error',
-      '-nostats',
-      '-progress',
-      'pipe:1',
-      ..._audioInputRestrictions,
-      '-i',
-      input.path,
-      '-map',
-      '0:a:0',
-      '-vn',
-      '-f',
-      'null',
-      '-',
-    ], cancel);
-    final progress = decoded.stdout as String;
-    if (!RegExp(r'^progress=end\r?$', multiLine: true).hasMatch(progress)) {
+    // Count decoded PCM samples without retaining them. FFmpeg 6's final
+    // progress timestamp can describe the start of its last audio packet and
+    // undercount duration; a successful complete decode supplies exact samples.
+    final decoded = await _run(
+      ffmpeg,
+      [
+        '-nostdin',
+        '-hide_banner',
+        '-v',
+        'error',
+        ..._audioInputRestrictions,
+        '-i',
+        input.path,
+        '-map',
+        '0:a:0',
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        '-c:a',
+        'pcm_s16le',
+        '-f',
+        's16le',
+        'pipe:1',
+      ],
+      cancel,
+      countOutputBytes: true,
+    );
+    final count = decoded.stdout as int;
+    if (count == 0 || count.isOdd) {
       throw const WorkerFailure('invalid_audio_duration');
     }
-    final times = RegExp(r'^out_time_us=(\d+)\r?$', multiLine: true)
-        .allMatches(progress)
-        .map((match) => int.tryParse(match.group(1)!))
-        .whereType<int>();
-    if (times.isEmpty) throw const WorkerFailure('invalid_audio_duration');
-    final duration = times.reduce((a, b) => a > b ? a : b) / 1000000;
+    final duration = count / (16000 * 2);
     if (!duration.isFinite || duration <= 0) {
       throw const WorkerFailure('invalid_audio_duration');
     }
