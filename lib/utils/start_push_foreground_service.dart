@@ -10,9 +10,14 @@ import 'package:matrix/matrix_api_lite/utils/logs.dart';
 import 'package:universal_html/html.dart' as html;
 
 import '../l10n/l10n.dart';
+import 'foreground_service_controller.dart';
 
 abstract class ForegroundServices {
-  static final List<String> runningServices = [];
+  static final _controller = ForegroundServiceController(
+    start: _startNativeService,
+    stop: _stopNativeService,
+  );
+  static List<String> get runningServices => _controller.runningServices;
 
   static bool get platformSupported =>
       PlatformInfos.isMobile || PlatformInfos.isWeb;
@@ -23,18 +28,35 @@ abstract class ForegroundServices {
   }
 
   static Future<void> stopService(String name) async {
-    runningServices.remove(name);
-    if (runningServices.isNotEmpty) return;
+    try {
+      await _controller.stop(name);
+    } catch (_) {
+      Logs().w('[PushHelper] Foreground service stop failed');
+    }
+  }
+
+  static Future<void> _stopNativeService() async {
     if (kIsWeb) {
       html.window.removeEventListener('beforeunload', _beforeUnload);
       return;
     }
-    FlutterForegroundTask.stopService();
+    if (PlatformInfos.isMobile) {
+      final result = await FlutterForegroundTask.stopService();
+      if (result is! ServiceRequestSuccess) {
+        throw StateError('Foreground service stop failed');
+      }
+    }
   }
 
   static Future<void> startService(String name) async {
     try {
-      runningServices.add(name);
+      await _controller.start(name);
+    } catch (_) {
+      Logs().w('[PushHelper] Foreground service start failed');
+    }
+  }
+
+  static Future<void> _startNativeService() async {
       if (kIsWeb) {
         html.window.addEventListener('beforeunload', _beforeUnload);
         return;
@@ -72,15 +94,10 @@ abstract class ForegroundServices {
           notificationText: l10n.loadingMessages,
           notificationIcon: NotificationIcon(metaDataName: 'ic_launcher'),
         );
-        final started = result is ServiceRequestSuccess;
-        Logs().d('[PushHelper] Foreground service start: $started ($result)');
-      } else if (kIsWeb) {
-        // TODO: Implement window.onBeforeUnload overwrite
+        if (result is! ServiceRequestSuccess) {
+          throw StateError('Foreground service start failed');
+        }
       }
       return;
-    } catch (e, s) {
-      Logs().w('[PushHelper] Unable to start foreground service', e, s);
-      return;
-    }
   }
 }

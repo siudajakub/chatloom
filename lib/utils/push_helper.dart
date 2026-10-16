@@ -12,6 +12,8 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/diagnostics.dart';
+import 'package:personal_core/personal_core.dart' show PersonalNotificationMode;
 import 'package:fluffychat/personal/notification_eligibility.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
@@ -20,8 +22,9 @@ import 'package:fluffychat/utils/call_kit_params.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
+import 'package:fluffychat/utils/notification_client_routing.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/start_push_foreground_service.dart';
+import 'package:fluffychat/utils/push_work_policy.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_new_badger/flutter_new_badger.dart';
@@ -42,14 +45,18 @@ Future<void> pushHelper(
   PersonalPrivacy.installLogging();
   l10n ??= await lookupL10n(PlatformDispatcher.instance.locale);
 
+  var allowFallback = false;
+  final work = PushWorkBudget();
   try {
     await _tryPushHelper(
       notification,
       clients: clients,
       l10n: l10n,
       activeRoomId: activeRoomId,
+      onFallbackEligibility: (allowed) => allowFallback = allowed,
+      work: work,
       flutterLocalNotificationsPlugin: flutterLocalNotificationsPlugin,
-    ).timeout(const Duration(seconds: 30));
+    );
   } catch (e, s) {
     if (PlatformInfos.isAndroid &&
         e is! TimeoutException &&
@@ -63,7 +70,7 @@ Future<void> pushHelper(
       ]);
     }
 
-    if (notification.roomId != null) {
+    if (notification.roomId != null && allowFallback && work.active) {
       await flutterLocalNotificationsPlugin.show(
         id: notification.notificationId,
         title: 'Personal Chat',
@@ -91,8 +98,6 @@ Future<void> pushHelper(
       );
     }
     rethrow;
-  } finally {
-    ForegroundServices.stopService('background_push');
   }
 }
 
@@ -102,18 +107,20 @@ Future<void> personalReminderWake({
   required FlutterLocalNotificationsPlugin plugin,
 }) async {
   PersonalPrivacy.installLogging();
-  try {
+  final work = PushWorkBudget();
     for (final client in clients) {
-      await client.oneShotSync().timeout(const Duration(seconds: 20));
+      if (!client.isLogged()) continue;
+      await work.wait(() => client.oneShotSync(timeout: Duration.zero));
       final personal = PersonalClient.of(client);
-      await personal.load();
-      await personal.retry();
+      await work.wait(personal.load);
+      await work.wait(personal.retry);
       for (final event in personal.dueReminderEvents) {
-        final target = await PersonalPrivacy.reminderTarget(event);
+        final target = await work.wait(() => PersonalPrivacy.reminderTarget(event));
         if (target == null) {
           continue;
         }
-        await personal.presentReminder(
+        work.check();
+        await work.wait(() => personal.presentReminder(
           event,
           () => plugin.show(
             id: ('reminder_${event.content['entityId']}').hashCode,
@@ -134,12 +141,9 @@ Future<void> personalReminderWake({
               null,
             ).toString(),
           ),
-        );
+        ));
       }
     }
-  } finally {
-    ForegroundServices.stopService('background_push');
-  }
 }
 
 Future<void> _tryPushHelper(
@@ -147,37 +151,32 @@ Future<void> _tryPushHelper(
   List<Client>? clients,
   L10n? l10n,
   String? activeRoomId,
+  void Function(bool)? onFallbackEligibility,
+  required PushWorkBudget work,
   required FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin,
 }) async {
   final isBackgroundMessage = clients == null;
-  Logs().v(
-    'Push helper has been started (background=$isBackgroundMessage).',
-    notification.toJson(),
-  );
+  Logs().v('Push helper has been started (background=$isBackgroundMessage).');
 
   final clientName = notification.clientName;
-  final store = await AppSettings.init();
+  final store = await work.wait(AppSettings.init);
 
-  final client = clientName == null
-      ? (clients?.first ??
-            (await ClientManager.getClients(
-              initialize: false,
-              store: store,
-            )).first)
-      : (clients?.firstWhereOrNull(
-              (client) => client.clientName == clientName,
-            ) ??
-            await ClientManager.createClient(clientName, store));
+  // A removed account must never open a new database or fall back to another
+  // account merely because a delayed push carries its old client name.
+  final availableClients = clients ??
+      await work.wait(() => ClientManager.getClients(initialize: false, store: store));
+  final client = selectNotificationClient(availableClients, clientName, (client) => client.clientName);
+  if (client == null) return;
 
   lastReceivedPushNotification[client.clientName] = DateTime.now();
 
   l10n ??= await L10n.delegate.load(PlatformDispatcher.instance.locale);
 
   Logs().v('Load event...');
-  final event = await client.getEventByPushNotification(
+  final event = await work.wait(() => client.getEventByPushNotification(
     notification,
     storeInDatabase: false,
-  );
+  ));
 
   // Known bridge controls are internal state, including background pushes.
   if (event != null && isTelegramMediaControl(event.type)) return;
@@ -186,17 +185,17 @@ Future<void> _tryPushHelper(
   if (event == null) {
     Logs().v('Notification is a clearing indicator.');
     if (clients?.length == 1 && (notification.counts?.unread == 0)) {
-      await flutterLocalNotificationsPlugin.cancelAll();
+      await work.wait(flutterLocalNotificationsPlugin.cancelAll);
     } else {
       // Make sure client is fully loaded and synced before dismiss notifications:
-      await client.roomsLoading;
-      await client
-          .oneShotSync()
+      await work.wait(() async => await client.roomsLoading);
+      await work.wait(() => client
+          .oneShotSync(timeout: Duration.zero)
           .timeout(const Duration(seconds: 8))
-          .catchError((_) => null);
+          .catchError((_) => null));
 
-      final activeNotifications = await flutterLocalNotificationsPlugin
-          .getActiveNotifications();
+      final activeNotifications = await work.wait(flutterLocalNotificationsPlugin
+          .getActiveNotifications);
       activeNotifications.removeWhere(
         (notification) => notification.groupKey != client.clientName,
       );
@@ -208,16 +207,16 @@ Future<void> _tryPushHelper(
               activeNotification.id,
         );
         if (room != null && !room.isUnreadOrInvited) {
-          flutterLocalNotificationsPlugin.cancel(id: activeNotification.id!);
+          await work.wait(() => flutterLocalNotificationsPlugin.cancel(id: activeNotification.id!));
           if (PlatformInfos.isAndroid) needsUpdateForSummaryNotification = true;
         }
       }
       if (needsUpdateForSummaryNotification) {
-        await updateSummaryNotification(
+        await work.wait(() => updateSummaryNotification(
           clientName: client.clientName,
           l10n: l10n,
           flutterLocalNotificationsPlugin: flutterLocalNotificationsPlugin,
-        );
+        ));
       }
     }
     return;
@@ -230,14 +229,13 @@ Future<void> _tryPushHelper(
     return;
   }
 
-  if (event.type == RtcNotificationContent.eventType &&
+  final incomingCall =
+      event.type == RtcNotificationContent.eventType &&
       event.tryParseRtcNotificationContent()?.notificationType == .ring &&
-      PlatformInfos.isMobile) {
-    _showIncomingCall(event, l10n);
-    return;
-  }
+      PlatformInfos.isMobile;
 
-  if (notification.roomId != null &&
+  if (!incomingCall &&
+      notification.roomId != null &&
       activeRoomId == notification.roomId &&
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
     Logs().v('Room is in foreground. Stop push helper here.');
@@ -245,11 +243,11 @@ Future<void> _tryPushHelper(
   }
 
   if (PersonalPrivacy.isJournal(event.room)) {
-    final target = await PersonalPrivacy.reminderTarget(event);
+    final target = await work.wait(() => PersonalPrivacy.reminderTarget(event));
     if (target == null) {
       return;
     }
-    await PersonalClient.of(client).presentReminder(
+    await work.wait(() => PersonalClient.of(client).presentReminder(
       event,
       () => flutterLocalNotificationsPlugin.show(
         id: ('reminder_${event.content['entityId']}').hashCode,
@@ -270,18 +268,29 @@ Future<void> _tryPushHelper(
           null,
         ).toString(),
       ),
-    );
+    ));
     return;
   }
   final personal = PersonalClient.of(client);
-  await personal.load();
-  if (!await personalNotificationEligible(
+  await work.wait(personal.load);
+  if (personal.syncFailure == PrivateSyncFailure.storageUnavailable) return;
+  final projection = InboxProjection(personal);
+  if (!await work.wait(() => personalNotificationEligible(
     event,
-    InboxProjection(personal).metadataFor(event.room),
-  )) {
+    projection.metadataFor(event.room),
+    notificationMode: projection.notificationModeFor(event.room),
+  ))) {
     return;
   }
-  await flutterLocalNotificationsPlugin.show(
+  // An error cannot turn unknown, ignored or mentions-only state into a generic alert.
+  onFallbackEligibility?.call(
+    projection.notificationModeFor(event.room) == PersonalNotificationMode.all,
+  );
+  if (incomingCall) {
+    await work.wait(() => _showIncomingCall(event, l10n!, work));
+    return;
+  }
+  await work.wait(() => flutterLocalNotificationsPlugin.show(
     id: notification.notificationId,
     title: 'Personal Chat',
     body: 'Open the app to read your message.',
@@ -308,7 +317,7 @@ Future<void> _tryPushHelper(
       event.room.id,
       event.eventId,
     ).toString(),
-  );
+  ));
 }
 
 void updateAppBadge(int unreadCount) {
@@ -372,7 +381,8 @@ class FluffyChatPushPayload {
     if (parts.length != 3) {
       return FluffyChatPushPayload(null, null, null);
     }
-    return FluffyChatPushPayload(parts.first, parts[1], parts[2]);
+    String? value(String part) => part.isEmpty || part == 'null' ? null : part;
+    return FluffyChatPushPayload(value(parts.first), value(parts[1]), value(parts[2]));
   }
 
   @override
@@ -391,9 +401,9 @@ extension on PushNotification {
   }
 }
 
-Future<void> _showIncomingCall(Event event, L10n l10n) async {
+Future<void> _showIncomingCall(Event event, L10n l10n, PushWorkBudget work) async {
   final callId = '${event.room.id}|${event.room.client.clientName}';
-  final activeCalls = await FlutterCallkitIncoming.activeCalls();
+  final activeCalls = await work.wait(FlutterCallkitIncoming.activeCalls);
   if (activeCalls.any((call) => call.id == callId)) {
     Logs().d(
       'Call with this ID is already active. Ignoring this Push Notification...',
@@ -410,25 +420,26 @@ Future<void> _showIncomingCall(Event event, L10n l10n) async {
   final timeout =
       event.tryParseRtcNotificationContent()?.lifetime ??
       RtcNotificationContent.defaultLifetime;
-  final params = await buildFluffyChatCallKitParams(
+  final params = await work.wait(() => buildFluffyChatCallKitParams(
     event.room,
     l10n: l10n,
     intent: intent,
     timeout: timeout,
-  );
-  final timeoutDateTime = DateTime.now().add(timeout);
-  await FlutterCallkitIncoming.showCallkitIncoming(params);
+  ));
+  await work.wait(() => FlutterCallkitIncoming.showCallkitIncoming(params));
 
-  while (DateTime.now().isBefore(timeoutDateTime)) {
-    await event.room.client.oneShotSync();
+  await pollIncomingCall(
+    lifetime: timeout < work.remaining ? timeout : work.remaining,
+    sync: () => event.room.client.oneShotSync(timeout: Duration.zero),
+    finished: () async {
     if (!event.room.hasActiveMatrixRtcCall) {
       Logs().i('The other party has ended the call');
       await FlutterCallkitIncoming.endCall(params.id);
-      break;
+      return true;
     }
     if (event.room.ownMatrixRtcMembership != null) {
       Logs().d('User has joined the call.');
-      break;
+      return true;
     }
     if (event.room.getActiveMatrixRtcMembers().any(
       (member) =>
@@ -437,7 +448,8 @@ Future<void> _showIncomingCall(Event event, L10n l10n) async {
     )) {
       Logs().i('User has accepted the call on a different device');
       await FlutterCallkitIncoming.endCall(params.id);
-      break;
+      return true;
     }
-  }
+    return false;
+  });
 }

@@ -11,10 +11,12 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
 
+import 'package:crypto/crypto.dart';
 import 'package:fcm_shared_isolate/fcm_shared_isolate.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/main.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/push_registration.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:fluffychat/widgets/fluffy_chat_app.dart';
@@ -30,6 +32,7 @@ import '../config/app_config.dart';
 import '../config/setting_keys.dart';
 import '../widgets/matrix.dart';
 import 'platform_infos.dart';
+import 'start_push_foreground_service.dart';
 
 class BackgroundPush {
   static BackgroundPush? _instance;
@@ -41,9 +44,116 @@ class BackgroundPush {
   List<Client> get clients => matrix?.widget.clients ?? _clients;
 
   MatrixState? matrix;
-  String? _fcmToken;
+  late final Future<void> ready;
 
+  /// The shared Android engine outlives its activity/widget. Drop the widget
+  /// and its callbacks while retaining the registered push listeners.
+  void detachMatrix(MatrixState owner) {
+    if (!identical(matrix, owner)) return;
+    _clients = List<Client>.from(owner.widget.clients);
+    matrix = null;
+    onFcmError = null;
+  }
+  final _registration = PushRegistration();
+  final registrationChanges = ValueNotifier<int>(0);
+  final _pusherPhases = <Client, PushRegistrationPhase>{};
+  Future<void> _registrationQueue = Future<void>.value();
+  Future<void> _tokenPersistence = Future<void>.value();
+  int get registrationRevision => _registration.revision;
+
+  String? get _fcmToken => _registration.token;
   String? get fcmToken => _fcmToken;
+  String registrationDescription(Client client) {
+    final view = PushRegistration()
+      ..phase = _pusherPhases[client] ?? _registration.phase;
+    view.rotated = _registration.rotated;
+    return view.description;
+  }
+
+  void _changed() => registrationChanges.value++;
+
+  Future<void> _acceptFcmToken(String token) {
+    if (token.isEmpty) return Future<void>.value();
+    if (_registration.observe(token)) {
+      _pusherPhases.clear();
+      _changed();
+    }
+    final revision = _registration.revision;
+    _tokenPersistence = _tokenPersistence.catchError((Object _) {}).then((
+      _,
+    ) async {
+      const storage = FlutterSecureStorage();
+      final fingerprint = sha256.convert(utf8.encode(token)).toString();
+      final previous = await storage.read(
+        key: 'personal_fcm_token_fingerprint',
+      );
+      if (_registration.revision != revision) return;
+      if (previous != null && previous != fingerprint) {
+        _registration.rotated = true;
+        _changed();
+      }
+      await storage.write(
+        key: 'personal_fcm_token_fingerprint',
+        value: fingerprint,
+      );
+    });
+    return _tokenPersistence;
+  }
+
+  Future<void> _onNewFcmToken(String token) async {
+    if (token.isEmpty) return;
+    try {
+      await _acceptFcmToken(token);
+      if (upAction || !firebaseEnabled || _registration.updating) return;
+      for (final client in List<Client>.from(clients)) {
+        if (client.isLogged()) await _queueFirebaseRegistration(client);
+      }
+    } catch (_) {
+      if (_fcmToken == token) {
+        _registration.phase = PushRegistrationPhase.failed;
+        _changed();
+      }
+    }
+  }
+
+  void beginRegistrationUpdate() {
+    _registration.beginUpdate();
+    _pusherPhases.clear();
+    _changed();
+  }
+
+  void endRegistrationUpdate() {
+    _registration.endUpdate();
+    _pusherPhases.clear();
+    _changed();
+  }
+
+  void invalidateRegistration() {
+    _registration.invalidate();
+    _pusherPhases.clear();
+    _changed();
+  }
+
+  Future<void> _queueFirebaseRegistration(Client client) {
+    final token = _fcmToken;
+    if (token == null || token.isEmpty) return Future<void>.value();
+    final revision = _registration.revision;
+    final next = _registrationQueue.catchError((Object _) {}).then((_) async {
+      if (revision != _registration.revision ||
+          upAction ||
+          _registration.updating) {
+        return;
+      }
+      await setupPusher(
+        client: client,
+        gatewayUrl: AppSettings.pushNotificationsGatewayUrl.value,
+        token: token,
+      );
+    });
+    _registrationQueue = next;
+    return next;
+  }
+
   void Function(String errorMsg, {Uri? link})? onFcmError;
   L10n? l10n;
 
@@ -105,18 +215,25 @@ class BackgroundPush {
           android: AndroidInitializationSettings('notifications_icon'),
           iOS: DarwinInitializationSettings(),
         ),
-        onDidReceiveNotificationResponse: (response) => notificationTap(
-          response,
-          clients: clients,
-          router: FluffyChatApp.router,
-          l10n: l10n,
-        ),
+        onDidReceiveNotificationResponse: (response) async {
+          try {
+            await notificationTap(
+              response,
+              clients: clients,
+              router: FluffyChatApp.router,
+              l10n: l10n,
+            );
+          } catch (_) {
+            Logs().w('[Push] notification_action_failed');
+          }
+        },
         onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
       );
       Logs().v('Flutter Local Notifications initialized');
       if (firebaseEnabled) {
         firebase.setListeners(
           onMessage: handleFcmMessage,
+          onNewToken: (token) => unawaited(_onNewFcmToken(token)),
         );
       }
       if (Platform.isAndroid) {
@@ -133,11 +250,13 @@ class BackgroundPush {
   }
 
   BackgroundPush._(this._clients) {
-    _init();
+    ready = _init();
   }
 
   factory BackgroundPush.clientOnly(List<Client> clients) {
-    return _instance ??= BackgroundPush._(clients);
+    final instance = _instance ??= BackgroundPush._(clients);
+    instance._clients = clients;
+    return instance;
   }
 
   factory BackgroundPush(
@@ -151,111 +270,149 @@ class BackgroundPush {
     return instance;
   }
 
-  /// Makes sure that there is exactly ONE pusher with these settings for this
-  /// client and deletes all other pushers if not.
+  /// Update only this account/device's pusher while its session and token are
+  /// current. The private gateway allowlist is configured separately by J.
   Future<void> setupPusher({
     required Client client,
     String? gatewayUrl,
     String? token,
   }) async {
-    if (PlatformInfos.isIOS) {
-      await firebase.requestPermission();
-    }
-    if (PlatformInfos.isAndroid && !isIntegrationTest) {
-      _flutterLocalNotificationsPlugin
-          .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >()
-          ?.requestNotificationsPermission();
-    }
-    final appDisplayName = PlatformInfos.appDisplayName;
-
-    final pushers =
-        await (client.getPushers().catchError((e) {
-          Logs().w('[Push] Unable to request pushers', e);
-          return <Pusher>[];
-        })) ??
-        [];
-
-    // we need the deviceAppId to remove potential legacy pusher
-    var deviceAppId = '${AppConfig.pushNotificationsAppId}.${client.deviceID}';
-    // appId may only be up to 64 chars as per spec
-    if (deviceAppId.length > 64) {
-      deviceAppId = deviceAppId.substring(0, 64);
-    }
-    final thisAppId = deviceAppId;
-    if (gatewayUrl == null || token == null) {
-      Logs().w('[Push] Missing required push credentials');
-      return;
-    }
-
+    if (gatewayUrl == null || token == null || token.isEmpty) return;
+    final owner = client.userID;
+    final device = client.deviceID;
     final ownFcmGateway =
         gatewayUrl == AppSettings.pushNotificationsGatewayUrl.value &&
         token == _fcmToken;
-    final gatewayNonce = ownFcmGateway
-        ? await const FlutterSecureStorage().read(key: 'personal_gateway_nonce')
-        : null;
-    if (ownFcmGateway && (gatewayNonce == null || gatewayNonce.isEmpty)) {
-      throw StateError('Gateway device registration required');
+    final revision = _registration.revision;
+    bool current() =>
+        clients.contains(client) &&
+        client.isLogged() &&
+        client.userID == owner &&
+        client.deviceID == device &&
+        owner != null &&
+        device != null &&
+        (!ownFcmGateway ||
+            (!upAction &&
+                !_registration.updating &&
+                gatewayUrl == AppSettings.pushNotificationsGatewayUrl.value &&
+                _registration.current(revision, token, true)));
+    if (!current()) return;
+    final appDisplayName = PlatformInfos.appDisplayName;
+    var appId = '${AppConfig.pushNotificationsAppId}.$device';
+    if (appId.length > 64) appId = appId.substring(0, 64);
+    final thisAppId = appId;
+    var pushers = <Pusher>[];
+    Pusher? desired;
+    var alreadySet = false;
+    if (ownFcmGateway) {
+      _pusherPhases[client] = PushRegistrationPhase.registering;
+      _changed();
     }
-    if (pushers.any(
-      (currentPusher) =>
-          currentPusher.pushkey == token &&
-          currentPusher.data.additionalProperties['client_name'] ==
-              client.clientName &&
-          currentPusher.kind == 'http' &&
-          currentPusher.appId == thisAppId &&
-          currentPusher.appDisplayName == appDisplayName &&
-          currentPusher.deviceDisplayName ==
-              (client.deviceName ?? appDisplayName) &&
-          currentPusher.lang == 'en' &&
-          currentPusher.data.url.toString() == gatewayUrl &&
-          currentPusher.data.format ==
-              AppSettings.pushNotificationsPusherFormat.value &&
-          currentPusher.data.additionalProperties['data_message'] ==
-              pusherDataMessageFormat &&
-          currentPusher.data.additionalProperties['gateway_nonce'] ==
-              gatewayNonce,
-    )) {
-      Logs().i('[Push] Pusher already set for ${client.deviceID}');
-      return;
-    }
-
-    if (!client.isLogged()) return;
-
-    Logs().i('Need to set new pusher for ${client.clientName}');
     try {
-      await client.postPusher(
-        Pusher(
-          pushkey: token,
-          appId: thisAppId,
-          appDisplayName: appDisplayName,
-          deviceDisplayName: client.deviceName ?? appDisplayName,
-          lang: 'en',
-          data: PusherData(
-            url: Uri.parse(gatewayUrl),
-            format: AppSettings.pushNotificationsPusherFormat.value,
-            additionalProperties: {
-              'client_name': client.clientName,
-              'data_message': pusherDataMessageFormat,
-              'gateway_nonce': ?gatewayNonce,
-            },
-          ),
-          kind: 'http',
-        ),
-        append: true,
+      final completed = await registerCurrentPush(
+        current: current,
+        prepare: () async {
+          if (PlatformInfos.isIOS) await firebase.requestPermission();
+          if (PlatformInfos.isAndroid && !isIntegrationTest) {
+            await _flutterLocalNotificationsPlugin
+                .resolvePlatformSpecificImplementation<
+                  AndroidFlutterLocalNotificationsPlugin
+                >()
+                ?.requestNotificationsPermission();
+          }
+          pushers = await client.getPushers() ?? [];
+          final nonce = ownFcmGateway
+              ? await const FlutterSecureStorage().read(
+                  key: 'personal_gateway_nonce',
+                )
+              : null;
+          if (ownFcmGateway && !validGatewayNonce(nonce)) {
+            throw StateError('Private gateway registration required');
+          }
+          desired = Pusher(
+            pushkey: token,
+            appId: thisAppId,
+            appDisplayName: appDisplayName,
+            deviceDisplayName: client.deviceName ?? appDisplayName,
+            lang: 'en',
+            data: PusherData(
+              url: Uri.parse(gatewayUrl),
+              format: AppSettings.pushNotificationsPusherFormat.value,
+              additionalProperties: {
+                'client_name': client.clientName,
+                'data_message': pusherDataMessageFormat,
+                'gateway_nonce': ?nonce,
+              },
+            ),
+            kind: 'http',
+          );
+          alreadySet = pushers.any(
+            (p) =>
+                p.pushkey == token &&
+                p.appId == thisAppId &&
+                p.kind == 'http' &&
+                p.appDisplayName == appDisplayName &&
+                p.deviceDisplayName == desired!.deviceDisplayName &&
+                p.lang == 'en' &&
+                p.data.url.toString() == gatewayUrl &&
+                p.data.format == desired!.data.format &&
+                p.data.additionalProperties['client_name'] ==
+                    client.clientName &&
+                p.data.additionalProperties['data_message'] ==
+                    pusherDataMessageFormat &&
+                p.data.additionalProperties['gateway_nonce'] == nonce,
+          );
+        },
+        post: () async {
+          if (!alreadySet) await client.postPusher(desired!, append: true);
+        },
+        finish: () async {
+          for (final old in pushers.where(
+            (p) =>
+                p.appId == thisAppId &&
+                p.pushkey != token &&
+                p.kind == 'http' &&
+                p.data.url.toString() == gatewayUrl &&
+                p.data.additionalProperties['client_name'] ==
+                    client.clientName &&
+                p.data.additionalProperties['data_message'] ==
+                    pusherDataMessageFormat,
+          )) {
+            if (!current()) return;
+            await client.deletePusher(old);
+          }
+        },
       );
-      for (final old in pushers.where(
-        (p) => p.appId == thisAppId && p.pushkey != token,
-      )) {
-        await client.deletePusher(old);
+      if (completed && ownFcmGateway) {
+        _pusherPhases[client] = PushRegistrationPhase.pusherConfigured;
+        _changed();
       }
-    } catch (e, s) {
-      Logs().e('[Push] Unable to set pushers', e, s);
+    } catch (_) {
+      if (current() && ownFcmGateway) {
+        _pusherPhases[client] = PushRegistrationPhase.failed;
+        _changed();
+      }
+      // No raw exception, token, account or gateway URL in diagnostics.
+      Logs().w('[Push] registration_failed');
     }
   }
 
-  Future<void> handleFcmMessage(Map<String, dynamic> message) async {
+  Future<void> _processPush(Future<void> Function() process) async {
+    final inBackground = PlatformInfos.isAndroid &&
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+    if (inBackground) await ForegroundServices.startService('background_push');
+    try {
+      await process();
+    } catch (error) {
+      // FcmSharedIsolate invokes a void callback and cannot observe its Future.
+      // Handle failures here without exposing a payload or account identifier.
+      Logs().w('[Push] processing_failed', error.runtimeType.toString());
+    } finally {
+      if (inBackground) await ForegroundServices.stopService('background_push');
+    }
+  }
+
+  Future<void> handleFcmMessage(Map<String, dynamic> message) => _processPush(() async {
     final data = message.tryGetMap<String, Object>('data') ?? message;
     if (data['personal_wake'] == 'reminder') {
       await personalReminderWake(
@@ -271,13 +428,15 @@ class BackgroundPush {
       activeRoomId: matrix?.activeRoomId,
       flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
     );
-  }
+  });
 
   final pusherDataMessageFormat = Platform.isAndroid;
 
   static bool _wentToRoomOnStartup = false;
 
   Future<void> setupPush(BuildContext context) async {
+    await ready;
+    if (!context.mounted) return;
     if (PlatformInfos.isAndroid &&
         (await UnifiedPush.getDistributors()).isNotEmpty &&
         context.mounted) {
@@ -294,7 +453,7 @@ class BackgroundPush {
         if (client.onLoginStateChanged.value != LoginState.loggedIn ||
             !PlatformInfos.isMobile ||
             matrix == null) {
-          return;
+          continue;
         }
         // Do not setup unifiedpush if this has been initialized by
         // an unifiedpush action
@@ -353,34 +512,33 @@ class BackgroundPush {
       await _noFcmWarning();
       return;
     }
-    if (_fcmToken?.isEmpty ?? true) {
-      if (PlatformInfos.isIOS) {
-        await firebase.requestPermission();
-      }
-      const max = 5;
-      for (var i = 0; i < max; i++) {
-        try {
-          await Future.delayed(const Duration(seconds: 1));
-          _fcmToken = await firebase.getToken();
-          if (_fcmToken != null) break;
-        } catch (e, s) {
-          Logs().w(
-            '[Push] cannot get token - try ($i/$max)',
-            e,
-            e is String ? null : s,
-          );
+    // Query the native cache on every setup: a rotation may have happened
+    // while this isolate was stopped. A newer callback wins over this read.
+    try {
+      if (PlatformInfos.isIOS) await firebase.requestPermission();
+      for (var i = 0; i < 5; i++) {
+        final revision = _registration.revision;
+        final token = await firebase.getToken();
+        if (revision == _registration.revision &&
+            token != null &&
+            token.isNotEmpty) {
+          await _acceptFcmToken(token);
         }
+        if (_fcmToken != null) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
       }
       if (_fcmToken == null) {
+        _registration.phase = PushRegistrationPhase.tokenUnavailable;
+        _changed();
         await _noFcmWarning();
         return;
       }
+      await _tokenPersistence;
+      await _queueFirebaseRegistration(client);
+    } catch (_) {
+      _pusherPhases[client] = PushRegistrationPhase.failed;
+      _changed();
     }
-    await setupPusher(
-      client: client,
-      gatewayUrl: AppSettings.pushNotificationsGatewayUrl.value,
-      token: _fcmToken,
-    );
   }
 
   Future<void> _newUpEndpoint(PushEndpoint newPushEndpoint, String i) async {
@@ -406,12 +564,10 @@ class BackgroundPush {
               res['unifiedpush']['gateway'] == 'matrix')) {
         endpoint = url;
       }
-    } catch (e) {
-      Logs().i(
-        '[Push] No self-hosted unified push gateway present: $newEndpoint',
-      );
+    } catch (_) {
+      Logs().i('[Push] No self-hosted unified push gateway present');
     }
-    Logs().i('[Push] UnifiedPush using endpoint $endpoint');
+    Logs().i('[Push] UnifiedPush gateway selected');
 
     for (final client in clients) {
       await setupPusher(
@@ -433,7 +589,7 @@ class BackgroundPush {
     await AppSettings.unifiedPushRegistered.setItem(false);
   }
 
-  Future<void> _onUpMessage(PushMessage pushMessage, String i) async {
+  Future<void> _onUpMessage(PushMessage pushMessage, String i) => _processPush(() async {
     final message = pushMessage.content;
     upAction = true;
     final data = Map<String, dynamic>.from(
@@ -448,7 +604,7 @@ class BackgroundPush {
       activeRoomId: matrix?.activeRoomId,
       flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
     );
-  }
+  });
 }
 
 class UPFunctions extends UnifiedPushFunctions {

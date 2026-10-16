@@ -7,6 +7,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/diagnostics.dart';
 import 'package:fluffychat/personal/notification_eligibility.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
@@ -59,9 +60,14 @@ extension LocalNotificationsExtension on MatrixState {
     }
     final personal = PersonalClient.of(event.room.client);
     await personal.load();
+    if (!kIsWeb &&
+        personal.syncFailure == PrivateSyncFailure.storageUnavailable)
+      return;
+    final projection = InboxProjection(personal);
     if (!await personalNotificationEligible(
       event,
-      InboxProjection(personal).metadataFor(event.room),
+      projection.metadataFor(event.room),
+      notificationMode: projection.notificationModeFor(event.room),
     )) {
       return;
     }
