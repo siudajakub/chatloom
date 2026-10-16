@@ -6,6 +6,9 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../storage/storage_failure.dart';
+import 'private_directories_stub.dart'
+    if (dart.library.ffi) 'private_directories_native.dart'
+    as native;
 
 /// Short-lived plaintext files for native codecs that cannot consume bytes.
 /// Filenames never include contact, source event or original attachment names.
@@ -20,8 +23,28 @@ class MediaAccess {
   /// from the current process are left alone to avoid isolate lock ambiguity.
   static Future<MediaAccess> open({required Directory directory}) async {
     try {
-      await directory.create(recursive: true);
-      final access = MediaAccess._(directory);
+      // Resolve system temp aliases once, but never follow the managed root.
+      if (await FileSystemEntity.type(directory.path, followLinks: false) ==
+          FileSystemEntityType.link) {
+        throw const StorageFailure(StorageFailureCode.mediaUnavailable);
+      }
+      await directory.parent.create(recursive: true);
+      final parent = await directory.parent.resolveSymbolicLinks();
+      final name = directory.absolute.uri.pathSegments
+          .where((part) => part.isNotEmpty)
+          .last;
+      if (name == '.' || name == '..') {
+        throw const StorageFailure(StorageFailureCode.mediaUnavailable);
+      }
+      final root = Directory('$parent/$name');
+      if (await FileSystemEntity.type(root.path, followLinks: false) ==
+          FileSystemEntityType.notFound) {
+        // mkdir(0700) is atomic and can only be made stricter by the umask.
+        // A concurrent opener may have created the same root; validate below.
+        native.PrivateDirectories.create(root);
+      }
+      final access = MediaAccess._(root);
+      await access._validateRoot();
       await access.cleanupStale();
       return access;
     } catch (_) {
@@ -39,13 +62,21 @@ class MediaAccess {
     RandomAccessFile? lock;
     Directory? lease;
     try {
+      await _validateRoot();
       final random = Random.secure();
       final suffix = base64UrlEncode(
         List<int>.generate(24, (_) => random.nextInt(256)),
       );
-      // mkdtemp creates the lease with owner-only permissions on native POSIX
-      // platforms; regular mkdir would inherit a potentially permissive umask.
-      lease = await _root.createTemp('lease_${pid}_${suffix}_');
+      final candidate = Directory('${_root.path}/lease_${pid}_$suffix');
+      // Dart createTemp does not guarantee 0700 on every runtime. Native mkdir
+      // establishes privacy atomically, before lock, plaintext or encoder path.
+      if (!native.PrivateDirectories.create(candidate)) {
+        throw const StorageFailure(StorageFailureCode.mediaUnavailable);
+      }
+      lease =
+          candidate; // Only this operation's successfully created directory.
+      await _validateDirectory(lease, private: true);
+      await _validateRoot();
       _active.add(lease.path);
       lock = await File('${lease.path}/.lock').open(mode: FileMode.append);
       await lock.lock(FileLock.blockingExclusive);
@@ -55,11 +86,19 @@ class MediaAccess {
     } catch (_) {
       if (lease != null) {
         try {
-          if (await lease.exists()) await lease.delete(recursive: true);
+          // A failed mode check may leave an empty 0000 directory. rmdir can
+          // remove it without opening it; recursive traversal cannot on Linux.
+          try {
+            await lease.delete();
+          } on FileSystemException {
+            await lease.delete(recursive: true);
+          }
         } catch (_) {}
         _active.remove(lease.path);
       }
-      await lock?.close();
+      try {
+        await lock?.close();
+      } catch (_) {}
       throw const StorageFailure(StorageFailureCode.mediaUnavailable);
     }
   }
@@ -85,9 +124,33 @@ class MediaAccess {
     }
   }
 
+  Future<void> _validateRoot() => _validateDirectory(_root);
+
+  static Future<void> _validateDirectory(
+    Directory directory, {
+    bool private = false,
+  }) async {
+    if (!(Platform.isAndroid ||
+            Platform.isLinux ||
+            Platform.isMacOS ||
+            Platform.isIOS) ||
+        await FileSystemEntity.type(directory.path, followLinks: false) !=
+            FileSystemEntityType.directory ||
+        await directory.resolveSymbolicLinks() != directory.path) {
+      throw const StorageFailure(StorageFailureCode.mediaUnavailable);
+    }
+    final mode = (await directory.stat()).mode;
+    // A managed root may already be 0755. Others must never replace its leases.
+    // The lease itself must be exactly owner-only before anything is written.
+    if (mode & 0x1c0 != 0x1c0 || mode & (private ? 0x3f : 0x12) != 0) {
+      throw const StorageFailure(StorageFailureCode.mediaUnavailable);
+    }
+  }
+
   /// Sweeps only our managed lease directories, never arbitrary temp files.
   Future<void> cleanupStale() async {
     try {
+      await _validateRoot();
       await for (final item in _root.list(followLinks: false)) {
         if (item is! Directory || _active.contains(item.path)) continue;
         final name = item.uri.pathSegments
@@ -96,11 +159,19 @@ class MediaAccess {
         final match = RegExp(
           r'^lease_(\d+)_[A-Za-z0-9_-]{32}(?:_[A-Za-z0-9_-]+)?$',
         ).firstMatch(name);
-        if (match == null || int.tryParse(match[1]!) == pid) continue;
+        if (match == null) continue;
+        final ownerPid = int.tryParse(match[1]!);
+        if (ownerPid == null || ownerPid > 0x7fffffff) continue;
+        // Lock-file creation and lock acquisition are separate async steps.
+        // A living owner may be in either setup window, including an existing
+        // .lock that is not locked yet. Sweep only conclusively dead owners.
+        if (ownerPid == pid ||
+            native.PrivateDirectories.processMayBeAlive(ownerPid)) {
+          continue;
+        }
         final lockPath = '${item.path}/.lock';
         if (await FileSystemEntity.type(lockPath, followLinks: false) !=
             FileSystemEntityType.file) {
-          // No completed lease setup: safe to clean a previous process dir.
           await item.delete(recursive: true);
           continue;
         }
@@ -133,6 +204,7 @@ class ManagedMediaFile {
   final RandomAccessFile _lock;
   final Set<String> _active;
   bool _closed = false;
+  Future<void>? _closing;
 
   ManagedMediaFile._(this.file, this._directory, this._lock, this._active);
 
@@ -158,8 +230,9 @@ class ManagedMediaFile {
     return File('${_directory.path}/converted$extension');
   }
 
-  Future<void> close() async {
-    if (_closed) return;
+  Future<void> close() => _closing ??= _close();
+
+  Future<void> _close() async {
     _closed = true;
     try {
       if (await _directory.exists()) {
