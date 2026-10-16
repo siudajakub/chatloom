@@ -8,21 +8,35 @@ import 'package:fluffychat/pages/chat/events/message_content.dart';
 import 'package:fluffychat/pages/chat/events/message_reactions.dart';
 import 'package:fluffychat/pages/chat/events/reply_content.dart';
 import 'package:fluffychat/pages/chat/notion_conversation.dart';
+import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/pages/chat/compact_composer.dart';
+import 'package:fluffychat/pages/chat/conversation_source_picker.dart';
+import 'package:fluffychat/pages/chat/conversation_bubble.dart';
+import 'package:fluffychat/pages/chat/conversation_grouping.dart';
+import 'package:fluffychat/pages/chat/conversation_message_actions.dart';
+import 'package:fluffychat/pages/chat/conversation_message_gestures.dart';
+import 'package:fluffychat/pages/chat/conversation_motion.dart';
+import 'package:fluffychat/pages/chat/matrix_conversation_grouping.dart';
 import 'package:fluffychat/personal/capabilities.dart';
 import 'package:fluffychat/personal/immediate_outbox.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/media/immediate_media_outbox.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/personal_hub.dart'
-    show personalDate, personalText, schedulePersonalAttachment;
+    show
+        personalDate,
+        personalText,
+        schedulePersonalAttachment,
+        conversationQuickActions,
+        requestConversationReminder;
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/scheduled_composer.dart';
 import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
 import 'package:fluffychat/personal/round_video/round_outbox_panel.dart';
-import 'package:fluffychat/personal/round_video/round_record_button.dart';
 import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 import 'package:fluffychat/personal/round_video/telegram_room_binding.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_adapter.dart';
+import 'package:fluffychat/personal/ui/notion_chat_details_content.dart';
 import 'package:fluffychat/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
 import 'package:fluffychat/ui/notion/notion.dart';
@@ -90,7 +104,7 @@ class SourceChatPage extends StatelessWidget {
   }
 }
 
-class MergedChatPage extends StatefulWidget {
+class MergedChatPage extends StatelessWidget {
   final PersonalClient personal;
   final PersonGroup group;
   const MergedChatPage({
@@ -99,17 +113,46 @@ class MergedChatPage extends StatefulWidget {
     required this.group,
   });
   @override
-  State<MergedChatPage> createState() => _MergedChatPageState();
+  Widget build(BuildContext context) => _MergedChatView(
+    key: ValueKey((personal, group.id)),
+    personal: personal,
+    group: group,
+  );
 }
 
-class _MergedChatPageState extends State<MergedChatPage> {
+class _MergedChatView extends StatefulWidget {
+  final PersonalClient personal;
+  final PersonGroup group;
+  const _MergedChatView({
+    super.key,
+    required this.personal,
+    required this.group,
+  });
+  @override
+  State<_MergedChatView> createState() => _MergedChatPageState();
+}
+
+class _MergedChatPageState extends State<_MergedChatView> {
   final timelines = <String, Timeline>{};
   final input = TextEditingController();
+  final inputFocus = FocusNode();
+  bool _textSelectionActive = false;
+  int _generation = 0;
   final viewed = <String, Event>{};
   final rowKeys = <String, GlobalKey>{};
   final viewportKey = GlobalKey();
   final scroll = ScrollController();
   bool showLatest = false;
+  bool _liveUpdatePending = false;
+  final _seenEntries = <String>{};
+  final _enterEntries = <String>{};
+  DateTime? _latestSeenTimestamp;
+
+  String _entryIdentity(Event event) => jsonEncode([
+    personal.client.userID,
+    event.room.id,
+    event.transactionId ?? event.eventId,
+  ]);
   ConversationRef? selectedNetwork;
   SendTarget? _draftTarget;
   MergedEvent<Object?>? _confirmedOutgoing;
@@ -138,6 +181,7 @@ class _MergedChatPageState extends State<MergedChatPage> {
   }
 
   Future<void> _load() async {
+    _generation++;
     if (!loading) setState(() => loading = true);
     unavailable.clear();
     problem = null;
@@ -167,7 +211,10 @@ class _MergedChatPageState extends State<MergedChatPage> {
             return;
           }
           try {
-            final timeline = await room.getTimeline(onUpdate: _timelineChanged);
+            final timeline = await room.getTimeline(
+              onNewEvent: () => _liveUpdatePending = true,
+              onUpdate: _timelineChanged,
+            );
             if (!mounted) {
               timeline.cancelSubscriptions();
               return;
@@ -318,6 +365,17 @@ class _MergedChatPageState extends State<MergedChatPage> {
     final anchor = scroll.hasClients && scroll.offset > 80
         ? _visibleAnchor()
         : null;
+    if (_liveUpdatePending && !loading && !paging && anchor == null) {
+      final previousLatest = _latestSeenTimestamp;
+      for (final merged in buffer.coveredEvents) {
+        final identity = _entryIdentity(merged.value);
+        if (!_seenEntries.contains(identity) &&
+            previousLatest != null &&
+            !merged.timestamp.isBefore(previousLatest))
+          _enterEntries.add(identity);
+      }
+    }
+    _liveUpdatePending = false;
     setState(() {});
     if (anchor == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -377,19 +435,127 @@ class _MergedChatPageState extends State<MergedChatPage> {
     );
   }
 
+  Future<void> _quickAction(String action) async {
+    if (action == 'read') {
+      await _allRead();
+      return;
+    }
+    if (action == 'source.details') {
+      await showNotionMergedChatDetails(
+        context,
+        personal: personal,
+        group: widget.group,
+      );
+      return;
+    }
+    if (action == 'source.search') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => NotionConversationContentPage(
+            rooms: timelines.values.map((t) => t.room).toList(),
+            name: widget.group.name,
+          ),
+        ),
+      );
+      return;
+    }
+    if (action == 'schedule') {
+      await _schedule(null);
+      return;
+    }
+    if (action == 'reminder') {
+      // A reminder is source-bound; the user must choose, even for a person.
+      final source = await showModalBottomSheet<Room>(
+        context: context,
+        builder: (context) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const ListTile(title: Text('Choose reminder source')),
+              for (final timeline in timelines.values)
+                ListTile(
+                  title: Text(timeline.room.getLocalizedDisplayname()),
+                  subtitle: Text(
+                    notionNetworkLabel(PersonalClient.networkOf(timeline.room)),
+                  ),
+                  onTap: () => Navigator.pop(context, timeline.room),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (source == null ||
+          !mounted ||
+          !identical(Matrix.of(context).client, personal.client))
+        return;
+      try {
+        await requestConversationReminder(
+          context,
+          personal,
+          source,
+          isCurrent: () =>
+              mounted &&
+              identical(Matrix.of(context).client, personal.client) &&
+              widget.group.members.any((m) => m.roomId == source.id),
+        );
+      } catch (_) {
+        if (mounted)
+          setState(
+            () => problem =
+                'The reminder could not be saved. Retry from this source.',
+          );
+      }
+    }
+  }
+
   Future<void> _page() async {
-    if (paging) return;
+    if (paging ||
+        !PersonalPrivacy.surfaceUnlocked ||
+        !identical(Matrix.of(context).client, personal.client))
+      return;
+    final privacyGeneration = PersonalPrivacy.surfaceGeneration;
     setState(() => paging = true);
     try {
-      await Future.wait(
-        timelines.values
-            .where((t) => t.canRequestHistory)
-            .map((t) => t.requestHistory(historyCount: 50)),
-      );
+      final generation = _generation;
+      for (final t in timelines.values.toList()) {
+        if (!t.canRequestHistory) continue;
+        final before = (
+          t.events.length,
+          t.room.prev_batch,
+          t.events.lastOrNull?.eventId,
+        );
+        try {
+          await t.requestHistory(historyCount: 50);
+          if (!mounted ||
+              generation != _generation ||
+              PersonalPrivacy.surfaceGeneration != privacyGeneration ||
+              !identical(Matrix.of(context).client, personal.client))
+            return;
+          if (t.canRequestHistory &&
+              before ==
+                  (
+                    t.events.length,
+                    t.room.prev_batch,
+                    t.events.lastOrNull?.eventId,
+                  )) {
+            problem =
+                'One source did not advance. Loaded history is kept. Retry older messages.';
+          }
+        } catch (_) {
+          if (!mounted ||
+              generation != _generation ||
+              PersonalPrivacy.surfaceGeneration != privacyGeneration ||
+              !identical(Matrix.of(context).client, personal.client))
+            return;
+          problem =
+              'Some older history could not be loaded. Loaded history is kept. Retry older messages.';
+        }
+      }
     } catch (_) {
       problem = 'Some older history could not be loaded. You can retry.';
+    } finally {
+      if (mounted) setState(() => paging = false);
     }
-    if (mounted) setState(() => paging = false);
   }
 
   void _observe(Event event, GlobalKey key) {
@@ -459,6 +625,10 @@ class _MergedChatPageState extends State<MergedChatPage> {
         text,
         replyTo: replyAtSend,
       );
+      if (!mounted ||
+          !identical(widget.personal, personal) ||
+          !identical(Matrix.of(context).client, personal.client))
+        return;
       if (result.state != ImmediateSendState.accepted) {
         problem =
             'Sending was not confirmed. Retrying retains the same attempt.';
@@ -507,12 +677,13 @@ class _MergedChatPageState extends State<MergedChatPage> {
     }
   }
 
-  Future<void> _schedule(bool attachment) async {
+  Future<void> _schedule(bool? attachment) async {
     if (sending || _needsNetworkChoice) return;
     final frozen = target;
     final text = input.text;
     final frozenReply = reply;
-    if (!attachment && text.trim().isEmpty) return;
+    final privacyGeneration = PersonalPrivacy.surfaceGeneration;
+
     setState(() => sending = true);
     try {
       final room = personal.client.getRoomById(frozen.conversation.roomId);
@@ -521,13 +692,46 @@ class _MergedChatPageState extends State<MergedChatPage> {
         room: room,
         target: frozen,
         reply: frozenReply,
-        isCurrent: () => mounted &&
-            identical(Matrix.of(context).client, personal.client),
+        isCurrent: () =>
+            mounted &&
+            identical(Matrix.of(context).client, personal.client) &&
+            PersonalPrivacy.surfaceUnlocked &&
+            PersonalPrivacy.surfaceGeneration == privacyGeneration &&
+            target.conversation == frozen.conversation &&
+            identical(reply, frozenReply),
       );
-      bool sameComposerContext() => mounted &&
+      bool sameComposerContext() =>
+          mounted &&
           identical(Matrix.of(context).client, personal.client) &&
           target.conversation == frozen.conversation &&
           identical(reply, frozenReply);
+      if (attachment == null) {
+        attachment = await showDialog<bool>(
+          context: context,
+          builder: (context) => SimpleDialog(
+            title: const Text('Send later'),
+            children: [
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Text'),
+              ),
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Attachment'),
+              ),
+            ],
+          ),
+        );
+        if (attachment == null || !mounted) return;
+        composer.validateCurrent();
+      }
+      if (!attachment && text.trim().isEmpty) {
+        setState(
+          () => problem =
+              'Write a message before scheduling text. Your draft is preserved.',
+        );
+        return;
+      }
       if (attachment) {
         await schedulePersonalAttachment(
           context,
@@ -573,7 +777,10 @@ class _MergedChatPageState extends State<MergedChatPage> {
     }
   }
 
-  Future<void> _recordRound(RoundCaptureGestureController gesture, {bool silent = false}) async {
+  Future<void> _recordRound(
+    RoundCaptureGestureController gesture, {
+    bool silent = false,
+  }) async {
     if (sending || loading || _needsNetworkChoice) return;
     final frozen = target;
     final sourceRoom = personal.client.getRoomById(frozen.conversation.roomId);
@@ -710,6 +917,7 @@ class _MergedChatPageState extends State<MergedChatPage> {
             readUpToEventId: viewed[sourceRoom.id]?.eventId,
           );
         });
+        inputFocus.requestFocus();
         await _draft();
         return;
       }
@@ -730,15 +938,19 @@ class _MergedChatPageState extends State<MergedChatPage> {
         });
       }
       if (action == 'reaction') {
-        if (!RoomCapabilities.forFeature(
-          BridgeFeature.reaction,
-          sourceRoom,
-          event: event,
-          reaction: '👍',
-        ).allowed) {
-          throw StateError('Reaction capability unverified');
-        }
-        await sourceRoom.sendReaction(event.eventId, '👍');
+        final timeline = timelines[sourceRoom.id];
+        if (timeline == null) return;
+        await ConversationMessageActions.react(
+          context,
+          event,
+          timeline,
+          '👍',
+          strict: true,
+          isCurrent: () =>
+              mounted &&
+              identical(personal, widget.personal) &&
+              widget.group.members.contains(personal.ref(sourceRoom)),
+        );
       }
       if (action == 'edit') {
         final timeline = timelines[sourceRoom.id];
@@ -791,8 +1003,162 @@ class _MergedChatPageState extends State<MergedChatPage> {
     }
   }
 
+  Future<void> _showMessageActions(
+    Event event,
+    Timeline timeline,
+    bool outgoing, [
+    Offset? position,
+  ]) async {
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final point = position ?? overlay.size.center(Offset.zero);
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(point.dx, point.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'reply',
+          enabled: !event.redacted,
+          child: const Text('Reply in source network'),
+        ),
+        PopupMenuItem(
+          value: 'reaction',
+          enabled: !event.redacted,
+          child: const Text('React with thumbs up'),
+        ),
+        PopupMenuItem(
+          value: 'bookmark',
+          enabled: !event.redacted,
+          child: const Text('Bookmark'),
+        ),
+        const PopupMenuItem(
+          value: 'source',
+          child: Text('Open source · edit · delete'),
+        ),
+        if (outgoing &&
+            event.messageType == MessageTypes.Text &&
+            !event.redacted)
+          PopupMenuItem(
+            value: 'edit',
+            enabled: RoomCapabilities.forFeature(
+              BridgeFeature.edit,
+              event.room,
+              event: event,
+              editCount: event
+                  .aggregatedEvents(timeline, RelationshipTypes.edit)
+                  .length,
+            ).allowed,
+            child: const Text('Edit in source network'),
+          ),
+        const PopupMenuItem(value: 'select', child: Text('Select text')),
+      ],
+    );
+    if (selected == null ||
+        !mounted ||
+        !identical(Matrix.of(context).client, personal.client))
+      return;
+    if (selected == 'select') {
+      setState(() => _textSelectionActive = true);
+      return;
+    }
+    await _action(event, selected);
+  }
+
+  bool _hasSourceBoundary(Event event) {
+    final events = timelines[event.room.id]?.events;
+    if (events == null) return true;
+    final index = events.indexWhere((e) => e.eventId == event.eventId);
+    if (index < 0) return true;
+    // Omitted state events still break a visual series on either side.
+    bool separator(Event e) => !{
+      EventTypes.Message,
+      EventTypes.Sticker,
+      EventTypes.Encrypted,
+      PollEventContent.startType,
+      EventTypes.Reaction,
+    }.contains(e.type);
+    bool breaks(int step) {
+      for (var i = index + step; i >= 0 && i < events.length; i += step) {
+        final neighbour = events[i];
+        if (neighbour.type == EventTypes.Reaction ||
+            neighbour.relationshipType == RelationshipTypes.edit)
+          continue;
+        return separator(neighbour);
+      }
+      return false;
+    }
+
+    return breaks(-1) || breaks(1);
+  }
+
+  Future<void> _chooseSource() async {
+    if (reply != null || sending) return;
+    final frozenPersonal = personal;
+    final frozenGroup = widget.group;
+    final frozenReply = reply;
+    final wasFocused = inputFocus.hasFocus;
+    final value = await showConversationSourcePicker(
+      context,
+      selected: _needsNetworkChoice ? null : target.conversation,
+      sources: [
+        for (final member in frozenGroup.members)
+          ConversationSourceOption(
+            conversation: member,
+            title:
+                personal.client
+                    .getRoomById(member.roomId)
+                    ?.getLocalizedDisplayname() ??
+                'Unavailable source',
+            subtitle: personal.client.userID == member.accountId
+                ? 'Current account · Source ${frozenGroup.members.indexOf(member) + 1}'
+                : 'Different account · Source ${frozenGroup.members.indexOf(member) + 1}',
+            available:
+                member.accountId == personal.client.userID &&
+                personal.client.getRoomById(member.roomId)?.membership ==
+                    Membership.join &&
+                personal.client
+                        .getRoomById(member.roomId)
+                        ?.canSendDefaultMessages ==
+                    true,
+            unavailableReason: 'Source disconnected or sending unavailable',
+          ),
+      ],
+    );
+    if (value == null ||
+        !mounted ||
+        !identical(personal, frozenPersonal) ||
+        !identical(widget.group, frozenGroup) ||
+        !identical(widget.personal, frozenPersonal) ||
+        !identical(Matrix.of(context).client, frozenPersonal.client) ||
+        reply != frozenReply ||
+        reply != null ||
+        sending ||
+        !widget.group.members.contains(value) ||
+        value.accountId != personal.client.userID)
+      return;
+    final room = personal.client.getRoomById(value.roomId);
+    if (room == null ||
+        room.membership != Membership.join ||
+        !room.canSendDefaultMessages)
+      return;
+    setState(() {
+      selectedNetwork = value;
+      _draftTarget = SendTarget(
+        conversation: value,
+        readUpToEventId: viewed[value.roomId]?.eventId,
+      );
+      _needsNetworkChoice = false;
+    });
+    if (wasFocused) inputFocus.requestFocus();
+    await _draft();
+  }
+
   @override
   void dispose() {
+    _generation++;
     if (_savedDraftText != input.text) {
       try {
         final frozen = _draftTarget ?? target;
@@ -812,6 +1178,7 @@ class _MergedChatPageState extends State<MergedChatPage> {
     }
     _draftTimer?.cancel();
     personal.removeListener(_personalChanged);
+    inputFocus.dispose();
     input.dispose();
     scroll.dispose();
     super.dispose();
@@ -820,6 +1187,13 @@ class _MergedChatPageState extends State<MergedChatPage> {
   @override
   Widget build(BuildContext context) {
     final events = buffer.coveredEvents.reversed.toList();
+    for (final merged in events) {
+      _seenEntries.add(_entryIdentity(merged.value));
+      if (_latestSeenTimestamp == null ||
+          merged.timestamp.isAfter(_latestSeenTimestamp!)) {
+        _latestSeenTimestamp = merged.timestamp;
+      }
+    }
     final channel = target.conversation;
     final theme = Theme.of(context);
     final displayName =
@@ -859,20 +1233,9 @@ class _MergedChatPageState extends State<MergedChatPage> {
           PopupMenuButton<String>(
             tooltip: 'Conversation actions',
             icon: const Icon(Icons.more_horiz),
-            onSelected: (action) => action == 'read'
-                ? _allRead()
-                : showNotionMergedChatDetails(
-                    context,
-                    personal: personal,
-                    group: widget.group,
-                  ),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'details', child: Text('Chat details')),
-              PopupMenuItem(
-                value: 'read',
-                child: Text('Mark all sources as read'),
-              ),
-            ],
+            onSelected: _quickAction,
+            itemBuilder: (_) =>
+                conversationQuickActions(merged: true, editing: false),
           ),
         ],
       ),
@@ -897,223 +1260,354 @@ class _MergedChatPageState extends State<MergedChatPage> {
           Expanded(
             child: Stack(
               children: [
-                ListView.builder(
-                  key: viewportKey,
-                  controller: scroll,
-                  reverse: true,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  scrollCacheExtent: const ScrollCacheExtent.pixels(0),
-                  itemCount: events.length + 1,
-                  findChildIndexCallback: (key) {
-                    final source = rowKeys.entries
-                        .where((entry) => entry.value == key)
-                        .firstOrNull
-                        ?.key;
-                    if (source == null) return null;
-                    final index = events.indexWhere(
-                      (event) => event.source.key == source,
-                    );
-                    return index < 0 ? null : index;
+                SelectionArea(
+                  onSelectionChanged: (content) {
+                    final active =
+                        content != null && content.plainText.isNotEmpty;
+                    if (active != _textSelectionActive)
+                      setState(() => _textSelectionActive = active);
                   },
-                  itemBuilder: (context, index) {
-                    if (index == events.length)
-                      return buffer.hasMore
-                          ? TextButton(
-                              onPressed: paging ? null : _page,
-                              child: Text(
-                                paging ? 'Loading…' : 'Older messages',
-                              ),
-                            )
-                          : Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Text(
-                                events.isEmpty && !loading
-                                    ? 'No messages yet'
-                                    : 'Available history loaded',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: theme.colorScheme.onSurfaceVariant,
+                  child: ListView.builder(
+                    key: viewportKey,
+                    controller: scroll,
+                    reverse: true,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    scrollCacheExtent: const ScrollCacheExtent.pixels(0),
+                    itemCount: events.length + 1,
+                    findChildIndexCallback: (key) {
+                      final source = rowKeys.entries
+                          .where((entry) => entry.value == key)
+                          .firstOrNull
+                          ?.key;
+                      if (source == null) return null;
+                      final index = events.indexWhere(
+                        (event) => event.source.key == source,
+                      );
+                      return index < 0 ? null : index;
+                    },
+                    itemBuilder: (context, index) {
+                      if (index == events.length)
+                        return buffer.hasMore
+                            ? TextButton(
+                                onPressed: paging ? null : _page,
+                                child: Text(
+                                  paging ? 'Loading…' : 'Older messages',
                                 ),
-                              ),
-                            );
-                    final merged = events[index];
-                    final event = merged.value;
-                    final timeline = timelines[event.room.id]!;
-                    final display = event.getDisplayEvent(timeline);
-                    final rendered = display.eventId == event.eventId
-                        ? event
-                        : Event.fromJson({
-                            ...event.toJson(),
-                            'type': display.type,
-                            'content': display.content,
-                          }, event.room);
-                    final key = rowKeys.putIfAbsent(
-                      merged.source.key,
-                      GlobalKey.new,
-                    );
-                    _observe(event, key);
-                    return FutureBuilder<User?>(
-                      key: key,
-                      future: event.fetchSenderUser(),
-                      builder: (context, snapshot) {
-                        final sender =
-                            snapshot.data ?? event.senderFromMemoryOrFallback;
-                        return NotionAuthoredMessageRow(
-                          avatar: Avatar(
-                            client: event.room.client,
-                            mxContent: sender.avatarUrl,
-                            name: sender.calcDisplayname(),
-                            size: 36,
-                          ),
-                          author: merged.isOutgoing
-                              ? 'You'
-                              : sender.calcDisplayname(),
-                          time: event.originServerTs.localizedTimeOfDay(
-                            context,
-                          ),
-                          source:
-                              'via ${notionNetworkLabel(PersonalClient.networkOf(event.room))}',
-                          actions: PopupMenuButton<String>(
-                            tooltip: 'Message actions',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(minWidth: 44),
-                            iconSize: 18,
-                            onSelected: (action) => _action(event, action),
-                            itemBuilder: (_) => [
-                              PopupMenuItem(
-                                value: 'reply',
-                                enabled: !event.redacted,
-                                child: const Text('Reply in source network'),
-                              ),
-                              PopupMenuItem(
-                                value: 'reaction',
-                                enabled: !event.redacted,
-                                child: const Text('React with thumbs up'),
-                              ),
-                              PopupMenuItem(
-                                value: 'bookmark',
-                                enabled: !event.redacted,
-                                child: const Text('Bookmark'),
-                              ),
-                              const PopupMenuItem(
-                                value: 'source',
-                                child: Text('Open source · edit · delete'),
-                              ),
-                              if (merged.isOutgoing &&
-                                  event.messageType == MessageTypes.Text &&
-                                  !event.redacted)
-                                PopupMenuItem(
-                                  value: 'edit',
-                                  enabled: RoomCapabilities.forFeature(
-                                    BridgeFeature.edit,
-                                    event.room,
-                                    event: event,
-                                    editCount: event
-                                        .aggregatedEvents(
-                                          timeline,
-                                          RelationshipTypes.edit,
-                                        )
-                                        .length,
-                                  ).allowed,
-                                  child: const Text('Edit in source network'),
-                                ),
-                            ],
-                          ),
-                          body: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (event.inReplyToEventId(
-                                    includingFallback: false,
-                                  ) !=
-                                  null)
-                                FutureBuilder<Event?>(
-                                  future: event.getReplyEvent(timeline),
-                                  builder: (context, snapshot) {
-                                    final original = snapshot.data;
-                                    if (original == null)
-                                      return const Text(
-                                        'Loading reply…',
-                                        style: TextStyle(fontSize: 12),
-                                      );
-                                    return InkWell(
-                                      onTap: () => _action(original, 'source'),
-                                      child: AbsorbPointer(
-                                        child: ReplyContent(
-                                          original,
-                                          ownMessage: merged.isOutgoing,
-                                          timeline: timeline,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              AbsorbPointer(
-                                absorbing:
-                                    event.type == PollEventContent.startType &&
-                                    !RoomCapabilities.forFeature(
-                                      BridgeFeature.poll,
-                                      event.room,
-                                      event: event,
-                                    ).allowed,
-                                child: MessageContent(
-                                  rendered,
-                                  timeline: timeline,
-                                  textColor: theme.colorScheme.onSurface,
-                                  linkColor: theme.colorScheme.primary,
-                                  borderRadius: BorderRadius.circular(
-                                    NotionTokens.radius,
-                                  ),
-                                  selected: false,
-                                  bigEmojis: const {},
-                                ),
-                              ),
-                              if (event.hasAggregatedEvents(
-                                timeline,
-                                RelationshipTypes.reaction,
-                              ))
-                                MessageReactions(event, timeline),
-                              if (event.hasAggregatedEvents(
-                                timeline,
-                                RelationshipTypes.edit,
-                              ))
-                                Text(
-                                  'Edited',
-                                  style: NotionTokens.caption.copyWith(
+                              )
+                            : Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Text(
+                                  events.isEmpty && !loading
+                                      ? 'No messages yet'
+                                      : 'Available history loaded',
+                                  style: TextStyle(
+                                    fontSize: 12,
                                     color: theme.colorScheme.onSurfaceVariant,
                                   ),
                                 ),
-                              if (event.status.isError)
-                                Text(
-                                  'Could not be sent · open source to retry',
-                                  style: NotionTokens.caption.copyWith(
-                                    color: theme.colorScheme.error,
+                              );
+                      final merged = events[index];
+                      final event = merged.value;
+                      final timeline = timelines[event.room.id]!;
+                      final display = event.getDisplayEvent(timeline);
+                      final rendered = display.eventId == event.eventId
+                          ? event
+                          : Event.fromJson({
+                              ...event.toJson(),
+                              'type': display.type,
+                              'content': display.content,
+                            }, event.room);
+                      final key = rowKeys.putIfAbsent(
+                        merged.source.key,
+                        GlobalKey.new,
+                      );
+                      _observe(event, key);
+                      return FutureBuilder<User?>(
+                        key: key,
+                        future: event.fetchSenderUser(),
+                        builder: (context, snapshot) {
+                          final sender =
+                              snapshot.data ?? event.senderFromMemoryOrFallback;
+                          final position = conversationGroupPosition(
+                            item: conversationGroupingItem(
+                              event,
+                              boundary: _hasSourceBoundary(event),
+                            ),
+                            older: index + 1 < events.length
+                                ? conversationGroupingItem(
+                                    events[index + 1].value,
+                                    boundary: _hasSourceBoundary(
+                                      events[index + 1].value,
+                                    ),
+                                  )
+                                : null,
+                            newer: index > 0
+                                ? conversationGroupingItem(
+                                    events[index - 1].value,
+                                    boundary: _hasSourceBoundary(
+                                      events[index - 1].value,
+                                    ),
+                                  )
+                                : null,
+                          );
+                          final first =
+                              position == ConversationGroupPosition.first ||
+                              position == ConversationGroupPosition.single;
+                          final projection = InboxProjection(personal);
+                          final privatePalette =
+                              projection
+                                  .metadataForEntity(
+                                    'person:${widget.group.id}',
+                                  )
+                                  .theme ??
+                              projection.metadataFor(event.room).theme;
+                          final privateFill = merged.isOutgoing
+                              ? privatePalette?.outgoingColor
+                              : privatePalette?.incomingColor;
+                          final contentColor = privateFill is int
+                              ? (Color(privateFill).computeLuminance() > .179
+                                    ? Colors.black87
+                                    : Colors.white)
+                              : ConversationBubbleColors.of(context).text;
+                          final canReply = RoomCapabilities.forFeature(
+                            BridgeFeature.reply,
+                            event.room,
+                            event: event,
+                          ).allowed;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: ConversationMessageEntrance(
+                              identity: _entryIdentity(event),
+                              animate: _enterEntries.remove(
+                                _entryIdentity(event),
+                              ),
+                              child: ConversationBubble(
+                                outgoing: merged.isOutgoing,
+                                backgroundColor: privateFill is int
+                                    ? Color(privateFill)
+                                    : null,
+                                groupPosition: position,
+                                media:
+                                    {
+                                      MessageTypes.Image,
+                                      MessageTypes.Video,
+                                      MessageTypes.Sticker,
+                                    }.contains(event.messageType) &&
+                                    !event.redacted,
+                                avatar: Avatar(
+                                  client: event.room.client,
+                                  mxContent: sender.avatarUrl,
+                                  name: sender.calcDisplayname(),
+                                  size: 28,
+                                ),
+                                heading: first
+                                    ? Text(
+                                        'via ${notionNetworkLabel(PersonalClient.networkOf(event.room))}',
+                                        style: NotionTokens.caption,
+                                      )
+                                    : null,
+                                footer: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: merged.isOutgoing
+                                      ? CrossAxisAlignment.end
+                                      : CrossAxisAlignment.start,
+                                  children: [
+                                    ConversationReactionFeedback(
+                                      event,
+                                      timeline,
+                                    ),
+                                    if (position ==
+                                            ConversationGroupPosition.single ||
+                                        position ==
+                                            ConversationGroupPosition.last)
+                                      Text(
+                                        event.originServerTs.localizedTimeOfDay(
+                                          context,
+                                        ),
+                                        style: NotionTokens.caption,
+                                      ),
+                                  ],
+                                ),
+                                reactions:
+                                    event.hasAggregatedEvents(
+                                      timeline,
+                                      RelationshipTypes.reaction,
+                                    )
+                                    ? MessageReactions(
+                                        event,
+                                        timeline,
+                                        strict: true,
+                                      )
+                                    : null,
+                                surfaceBuilder: (surface) => GestureDetector(
+                                  onLongPressStart: _textSelectionActive
+                                      ? null
+                                      : (details) => _showMessageActions(
+                                          event,
+                                          timeline,
+                                          merged.isOutgoing,
+                                          details.globalPosition,
+                                        ),
+                                  onSecondaryTapUp: (details) =>
+                                      _showMessageActions(
+                                        event,
+                                        timeline,
+                                        merged.isOutgoing,
+                                        details.globalPosition,
+                                      ),
+                                  child: Semantics(
+                                    onLongPress: () => _showMessageActions(
+                                      event,
+                                      timeline,
+                                      merged.isOutgoing,
+                                    ),
+                                    child: ConversationMessageGestures(
+                                      identity: merged.source.key,
+                                      enabled: !_textSelectionActive,
+                                      swipeRightToLeft: AppSettings
+                                          .swipeRightToLeftToReply
+                                          .value,
+                                      interactiveContent:
+                                          conversationHasInteractiveContent(
+                                            display,
+                                          ),
+                                      onReply: canReply
+                                          ? () => _action(event, 'reply')
+                                          : null,
+                                      quickLikeEnabled:
+                                          AppSettings.doubleTapToReact.value,
+                                      likeEmoji:
+                                          AppSettings.doubleTapReaction.value,
+                                      onLike: () =>
+                                          ConversationMessageActions.react(
+                                            context,
+                                            event,
+                                            timeline,
+                                            AppSettings.doubleTapReaction.value,
+                                            strict: true,
+                                            isCurrent: () =>
+                                                mounted &&
+                                                identical(
+                                                  widget.personal,
+                                                  personal,
+                                                ) &&
+                                                identical(
+                                                  Matrix.of(context).client,
+                                                  personal.client,
+                                                ) &&
+                                                widget.group.members.contains(
+                                                  personal.ref(event.room),
+                                                ),
+                                          ),
+                                      child: surface,
+                                    ),
                                   ),
                                 ),
-                              if (event.status == EventStatus.sending)
-                                const Text(
-                                  'Sending…',
-                                  style: NotionTokens.caption,
+                                body: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (event.inReplyToEventId(
+                                          includingFallback: false,
+                                        ) !=
+                                        null)
+                                      FutureBuilder<Event?>(
+                                        future: event.getReplyEvent(timeline),
+                                        builder: (context, snapshot) {
+                                          final original = snapshot.data;
+                                          if (original == null)
+                                            return Text(
+                                              snapshot.connectionState ==
+                                                      ConnectionState.done
+                                                  ? 'Original message unavailable'
+                                                  : 'Loading reply…',
+                                              style: TextStyle(fontSize: 12),
+                                            );
+                                          return InkWell(
+                                            onTap: () =>
+                                                _action(original, 'source'),
+                                            child: AbsorbPointer(
+                                              child: ReplyContent(
+                                                original,
+                                                ownMessage: merged.isOutgoing,
+                                                foregroundColor:
+                                                    privateFill is int
+                                                    ? contentColor
+                                                    : null,
+                                                timeline: timeline,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    AbsorbPointer(
+                                      absorbing:
+                                          event.type ==
+                                              PollEventContent.startType &&
+                                          !RoomCapabilities.forFeature(
+                                            BridgeFeature.poll,
+                                            event.room,
+                                            event: event,
+                                          ).allowed,
+                                      child: MessageContent(
+                                        rendered,
+                                        timeline: timeline,
+                                        textColor: contentColor,
+                                        linkColor: privateFill is int
+                                            ? contentColor
+                                            : theme.colorScheme.primary,
+                                        borderRadius: BorderRadius.circular(20),
+                                        selected: false,
+                                        bigEmojis: const {},
+                                      ),
+                                    ),
+                                    if (event.hasAggregatedEvents(
+                                      timeline,
+                                      RelationshipTypes.edit,
+                                    ))
+                                      Text(
+                                        'Edited',
+                                        style: NotionTokens.caption.copyWith(
+                                          color: theme
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                        ),
+                                      ),
+                                    if (event.status.isError)
+                                      Text(
+                                        'Could not be sent · open source to retry',
+                                        style: NotionTokens.caption.copyWith(
+                                          color: theme.colorScheme.error,
+                                        ),
+                                      ),
+                                    if (event.status == EventStatus.sending)
+                                      const Text(
+                                        'Sending…',
+                                        style: NotionTokens.caption,
+                                      ),
+                                    if (event.type ==
+                                            PollEventContent.startType &&
+                                        !RoomCapabilities.forFeature(
+                                          BridgeFeature.poll,
+                                          event.room,
+                                          event: event,
+                                        ).allowed)
+                                      Text(
+                                        RoomCapabilities.forFeature(
+                                          BridgeFeature.poll,
+                                          event.room,
+                                          event: event,
+                                        ).reason,
+                                        style: NotionTokens.caption,
+                                      ),
+                                  ],
                                 ),
-                              if (event.type == PollEventContent.startType &&
-                                  !RoomCapabilities.forFeature(
-                                    BridgeFeature.poll,
-                                    event.room,
-                                    event: event,
-                                  ).allowed)
-                                Text(
-                                  RoomCapabilities.forFeature(
-                                    BridgeFeature.poll,
-                                    event.room,
-                                    event: event,
-                                  ).reason,
-                                  style: NotionTokens.caption,
-                                ),
-                            ],
-                          ),
-                        );
-                      },
-                    );
-                  },
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
                 ),
                 if (showLatest)
                   Positioned(
@@ -1135,17 +1629,31 @@ class _MergedChatPageState extends State<MergedChatPage> {
               ],
             ),
           ),
+          if (_textSelectionActive)
+            TextButton(
+              onPressed: () => setState(() => _textSelectionActive = false),
+              child: const Text('Done selecting'),
+            ),
           if (reply != null)
             ListTile(
               dense: true,
-              title: const Text('Reply in source network'),
+              title: Text(
+                'Replying to ${reply!.senderFromMemoryOrFallback.calcDisplayname()}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               subtitle: Text(
-                '${notionNetworkLabel(PersonalClient.networkOf(reply!.room))} · Cancel this reply to open the source voice recorder',
+                '${notionNetworkLabel(PersonalClient.networkOf(reply!.room))} · ${reply!.body}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
               trailing: NotionIconButton(
                 icon: Icons.close,
                 label: 'Cancel reply',
-                onPressed: () => setState(() => reply = null),
+                onPressed: () {
+                  setState(() => reply = null);
+                  _draft();
+                },
               ),
             ),
           if (channel.network == 'telegram' &&
@@ -1156,128 +1664,192 @@ class _MergedChatPageState extends State<MergedChatPage> {
           SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-              child: NotionComposer(
-                input: TextField(
-                  controller: input,
-                  maxLines: 6,
-                  minLines: 1,
-                  keyboardType: TextInputType.multiline,
-                  decoration: const InputDecoration(
-                    hintText: 'Write a message…',
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    filled: false,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 4,
-                      vertical: 6,
+              padding: EdgeInsets.zero,
+              child: TextFieldTapRegion(
+                child: CompactComposer(
+                  input: TextField(
+                    controller: input,
+                    maxLines: conversationComposerMaxLines(
+                      context,
+                      hasContext: reply != null,
                     ),
+                    focusNode: inputFocus,
+                    minLines: 1,
+                    keyboardType: TextInputType.multiline,
+                    decoration: const InputDecoration(
+                      hintText: 'Message…',
+                      hintMaxLines: 1,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      filled: false,
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 6,
+                      ),
+                    ),
+                    onChanged: (_) {
+                      setState(() => _draftTarget ??= target);
+                      _draftTimer?.cancel();
+                      _draftTimer = Timer(
+                        const Duration(milliseconds: 500),
+                        _draft,
+                      );
+                    },
                   ),
-                  onChanged: (_) {
-                    setState(() => _draftTarget ??= target);
-                    _draftTimer?.cancel();
-                    _draftTimer = Timer(
-                      const Duration(milliseconds: 500),
-                      _draft,
-                    );
-                  },
-                ),
-                actions: [
-                  NotionIconButton(
-                    icon: Icons.attach_file_outlined,
-                    label: 'Attach media or a file',
-                    onPressed: enabled ? _attachMedia : null,
-                  ),
-                  NotionIconButton(
-                    icon: Icons.mic_none_outlined,
-                    label: reply == null
-                        ? 'Record a voice message in source conversation'
-                        : 'Cancel this reply before opening the source voice recorder',
-                    onPressed: enabled && reply == null
-                        ? _openVoiceSource
+                  addAction: IconButton(
+                    tooltip: 'More message actions',
+                    icon: const Icon(Icons.add),
+                    onPressed: enabled
+                        ? () => showModalBottomSheet<void>(
+                            context: context,
+                            builder: (_) => SafeArea(
+                              child: Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    NotionIconButton(
+                                      icon: Icons.attach_file_outlined,
+                                      label: 'Attach media or a file',
+                                      onPressed: enabled
+                                          ? () {
+                                              Navigator.of(context).pop();
+                                              _attachMedia();
+                                            }
+                                          : null,
+                                    ),
+                                    NotionIconButton(
+                                      icon: Icons.mic_none_outlined,
+                                      label: reply == null
+                                          ? 'Record a voice message in source conversation'
+                                          : 'Cancel this reply before opening the source voice recorder',
+                                      onPressed: enabled && reply == null
+                                          ? () {
+                                              Navigator.of(context).pop();
+                                              _openVoiceSource();
+                                            }
+                                          : null,
+                                    ),
+                                    if (channel.network == 'telegram')
+                                      IconButton(
+                                        tooltip: 'Record a round video',
+                                        icon: const Icon(
+                                          Icons.videocam_outlined,
+                                        ),
+                                        onPressed: () {
+                                          Navigator.of(context).pop();
+                                          final gesture =
+                                              RoundCaptureGestureController(
+                                                held: true,
+                                              )..lock();
+                                          _recordRound(
+                                            gesture,
+                                          ).whenComplete(gesture.dispose);
+                                        },
+                                      ),
+                                    PopupMenuButton<String>(
+                                      tooltip: 'Send options',
+                                      enabled: enabled,
+                                      onSelected: (choice) {
+                                        Navigator.of(context).pop();
+                                        if (choice == 'roundSilent') {
+                                          final gesture =
+                                              RoundCaptureGestureController(
+                                                held: true,
+                                              )..lock();
+                                          _recordRound(
+                                            gesture,
+                                            silent: true,
+                                          ).whenComplete(gesture.dispose);
+                                        } else {
+                                          _schedule(choice == 'attachment');
+                                        }
+                                      },
+                                      itemBuilder: (_) => [
+                                        const PopupMenuItem(
+                                          value: 'text',
+                                          child: Text('Schedule text'),
+                                        ),
+                                        const PopupMenuItem(
+                                          value: 'attachment',
+                                          child: Text('Schedule an attachment'),
+                                        ),
+                                        if (PlatformInfos.isAndroid &&
+                                            personal.client.getRoomById(
+                                                  channel.roomId,
+                                                ) !=
+                                                null &&
+                                            TelegramRoomBinding.of(
+                                                      personal.client
+                                                          .getRoomById(
+                                                            channel.roomId,
+                                                          )!,
+                                                    )
+                                                    ?.capabilities(
+                                                      personal.client
+                                                          .getRoomById(
+                                                            channel.roomId,
+                                                          )!,
+                                                    )
+                                                    .extension
+                                                    .operation('silent_send')
+                                                    .allowed ==
+                                                true)
+                                          const PopupMenuItem(
+                                            value: 'roundSilent',
+                                            child: Text(
+                                              'Record a round video silently',
+                                            ),
+                                          ),
+                                      ],
+                                      icon: const Icon(Icons.schedule_outlined),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          )
                         : null,
                   ),
-                  if (channel.network == 'telegram')
-                    RoundRecordButton(onRecord: _recordRound),
-                  PopupMenuButton<String>(
-                    tooltip: 'Send options',
-                    enabled: enabled,
-                    onSelected: (choice) {
-                      if (choice == 'roundSilent') {
-                        final gesture = RoundCaptureGestureController(held: true)..lock();
-                        _recordRound(gesture, silent: true).whenComplete(gesture.dispose);
-                      } else {
-                        _schedule(choice == 'attachment');
-                      }
-                    },
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(value: 'text', child: Text('Schedule text')),
-                      const PopupMenuItem(
-                        value: 'attachment',
-                        child: Text('Schedule an attachment'),
-                      ),
-                      if (PlatformInfos.isAndroid &&
-                          personal.client.getRoomById(channel.roomId) != null &&
-                          TelegramRoomBinding.of(personal.client.getRoomById(channel.roomId)!)
-                              ?.capabilities(personal.client.getRoomById(channel.roomId)!)
-                              .extension.operation('silent_send').allowed == true)
-                        const PopupMenuItem(
-                          value: 'roundSilent',
-                          child: Text('Record a round video silently'),
-                        ),
-                    ],
-                    icon: const Icon(Icons.schedule_outlined),
+                  source: ConversationSourceChip(
+                    network: channel.network,
+                    label: _needsNetworkChoice
+                        ? 'Choose source'
+                        : personal.client.getRoomById(channel.roomId) == null
+                        ? '${notionNetworkLabel(channel.network)} · unavailable'
+                        : null,
+                    locked: reply != null,
+                    onPressed:
+                        widget.group.members.length > 1 &&
+                            !sending &&
+                            reply == null
+                        ? _chooseSource
+                        : null,
+                    available: true,
                   ),
-                ],
-                source: DropdownButtonHideUnderline(
-                  child: DropdownButton<ConversationRef>(
-                    isExpanded: true,
-                    isDense: true,
-                    hint: const Text('Choose a send network'),
-                    value: _needsNetworkChoice ? null : channel,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    onChanged: reply != null || sending
-                        ? null
-                        : (value) {
-                            if (value == null) return;
-                            setState(() {
-                              selectedNetwork = value;
-                              _draftTarget = SendTarget(
-                                conversation: value,
-                                readUpToEventId: viewed[value.roomId]?.eventId,
-                              );
-                              _needsNetworkChoice = false;
-                            });
-                            _draft();
-                          },
-                    items: [
-                      for (final member in widget.group.members)
-                        DropdownMenuItem(
-                          value: member,
-                          child: Text(
-                            '${notionNetworkLabel(member.network)} · ${personal.client.getRoomById(member.roomId)?.getLocalizedDisplayname() ?? 'Unavailable source'}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                  primaryAction: input.text.trim().isEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.mic_none_outlined),
+                          tooltip: reply == null
+                              ? 'Record in source conversation'
+                              : 'Cancel reply to record voice',
+                          onPressed: enabled && reply == null
+                              ? _openVoiceSource
+                              : null,
+                        )
+                      : NotionSendButton(
+                          busy: sending,
+                          onPressed:
+                              enabled &&
+                                  personal.client
+                                          .getRoomById(channel.roomId)
+                                          ?.canSendDefaultMessages ==
+                                      true
+                              ? _send
+                              : null,
                         ),
-                    ],
-                  ),
-                ),
-                sendAction: NotionSendButton(
-                  busy: sending,
-                  onPressed:
-                      !enabled ||
-                          input.text.trim().isEmpty ||
-                          personal.client
-                                  .getRoomById(channel.roomId)
-                                  ?.canSendDefaultMessages !=
-                              true
-                      ? null
-                      : _send,
                 ),
               ),
             ),

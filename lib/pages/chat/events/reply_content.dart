@@ -14,12 +14,14 @@ class ReplyContent extends StatelessWidget {
   final Event replyEvent;
   final bool ownMessage;
   final Timeline? timeline;
+  final Color? foregroundColor;
 
   const ReplyContent(
     this.replyEvent, {
     this.ownMessage = false,
     super.key,
     this.timeline,
+    this.foregroundColor,
   });
 
   static const BorderRadius borderRadius = BorderRadius.only(
@@ -36,11 +38,7 @@ class ReplyContent extends StatelessWidget {
         ? replyEvent.getDisplayEvent(timeline)
         : replyEvent;
     const fontSize = AppConfig.messageFontSize;
-    final color = theme.brightness == Brightness.dark
-        ? theme.colorScheme.onTertiaryContainer
-        : ownMessage
-        ? theme.colorScheme.tertiaryContainer
-        : theme.colorScheme.tertiary;
+    final color = foregroundColor ?? theme.colorScheme.onSurfaceVariant;
 
     return Material(
       color: Colors.transparent,
@@ -91,11 +89,7 @@ class ReplyContent extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                   style: TextStyle(
-                    color: theme.brightness == Brightness.dark
-                        ? theme.colorScheme.onSurface
-                        : ownMessage
-                        ? theme.colorScheme.onTertiary
-                        : theme.colorScheme.onSurface,
+                    color: foregroundColor ?? theme.colorScheme.onSurface,
                     fontSize: fontSize,
                   ),
                 ),

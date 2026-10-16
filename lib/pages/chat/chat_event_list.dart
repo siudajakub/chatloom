@@ -23,10 +23,18 @@ import 'package:scroll_to_index/scroll_to_index.dart';
 
 import '../../utils/date_time_extension.dart';
 
-class ChatEventList extends StatelessWidget {
+class ChatEventList extends StatefulWidget {
   final ChatController controller;
 
   const ChatEventList({super.key, required this.controller});
+
+  @override
+  State<ChatEventList> createState() => _ChatEventListState();
+}
+
+class _ChatEventListState extends State<ChatEventList> {
+  ChatController get controller => widget.controller;
+  bool _textSelectionActive = false;
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +64,11 @@ class ChatEventList extends StatelessWidget {
         controller.room.client.applicationAccountConfig.wallpaperUrl != null;
 
     return SelectionArea(
+      onSelectionChanged: (content) {
+        final active = content != null && content.plainText.isNotEmpty;
+        if (active != _textSelectionActive)
+          setState(() => _textSelectionActive = active);
+      },
       child: MediaQuery(
         data: MediaQuery.of(context).copyWith(
           textScaler: TextScaler.linear(
@@ -92,7 +105,9 @@ class ChatEventList extends StatelessWidget {
                       icon: timeline.isRequestingFuture
                           ? CircularProgressIndicator.adaptive(strokeWidth: 2)
                           : const Icon(Icons.arrow_downward_outlined),
-                      label: Text(L10n.of(context).loadMore),
+                      label: Text(
+                        controller.historyError ?? L10n.of(context).loadMore,
+                      ),
                     ),
                   );
                 }
@@ -118,20 +133,26 @@ class ChatEventList extends StatelessWidget {
                       (event) =>
                           !event.isCollapsedState && event.isVisibleInGui,
                     );
-                    if (visibleIndex > timeline.events.length - 50) {
+                    if (visibleIndex > timeline.events.length - 50 &&
+                        controller.historyError == null &&
+                        !controller.historyLoading) {
                       WidgetsBinding.instance.addPostFrameCallback(
                         controller.requestHistory,
                       );
                     }
                     return Center(
                       child: TextButton.icon(
-                        onPressed: timeline.isRequestingHistory
+                        onPressed:
+                            controller.historyLoading ||
+                                timeline.isRequestingHistory
                             ? null
                             : controller.requestHistory,
                         icon: timeline.isRequestingHistory
                             ? CircularProgressIndicator.adaptive(strokeWidth: 2)
                             : const Icon(Icons.arrow_upward_outlined),
-                        label: Text(L10n.of(context).loadMore),
+                        label: Text(
+                          controller.historyError ?? L10n.of(context).loadMore,
+                        ),
                       ),
                     );
                   },
@@ -202,6 +223,8 @@ class ChatEventList extends StatelessWidget {
                       onSelect: controller.onSelectMessage,
                       scrollToEventId: controller.scrollToEventId,
                       longPressSelect: controller.selectedEvents.isNotEmpty,
+                      readMarkerEventId: controller.readMarkerEventId,
+                      textSelectionActive: _textSelectionActive,
                       selected: controller.selectedEvents.any(
                         (e) => e.eventId == event.eventId,
                       ),

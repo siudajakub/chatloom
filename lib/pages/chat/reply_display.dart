@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat/conversation_motion.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -21,14 +22,16 @@ class ReplyDisplay extends StatelessWidget {
     final theme = Theme.of(context);
 
     return AnimatedSize(
-      duration: FluffyThemes.animationDuration,
+      duration: ConversationMotion.reduced(context)
+          ? Duration.zero
+          : const Duration(milliseconds: 180),
       curve: FluffyThemes.animationCurve,
       clipBehavior: Clip.hardEdge,
       child: controller.editEvent != null || controller.replyEvent != null
           ? Material(
               color: theme.colorScheme.surfaceContainer,
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                padding: const EdgeInsets.symmetric(vertical: 2.0),
                 child: Row(
                   children: <Widget>[
                     Padding(
@@ -76,18 +79,20 @@ class _EditContent extends StatelessWidget {
       children: <Widget>[
         Icon(Icons.edit, color: theme.colorScheme.primary),
         Container(width: 15.0),
-        Text(
-          event
-              .calcLocalizedBodyFallback(
-                MatrixLocals(L10n.of(context)),
-                withSenderNamePrefix: false,
-                hideReply: true,
-              )
-              .trim()
-              .replaceAll('\n', ' '),
-          overflow: TextOverflow.ellipsis,
-          maxLines: 1,
-          style: TextStyle(color: theme.textTheme.bodyMedium!.color),
+        Expanded(
+          child: Text(
+            event
+                .calcLocalizedBodyFallback(
+                  MatrixLocals(L10n.of(context)),
+                  withSenderNamePrefix: false,
+                  hideReply: true,
+                )
+                .trim()
+                .replaceAll('\n', ' '),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+            style: TextStyle(color: theme.textTheme.bodyMedium!.color),
+          ),
         ),
       ],
     );

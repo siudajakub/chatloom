@@ -1,10 +1,91 @@
+import 'dart:ui' as ui;
+
 import 'package:fluffychat/pages/chat/notion_conversation.dart';
+import 'package:fluffychat/pages/chat/conversation_bubble.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 void main() {
-  testWidgets('incoming and outgoing entries share the authored column', (
+  testWidgets(
+    'chat header exposes one named button with its own details action',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      try {
+        var opens = 0;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              appBar: AppBar(
+                title: NotionCompactChatHeader(
+                  avatar: Semantics(
+                    label: 'Fictional avatar child',
+                    child: const Icon(Icons.person_outline),
+                  ),
+                  name: 'Fictional source',
+                  onDetails: () => opens++,
+                ),
+              ),
+            ),
+          ),
+        );
+        final control = find.semantics.byLabel(
+          'Chat details for Fictional source',
+        );
+        expect(control, findsOne);
+        final node = control.evaluate().single;
+        final data = node.getSemanticsData();
+        expect(data.label, 'Chat details for Fictional source');
+        expect(data.flagsCollection.isButton, isTrue);
+        expect(data.flagsCollection.isHeader, isFalse);
+        expect(data.flagsCollection.isEnabled, ui.Tristate.isTrue);
+        expect(data.hasAction(ui.SemanticsAction.tap), isTrue);
+        tester.semantics.tap(control);
+        await tester.pump();
+        expect(opens, 1);
+        await tester.tap(find.text('Fictional source'));
+        await tester.pump();
+        expect(opens, 2);
+      } finally {
+        semantics.dispose();
+      }
+    },
+  );
+
+  testWidgets('unavailable chat details keep the named button disabled', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            appBar: AppBar(
+              title: const NotionCompactChatHeader(
+                avatar: Icon(Icons.person_outline),
+                name: 'Fictional source',
+                onDetails: null,
+              ),
+            ),
+          ),
+        ),
+      );
+      final control = find.semantics.byLabel(
+        'Chat details for Fictional source',
+      );
+      expect(control, findsOne);
+      final data = control.evaluate().single.getSemanticsData();
+      expect(data.label, 'Chat details for Fictional source');
+      expect(data.flagsCollection.isButton, isTrue);
+      expect(data.flagsCollection.isHeader, isFalse);
+      expect(data.flagsCollection.isEnabled, ui.Tristate.isFalse);
+      expect(data.hasAction(ui.SemanticsAction.tap), isFalse);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('incoming starts and outgoing ends the conversation column', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -12,17 +93,16 @@ void main() {
         home: Scaffold(
           body: Column(
             children: const [
-              NotionAuthoredMessageRow(
+              ConversationBubble(
+                outgoing: false,
                 avatar: Icon(Icons.person_outline),
-                author: 'Anna',
-                time: '16:40',
                 body: Text('Are you free tomorrow?'),
+                footer: Text('16:40'),
               ),
-              NotionAuthoredMessageRow(
-                avatar: Icon(Icons.person_outline),
-                author: 'You',
-                time: '16:41',
+              ConversationBubble(
+                outgoing: true,
                 body: Text('Yes, after work.'),
+                footer: Text('16:41'),
               ),
             ],
           ),
@@ -30,12 +110,8 @@ void main() {
       ),
     );
     expect(
-      tester.getTopLeft(find.text('Anna')).dx,
-      tester.getTopLeft(find.text('You')).dx,
-    );
-    expect(
       tester.getTopLeft(find.text('Are you free tomorrow?')).dx,
-      tester.getTopLeft(find.text('Yes, after work.')).dx,
+      lessThan(tester.getTopLeft(find.text('Yes, after work.')).dx),
     );
     expect(find.text('16:40'), findsOneWidget);
     expect(find.text('16:41'), findsOneWidget);
@@ -106,6 +182,8 @@ void main() {
       expect(downloads, 1);
       final slider = tester.widget<Slider>(find.byType(Slider));
       slider.onChanged!(.65);
+      expect(sought, isNull);
+      slider.onChangeEnd!(.65);
       expect(sought, .65);
       expect(tester.takeException(), isNull);
     },

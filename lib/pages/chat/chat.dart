@@ -249,9 +249,50 @@ class ChatController extends State<ChatPageWithRoom>
     context.go('/rooms');
   }
 
+  String? historyError;
+  bool historyLoading = false;
+  final _historyPositions = <(Timeline, int, String?, String?)>{};
   Future<void> requestHistory([_]) async {
-    Logs().v('Requesting history...');
-    await timeline?.requestHistory(historyCount: _loadHistoryCount);
+    final current = timeline;
+    if (historyLoading || current == null || current.isRequestingHistory)
+      return;
+    final before = (
+      current.events.length,
+      current.room.prev_batch,
+      current.events.lastOrNull?.eventId,
+    );
+    setState(() {
+      historyLoading = true;
+      historyError = null;
+    });
+    try {
+      await current.requestHistory(historyCount: _loadHistoryCount);
+      if (!mounted || !identical(timeline, current)) return;
+      final position = (
+        current,
+        current.events.length,
+        current.room.prev_batch,
+        current.events.lastOrNull?.eventId,
+      );
+      final repeated = !_historyPositions.add(position);
+      if (_historyPositions.length > 32)
+        _historyPositions.remove(_historyPositions.first);
+      if (current.canRequestHistory &&
+          (repeated ||
+              before ==
+                  (
+                    current.events.length,
+                    current.room.prev_batch,
+                    current.events.lastOrNull?.eventId,
+                  ))) {
+        historyError = 'History did not advance. Retry loading older messages.';
+      }
+    } catch (_) {
+      if (mounted && identical(timeline, current))
+        historyError = 'Older history could not load. Retry.';
+    } finally {
+      if (mounted) setState(() => historyLoading = false);
+    }
   }
 
   Future<void> requestFuture() async {
@@ -633,6 +674,8 @@ class ChatController extends State<ChatPageWithRoom>
     }
     if (timeline != loadedTimeline) timeline?.cancelSubscriptions();
     timeline = loadedTimeline;
+    historyError = null;
+    _historyPositions.clear();
     loadedTimeline.requestKeys(onlineKeyBackupOnly: false);
     if (requestedRoom.markedUnread &&
         PersonalPrivacy.policy.allowAutomaticRead) {

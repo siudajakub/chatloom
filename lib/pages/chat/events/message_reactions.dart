@@ -3,10 +3,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:collection/collection.dart' show IterableExtension;
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/pages/chat/conversation_message_actions.dart';
 import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
@@ -15,8 +14,14 @@ import 'package:matrix/matrix.dart';
 class MessageReactions extends StatelessWidget {
   final Event event;
   final Timeline timeline;
+  final bool strict;
 
-  const MessageReactions(this.event, this.timeline, {super.key});
+  const MessageReactions(
+    this.event,
+    this.timeline, {
+    super.key,
+    this.strict = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -49,40 +54,46 @@ class MessageReactions extends StatelessWidget {
     final reactionList = reactionMap.values.toList();
     reactionList.sort((a, b) => b.count - a.count > 0 ? 1 : -1);
     final ownMessage = event.senderId == event.room.client.userID;
-    return Wrap(
-      spacing: 4.0,
-      runSpacing: 4.0,
-      alignment: ownMessage ? WrapAlignment.end : WrapAlignment.start,
-      children: [
-        ...reactionList.map(
-          (r) => _Reaction(
-            reactionKey: r.key,
-            count: r.count,
-            reacted: r.reacted,
-            onTap: () {
-              if (r.reacted) {
-                final evt = allReactionEvents.firstWhereOrNull(
-                  (e) =>
-                      e.senderId == e.room.client.userID &&
-                      e.content.tryGetMap('m.relates_to')?['key'] == r.key,
-                );
-                if (evt != null) {
-                  showFutureLoadingDialog(
-                    context: context,
-                    future: evt.redactEvent,
-                  );
-                }
-              } else {
-                event.room.sendReaction(event.eventId, r.key);
-              }
-            },
-            onLongPress: () async => await _AdaptableReactorsDialog(
-              client: client,
-              reactionEntry: r,
-            ).show(context),
+    final manager = ConversationMessageActions.coordinator(event);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!context.mounted) return;
+      ConversationMessageActions.reconcile(event, timeline);
+    });
+    return AnimatedBuilder(
+      animation: manager,
+      builder: (context, _) => Wrap(
+        spacing: 4.0,
+        runSpacing: 4.0,
+        alignment: ownMessage ? WrapAlignment.end : WrapAlignment.start,
+        children: [
+          ...reactionList.map(
+            (r) => _Reaction(
+              reactionKey: r.key,
+              count: r.count,
+              reacted: r.reacted,
+              pending:
+                  manager.unresolved(
+                    ConversationMessageActions.key(event, r.key),
+                  ) ||
+                  manager.unresolved(
+                    ConversationMessageActions.key(event, r.key, removal: true),
+                  ),
+              onTap: () => ConversationMessageActions.react(
+                context,
+                event,
+                timeline,
+                r.key,
+                toggle: true,
+                strict: strict,
+              ),
+              onLongPress: () async => await _AdaptableReactorsDialog(
+                client: client,
+                reactionEntry: r,
+              ).show(context),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -91,6 +102,7 @@ class _Reaction extends StatelessWidget {
   final String reactionKey;
   final int count;
   final bool? reacted;
+  final bool pending;
   final void Function()? onTap;
   final void Function()? onLongPress;
 
@@ -98,6 +110,7 @@ class _Reaction extends StatelessWidget {
     required this.reactionKey,
     required this.count,
     required this.reacted,
+    this.pending = false,
     required this.onTap,
     required this.onLongPress,
   });
@@ -122,30 +135,37 @@ class _Reaction extends StatelessWidget {
       }
       content = Text(renderKey.toString(), style: TextStyle(fontSize: 14));
     }
-    return Badge(
-      isLabelVisible: count > 1,
-      label: Text(count.toString()),
-      textStyle: TextStyle(fontSize: 10),
-      textColor: theme.colorScheme.onPrimary,
-      backgroundColor: theme.colorScheme.primary.withAlpha(200),
-      child: InkWell(
-        onTap: () => onTap != null ? onTap!() : null,
-        onLongPress: () => onLongPress != null ? onLongPress!() : null,
-        borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-        child: Container(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.secondaryContainer,
-            border: Border.all(
-              color: reacted == true
-                  ? theme.colorScheme.secondary
-                  : theme.colorScheme.secondaryContainer,
-              width: 1,
-            ),
+    return Semantics(
+      label:
+          '$reactionKey, $count reactions${pending ? ', waiting for source confirmation' : ''}',
+      child: Opacity(
+        opacity: pending ? .55 : 1,
+        child: Badge(
+          isLabelVisible: count > 1,
+          label: Text(count.toString()),
+          textStyle: TextStyle(fontSize: 10),
+          textColor: theme.colorScheme.onPrimary,
+          backgroundColor: theme.colorScheme.primary.withAlpha(200),
+          child: InkWell(
+            onTap: () => onTap != null ? onTap!() : null,
+            onLongPress: () => onLongPress != null ? onLongPress!() : null,
             borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+            child: Container(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.secondaryContainer,
+                border: Border.all(
+                  color: reacted == true
+                      ? theme.colorScheme.secondary
+                      : theme.colorScheme.secondaryContainer,
+                  width: 1,
+                ),
+                borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+              ),
+              height: 24,
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: content,
+            ),
           ),
-          height: 24,
-          padding: const EdgeInsets.symmetric(horizontal: 3),
-          child: content,
         ),
       ),
     );
