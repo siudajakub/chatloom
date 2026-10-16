@@ -40,6 +40,38 @@ Future<void> main() async {
     check((await db.readPrefix('job%_/')).length == 1, 'Prefix wildcard');
     check((await db.readPrefix('🎙️/')).length == 1, 'Unicode prefix');
     check((await db.readPrefix('')).length == 4, 'Empty prefix');
+    final boundaryKeys = [
+      'scope:item',
+      'scope;outside',
+      'Scope:case-sensitive',
+      'edge\u{10ffff}/item',
+      'edgf/outside',
+      '\ud7ff/item',
+      '\ue000/outside',
+      '\uffff/item',
+      '\u{10000}/outside',
+      '\u{10ffff}',
+      '\u{10ffff}/item',
+    ];
+    for (final boundary in boundaryKeys) {
+      await db.put(boundary, {'fixture': true});
+    }
+    for (final prefix in [
+      'scope:',
+      'Scope:',
+      'edge\u{10ffff}',
+      '\ud7ff',
+      '\uffff',
+      '\u{10ffff}',
+      '\u{10ffff}/',
+    ]) {
+      final expected = boundaryKeys.where((key) => key.startsWith(prefix)).toSet();
+      final actual = (await db.readPrefix(prefix)).keys.toSet();
+      check(
+        actual.length == expected.length && actual.containsAll(expected),
+        'Prefix range boundary mismatch',
+      );
+    }
     await db.delete('jobxx/2');
     check(await db.get('jobxx/2') == null, 'Delete failed');
     await db.close();

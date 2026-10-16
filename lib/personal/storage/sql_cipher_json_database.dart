@@ -83,13 +83,23 @@ class SqlCipherJsonDatabase {
     );
   });
 
-  /// '%' and '_' are literal, and SQLite length handles Unicode code points.
+  /// Binary text ranges use the primary-key index. '%' and '_' stay literal;
+  /// computing the upper boundary by Unicode scalar preserves emoji prefixes.
   Future<Map<String, Map<String, dynamic>>> readPrefix(String prefix) =>
       preserveOnStorageFailure(() async {
+        final upper = _prefixUpperBound(prefix);
         final rows = await _database.query(
           'personal_entries',
-          where: 'substr(entry_key, 1, length(?)) = ?',
-          whereArgs: [prefix, prefix],
+          where: prefix.isEmpty
+              ? null
+              : upper == null
+              ? 'entry_key >= ?'
+              : 'entry_key >= ? AND entry_key < ?',
+          whereArgs: prefix.isEmpty
+              ? null
+              : upper == null
+              ? [prefix]
+              : [prefix, upper],
           orderBy: 'entry_key',
         );
         return {
@@ -97,6 +107,16 @@ class SqlCipherJsonDatabase {
             row['entry_key']! as String: _decode(row['json_value']),
         };
       });
+
+  static String? _prefixUpperBound(String prefix) {
+    final scalars = prefix.runes.toList();
+    for (var i = scalars.length - 1; i >= 0; i--) {
+      if (scalars[i] == 0x10ffff) continue;
+      scalars[i] = scalars[i] == 0xd7ff ? 0xe000 : scalars[i] + 1;
+      return String.fromCharCodes(scalars.take(i + 1));
+    }
+    return null;
+  }
 
   Future<void> close() => preserveOnStorageFailure(_database.close);
 
