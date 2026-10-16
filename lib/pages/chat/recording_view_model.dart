@@ -20,6 +20,7 @@ import 'package:record/record.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'events/audio_player.dart';
+import 'recording_waveform.dart';
 
 class RecordingViewModel extends StatefulWidget {
   final Widget Function(BuildContext, RecordingViewModelState) builder;
@@ -31,64 +32,90 @@ class RecordingViewModel extends StatefulWidget {
 }
 
 class RecordingViewModelState extends State<RecordingViewModel> {
+  static const maxVisibleAmplitudes = 120;
   Timer? _recorderSubscription;
   Duration duration = Duration.zero;
+  final Stopwatch _clock = Stopwatch();
+  final RecordingWaveform _waveform = RecordingWaveform();
+  int _generation = 0, _sampleGeneration = 0;
+  bool _starting = false, _transitioning = false, _sending = false;
+  bool _wakeHeld = false;
+  Future<void> _wakeTail = Future<void>.value();
+  Future<void> _cleanup = Future<void>.value();
+  _VoiceRecordingSession? _session;
 
-  bool get isRecording => _audioRecorder != null;
+  bool get isRecording => _session != null;
+  bool get controlsBusy => _starting || _transitioning || _sending;
+  bool get isSending => _sending;
+  bool get canResume => !controlsBusy && _session?.stopped != true;
 
-  AudioRecorder? _audioRecorder;
   final List<double> amplitudeTimeline = [];
 
   String? fileName;
 
   bool isPaused = false;
 
+  bool _current(int generation, _VoiceRecordingSession session) =>
+      mounted && generation == _generation && identical(_session, session);
+
+  Future<void> _setAwake(bool enabled) {
+    if (_wakeHeld == enabled) return _wakeTail;
+    _wakeHeld = enabled;
+    final operation = _wakeTail.then((_) => WakelockPlus.toggle(enable: enabled));
+    _wakeTail = operation.catchError((Object _) {});
+    return operation;
+  }
+
   Future<void> startRecording(Room room) async {
-    room.client.getConfig(); // Preload server file configuration.
-    if (PlatformInfos.isAndroid) {
-      final info = await DeviceInfoPlugin().androidInfo;
-      if (!mounted) return;
-      if (info.version.sdkInt < 19) {
-        showOkAlertDialog(
-          context: context,
-          title: L10n.of(context).unsupportedAndroidVersion,
-          message: L10n.of(context).unsupportedAndroidVersionLong,
-          okLabel: L10n.of(context).close,
-        );
+    if (!mounted || _starting || _session != null) return;
+    _starting = true;
+    final generation = ++_generation;
+    _VoiceRecordingSession? session;
+    try {
+      await _cleanup;
+      if (!mounted || generation != _generation) return;
+      // Server configuration preloading must not turn a failed request into an
+      // unhandled asynchronous error while microphone permission is pending.
+      unawaited(room.client.getConfig().then<void>((_) {}, onError: (Object _) {}));
+      if (PlatformInfos.isAndroid) {
+        final info = await DeviceInfoPlugin().androidInfo;
+        if (!mounted || generation != _generation) return;
+        if (info.version.sdkInt < 19) {
+          showOkAlertDialog(
+            context: context,
+            title: L10n.of(context).unsupportedAndroidVersion,
+            message: L10n.of(context).unsupportedAndroidVersionLong,
+            okLabel: L10n.of(context).close,
+          );
+          return;
+        }
+      }
+      session = _session = _VoiceRecordingSession(AudioRecorder());
+      final audioRecorder = session.recorder;
+      setState(() {});
+      final permission = await audioRecorder.hasPermission();
+      if (!_current(generation, session)) return;
+      if (!permission) {
+        setState(_reset);
         return;
       }
-    }
-    if (await AudioRecorder().hasPermission() == false) return;
-
-    final audioRecorder = _audioRecorder ??= AudioRecorder();
-    setState(() {});
-
-    try {
       final codec =
           !PlatformInfos
                   .isIOS && // Blocked by https://github.com/llfbandit/record/issues/560
               await audioRecorder.isEncoderSupported(AudioEncoder.opus)
           ? AudioEncoder.opus
           : AudioEncoder.aacLc;
+      if (!_current(generation, session)) return;
       fileName =
           'voice_message_${DateTime.now().millisecondsSinceEpoch}.${codec.fileExtension}';
       String? path;
       if (!kIsWeb) {
         final tempDir = await getTemporaryDirectory();
+        if (!_current(generation, session)) return;
         path = path_lib.join(tempDir.path, fileName);
       }
-
-      final result = await audioRecorder.hasPermission();
-      if (result != true) {
-        if (!mounted) return;
-        showOkAlertDialog(
-          context: context,
-          title: L10n.of(context).oopsSomethingWentWrong,
-          message: L10n.of(context).noPermission,
-        );
-        return;
-      }
-      await WakelockPlus.enable();
+      await _setAwake(true);
+      if (!_current(generation, session)) return;
 
       await audioRecorder.start(
         RecordConfig(
@@ -102,18 +129,23 @@ class RecordingViewModelState extends State<RecordingViewModel> {
         ),
         path: path ?? '',
       );
-      if (!mounted) return;
+      if (!_current(generation, session)) return;
+      _clock.reset();
+      _clock.start();
       setState(() => duration = Duration.zero);
       _subscribe();
-    } catch (e, s) {
-      Logs().w('Unable to start voice message recording', e, s);
-      if (!mounted) return;
-      showOkAlertDialog(
-        context: context,
-        title: L10n.of(context).oopsSomethingWentWrong,
-        message: e.toString(),
-      );
-      setState(_reset);
+    } catch (_) {
+      if (mounted && generation == _generation) {
+        _showError();
+        setState(_reset);
+      }
+    } finally {
+      if (session != null && !_current(generation, session)) {
+        await session.release();
+      }
+      if (mounted && generation == _generation) {
+        setState(() => _starting = false);
+      }
     }
   }
 
@@ -124,50 +156,120 @@ class RecordingViewModelState extends State<RecordingViewModel> {
   }
 
   void _subscribe() {
-    _recorderSubscription?.cancel();
+    _stopSampling();
+    final session = _session;
+    if (session == null) return;
+    final generation = _generation;
+    final sampleGeneration = _sampleGeneration;
+    var pending = false;
     _recorderSubscription = Timer.periodic(const Duration(milliseconds: 100), (
       _,
     ) async {
-      final amplitude = await _audioRecorder!.getAmplitude();
-      var value = 100 + amplitude.current * 2;
-      value = value < 1 ? 1 : value;
-      amplitudeTimeline.add(value);
-      setState(() {
-        duration += const Duration(milliseconds: 100);
-      });
+      if (pending || !_current(generation, session) || isPaused || _sending) return;
+      pending = true;
+      try {
+        final amplitude = await session.recorder.getAmplitude();
+        if (!_current(generation, session) ||
+            sampleGeneration != _sampleGeneration) {
+          return;
+        }
+        final raw = 100 + amplitude.current * 2;
+        final value = raw.isFinite ? raw.clamp(1.0, 100.0) : 1.0;
+        setState(() {
+          amplitudeTimeline.add(value);
+          if (amplitudeTimeline.length > maxVisibleAmplitudes) {
+            amplitudeTimeline.removeAt(0);
+          }
+          _waveform.add(value);
+          duration = _clock.elapsed;
+        });
+      } catch (_) {
+        // Device interruptions or a rejected sample must not escape the timer
+        // or leave a recorder/wakelock running without a working UI.
+        if (_current(generation, session)) {
+          _showError();
+          setState(_reset);
+        }
+      } finally {
+        pending = false;
+      }
     });
   }
 
-  void _reset() {
-    WakelockPlus.disable();
+  void _stopSampling() {
+    ++_sampleGeneration;
     _recorderSubscription?.cancel();
-    _audioRecorder?.stop();
-    _audioRecorder = null;
+    _recorderSubscription = null;
+  }
+
+  void _reset() {
+    ++_generation;
+    _stopSampling();
+    _clock.stop();
+    _clock.reset();
+    final session = _session;
+    _session = null;
+    _cleanup = Future.wait<void>([
+      if (session != null) session.release(),
+      _setAwake(false).catchError((Object _) {}),
+    ]).then<void>((_) {});
 
     fileName = null;
     duration = Duration.zero;
     amplitudeTimeline.clear();
+    _waveform.clear();
     isPaused = false;
+    _starting = _transitioning = _sending = false;
   }
 
   void cancel() {
     setState(_reset);
   }
 
-  void pause() {
-    _audioRecorder?.pause();
-    _recorderSubscription?.cancel();
-    setState(() {
+  Future<void> pause() async {
+    final session = _session;
+    if (session == null || controlsBusy || isPaused) return;
+    final generation = _generation;
+    setState(() => _transitioning = true);
+    _stopSampling();
+    try {
+      await session.recorder.pause();
+      if (!_current(generation, session)) return;
+      _clock.stop();
       isPaused = true;
-    });
+      duration = _clock.elapsed;
+      await _setAwake(false);
+    } catch (_) {
+      if (_current(generation, session)) {
+        _showError();
+        setState(_reset);
+      }
+    } finally {
+      if (_current(generation, session)) setState(() => _transitioning = false);
+    }
   }
 
-  void resume() {
-    _audioRecorder?.resume();
-    _subscribe();
-    setState(() {
+  Future<void> resume() async {
+    final session = _session;
+    if (session == null || !canResume || !isPaused) return;
+    final generation = _generation;
+    setState(() => _transitioning = true);
+    try {
+      await _setAwake(true);
+      if (!_current(generation, session)) return;
+      await session.recorder.resume();
+      if (!_current(generation, session)) return;
+      _clock.start();
       isPaused = false;
-    });
+      _subscribe();
+    } catch (_) {
+      if (_current(generation, session)) {
+        _showError();
+        setState(_reset);
+      }
+    } finally {
+      if (_current(generation, session)) setState(() => _transitioning = false);
+    }
   }
 
   Future<void> stopAndSend(
@@ -179,26 +281,69 @@ class RecordingViewModelState extends State<RecordingViewModel> {
     )
     onSend,
   ) async {
-    _recorderSubscription?.cancel();
-    final path = await _audioRecorder?.stop();
-
-    if (path == null) throw ('Recording failed!');
-    const waveCount = AudioPlayerWidget.wavesCount;
-    final step = amplitudeTimeline.length < waveCount
-        ? 1
-        : (amplitudeTimeline.length / waveCount).round();
-    final waveform = <int>[];
-    for (var i = 0; i < amplitudeTimeline.length; i += step) {
-      waveform.add((amplitudeTimeline[i] / 100 * 1024).round());
+    final session = _session;
+    final name = fileName;
+    if (session == null || name == null || controlsBusy) return;
+    final generation = _generation;
+    setState(() => _sending = true);
+    _stopSampling();
+    _clock.stop();
+    duration = _clock.elapsed;
+    final waveform = _waveform.samples(count: AudioPlayerWidget.wavesCount);
+    try {
+      final path = await session.stop();
+      if (!_current(generation, session)) return;
+      isPaused = true;
+      await _setAwake(false);
+      if (!_current(generation, session)) return;
+      if (path == null) throw StateError('Recording failed');
+      // Keep the recorded file and source-bound callback until the normal send
+      // path accepts it. A failed send remains available for explicit retry.
+      await onSend(path, duration.inMilliseconds, waveform, name);
+      if (_current(generation, session)) setState(_reset);
+    } catch (_) {
+      if (_current(generation, session)) {
+        isPaused = true;
+        unawaited(_setAwake(false).catchError((Object _) {}));
+        _showError();
+      }
+    } finally {
+      if (_current(generation, session)) setState(() => _sending = false);
     }
+  }
 
-    onSend(path, duration.inMilliseconds, waveform, fileName!);
-
-    cancel();
+  void _showError() {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(L10n.of(context).oopsSomethingWentWrong)),
+    );
   }
 
   @override
   Widget build(BuildContext context) => widget.builder(context, this);
+}
+
+/// Owns one platform recorder, including permission-only and failed sessions.
+/// Stop/dispose is idempotent even when cancellation races a native callback.
+class _VoiceRecordingSession {
+  final AudioRecorder recorder;
+  Future<String?>? _stop;
+  Future<void>? _release;
+  _VoiceRecordingSession(this.recorder);
+  bool get stopped => _stop != null;
+  Future<String?> stop() => _stop ??= recorder.stop();
+  Future<void> release() => _release ??= _close();
+  Future<void> _close() async {
+    try {
+      await stop();
+    } catch (_) {
+      // Even a rejected stop must release the native recorder/state stream.
+    } finally {
+      try {
+        await recorder.dispose();
+      } catch (_) {}
+    }
+  }
 }
 
 extension on AudioEncoder {

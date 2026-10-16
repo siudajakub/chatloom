@@ -38,7 +38,7 @@ class RecordingInputRow extends StatelessWidget {
               tooltip: L10n.of(context).cancel,
               icon: const Icon(Icons.delete_outlined),
               color: theme.colorScheme.error,
-              onPressed: state.cancel,
+              onPressed: state.isSending ? null : state.cancel,
             ),
           ),
           if (state.isPaused)
@@ -48,7 +48,7 @@ class RecordingInputRow extends StatelessWidget {
               child: IconButton(
                 tooltip: L10n.of(context).resume,
                 icon: const Icon(Icons.play_circle_outline_outlined),
-                onPressed: state.resume,
+                onPressed: state.canResume ? state.resume : null,
               ),
             )
           else
@@ -58,7 +58,7 @@ class RecordingInputRow extends StatelessWidget {
               child: IconButton(
                 tooltip: L10n.of(context).pause,
                 icon: const Icon(Icons.pause_circle_outline_outlined),
-                onPressed: state.pause,
+                onPressed: state.controlsBusy ? null : state.pause,
               ),
             ),
           Text(time),
@@ -97,7 +97,7 @@ class RecordingInputRow extends StatelessWidget {
             ),
             tooltip: L10n.of(context).sendAudio,
             icon: const Icon(Icons.send_outlined),
-            onPressed: () => state.stopAndSend(onSend),
+            onPressed: state.controlsBusy ? null : () => state.stopAndSend(onSend),
           ),
           const SizedBox(width: 4),
         ],
