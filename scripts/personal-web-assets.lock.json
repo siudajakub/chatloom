@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "archive": {
+    "name": "fluffychat-web.tar.gz",
+    "release": "https://github.com/krille-chan/fluffychat/releases/tag/v2.10.0",
+    "sha256": "8321da3b5248e3a4c609d7d70df5ca84ae173c44807fa17a79ed65cfcdf4458e"
+  },
+  "packages": {"flutter_vodozemac": "0.8.1", "native_imaging": "0.5.0"},
+  "assets": [
+    {"path": "web/Imaging.js", "member": "build/web/Imaging.js", "sha256": "2016c5c7799de3796832cf4ae55bc5dbd57b83be620f2abc481fe89e046a1d22"},
+    {"path": "web/Imaging.wasm", "member": "build/web/Imaging.wasm", "sha256": "2c792a50f652559056c519c2426446442e234348a58a47913495d8a873802232"},
+    {"path": "assets/vodozemac/0.8.1/vodozemac_bindings_dart.js", "member": "build/web/assets/assets/vodozemac/0.8.1/vodozemac_bindings_dart.js", "sha256": "13c6a7e47c8cb964fc40dc31e402509f6908f434796ac64415035d786f870dda"},
+    {"path": "assets/vodozemac/0.8.1/vodozemac_bindings_dart_bg.wasm", "member": "build/web/assets/assets/vodozemac/0.8.1/vodozemac_bindings_dart_bg.wasm", "sha256": "3d848171d57cc1cc5cc87fb81265c95dcc93f5b350abd2b05a61d3193066c362"}
+  ]
+}

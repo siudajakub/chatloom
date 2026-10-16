@@ -37,6 +37,8 @@ SOURCES = (
     'assets/notion/fonts/Roboto-Bold.ttf',
     'assets/notion/fonts/Roboto_LICENSE.txt',
     'lib/personal/media/media_access.dart',
+    'lib/personal/media/private_directories_native.dart',
+    'lib/personal/media/private_directories_stub.dart',
     'lib/personal/storage/storage_failure.dart',
     'lib/personal/round_video/round_capture_backend.dart',
     'lib/personal/round_video/round_capture_controller.dart',

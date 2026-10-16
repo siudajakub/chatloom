@@ -34,7 +34,11 @@ SOURCES = (
  'lib/personal/ui/notion_search_controls.dart',
  'lib/personal/ui/notion_chat_details_page.dart', 'lib/personal/ui/notion_settings_page.dart',
  'lib/personal/ui/notion_chat_details_notifications.dart',
+ 'lib/personal/ui/notion_privacy_preferences.dart', 'lib/personal/ui/notion_settings_body.dart',
  'lib/pages/chat/notion_conversation.dart',
+ 'lib/pages/chat/conversation_grouping.dart', 'lib/pages/chat/conversation_bubble.dart',
+ 'lib/pages/chat/conversation_motion.dart', 'lib/pages/chat/conversation_message_gestures.dart',
+ 'lib/pages/chat/compact_composer.dart', 'lib/pages/chat/conversation_source_picker.dart',
  'lib/config/themes.dart', 'lib/widgets/layouts/two_column_layout.dart',
 )
 
@@ -73,7 +77,12 @@ def prepare(flutter):
   raise RuntimeError('Unexpected native app graph in presentation harness')
  manifest = {}
  sources = list(SOURCES)
- sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion').glob('*.dart')) if not path.name.endswith(('_controller_test.dart', '_adapter_test.dart'))]
+ # SDK/controller suites run with native hooks through run-personal-app-tests.py.
+ full_graph_only = {'two_column_accessibility_test.dart',
+                    'conversation_message_actions_test.dart',
+                    'conversation_timeline_integration_test.dart',
+                    'conversation_ux_capture_test.dart'}
+ sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion').glob('*_test.dart')) if not path.name.endswith(('_controller_test.dart', '_adapter_test.dart')) and path.name not in full_graph_only]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'assets/notion').rglob('*')) if path.is_file()]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'packages/personal_core/lib').rglob('*.dart'))]
  sources += ['packages/personal_core/pubspec.yaml']
@@ -133,20 +142,22 @@ def main():
  parser.add_argument('--flutter', default=str(PROJECT / 'spikes/toolchains/flutter-3.47.4/bin/flutter'))
  parser.add_argument('--prepare-only', action='store_true')
  parser.add_argument('--skip-analyze', action='store_true')
+ parser.add_argument('--capture-dir', type=Path, help='Separate directory for synthetic screenshots')
  args = parser.parse_args()
  manifest = prepare(args.flutter)
  print(f'Prepared {len(manifest)} hashed production inputs at {HARNESS}', flush=True)
  if args.prepare_only:
   return
  environment = dict(os.environ)
- environment['NOTION_CAPTURE_DIR'] = str(ROOT / 'docs/notion-ui/evidence/screenshots')
+ environment['NOTION_CAPTURE_DIR'] = str(args.capture_dir or ROOT / 'docs/notion-ui/evidence/screenshots')
  environment['NOTION_APPROVED_PHOTOS'] = '1'
  def run(arguments):
   subprocess.run(['rtk', args.flutter, *arguments], cwd=HARNESS, env=environment, check=True)
  run(['pub', 'get', '--offline'])
- run(['test', '--no-pub', '--concurrency=1', '--reporter', 'expanded', 'test/notion'])
+ test_sources = [name for name in manifest if name.startswith('test/notion/')]
+ run(['test', '--no-pub', '--concurrency=1', '--reporter', 'expanded', *test_sources])
  if not args.skip_analyze:
-  run(['analyze', '--no-pub', '--no-fatal-infos', 'lib', 'test'])
+  run(['analyze', '--no-pub', '--no-fatal-infos', 'lib', *test_sources])
  drift = [name for name, digest in manifest.items() if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != digest]
  if drift:
   raise RuntimeError('Production sources changed during verification; rerun: ' + ', '.join(drift))

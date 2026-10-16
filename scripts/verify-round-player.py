@@ -31,6 +31,8 @@ MARKER = '.personal-round-player-harness'
 MARKER_CONTENT = 'managed-by:scripts/verify-round-player.py:v1\n'
 SOURCES = (
     'lib/personal/media/media_access.dart',
+    'lib/personal/media/private_directories_native.dart',
+    'lib/personal/media/private_directories_stub.dart',
     'lib/personal/storage/storage_failure.dart',
     'lib/personal/round_video/round_media_loader.dart',
     'lib/personal/round_video/round_playback_coordinator.dart',
@@ -52,7 +54,7 @@ TESTS = (
     'test/personal/round_video/round_mini_player_lifecycle_test.dart',
 )
 DIRECT = (
-    'material_ui', 'video_player', 'just_audio', 'path_provider',
+    'material_ui', 'video_player', 'just_audio', 'path_provider', 'http',
     'path_provider_platform_interface', 'shared_preferences', 'async',
 )
 FORBIDDEN = {
