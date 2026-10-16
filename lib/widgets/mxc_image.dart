@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -10,9 +11,11 @@ import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/utils/bounded_byte_cache.dart';
 import 'package:fluffychat/utils/client_download_content_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:fluffychat/widgets/matrix.dart';
+import 'package:http/http.dart' as http;
 import 'package:lottie/lottie.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -37,7 +40,7 @@ class MxcImage extends StatefulWidget {
   final BorderRadius borderRadius;
 
   static void clearCache(String cacheName) =>
-      _MxcImageState._imageDataCaches.remove(cacheName);
+      _MxcImageState._imageDataCache.removeWhere((key) => key.$2 == cacheName);
 
   const MxcImage({
     this.uri,
@@ -64,31 +67,67 @@ class MxcImage extends StatefulWidget {
   State<MxcImage> createState() => _MxcImageState();
 }
 
-class _MxcImageState extends State<MxcImage> {
-  static final Map<String?, Map<String, Uint8List>> _imageDataCaches = {};
-  Map<String, Uint8List> get _imageDataCache =>
-      _imageDataCaches[widget.cacheName ?? ''] ??= {};
+typedef _ImageKey = (
+  Client,
+  String,
+  String,
+  String?,
+  double?,
+  double?,
+  bool,
+  bool,
+);
 
-  Uint8List? _imageDataNoCache;
+class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
+  static final _imageDataCache = BoundedByteCache<_ImageKey>(
+    maxBytes: 32 * 1024 * 1024,
+    maxEntries: 512,
+  );
+  Uint8List? _imageData, _lottieData;
+  Timer? _retryTimer;
+  int _generation = 0, _failures = 0;
+  bool _loading = false;
+  Client? _dependencyClient;
+  double? _dependencyDpr;
 
-  Uint8List? get _imageData => widget.cacheKey == null
-      ? _imageDataNoCache
-      : _imageDataCache[widget.cacheKey];
-
-  set _imageData(Uint8List? data) {
-    if (data == null) return;
-    final cacheKey = widget.cacheKey;
-    cacheKey == null
-        ? _imageDataNoCache = data
-        : _imageDataCache[cacheKey] = data;
+  bool get _active {
+    final state = WidgetsBinding.instance.lifecycleState;
+    return state == null || state == AppLifecycleState.resumed;
   }
 
-  Future<void> _load() async {
-    if (!mounted) return;
+  void _accept(Uint8List data, _ImageKey? key, int generation) {
+    if (!mounted || generation != _generation) return;
+    if (key != null) _imageDataCache.put(key, data);
+    setState(() {
+      _imageData = data;
+      _lottieData = _ungzipLottie(data);
+      _failures = 0;
+    });
+  }
+
+  Future<void> _load(int generation) async {
     final client =
         widget.client ?? widget.event?.room.client ?? Matrix.of(context).client;
     final uri = widget.uri;
     final event = widget.event;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final key = widget.cacheKey == null
+        ? null
+        : (
+            client,
+            widget.cacheName ?? '',
+            widget.cacheKey!,
+            widget.uri?.toString() ?? widget.event?.eventId,
+            widget.width == null ? null : widget.width! * dpr,
+            widget.height == null ? null : widget.height! * dpr,
+            widget.isThumbnail,
+            widget.animated,
+          );
+    final cached = key == null ? null : _imageDataCache.get(key);
+    if (cached != null) {
+      _accept(cached, null, generation);
+      return;
+    }
 
     if (uri != null) {
       final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
@@ -105,10 +144,8 @@ class _MxcImageState extends State<MxcImage> {
         isThumbnail: widget.isThumbnail,
         animated: widget.animated,
       );
-      if (!mounted) return;
-      setState(() {
-        _imageData = remoteData;
-      });
+      _accept(remoteData, key, generation);
+      return;
     }
 
     if (event != null) {
@@ -119,46 +156,153 @@ class _MxcImageState extends State<MxcImage> {
             MessageTypes.Sticker,
           }.contains(event.messageType)) {
         Logs().e('Event of type ${event.messageType} has no thumbnail!');
+        return;
       }
       final data = await event.downloadAndDecryptAttachment(
         getThumbnail: useThumbnail,
       );
       if (data.detectFileType is MatrixImageFile) {
-        if (!mounted) return;
-        setState(() {
-          _imageData = data.bytes;
-        });
+        _accept(data.bytes, key, generation);
         return;
       }
     }
   }
 
   Future<void> _tryLoad() async {
-    if (_imageData != null) {
+    if (!mounted ||
+        !_active ||
+        _loading ||
+        _imageData != null ||
+        (widget.uri == null && widget.event == null)) {
       return;
     }
+    final generation = _generation;
+    _loading = true;
     try {
-      await _load();
+      await _load(generation);
     } on IOException catch (_) {
-      if (!mounted) return;
-      await Future.delayed(widget.retryDuration);
-      _tryLoad();
+      _scheduleRetry(generation);
+    } on http.ClientException catch (_) {
+      _scheduleRetry(generation);
+    } on TimeoutException catch (_) {
+      _scheduleRetry(generation);
     } on MatrixException catch (e) {
       Logs().d('Unable to load image', e);
+    } catch (e) {
+      // Authorization, unavailable keys or malformed attachments stay closed.
+      // A scoped thumbnail placeholder remains usable instead of an unhandled
+      // asynchronous exception or retrying protected media.
+      Logs().d('Unable to load image', e);
+    } finally {
+      if (generation == _generation) _loading = false;
     }
+  }
+
+  void _scheduleRetry(int generation) {
+    if (!mounted || generation != _generation || !_active) return;
+    final multiplier = 1 << min(_failures++, 5);
+    final delay = Duration(
+      microseconds: min(
+        widget.retryDuration.inMicroseconds * multiplier,
+        const Duration(minutes: 1).inMicroseconds,
+      ).clamp(1000, const Duration(minutes: 1).inMicroseconds),
+    );
+    _retryTimer?.cancel();
+    _retryTimer = Timer(delay, _tryLoad);
+  }
+
+  void _resetImage() {
+    _generation++;
+    _retryTimer?.cancel();
+    _loading = false;
+    _failures = 0;
+    _imageData = _lottieData = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _tryLoad());
   }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _tryLoad());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (widget.uri == null && widget.event == null) return;
+    final owner =
+        widget.client ?? widget.event?.room.client ?? Matrix.of(context).client;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    if (_dependencyClient != owner || _dependencyDpr != dpr) {
+      _dependencyClient = owner;
+      _dependencyDpr = dpr;
+      _resetImage();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _retryTimer?.cancel();
+    if (state == AppLifecycleState.resumed) {
+      _failures = 0;
+      unawaited(_tryLoad());
+    }
+  }
+
+  @override
+  void didHaveMemoryPressure() => _imageDataCache.removeWhere((_) => true);
+
+  @override
+  void didUpdateWidget(MxcImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.uri != widget.uri ||
+        oldWidget.event != widget.event ||
+        oldWidget.client != widget.client ||
+        oldWidget.cacheKey != widget.cacheKey ||
+        oldWidget.cacheName != widget.cacheName ||
+        oldWidget.width != widget.width ||
+        oldWidget.height != widget.height ||
+        oldWidget.isThumbnail != widget.isThumbnail ||
+        oldWidget.animated != widget.animated) {
+      _resetImage();
+    }
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _retryTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final data = _imageData;
     final hasData = data != null && data.isNotEmpty;
-    final ungzippedLottieData = data == null ? null : _ungzipLottie(data);
+    final ungzippedLottieData = _lottieData;
+    int? decodeSize(double? logical) {
+      if (!widget.isThumbnail ||
+          logical == null ||
+          !logical.isFinite ||
+          logical <= 0)
+        return null;
+      return max(1, (logical * MediaQuery.devicePixelRatioOf(context)).ceil());
+    }
+
+    ImageProvider imageProvider(Uint8List bytes) {
+      final original = MemoryImage(bytes);
+      final width = decodeSize(widget.width);
+      final height = decodeSize(widget.height);
+      if (width == null && height == null) return original;
+      return ResizeImage(
+        original,
+        width: width,
+        height: height,
+        policy: ResizeImagePolicy.fit,
+      );
+    }
 
     Widget errorFallback(
       BuildContext context,
@@ -197,8 +341,8 @@ class _MxcImageState extends State<MxcImage> {
                   fit: widget.fit,
                   errorBuilder: errorFallback,
                 )
-              : Image.memory(
-                  data,
+              : Image(
+                  image: imageProvider(data),
                   width: widget.width,
                   height: widget.height,
                   fit: widget.fit,

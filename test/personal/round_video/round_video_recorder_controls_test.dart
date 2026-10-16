@@ -93,7 +93,7 @@ void main() {
     }
     await fonts.load();
     final icons = FontLoader('MaterialIcons')
-      ..addFont(rootBundle.load('assets/fonts/MaterialIcons-Regular.otf'));
+      ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
     await icons.load();
   });
   const channel = MethodChannel(AndroidRoundCaptureBackend.channelName);

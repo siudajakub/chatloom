@@ -133,6 +133,27 @@ RoundCapturePreview capturePreview({
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const profile = RoundCaptureProfile(maxBytes: 25000000);
+  testWidgets('paused capture has no periodic UI wakeups and resume restarts it', (
+    tester,
+  ) async {
+    final backend = FakeCapture();
+    final controller = RoundCaptureController(backend: backend, profile: profile);
+    addTearDown(controller.dispose);
+    var changes = 0;
+    controller.addListener(() => changes++);
+    await controller.initialize();
+    await controller.start();
+    await tester.pump(const Duration(milliseconds: 200));
+    await controller.pause();
+    final pausedChanges = changes;
+    await tester.pump(const Duration(seconds: 5));
+    expect(changes, pausedChanges);
+    await controller.resume();
+    final resumedChanges = changes;
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(changes, greaterThan(resumedChanges));
+    await controller.cancel();
+  });
   test(
     'Dart and native share the narrow-range zoom availability threshold',
     () {

@@ -9,8 +9,10 @@ import 'package:fluffychat/personal/round_video/round_media_loader.dart';
 import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
 import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:matrix/src/utils/multipart_request_progress.dart';
 import 'package:video_player/video_player.dart';
 
 class _UnusedDatabase implements DatabaseApi {
@@ -58,6 +60,115 @@ Event _event() {
 }
 
 void main() {
+  testWidgets('visible round previews never download a full unopened clip', (
+    tester,
+  ) async {
+    final loader = _NeverLoad();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RoundVideoMessage(
+            _event(),
+            loader: loader,
+            coordinator: RoundPlaybackCoordinator(),
+            allowMutedAutoplay: true,
+            showThumbnail: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(loader.downloads, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final removed in [false, true]) {
+    testWidgets('late audible acquisition respects ${removed ? 'disposal' : 'source invalidation'}', (
+      tester,
+    ) async {
+      final event = _event();
+      final loader = _NeverLoad();
+      final coordinator = RoundPlaybackCoordinator();
+      final pause = Completer<void>();
+      final previous = coordinator.register(
+        pause: () => pause.future,
+        stop: () async {},
+      );
+      await previous.acquireAudible();
+      Widget build({bool expired = false}) => MaterialApp(
+        home: Scaffold(
+          body: RoundVideoMessage(
+            event,
+            loader: loader,
+            coordinator: coordinator,
+            showThumbnail: false,
+            isExpired: expired,
+          ),
+        ),
+      );
+      await tester.pumpWidget(build());
+      await tester.tap(find.byTooltip('Play round video'));
+      await tester.pump();
+      await tester.pumpWidget(removed ? const SizedBox.shrink() : build(expired: true));
+      pause.complete();
+      await tester.pump();
+      expect(loader.downloads, 0);
+      expect(tester.takeException(), isNull);
+      previous.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets(
+    'leaving a round tile cancels its in-flight SDK thumbnail safely',
+    (tester) async {
+      final event = _event();
+    event.content['info'] = {
+      ...event.infoMap,
+        'thumbnail_url': 'mxc://example.invalid/thumbnail',
+        'thumbnail_info': {'size': 4, 'mimetype': 'image/jpeg'},
+    };
+      var started = false;
+      var cancelled = false;
+      final stream = StreamController<List<int>>(
+        onCancel: () => cancelled = true,
+      );
+      addTearDown(stream.close);
+      final loader = RoundMediaLoader(
+        thumbnailDownload: (event, {onDownloadProgress}) async {
+          started = true;
+          return MatrixFile(
+            bytes: await http.ByteStream(
+              stream.stream,
+            ).toBytesWithProgress(onDownloadProgress),
+            name: 'fixture.jpg',
+            mimeType: 'image/jpeg',
+          );
+        },
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: RoundVideoMessage(
+              event,
+              loader: loader,
+              coordinator: RoundPlaybackCoordinator(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(started, isTrue);
+      await tester.pumpWidget(const SizedBox.shrink());
+      stream.add([1]);
+      await tester.pump();
+      expect(cancelled, isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test(
     'session cancellation covers playback and source subscriptions',
     () async {

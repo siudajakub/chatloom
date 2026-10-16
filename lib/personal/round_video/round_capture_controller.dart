@@ -221,14 +221,7 @@ class RoundCaptureController extends ChangeNotifier {
         _clock.reset();
         _clock.start();
         state = RoundCaptureState.recording;
-        _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
-          if (_clock.elapsedMilliseconds >= profile.maxDurationMs) {
-            wasInterrupted = true;
-            locked = true;
-            unawaited(finish());
-          }
-          _changed();
-        });
+        _subscribeTicker();
       } catch (error) {
         if (_current(generation) &&
             state == RoundCaptureState.preparing &&
@@ -244,6 +237,19 @@ class RoundCaptureController extends ChangeNotifier {
     if (!active || locked) return;
     locked = true;
     _changed();
+  }
+
+  void _subscribeTicker() {
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (_closed || state != RoundCaptureState.recording) return;
+      if (_clock.elapsedMilliseconds >= profile.maxDurationMs) {
+        wasInterrupted = true;
+        locked = true;
+        unawaited(finish());
+      }
+      _changed();
+    });
   }
 
   Future<void> pause() {
@@ -263,6 +269,7 @@ class RoundCaptureController extends ChangeNotifier {
           return;
         }
         _clock.stop();
+        _ticker?.cancel();
         locked = true;
         state = RoundCaptureState.paused;
       } catch (error) {
@@ -291,6 +298,7 @@ class RoundCaptureController extends ChangeNotifier {
         if (!_current(generation) || state != RoundCaptureState.paused) return;
         _clock.start();
         state = RoundCaptureState.recording;
+        _subscribeTicker();
       } catch (error) {
         if (_current(generation) && state == RoundCaptureState.paused) {
           _transitionFailed(error);

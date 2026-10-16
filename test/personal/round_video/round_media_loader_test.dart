@@ -5,7 +5,9 @@ import 'dart:typed_data';
 import 'package:fluffychat/personal/media/media_access.dart';
 import 'package:fluffychat/personal/round_video/round_media_loader.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
+import 'package:matrix/src/utils/multipart_request_progress.dart';
 // The isolated player harness pins this official platform test port directly.
 // ignore: depend_on_referenced_packages
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
@@ -69,7 +71,148 @@ MatrixFile _file() => MatrixFile(
   mimeType: 'video/mp4',
 );
 
+// Use the real asynchronous SDK stream path, not a synchronous callback fake.
+Future<Object?> _streamFailure(Future<Object?> Function() action) async {
+  final done = Completer<Object?>();
+  final uncaught = <Object>[];
+  runZonedGuarded(() async {
+    try {
+      await action().timeout(const Duration(seconds: 1));
+      done.complete(null);
+    } catch (error) {
+      done.complete(error);
+    }
+  }, (error, stack) => uncaught.add(error));
+  final error = await done.future;
+  expect(
+    uncaught,
+    isEmpty,
+    reason: 'Progress errors must stay in the download',
+  );
+  return error;
+}
+
 void main() {
+  test(
+    'SDK byte stream collects chunks and reports cumulative progress',
+    () async {
+      final progress = <int>[];
+      final bytes = await http.ByteStream(
+        Stream.fromIterable([
+          [1, 2],
+          [3, 4],
+        ]),
+      ).toBytesWithProgress(progress.add);
+      expect(bytes, [1, 2, 3, 4]);
+      expect(progress, [2, 4]);
+      expect(
+        await http.ByteStream(const Stream.empty()).toBytesWithProgress(null),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'SDK progress failure cancels stream and fails the download future',
+    () async {
+      var cancelled = false;
+      final stream = StreamController<List<int>>(
+        onCancel: () => cancelled = true,
+      );
+      addTearDown(stream.close);
+      final failure = StateError('synthetic progress failure');
+      final error = await _streamFailure(() {
+        final download = http.ByteStream(stream.stream).toBytesWithProgress((
+          _,
+        ) {
+          throw failure;
+        });
+        stream.add([1]);
+        return download;
+      });
+      expect(error, same(failure));
+      expect(cancelled, isTrue);
+    },
+  );
+
+  test('SDK stream errors fail once without returning partial media', () async {
+    final failure = StateError('synthetic stream failure');
+    final error = await _streamFailure(
+      () => http.ByteStream(
+        Stream<List<int>>.error(failure),
+      ).toBytesWithProgress(null),
+    );
+    expect(error, same(failure));
+  });
+
+  for (final thumbnail in [false, true]) {
+    for (final reason in ['cancelled', 'sourceUnavailable', 'mediaSizeLimit']) {
+      test(
+        'async SDK ${thumbnail ? 'thumbnail' : 'media'} handles $reason',
+        () async {
+          final cancellation = RoundMediaCancellation();
+          final event = _sizedEvent(thumbnailSize: 4);
+          var cancelled = false;
+          var leases = 0;
+          final stream = StreamController<List<int>>(
+            onCancel: () => cancelled = true,
+          );
+          addTearDown(stream.close);
+          Future<MatrixFile> download(void Function(int)? progress) async {
+            final bytes = http.ByteStream(
+              stream.stream,
+            ).toBytesWithProgress(progress);
+            if (reason == 'cancelled') cancellation.cancel();
+            if (reason == 'sourceUnavailable') {
+              event.content['msgtype'] = 'm.text';
+            }
+            stream.add(
+              Uint8List(
+                reason == 'mediaSizeLimit'
+                    ? (thumbnail
+                              ? RoundMediaLoader.maxThumbnailBytes
+                              : RoundMediaLoader.maxMediaBytes) +
+                          1
+                    : 1,
+              ),
+            );
+            return MatrixFile(
+              bytes: await bytes,
+              name: 'fixture.mp4',
+              mimeType: 'video/mp4',
+            );
+          }
+
+          final loader = RoundMediaLoader(
+            download: (event, {required cacheAttachment, onDownloadProgress}) =>
+                download(onDownloadProgress),
+            thumbnailDownload: (event, {onDownloadProgress}) =>
+                download(onDownloadProgress),
+            mediaAccess: () async {
+              leases++;
+              throw StateError('failed download must not create a lease');
+            },
+          );
+          final error = await _streamFailure(
+            () => thumbnail
+                ? loader.thumbnail(event, cancellation: cancellation)
+                : loader.load(event, cancellation: cancellation),
+          );
+          expect(
+            error,
+            isA<RoundMediaUnavailable>().having(
+              (e) => e.reason,
+              'reason',
+              reason,
+            ),
+          );
+          expect(cancelled, isTrue);
+          expect(leases, 0);
+        },
+      );
+    }
+  }
+
   test(
     'declared media/thumbnail limits reject before the SDK adapter',
     () async {
