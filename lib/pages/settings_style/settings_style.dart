@@ -5,6 +5,7 @@
 
 import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/personal/ui/notion_settings_page.dart';
 import 'package:fluffychat/utils/account_config.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -115,20 +116,11 @@ class SettingsStyleController extends State<SettingsStyle> {
   ThemeMode get currentTheme => ThemeController.of(context).themeMode;
   Color? get currentColor => ThemeController.of(context).primaryColor;
 
-  void switchTheme(ThemeMode? newTheme) {
+  Future<void> switchTheme(ThemeMode? newTheme) async {
     if (newTheme == null) return;
-    switch (newTheme) {
-      case ThemeMode.light:
-        ThemeController.of(context).setThemeMode(ThemeMode.light);
-        break;
-      case ThemeMode.dark:
-        ThemeController.of(context).setThemeMode(ThemeMode.dark);
-        break;
-      case ThemeMode.system:
-        ThemeController.of(context).setThemeMode(ThemeMode.system);
-        break;
-    }
-    setState(() {});
+    await ThemeController.of(context).setThemeMode(newTheme);
+    notionSettingsRevision.value++;
+    if (mounted) setState(() {});
   }
 
   Future<void> changeFontSizeFactor(double d) async {

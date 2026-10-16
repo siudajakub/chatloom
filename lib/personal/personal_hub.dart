@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 
@@ -9,16 +10,20 @@ import 'package:fluffychat/personal/capabilities.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/organization_page.dart';
 import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/personal_search_page.dart';
+import 'package:fluffychat/personal/ui/notion_chat_details_content.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/push_registration.dart';
 import 'package:fluffychat/personal/scheduled_composer.dart';
 import 'package:fluffychat/personal/storage/storage_failure.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/background_push.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/notion_room_actions.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';
@@ -90,11 +95,13 @@ Future<bool> schedulePersonalAttachment(
       !personal.ready) {
     throw StateError('The selected source or private sync is unavailable.');
   }
-  final frozen = composeContext ??
+  final frozen =
+      composeContext ??
       FrozenScheduledComposer.capture(
         room: room,
         target: target,
-        isCurrent: () => context.mounted &&
+        isCurrent: () =>
+            context.mounted &&
             identical(Matrix.of(context).client, personal.client),
       );
   if (jsonEncode(frozen.target.toJson()) != jsonEncode(target.toJson())) {
@@ -232,42 +239,105 @@ Future<bool> schedulePersonalAttachment(
   return true;
 }
 
-class PersonalHubButton extends StatelessWidget {
-  const PersonalHubButton({super.key});
-  @override
-  Widget build(BuildContext context) => IconButton(
-    tooltip: 'Personal tools',
-    icon: const Icon(Icons.tune),
-    onPressed: () => Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PersonalHub(client: Matrix.of(context).client),
-      ),
-    ),
-  );
+enum PersonalSettingsSection {
+  sync('Sync & transcriptions'),
+  people('People & merged conversations'),
+  transcriptions('Transcriptions'),
+  reminders('Reminders'),
+  scheduled('Scheduled messages'),
+  push('Push setup & registration');
+
+  final String title;
+  const PersonalSettingsSection(this.title);
 }
 
-class PersonalHub extends StatefulWidget {
+class PersonalSettingsPage extends StatefulWidget {
   final Client client;
-  const PersonalHub({super.key, required this.client});
+  final PersonalSettingsSection section;
+  const PersonalSettingsPage({
+    super.key,
+    required this.client,
+    required this.section,
+  });
   @override
-  State<PersonalHub> createState() => _PersonalHubState();
+  State<PersonalSettingsPage> createState() => _PersonalSettingsPageState();
 }
 
-class _PersonalHubState extends State<PersonalHub> {
-  late final personal = PersonalClient.of(widget.client);
+class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
+  late PersonalClient personal = PersonalClient.of(widget.client);
+  Timer? _readinessTimer;
+  AppLifecycleListener? _readinessLifecycle;
+  BackgroundPush? _push;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final push = BackgroundPush(Matrix.of(context));
+    if (!identical(_push, push)) {
+      _push?.registrationChanges.removeListener(_refreshReadiness);
+      _push = push;
+      push.registrationChanges.addListener(_refreshReadiness);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant PersonalSettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.client, widget.client)) {
+      personal = PersonalClient.of(widget.client);
+      unawaited(personal.load());
+    }
+  }
+
+  void _refreshReadiness() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _readinessTimer?.cancel();
+    _readinessLifecycle?.dispose();
+    _push?.registrationChanges.removeListener(_refreshReadiness);
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    _readinessLifecycle = AppLifecycleListener(
+      onStateChange: (_) => _updateReadinessTimer(),
+    );
+    _updateReadinessTimer();
     personal.load();
   }
 
+  void _updateReadinessTimer() {
+    _readinessTimer?.cancel();
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state != null && state != AppLifecycleState.resumed) return;
+    _refreshReadiness();
+    _readinessTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _refreshReadiness(),
+    );
+  }
+
   Future<void> _configurePush() async {
+    final account = widget.client;
+    final owner = account.userID, device = account.deviceID;
+    bool current() =>
+        mounted &&
+        identical(account, widget.client) &&
+        identical(Matrix.of(context).client, account) &&
+        account.userID == owner &&
+        account.deviceID == device &&
+        account.isLogged();
     final url = await personalText(
       context,
       'Notification gateway HTTPS address',
       initial: AppSettings.pushNotificationsGatewayUrl.value,
     );
-    if (url == null || !mounted) return;
+    if (url == null || !mounted || !current()) return;
     final uri = Uri.tryParse(url.trim());
     if (uri == null ||
         uri.scheme != 'https' ||
@@ -298,7 +368,7 @@ class _PersonalHubState extends State<PersonalHub> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
-                  'Paste the random key also saved in your gateway configuration. Use at least 32 characters and keep it private.',
+                  'Paste the random key also saved in your gateway configuration. Use 43–128 base64url characters and keep it private.',
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -307,10 +377,9 @@ class _PersonalHubState extends State<PersonalHub> {
                   autocorrect: false,
                   enableSuggestions: false,
                   decoration: const InputDecoration(labelText: 'Device key'),
-                  validator: (value) =>
-                      RegExp(r'^[A-Za-z0-9_-]{32,}$').hasMatch(value ?? '')
+                  validator: (value) => validGatewayNonce(value)
                       ? null
-                      : 'Use at least 32 random letters, digits, underscores or hyphens.',
+                      : 'Use 43–128 random letters, digits, underscores or hyphens.',
                 ),
               ],
             ),
@@ -334,15 +403,22 @@ class _PersonalHubState extends State<PersonalHub> {
     } finally {
       nonceController.dispose();
     }
-    if (nonce == null || !mounted) return;
-    await const FlutterSecureStorage().write(
-      key: 'personal_gateway_nonce',
-      value: nonce,
-    );
-    await AppSettings.pushNotificationsGatewayUrl.setItem(uri.toString());
-    if (!mounted) return;
+    if (nonce == null || !mounted || !current()) return;
+    final push = BackgroundPush(Matrix.of(context));
+    push.beginRegistrationUpdate();
+    try {
+      await const FlutterSecureStorage().write(
+        key: 'personal_gateway_nonce',
+        value: nonce,
+      );
+      if (!current()) return;
+      await AppSettings.pushNotificationsGatewayUrl.setItem(uri.toString());
+    } finally {
+      push.endRegistrationUpdate();
+    }
+    if (!mounted || !current()) return;
     await BackgroundPush(Matrix.of(context)).setupPush(context);
-    if (mounted) {
+    if (mounted && current()) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -354,18 +430,31 @@ class _PersonalHubState extends State<PersonalHub> {
   }
 
   Future<void> _copyPushRegistration() async {
-    final token = BackgroundPush(Matrix.of(context)).fcmToken;
+    final account = widget.client;
+    final owner = account.userID;
+    final push = BackgroundPush(Matrix.of(context));
+    final token = push.fcmToken;
+    final revision = push.registrationRevision;
     final device = widget.client.deviceID;
     final nonce = await const FlutterSecureStorage().read(
       key: 'personal_gateway_nonce',
     );
-    if (!mounted) return;
+    if (!mounted ||
+        !identical(account, widget.client) ||
+        !identical(Matrix.of(context).client, account) ||
+        account.userID != owner ||
+        account.deviceID != device ||
+        !account.isLogged() ||
+        _push?.fcmToken != token ||
+        push.registrationRevision != revision) {
+      return;
+    }
     if (token == null ||
         token.isEmpty ||
         device == null ||
         device.isEmpty ||
         nonce == null ||
-        !RegExp(r'^[A-Za-z0-9_-]{32,}$').hasMatch(nonce)) {
+        !validGatewayNonce(nonce)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -394,10 +483,14 @@ class _PersonalHubState extends State<PersonalHub> {
   }
 
   Future<void> run(Future<void> Function() f) async {
+    final owner = personal;
+    if (!mounted || !identical(Matrix.of(context).client, owner.client)) return;
     try {
       await f();
     } catch (error) {
-      if (mounted) {
+      if (mounted &&
+          identical(owner, personal) &&
+          identical(Matrix.of(context).client, owner.client)) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -414,378 +507,507 @@ class _PersonalHubState extends State<PersonalHub> {
     }
   }
 
+  bool _canChange(String entity) =>
+      personal.ready &&
+      !personal.pending.values.any((op) => op.entityId == entity);
+
   Future<void> merge() async {
-    final rooms = widget.client.rooms
+    final owner = personal;
+    if (!owner.ready) return;
+    final rooms = owner.client.rooms
         .where(
-          (r) => r.directChatMatrixID != null && !PersonalPrivacy.isJournal(r),
+          (room) =>
+              room.membership == Membership.join &&
+              room.directChatMatrixID != null &&
+              !PersonalPrivacy.isJournal(room),
         )
         .toList();
-    final selected = <String>{};
-    final name = TextEditingController();
-    final group = await showDialog<PersonGroup>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, set) => AlertDialog(
-          title: const Text('Merge conversations for one person'),
-          content: SizedBox(
-            width: 440,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: name,
-                  onChanged: (_) => set(() {}),
-                  decoration: const InputDecoration(labelText: 'Person name'),
-                ),
-                Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: [
-                      for (final room in rooms)
-                        CheckboxListTile(
-                          value: selected.contains(room.id),
-                          title: Text(room.getLocalizedDisplayname()),
-                          subtitle: Text(PersonalClient.networkOf(room)),
-                          onChanged: (v) => set(
-                            () => v == true
-                                ? selected.add(room.id)
-                                : selected.remove(room.id),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: selected.length < 2 || name.text.trim().isEmpty
-                  ? null
-                  : () => Navigator.pop(
-                      context,
-                      PersonGroup(
-                        id: const Uuid().v4(),
-                        name: name.text.trim(),
-                        members: rooms
-                            .where((r) => selected.contains(r.id))
-                            .map(personal.ref)
-                            .toList(),
-                        defaultRoomId: selected.first,
-                      ),
-                    ),
-              child: const Text('Merge'),
-            ),
-          ],
-        ),
+    final group = await Navigator.of(context).push<PersonGroup>(
+      MaterialPageRoute(
+        builder: (_) => _MergeSelectionPage(personal: owner, rooms: rooms),
       ),
     );
-    name.dispose();
-    if (group != null) {
-      await personal.put(
-        'person:${group.id}',
-        group.toJson().cast<String, dynamic>(),
-      );
-    }
+    if (group == null ||
+        !mounted ||
+        !identical(owner, personal) ||
+        !identical(Matrix.of(context).client, owner.client))
+      return;
+    await owner.put(
+      'person:${group.id}',
+      group.toJson().cast<String, dynamic>(),
+    );
+  }
+
+  Future<void> _unmerge(PersonGroup group) async {
+    final owner = personal;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Unmerge conversations?'),
+        content: const Text(
+          'The source conversations and their messages will be kept.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Unmerge'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true ||
+        !mounted ||
+        !identical(owner, personal) ||
+        !identical(Matrix.of(context).client, owner.client) ||
+        !_canChange('person:${group.id}'))
+      return;
+    await owner.delete('person:${group.id}');
   }
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: personal,
-    builder: (context, _) => Scaffold(
-      appBar: AppBar(title: const Text('Personal tools')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+    builder: (context, _) => NotionSettingsScaffold(
+      title: widget.section.title,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SwitchListTile(
-            title: const Text('Incognito mode'),
-            subtitle: const Text(
-              'Suppress automatic read receipts, typing and presence on this device. Your source network may mark messages read when you reply.',
-            ),
-            value: AppSettings.personalIncognito.value,
-            onChanged: (v) => run(() async {
-              await PersonalPrivacy.setIncognito(
-                v,
-                Matrix.of(context).widget.clients,
-              );
-              if (mounted) setState(() {});
-            }),
-          ),
-          ListTile(
-            leading: Icon(personal.ready ? Icons.lock : Icons.lock_outline),
-            title: Text(
-              personal.ready
-                  ? 'Private sync configured'
-                  : 'Set up private sync',
-            ),
-            subtitle: Text(
-              kIsWeb
-                  ? 'Private encrypted storage requires the native app. Ordinary conversations are available in the browser.'
+          if (!personal.ready &&
+              widget.section != PersonalSettingsSection.push &&
+              widget.section != PersonalSettingsSection.sync)
+            NotionListRow(
+              leading: const Icon(Icons.lock_outline),
+              title: 'Private sync is unavailable',
+              subtitle: kIsWeb
+                  ? 'Private encrypted storage requires the native app.'
                   : personal.problem ??
-                        (personal.workerOnline
-                            ? 'Background worker heartbeat received'
-                            : 'Background tasks need a paired worker'),
+                        'Connect private sync to use this feature.',
+              onTap: () => context.push('/rooms/settings/sync'),
             ),
-            onTap: kIsWeb ? null : () => run(personal.connect),
-          ),
-          if (personal.pending.isNotEmpty)
-            ListTile(
-              title: Text(
-                '${personal.pending.length} changes awaiting confirmation',
-              ),
-            ),
-          if (personal.conflicts.isNotEmpty) ...[
-            const ListTile(title: Text('Conflicts — both versions retained')),
-            for (final conflict in personal.conflicts.entries)
+          ...switch (widget.section) {
+            PersonalSettingsSection.sync => <Widget>[
               ListTile(
-                onTap: () => run(
-                  () => resolvePersonalMetadataConflict(
-                    context,
-                    personal,
-                    conflict.key,
+                leading: Icon(personal.ready ? Icons.lock : Icons.lock_outline),
+                title: Text(
+                  personal.ready
+                      ? 'Private sync configured'
+                      : 'Private sync not connected',
+                ),
+                subtitle: Text(
+                  kIsWeb
+                      ? 'Private encrypted storage requires the native app. Ordinary conversations are available in the browser.'
+                      : personal.problem ?? personal.workerReadinessDescription,
+                ),
+              ),
+              if (!personal.ready && !kIsWeb)
+                NotionListRow(
+                  title: 'Connect private sync',
+                  subtitle: 'Find your existing private journal or set it up.',
+                  onTap: () => run(personal.connect),
+                ),
+              NotionListRow(
+                leading: const Icon(Icons.cloud_outlined),
+                title: 'Background services',
+                subtitle: personal.workerReadinessDescription,
+              ),
+              if (personal.problem != null)
+                NotionListRow(
+                  title: 'Retry private sync',
+                  subtitle:
+                      'Reload existing local state and synchronization status.',
+                  onTap: () => run(personal.retry),
+                ),
+              if (personal.pending.isNotEmpty)
+                ListTile(
+                  title: Text(
+                    '${personal.pending.length} changes awaiting confirmation',
                   ),
                 ),
-                title: const Text('Concurrent change'),
-                subtitle: const Text(
-                  'Reopen the affected draft or setting before choosing a version.',
+              if (personal.conflicts.keys.any(
+                (key) =>
+                    !key.startsWith('label:') && !key.startsWith('labels:'),
+              )) ...[
+                const ListTile(
+                  title: Text('Conflicts — both versions retained'),
                 ),
-              ),
-          ],
-          ListTile(
-            title: const Text('Notification setup'),
-            subtitle: const Text(
-              kIsWeb
-                  ? 'Private push gateway setup requires the native app.'
-                  : 'Register this device with your private HTTPS gateway.',
-            ),
-            onTap: kIsWeb ? null : () => run(_configurePush),
-          ),
-          ListTile(
-            title: const Text('Copy private push registration (secrets)'),
-            subtitle: const Text(
-              'The token and key are copied only when you choose this action.',
-            ),
-            leading: const Icon(Icons.copy_outlined),
-            onTap: kIsWeb ? null : () => run(_copyPushRegistration),
-          ),
-          const Divider(),
-          ListTile(
-            title: const Text('Search conversations'),
-            leading: const Icon(Icons.search),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => PersonalSearchPage(personal: personal),
-              ),
-            ),
-          ),
-          ListTile(
-            title: const Text('Organization & appearance'),
-            leading: const Icon(Icons.palette_outlined),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => OrganizationPage(personal: personal),
-              ),
-            ),
-          ),
-          ListTile(
-            title: const Text('Search bookmarks'),
-            leading: const Icon(Icons.bookmarks_outlined),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => BookmarkSearchPage(personal: personal),
-              ),
-            ),
-          ),
-          ListTile(
-            title: const Text('People & merged conversations'),
-            trailing: IconButton(
-              tooltip: 'Merge conversations',
-              icon: const Icon(Icons.add),
-              onPressed: () => run(merge),
-            ),
-          ),
-          for (final group in personal.groups)
-            ListTile(
-              title: Text(group.name),
-              subtitle: Text('${group.members.length} sources'),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) =>
-                      MergedChatPage(personal: personal, group: group),
-                ),
-              ),
-              trailing: IconButton(
-                tooltip: 'Unmerge',
-                icon: const Icon(Icons.call_split),
-                onPressed: () =>
-                    run(() => personal.delete('person:${group.id}')),
-              ),
-            ),
-          if (personal.invalidGroupCount > 0)
-            ListTile(
-              leading: const Icon(Icons.warning_amber_outlined),
-              title: const Text(
-                'Some saved conversation groups could not be loaded. Their data is preserved.',
-              ),
-              subtitle: Text('${personal.invalidGroupCount} saved groups'),
-            ),
-          const Divider(),
-          ListTile(
-            title: const Text('Labels'),
-            trailing: IconButton(
-              icon: const Icon(Icons.add),
-              onPressed: () => run(() async {
-                final name = await personalText(context, 'New label');
-                if (name != null && name.trim().isNotEmpty) {
-                  await personal.put('label:${const Uuid().v4()}', {
-                    'name': name.trim(),
-                    'showInInbox': true,
-                  });
-                }
-              }),
-            ),
-          ),
-          for (final e in personal.values.entries.where(
-            (e) => e.key.startsWith('label:'),
-          ))
-            ListTile(
-              title: Text(e.value['name'] as String? ?? 'Label'),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete_outline),
-                onPressed: () => run(() => personal.delete(e.key)),
-              ),
-            ),
-          const Divider(),
-          const ListTile(title: Text('Reminders')),
-          for (final e in personal.reminders.entries)
-            ListTile(
-              title: const Text('Conversation reminder'),
-              subtitle: Text('${e.value['dueAt']} · ${e.value['state']}'),
-              trailing: IconButton(
-                tooltip: 'Cancel',
-                icon: const Icon(Icons.close),
-                onPressed: () => run(() async {
-                  await personal.command('reminder.cancel', e.key, {
-                    'id': e.key,
-                  }, baseRevision: e.value['revision'] as int? ?? 0);
-                }),
-              ),
-            ),
-          const ListTile(title: Text('Scheduled messages')),
-          for (final e in personal.schedules.entries)
-            ListTile(
-              title: Text(
-                (e.value['content'] as Map?)?['body'] as String? ?? 'Message',
-              ),
-              subtitle: Text(
-                '${e.value['state']} · ${e.value['dueAt']}\n${scheduledSourceSummary(e.value)}',
-              ),
-              trailing: PopupMenuButton<String>(
-                enabled:
-                    personal.ready &&
-                    {
-                      'queued',
-                      'paused',
-                      'waitingKeys',
-                    }.contains(e.value['state']) &&
-                    e.value['attempted'] != true &&
-                    !personal.pending.values.any((op) => op.entityId == e.key),
-                onSelected: (kind) => run(() async {
-                  if (kind == 'update') {
-                    final content = Map<String, dynamic>.from(
-                      e.value['content'] as Map,
-                    );
-                    if ({'m.text', 'm.notice'}.contains(content['msgtype'])) {
-                      final text = await personalText(
-                        context,
-                        'Message text',
-                        initial: content['body'] as String? ?? '',
-                      );
-                      if (text == null ||
-                          text.trim().isEmpty ||
-                          !context.mounted) {
-                        return;
+                for (final conflict in personal.conflicts.entries.where(
+                  (e) =>
+                      !e.key.startsWith('label:') &&
+                      !e.key.startsWith('labels:'),
+                ))
+                  ListTile(
+                    onTap: () => run(() async {
+                      if (conflict.key.startsWith('draft:')) {
+                        await Navigator.of(context).push<void>(
+                          MaterialPageRoute(
+                            builder: (_) => DraftConflictPage(
+                              personal: personal,
+                              entityKey: conflict.key,
+                            ),
+                          ),
+                        );
+                      } else {
+                        await resolvePersonalMetadataConflict(
+                          context,
+                          personal,
+                          conflict.key,
+                        );
                       }
-                      content['body'] = text;
-                    }
-                    if (!context.mounted) return;
-                    final due = await personalDate(context);
-                    if (due == null || !due.isAfter(DateTime.now())) return;
-                    final job = ScheduledSend.fromJson({
-                      ...e.value,
-                      'dueAt': due.toUtc().toIso8601String(),
-                      'content': content,
-                    });
-                    await personal.command(
-                      'schedule.update',
-                      e.key,
-                      job.toJson().cast<String, dynamic>(),
-                      baseRevision: e.value['revision'] as int? ?? 0,
-                    );
-                  } else {
-                    await personal.command('schedule.$kind', e.key, {
-                      'id': e.key,
-                    }, baseRevision: e.value['revision'] as int? ?? 0);
-                  }
-                }),
-                itemBuilder: (_) => [
-                  const PopupMenuItem(
-                    value: 'sendNow',
-                    child: Text('Send now'),
+                    }),
+                    title: Text(
+                      conflict.key.startsWith('draft:')
+                          ? 'Two draft versions'
+                          : 'Concurrent change',
+                    ),
+                    subtitle: const Text(
+                      'Reopen the affected draft or setting before choosing a version.',
+                    ),
                   ),
-                  PopupMenuItem(
-                    value: 'update',
-                    enabled: {'queued', 'paused'}.contains(e.value['state']),
-                    child: Text('Edit time or message'),
-                  ),
-                  const PopupMenuItem(value: 'cancel', child: Text('Cancel')),
-                ],
+              ],
+              for (final copy in personal.values.entries.where(
+                (e) => e.key.startsWith('draft-copy:'),
+              ))
+                ExpansionTile(
+                  title: const Text('Retained draft copy'),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: SelectableText(
+                        copy.value['text'] is String
+                            ? copy.value['text'] as String
+                            : '',
+                      ),
+                    ),
+                  ],
+                ),
+              NotionListRow(
+                leading: const Icon(Icons.description_outlined),
+                title: 'Transcriptions',
+                subtitle: 'Manual requests, estimated costs and service status',
+                onTap: () => context.push('/rooms/settings/transcriptions'),
               ),
-            ),
-          const Divider(),
-          const ListTile(title: Text('Bookmarks')),
-          for (final e in personal.values.entries.where(
-            (e) => e.key.startsWith('bookmark:'),
-          ))
-            ListTile(
-              title: const Text('Saved message'),
-              subtitle: Text(e.value['network'] as String? ?? ''),
-              onTap: () {
-                final source = SourceEventRef.fromJson(
-                  Map<String, dynamic>.from(e.value['source'] as Map),
-                );
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => SourceChatPage(source: source),
-                  ),
-                );
-              },
-              trailing: IconButton(
-                icon: const Icon(Icons.bookmark_remove),
-                onPressed: () => run(() => personal.delete(e.key)),
+            ],
+            PersonalSettingsSection.push => <Widget>[
+              ListTile(
+                title: const Text('Notification setup'),
+                subtitle: Text(
+                  kIsWeb
+                      ? 'Private push gateway setup requires the native app.'
+                      : _push?.registrationDescription(widget.client) ??
+                            'Notification registration has not been checked.',
+                ),
+                onTap: kIsWeb ? null : () => run(_configurePush),
+                trailing: kIsWeb ? null : const Icon(Icons.chevron_right),
               ),
-            ),
-          const Divider(),
-          const ListTile(
-            title: Text('Manual transcriptions'),
-            subtitle: Text(
-              'Only requested manually from a voice message. No monthly limit. Costs are estimates, not a bill.',
+              ListTile(
+                title: const Text('Copy private push registration (secrets)'),
+                subtitle: const Text(
+                  'The token and key are copied only when you choose this action.',
+                ),
+                leading: const Icon(Icons.copy_outlined),
+                onTap: kIsWeb ? null : () => run(_copyPushRegistration),
+              ),
+              NotionListRow(
+                title: 'Notification registration details',
+                subtitle: 'Registered devices and available push providers',
+                onTap: () =>
+                    context.push('/rooms/settings/notifications/registration'),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  'Registration describes this device configuration. It does not confirm gateway authorization or notification delivery.',
+                ),
+              ),
+            ],
+            PersonalSettingsSection.people => <Widget>[
+              ListTile(
+                title: const Text('Merge conversations'),
+                trailing: IconButton(
+                  tooltip: 'Merge conversations',
+                  icon: const Icon(Icons.add),
+                  onPressed: personal.ready ? () => run(merge) : null,
+                ),
+              ),
+              for (final group in personal.groups)
+                ListTile(
+                  title: Text(group.name),
+                  subtitle: Text('${group.members.length} sources'),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          MergedChatPage(personal: personal, group: group),
+                    ),
+                  ),
+                  trailing: IconButton(
+                    tooltip: 'Unmerge',
+                    icon: const Icon(Icons.call_split),
+                    onPressed:
+                        personal.ready &&
+                            !personal.pending.values.any(
+                              (op) => op.entityId == 'person:${group.id}',
+                            )
+                        ? () => run(() => _unmerge(group))
+                        : null,
+                  ),
+                ),
+              if (personal.invalidGroupCount > 0)
+                ListTile(
+                  leading: const Icon(Icons.warning_amber_outlined),
+                  title: const Text(
+                    'Some saved conversation groups could not be loaded. Their data is preserved.',
+                  ),
+                  subtitle: Text('${personal.invalidGroupCount} saved groups'),
+                ),
+              if (personal.groups.isEmpty)
+                const ListTile(
+                  subtitle: Text(
+                    'Merge two or more conversations for one person using the add button. Every message keeps its source network.',
+                  ),
+                ),
+            ],
+            PersonalSettingsSection.reminders => <Widget>[
+              for (final e in personal.reminders.entries)
+                ListTile(
+                  title: const Text('Conversation reminder'),
+                  subtitle: Text('${e.value['dueAt']} · ${e.value['state']}'),
+                  trailing: IconButton(
+                    tooltip: 'Cancel',
+                    icon: const Icon(Icons.close),
+                    onPressed:
+                        !personal.ready ||
+                            personal.pending.values.any(
+                              (op) => op.entityId == e.key,
+                            )
+                        ? null
+                        : () => run(() async {
+                            await personal.command('reminder.cancel', e.key, {
+                              'id': e.key,
+                            }, baseRevision: e.value['revision'] as int? ?? 0);
+                          }),
+                  ),
+                ),
+              if (personal.reminders.isEmpty)
+                const ListTile(
+                  title: Text('No reminders'),
+                  subtitle: Text(
+                    'Create a reminder from a conversation to bring it back at the right time.',
+                  ),
+                ),
+            ],
+            PersonalSettingsSection.scheduled => <Widget>[
+              for (final e in personal.schedules.entries)
+                ListTile(
+                  title: Text(
+                    (e.value['content'] as Map?)?['body'] as String? ??
+                        'Message',
+                  ),
+                  subtitle: Text(
+                    '${e.value['state']} · ${e.value['dueAt']}\n${scheduledSourceSummary(e.value)}',
+                  ),
+                  trailing: PopupMenuButton<String>(
+                    enabled:
+                        personal.ready &&
+                        {
+                          'queued',
+                          'paused',
+                          'waitingKeys',
+                        }.contains(e.value['state']) &&
+                        e.value['attempted'] != true &&
+                        !personal.pending.values.any(
+                          (op) => op.entityId == e.key,
+                        ),
+                    onSelected: (kind) => run(() async {
+                      final owner = personal;
+                      bool current() =>
+                          mounted &&
+                          identical(owner, personal) &&
+                          identical(Matrix.of(context).client, owner.client);
+                      if (!current()) return;
+                      if (kind == 'update') {
+                        final content = Map<String, dynamic>.from(
+                          e.value['content'] as Map,
+                        );
+                        if ({
+                          'm.text',
+                          'm.notice',
+                        }.contains(content['msgtype'])) {
+                          final text = await personalText(
+                            context,
+                            'Message text',
+                            initial: content['body'] as String? ?? '',
+                          );
+                          if (text == null ||
+                              text.trim().isEmpty ||
+                              !context.mounted) {
+                            return;
+                          }
+                          if (!current()) return;
+                          content['body'] = text;
+                        }
+                        if (!context.mounted) return;
+                        final due = await personalDate(context);
+                        if (due == null ||
+                            !due.isAfter(DateTime.now()) ||
+                            !current())
+                          return;
+                        final job = ScheduledSend.fromJson({
+                          ...e.value,
+                          'dueAt': due.toUtc().toIso8601String(),
+                          'content': content,
+                        });
+                        await owner.command(
+                          'schedule.update',
+                          e.key,
+                          job.toJson().cast<String, dynamic>(),
+                          baseRevision: e.value['revision'] as int? ?? 0,
+                        );
+                      } else {
+                        await owner.command('schedule.$kind', e.key, {
+                          'id': e.key,
+                        }, baseRevision: e.value['revision'] as int? ?? 0);
+                      }
+                    }),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'sendNow',
+                        child: Text('Send now'),
+                      ),
+                      PopupMenuItem(
+                        value: 'update',
+                        enabled: {
+                          'queued',
+                          'paused',
+                        }.contains(e.value['state']),
+                        child: Text('Edit time or message'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'cancel',
+                        child: Text('Cancel'),
+                      ),
+                    ],
+                  ),
+                ),
+              if (personal.schedules.isEmpty)
+                const ListTile(
+                  title: Text('No scheduled messages'),
+                  subtitle: Text(
+                    'Choose Send later when composing a message in a conversation.',
+                  ),
+                ),
+            ],
+            PersonalSettingsSection.transcriptions => <Widget>[
+              ListTile(
+                title: const Text('Transcription service'),
+                subtitle: Text(personal.workerReadinessDescription),
+              ),
+              const ListTile(
+                title: Text('Manual transcriptions'),
+                subtitle: Text(
+                  'Only requested manually from a voice message. No monthly limit. Costs are estimates, not a bill.',
+                ),
+              ),
+              ListTile(
+                title: Text(
+                  '${personal.transcripts.values.where((j) => j.state == JobState.done).length} completed',
+                ),
+                subtitle: Text(
+                  'Estimated cost: \$${personal.transcripts.values.fold<double>(0, (v, j) => v + (j.estimatedCostUsd ?? 0)).toStringAsFixed(4)} · ${personal.transcripts.values.where((j) => j.state == JobState.unknown).length} unknown attempts',
+                ),
+              ),
+            ],
+          },
+        ],
+      ),
+    ),
+  );
+}
+
+class _MergeSelectionPage extends StatefulWidget {
+  final PersonalClient personal;
+  final List<Room> rooms;
+  const _MergeSelectionPage({required this.personal, required this.rooms});
+  @override
+  State<_MergeSelectionPage> createState() => _MergeSelectionPageState();
+}
+
+class _MergeSelectionPageState extends State<_MergeSelectionPage> {
+  final _name = TextEditingController();
+  final _selected = <String>{};
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  bool get _current =>
+      widget.personal.ready &&
+      identical(Matrix.of(context).client, widget.personal.client);
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      leading: const BackButton(),
+      title: const Text('Merge conversations'),
+      centerTitle: false,
+    ),
+    body: NotionSettingsBody(
+      withScrolling: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _name,
+            decoration: const InputDecoration(labelText: 'Person name'),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Select at least two conversations. Each message keeps its original network.',
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: ListView(
+              children: [
+                for (final room in widget.rooms)
+                  CheckboxListTile(
+                    value: _selected.contains(room.id),
+                    title: Text(room.getLocalizedDisplayname()),
+                    subtitle: Text(PersonalClient.networkOf(room)),
+                    onChanged: !_current
+                        ? null
+                        : (value) => setState(() {
+                            value == true
+                                ? _selected.add(room.id)
+                                : _selected.remove(room.id);
+                          }),
+                  ),
+              ],
             ),
           ),
-          ListTile(
-            title: Text(
-              '${personal.transcripts.values.where((j) => j.state == JobState.done).length} completed',
-            ),
-            subtitle: Text(
-              'Estimated cost: \$${personal.transcripts.values.fold<double>(0, (v, j) => v + (j.estimatedCostUsd ?? 0)).toStringAsFixed(4)} · ${personal.transcripts.values.where((j) => j.state == JobState.unknown).length} unknown attempts',
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: FilledButton(
+              onPressed:
+                  !_current || _selected.length < 2 || _name.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.pop(
+                      context,
+                      PersonGroup(
+                        id: const Uuid().v4(),
+                        name: _name.text.trim(),
+                        members: widget.rooms
+                            .where((room) => _selected.contains(room.id))
+                            .map(widget.personal.ref)
+                            .toList(),
+                        defaultRoomId: _selected.first,
+                      ),
+                    ),
+              child: const Text('Merge conversations'),
             ),
           ),
         ],
@@ -824,59 +1046,26 @@ class RoomPersonalButton extends StatelessWidget {
         ? 'Conversation options'
         : 'Conversation tools',
     icon: Icon(includeChatSettings ? Icons.more_horiz : Icons.more_time),
-    itemBuilder: (_) => [
-      if (includeChatSettings) ...[
-        const PopupMenuItem(
-          value: 'source.details',
-          child: Text('Chat details'),
-        ),
-        const PopupMenuItem(
-          value: 'source.search',
-          child: Text('Search this conversation'),
-        ),
-        const PopupMenuItem(
-          value: 'source.encryption',
-          child: Text('Encryption & keys'),
-        ),
-        const PopupMenuDivider(),
-      ],
-      const PopupMenuItem(
-        value: 'organization',
-        child: Text('Organization & appearance'),
-      ),
-      const PopupMenuItem(
-        value: 'capabilities',
-        child: Text('Conversation capabilities'),
-      ),
-      const PopupMenuItem(value: 'read', child: Text('Mark as read')),
-      PopupMenuItem(
-        value: 'schedule',
-        enabled: isEditing?.call() != true,
-        child: Text(isEditing?.call() == true
-            ? 'Send later (finish editing first)'
-            : 'Send later'),
-      ),
-      PopupMenuItem(
-        value: 'scheduleMedia',
-        enabled: isEditing?.call() != true,
-        child: const Text('Schedule an attachment'),
-      ),
-      const PopupMenuItem(value: 'reminder', child: Text('Remind me')),
-      const PopupMenuItem(value: 'nickname', child: Text('Nickname')),
-      const PopupMenuItem(value: 'label', child: Text('Label')),
-      const PopupMenuItem(
-        value: 'bookmark',
-        child: Text('Bookmark latest message'),
-      ),
-      if (includeChatSettings) ...[
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: 'source.leave',
-          child: Text('Leave source conversation'),
-        ),
-      ],
-    ],
+    itemBuilder: (_) =>
+        conversationQuickActions(editing: isEditing?.call() == true),
     onSelected: (kind) async {
+      if (!context.mounted ||
+          !identical(Matrix.of(context).client, room.client) ||
+          isCurrentSource?.call() == false)
+        return;
+      if (kind == 'source.search') {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => NotionConversationContentPage(
+              rooms: [room],
+              name: InboxProjection(
+                PersonalClient.of(room.client),
+              ).displayName(room),
+            ),
+          ),
+        );
+        return;
+      }
       if (kind.startsWith('source.')) {
         await performNotionRoomAction(context, room, kind.substring(7));
         return;
@@ -885,6 +1074,10 @@ class RoomPersonalButton extends StatelessWidget {
       try {
         // Freeze relation, source and text before even the private-sync await.
         final frozenText = composer.text;
+        final frozenReply = replyEvent?.call();
+        final frozenRoot = threadRootEventId?.call();
+        final frozenLast = threadLastEventId?.call();
+        final privacyGeneration = PersonalPrivacy.surfaceGeneration;
         final scheduled = {'schedule', 'scheduleMedia'}.contains(kind)
             ? FrozenScheduledComposer.capture(
                 room: room,
@@ -892,16 +1085,24 @@ class RoomPersonalButton extends StatelessWidget {
                   conversation: p.ref(room),
                   readUpToEventId: readCutoff(),
                 ),
-                reply: replyEvent?.call(),
+                reply: frozenReply,
                 editing: isEditing?.call() == true,
-                threadRootEventId: threadRootEventId?.call(),
-                threadLastEventId: threadLastEventId?.call(),
-                isCurrent: () => context.mounted &&
+                threadRootEventId: frozenRoot,
+                threadLastEventId: frozenLast,
+                isCurrent: () =>
+                    context.mounted &&
                     isCurrentSource?.call() != false &&
+                    PersonalPrivacy.surfaceUnlocked &&
+                    privacyGeneration == PersonalPrivacy.surfaceGeneration &&
+                    frozenReply?.eventId == replyEvent?.call()?.eventId &&
+                    frozenRoot == threadRootEventId?.call() &&
+                    frozenLast == threadLastEventId?.call() &&
+                    isEditing?.call() != true &&
                     identical(Matrix.of(context).client, room.client),
               )
             : null;
-        bool sameComposerContext() => context.mounted &&
+        bool sameComposerContext() =>
+            context.mounted &&
             isCurrentSource?.call() != false &&
             identical(Matrix.of(context).client, room.client) &&
             scheduled!.matchesContext(
@@ -910,56 +1111,39 @@ class RoomPersonalButton extends StatelessWidget {
               threadRootEventId: threadRootEventId?.call(),
               threadLastEventId: threadLastEventId?.call(),
             );
-        await p.load();
-        if (!context.mounted) return;
-        if (kind == 'capabilities') {
-          await showDialog<void>(
+        if (kind == 'schedule') {
+          final choice = await showDialog<String>(
             context: context,
-            builder: (c) => AlertDialog(
-              title: const Text('Conversation capabilities'),
-              content: SizedBox(
-                width: 460,
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    for (final feature in BridgeFeature.values)
-                      ListTile(
-                        title: Text(feature.name),
-                        subtitle: Text(
-                          RoomCapabilities.forFeature(feature, room).reason,
-                        ),
-                        trailing: Icon(switch (RoomCapabilities.forFeature(
-                          feature,
-                          room,
-                        ).status) {
-                          CapabilityStatus.available =>
-                            Icons.check_circle_outline,
-                          CapabilityStatus.unavailable => Icons.block,
-                          CapabilityStatus.unverified => Icons.help_outline,
-                        }),
-                      ),
-                  ],
+            builder: (context) => SimpleDialog(
+              title: const Text('Send later'),
+              children: [
+                SimpleDialogOption(
+                  onPressed: frozenText.trim().isEmpty
+                      ? null
+                      : () => Navigator.pop(context, 'schedule'),
+                  child: Text(
+                    frozenText.trim().isEmpty
+                        ? 'Text (write a message first)'
+                        : 'Text',
+                  ),
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(c),
-                  child: const Text('Close'),
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(context, 'scheduleMedia'),
+                  child: const Text('Attachment'),
                 ),
               ],
             ),
           );
-          return;
+          if (choice == null || !context.mounted) return;
+          scheduled!.validateCurrent();
+          kind = choice;
         }
-        if (kind == 'organization') {
-          await Navigator.push(
-            context,
-            MaterialPageRoute<void>(
-              builder: (_) => OrganizationPage(personal: p, room: room),
-            ),
-          );
+        await p.load();
+        if (!context.mounted ||
+            isCurrentSource?.call() == false ||
+            !identical(Matrix.of(context).client, room.client) ||
+            !PersonalPrivacy.surfaceUnlocked)
           return;
-        }
         if (kind == 'read') {
           final id = room.lastEvent?.eventId;
           if (id != null) {
@@ -978,7 +1162,10 @@ class RoomPersonalButton extends StatelessWidget {
             id: id,
             target: scheduled.target,
             dueAt: due,
-            content: scheduled.content({'msgtype': 'm.text', 'body': frozenText}),
+            content: scheduled.content({
+              'msgtype': 'm.text',
+              'body': frozenText,
+            }),
             transactionId: 'schedule-$id',
           );
           await p.schedule(job);
@@ -1003,116 +1190,18 @@ class RoomPersonalButton extends StatelessWidget {
           );
         }
         if (kind == 'reminder') {
-          if (!context.mounted) return;
-          final due = await personalDate(context);
-          if (due == null) return;
-          if (!context.mounted) return;
-          var untilReply = true, archive = false;
-          final options = await showDialog<Map<String, bool>>(
-            context: context,
-            builder: (context) => StatefulBuilder(
-              builder: (context, set) => AlertDialog(
-                title: const Text('Remind me about this conversation'),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CheckboxListTile(
-                      title: const Text('Remind me only if there is no reply'),
-                      value: untilReply,
-                      onChanged: (value) =>
-                          set(() => untilReply = value ?? false),
-                    ),
-                    CheckboxListTile(
-                      title: const Text(
-                        'Archive this conversation until the reminder',
-                      ),
-                      value: archive,
-                      onChanged: (value) => set(() => archive = value ?? false),
-                    ),
-                  ],
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    onPressed: () => Navigator.pop(context, {
-                      'untilReply': untilReply,
-                      'archive': archive,
-                    }),
-                    child: const Text('Save reminder'),
-                  ),
-                ],
-              ),
-            ),
-          );
-          if (options == null) return;
-          final id = const Uuid().v4();
-          await p.command('reminder.create', id, {
-            'id': id,
-            'conversation': p.ref(room).toJson(),
-            'dueAt': due.toUtc().toIso8601String(),
-            'untilReply': options['untilReply'],
-          });
-          if (options['archive'] == true) {
-            final projection = InboxProjection(p);
-            final metadata = projection.metadataFor(room).setArchived(true);
-            final group = projection.groupFor(room);
-            final sources = group == null
-                ? [room]
-                : group.members
-                      .map((member) => p.client.getRoomById(member.roomId))
-                      .whereType<Room>();
-            await p.put(projection.metadataKey(room), {
-              ...metadata.toJson(),
-              'archivedAt': DateTime.now().toUtc().toIso8601String(),
-              'archiveSources': {
-                for (final source in sources)
-                  source.id: source.lastEvent?.eventId,
-              },
-            });
-          }
-        }
-        if (!context.mounted) return;
-        if (kind == 'nickname') {
-          final name = await personalText(
+          await requestConversationReminder(
             context,
-            'Private nickname for this conversation',
+            p,
+            room,
+            isCurrent: () =>
+                context.mounted &&
+                isCurrentSource?.call() != false &&
+                identical(Matrix.of(context).client, room.client),
           );
-          if (name != null) await p.put('nickname:${room.id}', {'name': name});
+          return;
         }
         if (!context.mounted) return;
-        if (kind == 'label') {
-          final selected = await showDialog<String>(
-            context: context,
-            builder: (c) => SimpleDialog(
-              title: const Text('Label'),
-              children: [
-                for (final label in p.values.entries.where(
-                  (e) => e.key.startsWith('label:'),
-                ))
-                  SimpleDialogOption(
-                    onPressed: () => Navigator.pop(c, label.key),
-                    child: Text(label.value['name'] as String? ?? 'Label'),
-                  ),
-              ],
-            ),
-          );
-          if (selected != null) {
-            await p.put('labels:${room.id}', {
-              'labels': [selected],
-            });
-          }
-        }
-        if (kind == 'bookmark' && room.lastEvent != null) {
-          final e = room.lastEvent!;
-          await p.put('bookmark:${p.transcriptId(e)}', {
-            'source': p.source(e).toJson(),
-            'network': PersonalClient.networkOf(room),
-            'createdAt': DateTime.now().toUtc().toIso8601String(),
-          });
-        }
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -1133,4 +1222,136 @@ class RoomPersonalButton extends StatelessWidget {
       }
     },
   );
+}
+
+/// The same short menu is used by ordinary and merged conversations.
+List<PopupMenuEntry<String>> conversationQuickActions({
+  bool editing = false,
+  bool merged = false,
+}) => [
+  const PopupMenuItem(
+    value: 'source.search',
+    child: ListTile(
+      leading: Icon(Icons.search_outlined),
+      title: Text('Search conversation'),
+    ),
+  ),
+  PopupMenuItem(
+    value: 'schedule',
+    enabled: !editing,
+    child: ListTile(
+      leading: const Icon(Icons.schedule_outlined),
+      title: Text(editing ? 'Send later (finish editing first)' : 'Send later'),
+    ),
+  ),
+  const PopupMenuItem(
+    value: 'reminder',
+    child: ListTile(
+      leading: Icon(Icons.alarm_outlined),
+      title: Text('Remind me'),
+    ),
+  ),
+  PopupMenuItem(
+    value: 'read',
+    child: ListTile(
+      leading: const Icon(Icons.mark_chat_read_outlined),
+      title: Text(merged ? 'Mark all sources as read' : 'Mark as read'),
+    ),
+  ),
+  const PopupMenuDivider(),
+  const PopupMenuItem(
+    value: 'source.details',
+    child: ListTile(
+      leading: Icon(Icons.info_outline),
+      title: Text('Chat details'),
+    ),
+  ),
+];
+
+Future<void> requestConversationReminder(
+  BuildContext context,
+  PersonalClient p,
+  Room room, {
+  required bool Function() isCurrent,
+}) async {
+  final account = p.client.userID;
+  final generation = PersonalPrivacy.surfaceGeneration;
+  bool current() =>
+      context.mounted &&
+      isCurrent() &&
+      account != null &&
+      p.client.userID == account &&
+      identical(p.client.getRoomById(room.id), room) &&
+      room.membership == Membership.join &&
+      PersonalPrivacy.surfaceUnlocked &&
+      PersonalPrivacy.surfaceGeneration == generation;
+  await p.load();
+  if (!current()) return;
+  final due = await personalDate(context);
+  if (due == null || !current()) return;
+  if (!context.mounted) return;
+  var untilReply = true, archive = false;
+  final options = await showDialog<Map<String, bool>>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, set) => AlertDialog(
+        title: const Text('Remind me about this conversation'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CheckboxListTile(
+              title: const Text('Remind me only if there is no reply'),
+              value: untilReply,
+              onChanged: (value) => set(() => untilReply = value ?? false),
+            ),
+            CheckboxListTile(
+              title: const Text('Archive this conversation until the reminder'),
+              value: archive,
+              onChanged: (value) => set(() => archive = value ?? false),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, {
+              'untilReply': untilReply,
+              'archive': archive,
+            }),
+            child: const Text('Save reminder'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (options == null || !current()) return;
+  if (!due.isAfter(DateTime.now())) throw StateError('Past date');
+  final id = const Uuid().v4();
+  await p.command('reminder.create', id, {
+    'id': id,
+    'conversation': p.ref(room).toJson(),
+    'dueAt': due.toUtc().toIso8601String(),
+    'untilReply': options['untilReply'],
+  });
+  if (!current()) return;
+  if (options['archive'] == true) {
+    final projection = InboxProjection(p);
+    final metadata = projection.metadataFor(room).setArchived(true);
+    final group = projection.groupFor(room);
+    final sources = group == null
+        ? [room]
+        : group.members
+              .map((member) => p.client.getRoomById(member.roomId))
+              .whereType<Room>();
+    await p.put(projection.metadataKey(room), {
+      ...metadata.toJson(),
+      'archivedAt': DateTime.now().toUtc().toIso8601String(),
+      'archiveSources': {
+        for (final source in sources) source.id: source.lastEvent?.eventId,
+      },
+    });
+  }
 }

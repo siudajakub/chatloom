@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:material_ui/material_ui.dart';
 
 class SettingsSwitchListTile extends StatefulWidget {
@@ -27,18 +28,33 @@ class SettingsSwitchListTile extends StatefulWidget {
 }
 
 class SettingsSwitchListTileState extends State<SettingsSwitchListTile> {
+  bool _pending = false;
+
   @override
   Widget build(BuildContext context) {
     final subtitle = widget.subtitle;
-    return SwitchListTile.adaptive(
+    return NotionSettingsToggle(
       value: widget.setting.value ?? widget.defaultValue ?? false,
-      title: Text(widget.title),
-      subtitle: subtitle == null ? null : Text(subtitle),
-      onChanged: (bool newValue) async {
-        widget.onChanged?.call(newValue);
-        await widget.setting.setItem(newValue);
-        setState(() {});
-      },
+      title: widget.title,
+      subtitle: subtitle,
+      onChanged: _pending
+          ? null
+          : (bool newValue) async {
+              setState(() => _pending = true);
+              try {
+                await widget.setting.setItem(newValue);
+                if (mounted) widget.onChanged?.call(newValue);
+              } catch (_) {
+                if (mounted)
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Could not save this setting. Try again.'),
+                    ),
+                  );
+              } finally {
+                if (mounted) setState(() => _pending = false);
+              }
+            },
     );
   }
 }

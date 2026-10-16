@@ -36,8 +36,8 @@ class SettingsStyleView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !FluffyThemes.isColumnMode(context),
-        centerTitle: FluffyThemes.isColumnMode(context),
-        title: Text(L10n.of(context).changeTheme),
+        centerTitle: false,
+        title: const Text('Appearance'),
       ),
       backgroundColor: theme.colorScheme.surface,
       body: NotionSettingsBody(

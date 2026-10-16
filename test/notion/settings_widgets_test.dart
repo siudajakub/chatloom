@@ -1,138 +1,202 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:fluffychat/personal/ui/notion_privacy_preferences.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:fluffychat/personal/ui/notion_settings_page.dart';
+import 'package:fluffychat/ui/notion/notion_theme.dart';
+import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
+
+NotionSettingsPage _index({
+  ValueChanged<String>? open,
+  String path = '/rooms/settings',
+}) => NotionSettingsPage(
+  data: NotionSettingsData(
+    name: 'Fictional account',
+    avatar: const Icon(Icons.person_outline),
+    selectedPath: path,
+  ),
+  actions: NotionSettingsActions(open: open),
+);
 
 void main() {
   testWidgets(
-    'settings privacy control is device-wide and all main routes are reachable',
+    'all categories and tools are direct, single destinations without overflow',
     (tester) async {
-      final actions = <String>[];
-      bool? privacy;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: NotionSettingsPage(
-            data: const NotionSettingsData(
-              name: 'Jan',
-              avatar: Icon(Icons.person_outline),
-              incognito: true,
-              appLock: 'Off',
-              appearance: 'Dark',
-              privateSync: 'Not connected',
-            ),
-            actions: NotionSettingsActions(
-              editProfile: () => actions.add('profile'),
-              appLock: () => actions.add('lock'),
-              devices: () => actions.add('devices'),
-              notifications: () => actions.add('notifications'),
-              appearance: () => actions.add('appearance'),
-              transcriptions: () => actions.add('transcriptions'),
-              privateSync: () => actions.add('sync'),
-              about: () => actions.add('about'),
-              overflow: () => actions.add('more'),
-              incognito: (value) => privacy = value,
-            ),
-          ),
-        ),
-      );
-      await tester.tap(find.text('Edit profile'));
-      await tester.scrollUntilVisible(find.text('Incognito mode'), 120);
-      await tester.ensureVisible(find.byType(Switch));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byType(Switch));
-      expect(privacy, false);
-      for (final label in [
-        'App lock',
-        'Devices & keys',
-        'Notifications',
-        'Appearance',
-        'Transcriptions',
-        'Private sync',
-        'About',
-      ]) {
-        await tester.scrollUntilVisible(find.text(label), 100);
-        await tester.ensureVisible(find.text(label));
+      final visited = <String>[];
+      await tester.pumpWidget(MaterialApp(home: _index(open: visited.add)));
+      for (final category in NotionSettingsCategory.values) {
+        final target = find.text(
+          category == NotionSettingsCategory.account
+              ? 'Fictional account'
+              : category.title,
+        );
+        await tester.scrollUntilVisible(target, 100);
+        await tester.ensureVisible(target);
         await tester.pumpAndSettle();
-        await tester.tap(find.text(label));
+        await tester.tap(target);
       }
-      await tester.tap(find.byTooltip('More settings'));
-      expect(actions, [
-        'profile',
-        'lock',
-        'devices',
-        'notifications',
-        'appearance',
-        'transcriptions',
-        'sync',
-        'about',
-        'more',
-      ]);
-      expect(tester.takeException(), isNull);
-    },
-  );
-  testWidgets(
-    'pending privacy keeps real value and disables duplicate changes',
-    (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(
-          home: NotionSettingsPage(
-            data: NotionSettingsData(
-              name: 'Jan',
-              avatar: Icon(Icons.person_outline),
-              incognito: true,
-              privacyPending: true,
-              status: 'Waiting for device settings',
-            ),
-            actions: NotionSettingsActions(),
-          ),
-        ),
+      expect(
+        visited,
+        NotionSettingsCategory.values
+            .map((category) => category.route)
+            .toList(),
       );
-      await tester.scrollUntilVisible(find.byType(Switch), 100);
-      await tester.ensureVisible(find.byType(Switch));
-      await tester.pumpAndSettle();
-      final control = tester.widget<Switch>(find.byType(Switch));
-      expect(control.value, isTrue);
-      expect(control.onChanged, isNull);
+      expect(visited.toSet().length, visited.length);
+      expect(find.byTooltip('More settings'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.byType(TextField), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
-  for (final width in [320.0, 390.0, 430.0]) {
-    testWidgets(
-      'settings adapts long copy and 200 percent text at width $width',
-      (tester) async {
-        tester.view.devicePixelRatio = 1;
-        tester.view.physicalSize = Size(width, 844);
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-        await tester.pumpWidget(
-          MaterialApp(
-            home: MediaQuery(
-              data: MediaQueryData(
-                size: Size(width, 844),
-                textScaler: const TextScaler.linear(2),
-              ),
-              child: SizedBox(
-                width: width,
-                child: const NotionSettingsPage(
-                  data: NotionSettingsData(
-                    name: 'A long fictional account name',
-                    avatar: Icon(Icons.person_outline),
-                    incognito: true,
-                    appLock: 'Unknown',
-                    appearance: 'System',
-                    privateSync: 'Changes awaiting synchronization',
+
+  test('secondary and legacy routes select the owning category', () {
+    const cases = {
+      '/rooms/settings': NotionSettingsCategory.account,
+      '/rooms/settings/devices': NotionSettingsCategory.security,
+      '/rooms/settings/recovery': NotionSettingsCategory.security,
+      '/rooms/settings/security/password': NotionSettingsCategory.account,
+      '/rooms/settings/security/3pid': NotionSettingsCategory.account,
+      '/rooms/settings/security/ignorelist': NotionSettingsCategory.security,
+      '/rooms/settings/people': NotionSettingsCategory.chats,
+      '/rooms/settings/organization': NotionSettingsCategory.chats,
+      '/rooms/settings/transcriptions': NotionSettingsCategory.sync,
+      '/rooms/settings/push': NotionSettingsCategory.notifications,
+      '/rooms/settings/notifications/registration':
+          NotionSettingsCategory.notifications,
+      '/rooms/settings/homeserver': NotionSettingsCategory.about,
+    };
+    for (final entry in cases.entries) {
+      expect(NotionSettingsCategory.forPath(entry.key), entry.value);
+    }
+  });
+
+  for (final incognito in [true, false]) {
+    for (final pending in [true, false]) {
+      testWidgets(
+        'privacy preserves saved choices: incognito=$incognito pending=$pending',
+        (tester) async {
+          final calls = <bool>[];
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: SingleChildScrollView(
+                  child: NotionPrivacyPreferences(
+                    incognito: incognito,
+                    pending: pending,
+                    typing: true,
+                    receipts: true,
+                    onIncognito: calls.add,
+                    onTyping: calls.add,
+                    onReceipts: calls.add,
                   ),
-                  actions: NotionSettingsActions(),
                 ),
               ),
             ),
+          );
+          final switches = tester
+              .widgetList<Switch>(find.byType(Switch))
+              .toList();
+          expect(switches.map((s) => s.value), [incognito, true, true]);
+          expect(switches.first.onChanged == null, pending);
+          expect(switches[1].onChanged == null, incognito || pending);
+          expect(switches[2].onChanged == null, incognito || pending);
+          expect(calls, isEmpty);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  testWidgets('privacy switch is keyboard operable with one toggle action', (
+    tester,
+  ) async {
+    final changes = <bool>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: NotionSettingsToggle(
+            title: 'Incognito mode',
+            value: true,
+            onChanged: changes.add,
           ),
-        );
-        await tester.scrollUntilVisible(find.text('About'), 240);
-        await tester.ensureVisible(find.text('About'));
-        await tester.pumpAndSettle();
-        expect(tester.takeException(), isNull);
-      },
+        ),
+      ),
     );
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    expect(changes, [false]);
+    final semantics = tester.ensureSemantics();
+    expect(find.bySemanticsLabel('Incognito mode'), findsOneWidget);
+    semantics.dispose();
+  });
+
+  testWidgets(
+    'failed privacy change keeps current policy and announces recovery',
+    (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: NotionPrivacyPreferences(
+                incognito: true,
+                typing: false,
+                receipts: false,
+                error: 'Could not save privacy. Try again.',
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Could not save privacy. Try again.'), findsOneWidget);
+      expect(tester.widget<Switch>(find.byType(Switch).first).value, isTrue);
+    },
+  );
+
+  for (final width in [320.0, 390.0, 430.0, 900.0, 1365.0]) {
+    for (final scale in [1.0, 2.0]) {
+      for (final brightness in Brightness.values) {
+        testWidgets('settings reachable at $width/$scale/$brightness', (
+          tester,
+        ) async {
+          tester.view.devicePixelRatio = 1;
+          tester.view.physicalSize = Size(width, 900);
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final index = _index(open: (_) {}, path: '/rooms/settings/sync');
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: NotionTheme.build(brightness),
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(scale)),
+                child: child!,
+              ),
+              home: width > 840
+                  ? TwoColumnLayout(
+                      hasNavigationRail: false,
+                      mainView: index,
+                      sideView: const NotionSettingsScaffold(
+                        title: 'Sync & transcriptions',
+                        child: Text('Changes awaiting confirmation'),
+                      ),
+                    )
+                  : index,
+            ),
+          );
+          await tester.scrollUntilVisible(
+            find.text('Scheduled messages'),
+            200,
+            scrollable: find.byType(Scrollable).first,
+          );
+          await tester.ensureVisible(find.text('Scheduled messages'));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+        });
+      }
+    }
   }
 }

@@ -21,7 +21,7 @@ class DevicesSettingsView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !FluffyThemes.isColumnMode(context),
-        centerTitle: FluffyThemes.isColumnMode(context),
+        centerTitle: false,
         title: Text(L10n.of(context).devices),
       ),
       body: NotionSettingsBody(

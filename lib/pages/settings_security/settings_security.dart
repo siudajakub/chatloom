@@ -5,10 +5,11 @@
 
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/ui/notion_settings_page.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/app_lock.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';
@@ -24,6 +25,36 @@ class SettingsSecurity extends StatefulWidget {
 }
 
 class SettingsSecurityController extends State<SettingsSecurity> {
+  bool privacyPending = false;
+  String? privacyError;
+
+  Future<void> setPrivacy(bool value, {AppSettings<bool?>? setting}) async {
+    if (privacyPending) return;
+    setState(() {
+      privacyPending = true;
+      privacyError = null;
+    });
+    try {
+      if (setting == null) {
+        await PersonalPrivacy.setIncognito(
+          value,
+          Matrix.of(context).widget.clients,
+        );
+      } else {
+        await setting.setItem(value);
+      }
+    } catch (_) {
+      if (mounted)
+        setState(
+          () => privacyError =
+              'Could not finish updating privacy. The current device policy is shown; try again.',
+        );
+    } finally {
+      notionSettingsRevision.value++;
+      if (mounted) setState(() => privacyPending = false);
+    }
+  }
+
   Future<void> toggleBiometrics() async {
     AppLock.of(context).showLockScreen();
 
@@ -103,56 +134,6 @@ class SettingsSecurityController extends State<SettingsSecurity> {
       setState(() {});
     }
   }
-
-  Future<void> deleteAccountAction() async {
-    final l10n = L10n.of(context);
-    final matrix = Matrix.of(context);
-    if (await showOkCancelAlertDialog(
-          useRootNavigator: false,
-          context: context,
-          title: l10n.warning,
-          message: l10n.deactivateAccountWarning,
-          okLabel: l10n.ok,
-          cancelLabel: l10n.cancel,
-          isDestructive: true,
-        ) ==
-        OkCancelResult.cancel) {
-      return;
-    }
-    if (!mounted) return;
-    final supposedMxid = matrix.client.userID!;
-    final mxid = await showTextInputDialog(
-      useRootNavigator: false,
-      context: context,
-      title: l10n.confirmMatrixId,
-      validator: (text) =>
-          text == supposedMxid ? null : l10n.supposedMxid(supposedMxid),
-      isDestructive: true,
-      okLabel: l10n.delete,
-      cancelLabel: l10n.cancel,
-    );
-    if (mxid == null || mxid.isEmpty || mxid != supposedMxid) {
-      return;
-    }
-    if (!mounted) return;
-    final resp = await showFutureLoadingDialog(
-      context: context,
-      delay: false,
-      future: () => matrix.client.uiaRequestBackground<IdServerUnbindResult?>(
-        (auth) => matrix.client.deactivateAccount(auth: auth, erase: true),
-      ),
-    );
-
-    if (!resp.isError) {
-      if (!mounted) return;
-      await showFutureLoadingDialog(
-        context: context,
-        future: () => matrix.client.logout(),
-      );
-    }
-  }
-
-  Future<void> dehydrateAction() => Matrix.of(context).dehydrateAction(context);
 
   Future<void> changeShareKeysWith(ShareKeysWith? shareKeysWith) async {
     if (shareKeysWith == null) return;

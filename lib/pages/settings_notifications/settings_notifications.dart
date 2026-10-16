@@ -20,7 +20,8 @@ import '../../widgets/matrix.dart';
 import 'settings_notifications_view.dart';
 
 class SettingsNotifications extends StatefulWidget {
-  const SettingsNotifications({super.key});
+  final bool registrationDetails;
+  const SettingsNotifications({super.key, this.registrationDetails = false});
 
   @override
   SettingsNotificationsController createState() =>
@@ -31,6 +32,8 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
   bool isLoading = false;
 
   Future<void> onPusherTap(Pusher pusher) async {
+    final account = Matrix.of(context).client;
+    final revision = _accountRevision;
     final delete = await showModalActionPopup<bool>(
       context: context,
       title: pusher.deviceDisplayName,
@@ -44,17 +47,16 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
         ),
       ],
     );
-    if (delete != true) return;
-    if (!mounted) return;
+    if (delete != true || !_current(account, revision)) return;
 
     final success = await showFutureLoadingDialog(
       context: context,
-      future: () => Matrix.of(context).client.deletePusher(
+      future: () => account.deletePusher(
         PusherId(appId: pusher.appId, pushkey: pusher.pushkey),
       ),
     );
 
-    if (success.error != null) return;
+    if (success.error != null || !_current(account, revision)) return;
 
     setState(() {
       pusherFuture = null;
@@ -62,13 +64,23 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
   }
 
   Future<List<Pusher>?>? pusherFuture;
+  Client? _account;
+  int _accountRevision = 0;
+  bool _current(Client account, int revision) =>
+      mounted &&
+      identical(_account, account) &&
+      identical(Matrix.of(context).client, account) &&
+      revision == _accountRevision;
+  void retryPushers() => setState(() => pusherFuture = null);
 
   Future<void> togglePushRule(PushRuleKind kind, PushRule pushRule) async {
+    final account = Matrix.of(context).client;
+    final revision = _accountRevision;
     setState(() {
       isLoading = true;
     });
     try {
-      final updateFromSync = Matrix.of(context).client.onSync.stream
+      final updateFromSync = account.onSync.stream
           .where(
             (syncUpdate) =>
                 syncUpdate.accountData?.any(
@@ -77,18 +89,20 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
                 false,
           )
           .first;
-      await Matrix.of(
-        context,
-      ).client.setPushRuleEnabled(kind, pushRule.ruleId, !pushRule.enabled);
-      await updateFromSync;
+      await account.setPushRuleEnabled(
+        kind,
+        pushRule.ruleId,
+        !pushRule.enabled,
+      );
+      await updateFromSync.timeout(const Duration(seconds: 15));
     } catch (e, s) {
       Logs().w('Unable to toggle push rule', e, s);
-      if (!mounted) return;
+      if (!_current(account, revision)) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
     } finally {
-      if (mounted) {
+      if (_current(account, revision)) {
         setState(() {
           isLoading = false;
         });
@@ -97,6 +111,8 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
   }
 
   Future<void> editPushRule(PushRule rule, PushRuleKind kind) async {
+    final account = Matrix.of(context).client;
+    final revision = _accountRevision;
     final theme = Theme.of(context);
     final action = await showAdaptiveDialog<PushRuleDialogAction>(
       context: context,
@@ -137,8 +153,7 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
         ),
       ),
     );
-    if (action == null) return;
-    if (!mounted) return;
+    if (action == null || !_current(account, revision)) return;
     switch (action) {
       case PushRuleDialogAction.delete:
         final consent = await showOkCancelAlertDialog(
@@ -148,13 +163,13 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
           okLabel: L10n.of(context).delete,
           isDestructive: true,
         );
-        if (consent != OkCancelResult.ok) return;
-        if (!mounted) return;
+        if (consent != OkCancelResult.ok || !_current(account, revision))
+          return;
         setState(() {
           isLoading = true;
         });
         try {
-          final updateFromSync = Matrix.of(context).client.onSync.stream
+          final updateFromSync = account.onSync.stream
               .where(
                 (syncUpdate) =>
                     syncUpdate.accountData?.any(
@@ -163,16 +178,16 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
                     false,
               )
               .first;
-          await Matrix.of(context).client.deletePushRule(kind, rule.ruleId);
-          await updateFromSync;
+          await account.deletePushRule(kind, rule.ruleId);
+          await updateFromSync.timeout(const Duration(seconds: 15));
         } catch (e, s) {
           Logs().w('Unable to delete push rule', e, s);
-          if (!mounted) return;
+          if (!_current(account, revision)) return;
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
         } finally {
-          if (mounted) {
+          if (_current(account, revision)) {
             setState(() {
               isLoading = false;
             });
@@ -183,7 +198,16 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
   }
 
   @override
-  Widget build(BuildContext context) => SettingsNotificationsView(this);
+  Widget build(BuildContext context) {
+    final account = Matrix.of(context).client;
+    if (!identical(_account, account)) {
+      _account = account;
+      _accountRevision++;
+      pusherFuture = null;
+      isLoading = false;
+    }
+    return SettingsNotificationsView(this);
+  }
 }
 
 enum PushRuleDialogAction { delete }

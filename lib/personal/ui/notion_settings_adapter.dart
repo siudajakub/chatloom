@@ -2,14 +2,11 @@
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/pages/settings/settings.dart';
 import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/personal_hub.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:fluffychat/personal/ui/notion_settings_page.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/app_lock.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/theme_builder.dart';
@@ -29,28 +26,34 @@ class NotionSettingsAdapter extends StatefulWidget {
 class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
   PersonalClient? _personal;
   Future<Uri?>? _accountManage;
-  bool _privacyPending = false;
-  bool _profileFailed = false;
-  String? _status;
+  Future<bool>? _passwordAvailable;
+  @override
+  void initState() {
+    super.initState();
+    notionSettingsRevision.addListener(_refresh);
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final next = PersonalClient.of(Matrix.of(context).client);
+    _bindClient(Matrix.of(context).client);
+  }
+
+  void _bindClient(Client client) {
+    final next = PersonalClient.of(client);
     if (_personal != next) {
       _personal?.removeListener(_refresh);
       _personal = next..addListener(_refresh);
-      _accountManage = _managementUrl(next.client);
+      _accountManage = null;
+      _passwordAvailable = null;
       next.load();
     }
   }
 
-  Future<Uri?> _managementUrl(Client client) async {
-    try {
-      return (await client.getAuthMetadata()).accountManagementUri;
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<Uri?> _managementUrl(Client client) async =>
+      (await client.getAuthMetadata().timeout(
+        const Duration(seconds: 10),
+      )).accountManagementUri;
 
   void _refresh() {
     if (mounted) setState(() {});
@@ -59,263 +62,243 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
   @override
   void dispose() {
     _personal?.removeListener(_refresh);
+    notionSettingsRevision.removeListener(_refresh);
     super.dispose();
   }
 
-  Future<void> _privacy(bool value) async {
-    if (_privacyPending) return;
-    setState(() {
-      _privacyPending = true;
-      _status = null;
-    });
-    try {
-      await PersonalPrivacy.setIncognito(
-        value,
-        Matrix.of(context).widget.clients,
-      );
-    } catch (_) {
-      if (mounted)
-        setState(
-          () => _status =
-              'Could not finish updating privacy. The current device policy is shown; try again.',
-        );
-    } finally {
-      if (mounted) setState(() => _privacyPending = false);
-    }
-  }
-
-  Future<void> _hub() async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => PersonalHub(client: Matrix.of(context).client),
-      ),
-    );
-    _refresh();
-  }
-
   Future<void> _route(String path) async {
-    await context.push(path);
+    if (MediaQuery.sizeOf(context).width > 840) {
+      context.go(path);
+    } else {
+      await context.push(path);
+    }
     _refresh();
   }
 
-  Future<void> _profile() {
-    if (_profileFailed) widget.controller.updateProfile();
-    return showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * .8,
-          ),
-          child: SingleChildScrollView(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Edit profile', style: NotionTokens.heading),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Your network profile is visible to other people on this account.',
-                  ),
-                  NotionListRow(
-                    leading: const Icon(Icons.edit_outlined),
-                    title: 'Change display name',
-                    onTap: () {
-                      Navigator.pop(context);
-                      widget.controller.setDisplaynameAction();
-                    },
-                  ),
-                  NotionListRow(
-                    leading: const Icon(Icons.photo_camera_outlined),
-                    title: 'Change profile photo',
-                    onTap: () {
-                      Navigator.pop(context);
-                      widget.controller.setAvatarAction();
-                    },
-                  ),
-                  NotionListRow(
-                    leading: const Icon(Icons.share_outlined),
-                    title: 'Share account address',
-                    onTap: () {
-                      Navigator.pop(context);
-                      final id = Matrix.of(this.context).client.userID;
-                      if (id != null) FluffyShare.share(id, this.context);
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _overflow() => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    builder: (context) => SafeArea(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text('More settings', style: NotionTokens.heading),
-              NotionListRow(
-                leading: const Icon(Icons.backup_outlined),
-                title: 'Encryption & recovery',
-                subtitle: widget.controller.cryptoIdentityConnected == null
-                    ? 'Checking recovery status'
-                    : widget.controller.cryptoIdentityConnected!
-                    ? 'Recovery connected'
-                    : 'Set up recovery',
-                onTap: () {
-                  Navigator.pop(context);
-                  widget.controller.firstRunBootstrapAction();
-                },
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.tune_outlined),
-                title: 'Personal tools',
-                subtitle:
-                    'Worker, conflicts, merge, organization, bookmarks, schedules & reminders',
-                onTap: () {
-                  Navigator.pop(context);
-                  _hub();
-                },
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.forum_outlined),
-                title: 'Chat preferences',
-                onTap: () {
-                  Navigator.pop(context);
-                  _route('/rooms/settings/chat');
-                },
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.shield_outlined),
-                title: 'Security & privacy',
-                onTap: () {
-                  Navigator.pop(context);
-                  _route('/rooms/settings/security');
-                },
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.person_add_outlined),
-                title: 'Add account',
-                onTap: () {
-                  Navigator.pop(context);
-                  _route('/rooms/settings/addaccount');
-                },
-              ),
-              FutureBuilder<Uri?>(
-                future: _accountManage,
-                builder: (context, snapshot) => snapshot.data == null
-                    ? const SizedBox.shrink()
-                    : NotionListRow(
-                        leading: const Icon(Icons.manage_accounts_outlined),
-                        title: 'Manage account',
-                        onTap: () {
-                          Navigator.pop(context);
-                          launchUrl(
-                            snapshot.data!,
-                            mode: LaunchMode.inAppBrowserView,
-                          );
-                        },
-                      ),
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.dns_outlined),
-                title: 'Homeserver',
-                onTap: () {
-                  Navigator.pop(context);
-                  _route('/rooms/settings/homeserver');
-                },
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.privacy_tip_outlined),
-                title: 'Privacy policy',
-                onTap: () {
-                  Navigator.pop(context);
-                  launchUrlString(AppSettings.privacyPolicy.value);
-                },
-              ),
-              const NotionDetailsSection(),
-              NotionListRow(
-                leading: const Icon(Icons.logout_outlined),
-                title: 'Log out',
-                onTap: () {
-                  Navigator.pop(context);
-                  widget.controller.logoutAction();
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
   @override
   Widget build(BuildContext context) {
+    final client = Matrix.of(context).client;
+    _bindClient(client);
     final personal = _personal!;
-    String appLock;
-    try {
-      appLock = AppLock.of(context).isActive ? 'On' : 'Off';
-    } catch (_) {
-      appLock = 'Unknown';
+    final surface = widget.controller.widget.surface;
+    if (surface == SettingsSurface.about) {
+      return NotionSettingsScaffold(
+        title: 'About & help',
+        child: Column(
+          children: [
+            NotionListRow(
+              leading: const Icon(Icons.info_outline),
+              title: 'App information',
+              subtitle: 'Version and licenses',
+              onTap: () => PlatformInfos.showDialog(context),
+            ),
+            NotionListRow(
+              leading: const Icon(Icons.privacy_tip_outlined),
+              title: 'Privacy policy',
+              onTap: () => launchUrlString(AppSettings.privacyPolicy.value),
+            ),
+            NotionListRow(
+              leading: const Icon(Icons.dns_outlined),
+              title: 'Homeserver',
+              onTap: () => _route('/rooms/settings/homeserver'),
+            ),
+          ],
+        ),
+      );
     }
-    final appearance = switch (ThemeController.of(context).themeMode) {
-      ThemeMode.dark => 'Dark',
-      ThemeMode.light => 'Light',
-      ThemeMode.system => 'System',
-    };
+    if (surface == SettingsSurface.recovery) {
+      final connected = widget.controller.cryptoIdentityConnected;
+      return NotionSettingsScaffold(
+        title: 'Encryption & recovery',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            NotionListRow(
+              leading: const Icon(Icons.backup_outlined),
+              title: 'Key backup',
+              subtitle: connected == null
+                  ? 'Recovery status is not confirmed. Check it when connected.'
+                  : connected
+                  ? 'Recovery connected'
+                  : 'Recovery is not set up',
+            ),
+            if (connected == null)
+              NotionListRow(
+                title: 'Check recovery status',
+                onTap: widget.controller.checkBootstrap,
+              ),
+            NotionListRow(
+              title: connected == true ? 'Manage recovery' : 'Set up recovery',
+              subtitle: 'Uses the existing encrypted key backup flow.',
+              onTap: widget.controller.firstRunBootstrapAction,
+            ),
+          ],
+        ),
+      );
+    }
     return FutureBuilder<Profile>(
+      key: ValueKey(client),
       future: widget.controller.profileFuture,
       builder: (context, snapshot) {
-        _profileFailed = snapshot.hasError;
         final profile = snapshot.data;
         final name =
-            profile?.displayName ??
-            Matrix.of(context).client.userID?.localpart ??
-            'Account';
+            profile?.displayName ?? client.userID?.localpart ?? 'Account';
+        final avatar = Avatar(
+          mxContent: profile?.avatarUrl,
+          name: name,
+          size: 44,
+        );
+        if (surface == SettingsSurface.account) {
+          _accountManage ??= _managementUrl(client);
+          _passwordAvailable ??= client
+              .getCapabilities()
+              .timeout(const Duration(seconds: 10))
+              .then((caps) => caps.mChangePassword?.enabled != false);
+          return NotionSettingsScaffold(
+            title: 'Account',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    avatar,
+                    const SizedBox(width: 16),
+                    Expanded(child: Text(name, style: NotionTokens.heading)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Your network profile is visible to other people on this account.',
+                ),
+                if (snapshot.hasError)
+                  NotionListRow(
+                    title: 'Profile could not load',
+                    subtitle: 'Retry without changing your account.',
+                    onTap: widget.controller.updateProfile,
+                  ),
+                const NotionSettingsSection('Profile'),
+                NotionListRow(
+                  leading: const Icon(Icons.edit_outlined),
+                  title: 'Change display name',
+                  onTap: widget.controller.setDisplaynameAction,
+                ),
+                NotionListRow(
+                  leading: const Icon(Icons.photo_camera_outlined),
+                  title: 'Change profile photo',
+                  onTap: widget.controller.setAvatarAction,
+                ),
+                NotionListRow(
+                  leading: const Icon(Icons.share_outlined),
+                  title: 'Share account address',
+                  onTap: () {
+                    final id = client.userID;
+                    if (id != null) FluffyShare.share(id, context);
+                  },
+                ),
+                const NotionSettingsSection('Account management'),
+                FutureBuilder<Uri?>(
+                  key: ValueKey(client),
+                  future: _accountManage,
+                  builder: (context, snapshot) => NotionListRow(
+                    leading: const Icon(Icons.manage_accounts_outlined),
+                    title: 'Manage account',
+                    subtitle: snapshot.hasError
+                        ? 'Could not check account management. Retry.'
+                        : snapshot.connectionState != ConnectionState.done
+                        ? 'Checking account management availability…'
+                        : snapshot.data == null
+                        ? 'This server does not provide an account management page.'
+                        : 'Open the account management page',
+                    onTap: snapshot.hasError
+                        ? () => setState(
+                            () => _accountManage = _managementUrl(client),
+                          )
+                        : snapshot.data == null
+                        ? null
+                        : () => launchUrl(
+                            snapshot.data!,
+                            mode: LaunchMode.inAppBrowserView,
+                          ),
+                  ),
+                ),
+                NotionListRow(
+                  leading: const Icon(Icons.person_add_outlined),
+                  title: 'Add account',
+                  onTap: () => _route('/rooms/settings/addaccount'),
+                ),
+                FutureBuilder<bool>(
+                  future: _passwordAvailable,
+                  builder: (context, snapshot) => NotionListRow(
+                    leading: const Icon(Icons.password_outlined),
+                    title: 'Change password',
+                    subtitle: snapshot.data == false
+                        ? 'Password changes are not supported by this account.'
+                        : snapshot.hasError
+                        ? 'Availability could not be checked. Open to continue.'
+                        : null,
+                    onTap: snapshot.data == false
+                        ? null
+                        : () => _route('/rooms/settings/security/password'),
+                  ),
+                ),
+                const NotionSettingsSection('Account actions'),
+                NotionListRow(
+                  leading: const Icon(Icons.logout_outlined),
+                  title: 'Log out',
+                  onTap: widget.controller.logoutAction,
+                ),
+                NotionListRow(
+                  leading: const Icon(Icons.cloud_upload_outlined),
+                  title: 'Export session and wipe device',
+                  subtitle:
+                      'Export a local session backup and remove this session from the device. Keep the backup private.',
+                  onTap: widget.controller.dehydrateAction,
+                ),
+                NotionListRow(
+                  leading: Icon(
+                    Icons.delete_outline,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  title: 'Delete account',
+                  subtitle: 'Permanently deactivate this account.',
+                  onTap: widget.controller.deleteAccountAction,
+                ),
+              ],
+            ),
+          );
+        }
+        final appearance = switch (ThemeController.of(context).themeMode) {
+          ThemeMode.dark => 'Dark',
+          ThemeMode.light => 'Light',
+          ThemeMode.system => 'System',
+        };
         return NotionSettingsPage(
           data: NotionSettingsData(
             name: name,
-            avatar: Avatar(mxContent: profile?.avatarUrl, name: name, size: 44),
-            incognito: AppSettings.personalIncognito.value,
-            privacyPending: _privacyPending,
-            appLock: appLock,
-            appearance: appearance,
-            privateSync: personal.ready
-                ? personal.pending.isEmpty
-                      ? 'Connected'
-                      : 'Changes awaiting synchronization'
-                : 'Not connected',
-            status:
-                _status ??
-                (snapshot.hasError
-                    ? 'Your profile could not load. Open Edit profile to retry.'
-                    : null),
+            avatar: avatar,
+            selectedPath: GoRouterState.of(context).uri.path,
+            summaries: {
+              NotionSettingsCategory.account:
+                  'Account · Profile and account management',
+              NotionSettingsCategory.security:
+                  AppSettings.personalIncognito.value
+                  ? 'Incognito on · App lock, devices and recovery'
+                  : 'Incognito off · App lock, devices and recovery',
+              NotionSettingsCategory.appearance:
+                  '$appearance · Text size and wallpaper',
+              NotionSettingsCategory.sync: personal.ready
+                  ? (personal.pending.isEmpty
+                        ? 'Private sync configured · Services and transcriptions'
+                        : '${personal.pending.length} changes awaiting confirmation')
+                  : 'Private sync not connected',
+            },
+            status: snapshot.hasError
+                ? 'Profile unavailable. Open Account to retry.'
+                : null,
           ),
           actions: NotionSettingsActions(
             back: () => context.go('/rooms'),
-            overflow: _overflow,
-            editProfile: _profile,
-            incognito: _privacy,
-            appLock: () => _route('/rooms/settings/security'),
-            devices: () => _route('/rooms/settings/devices'),
-            notifications: () => _route('/rooms/settings/notifications'),
-            appearance: () => _route('/rooms/settings/style'),
-            transcriptions: _hub,
-            privateSync: _hub,
-            about: () => PlatformInfos.showDialog(context),
+            open: _route,
           ),
         );
       },

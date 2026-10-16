@@ -33,12 +33,17 @@ import 'package:fluffychat/pages/settings_password/settings_password.dart';
 import 'package:fluffychat/pages/settings_security/settings_security.dart';
 import 'package:fluffychat/pages/settings_style/settings_style.dart';
 import 'package:fluffychat/pages/sign_in/sign_in_page.dart';
+import 'package:fluffychat/personal/organization_page.dart';
+import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
+import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/personal_hub.dart';
 import 'package:fluffychat/widgets/config_viewer.dart';
 import 'package:fluffychat/widgets/layouts/empty_page.dart';
 import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
 import 'package:fluffychat/widgets/log_view.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -208,16 +213,36 @@ abstract class AppRoutes {
               redirect: loggedOutRedirect,
             ),
             ShellRoute(
-              pageBuilder: (context, state, child) => defaultPageBuilder(
+              pageBuilder: (context, state, child) => noTransitionPageBuilder(
                 context,
                 state,
-                FluffyThemes.isColumnMode(context)
-                    ? TwoColumnLayout(
-                        mainView: Settings(key: state.pageKey),
-                        sideView: child,
-                        hasNavigationRail: false,
-                      )
-                    : child,
+                CallbackShortcuts(
+                  bindings: {
+                    const SingleActivator(LogicalKeyboardKey.escape): () {
+                      if (context.canPop()) {
+                        context.pop();
+                      } else {
+                        context.go(
+                          state.uri.path == '/rooms/settings'
+                              ? '/rooms'
+                              : '/rooms/settings',
+                        );
+                      }
+                    },
+                  },
+                  child: Focus(
+                    autofocus: true,
+                    child: FluffyThemes.isColumnMode(context)
+                        ? TwoColumnLayout(
+                            mainView: const Settings(
+                              key: ValueKey('settings-index'),
+                            ),
+                            sideView: child,
+                            hasNavigationRail: false,
+                          )
+                        : child,
+                  ),
+                ),
               ),
               routes: [
                 GoRoute(
@@ -226,10 +251,88 @@ abstract class AppRoutes {
                     context,
                     state,
                     FluffyThemes.isColumnMode(context)
-                        ? const EmptyPage()
+                        ? state.uri.path == '/rooms/settings'
+                              ? const Settings(surface: SettingsSurface.account)
+                              : const EmptyPage()
                         : const Settings(),
                   ),
                   routes: [
+                    for (final entry in const {
+                      'account': SettingsSurface.account,
+                      'recovery': SettingsSurface.recovery,
+                      'about': SettingsSurface.about,
+                    }.entries)
+                      GoRoute(
+                        path: entry.key,
+                        redirect: loggedOutRedirect,
+                        pageBuilder: (context, state) => defaultPageBuilder(
+                          context,
+                          state,
+                          Settings(surface: entry.value),
+                        ),
+                      ),
+                    for (final entry in const {
+                      'sync': PersonalSettingsSection.sync,
+                      'people': PersonalSettingsSection.people,
+                      'transcriptions': PersonalSettingsSection.transcriptions,
+                      'reminders': PersonalSettingsSection.reminders,
+                      'scheduled': PersonalSettingsSection.scheduled,
+                      'push': PersonalSettingsSection.push,
+                    }.entries)
+                      GoRoute(
+                        path: entry.key,
+                        redirect: loggedOutRedirect,
+                        pageBuilder: (context, state) => defaultPageBuilder(
+                          context,
+                          state,
+                          PersonalSettingsPage(
+                            client: Matrix.of(context).client,
+                            section: entry.value,
+                          ),
+                        ),
+                      ),
+                    GoRoute(
+                      path: 'networks',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        ChatPreferencesPage(
+                          key: ValueKey(Matrix.of(context).client),
+                          personal: PersonalClient.of(
+                            Matrix.of(context).client,
+                          ),
+                        ),
+                      ),
+                    ),
+                    GoRoute(
+                      path: 'organization',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        OrganizationPage(
+                          key: ValueKey(Matrix.of(context).client),
+                          personal: PersonalClient.of(
+                            Matrix.of(context).client,
+                          ),
+                        ),
+                      ),
+                    ),
+                    GoRoute(
+                      path: 'bookmarks',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        BookmarkSearchPage(
+                          key: ValueKey(Matrix.of(context).client),
+                          personal: PersonalClient.of(
+                            Matrix.of(context).client,
+                          ),
+                        ),
+                      ),
+                    ),
                     GoRoute(
                       path: 'notifications',
                       pageBuilder: (context, state) => defaultPageBuilder(
@@ -237,6 +340,19 @@ abstract class AppRoutes {
                         state,
                         const SettingsNotifications(),
                       ),
+                      routes: [
+                        GoRoute(
+                          path: 'registration',
+                          redirect: loggedOutRedirect,
+                          pageBuilder: (context, state) => defaultPageBuilder(
+                            context,
+                            state,
+                            const SettingsNotifications(
+                              registrationDetails: true,
+                            ),
+                          ),
+                        ),
+                      ],
                       redirect: loggedOutRedirect,
                     ),
                     GoRoute(

@@ -4,11 +4,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/file_selector.dart';
+import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
@@ -23,8 +26,11 @@ import 'package:matrix/matrix.dart';
 import '../../widgets/matrix.dart';
 import 'settings_view.dart';
 
+enum SettingsSurface { overview, account, recovery, about }
+
 class Settings extends StatefulWidget {
-  const Settings({super.key});
+  final SettingsSurface surface;
+  const Settings({super.key, this.surface = SettingsSurface.overview});
 
   @override
   SettingsController createState() => SettingsController();
@@ -242,6 +248,73 @@ class SettingsController extends State<Settings> {
     if (_isCurrentClient(client, revision)) {
       await checkBootstrap(account: client, accountRevision: revision);
     }
+  }
+
+  Future<void> deleteAccountAction() async {
+    final client = Matrix.of(context).client;
+    final revision = _accountRevision;
+    final l10n = L10n.of(context);
+    final consent = await showOkCancelAlertDialog(
+      useRootNavigator: false,
+      context: context,
+      title: l10n.warning,
+      message: l10n.deactivateAccountWarning,
+      okLabel: l10n.ok,
+      cancelLabel: l10n.cancel,
+      isDestructive: true,
+    );
+    if (consent != OkCancelResult.ok || !_isCurrentClient(client, revision))
+      return;
+    final owner = client.userID!;
+    final input = await showTextInputDialog(
+      useRootNavigator: false,
+      context: context,
+      title: l10n.confirmMatrixId,
+      validator: (text) => text == owner ? null : l10n.supposedMxid(owner),
+      isDestructive: true,
+      okLabel: l10n.delete,
+      cancelLabel: l10n.cancel,
+    );
+    if (input != owner || !_isCurrentClient(client, revision)) return;
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () => client.uiaRequestBackground<IdServerUnbindResult?>(
+        (auth) => _isCurrentClient(client, revision)
+            ? client.deactivateAccount(auth: auth, erase: true)
+            : throw StateError('The active account changed.'),
+      ),
+    );
+    if (result.isError || !_isCurrentClient(client, revision)) return;
+    await showFutureLoadingDialog(context: context, future: client.logout);
+    if (_isCurrentClient(client, revision)) context.go('/');
+  }
+
+  Future<void> dehydrateAction() async {
+    final client = Matrix.of(context).client;
+    final revision = _accountRevision;
+    if (!_isCurrentClient(client, revision)) return;
+    final l10n = L10n.of(context);
+    final consent = await showOkCancelAlertDialog(
+      context: context,
+      title: l10n.dehydrate,
+      message: l10n.dehydrateWarning,
+      isDestructive: true,
+      okLabel: l10n.ok,
+      cancelLabel: l10n.cancel,
+    );
+    if (consent != OkCancelResult.ok || !_isCurrentClient(client, revision))
+      return;
+    final response = await showFutureLoadingDialog(
+      context: context,
+      future: client.exportDump,
+    );
+    final export = response.result;
+    if (export == null || !_isCurrentClient(client, revision)) return;
+    final date = DateTime.now().toIso8601String().substring(0, 10);
+    await MatrixFile(
+      bytes: Uint8List.fromList(utf8.encode(export)),
+      name: 'personal-chat-export-$date.fluffybackup',
+    ).save(context);
   }
 
   @override

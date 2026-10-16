@@ -8,17 +8,18 @@ import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_notifications/push_rule_extensions.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/background_push.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:fluffychat/widgets/settings_switch_list_tile.dart';
 import 'package:flutter/foundation.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 import 'package:unifiedpush_ui/unifiedpush_ui.dart';
 
-import '../../utils/localized_exception_extension.dart';
 import '../../widgets/matrix.dart';
 import 'settings_notifications.dart';
 
@@ -44,8 +45,12 @@ class SettingsNotificationsView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !FluffyThemes.isColumnMode(context),
-        centerTitle: FluffyThemes.isColumnMode(context),
-        title: Text(L10n.of(context).notifications),
+        centerTitle: false,
+        title: Text(
+          controller.widget.registrationDetails
+              ? 'Notification registration details'
+              : 'Notifications',
+        ),
       ),
       body: NotionSettingsBody(
         child: StreamBuilder(
@@ -62,10 +67,38 @@ class SettingsNotificationsView extends StatelessWidget {
                 lastReceivedPushNotification[Matrix.of(
                   context,
                 ).client.clientName];
-            return SelectionArea(
-              child: Column(
-                children: [
-                  if (kDebugMode && lastReceivedPush != null)
+            return Column(
+              children: [
+                if (!controller.widget.registrationDetails) ...[
+                  if (pushService != null)
+                    ListenableBuilder(
+                      listenable: pushService.registrationChanges,
+                      builder: (context, _) => NotionListRow(
+                        leading: const Icon(Icons.phonelink_setup_outlined),
+                        title: 'Push setup & registration',
+                        subtitle: pushService.registrationDescription(
+                          Matrix.of(context).client,
+                        ),
+                        onTap: () => context.push('/rooms/settings/push'),
+                      ),
+                    )
+                  else
+                    NotionListRow(
+                      title: 'Push setup & registration',
+                      subtitle: 'Registration status is unavailable.',
+                      onTap: () => context.push('/rooms/settings/push'),
+                    ),
+                  const NotionSettingsSection('Notification rules'),
+                  if (pushRules == null)
+                    const ListTile(
+                      title: Text('Rules are not available yet'),
+                      subtitle: Text(
+                        'Reconnect to load account notification rules. Device setup remains available.',
+                      ),
+                    ),
+                  if (controller.widget.registrationDetails &&
+                      kDebugMode &&
+                      lastReceivedPush != null)
                     ListTile(
                       title: Text('Last received push notification'),
                       subtitle: Text(lastReceivedPush.toIso8601String()),
@@ -135,7 +168,8 @@ class SettingsNotificationsView extends StatelessWidget {
                         ),
                       Divider(color: theme.dividerColor),
                     ],
-
+                ],
+                if (controller.widget.registrationDetails) ...[
                   if (pushService?.firebaseEnabled != true)
                     ListTile(
                       title: Text(L10n.of(context).buildDoesNotSupportFirebase),
@@ -202,22 +236,22 @@ class SettingsNotificationsView extends StatelessWidget {
                     ),
                   ),
                   FutureBuilder<List<Pusher>?>(
+                    key: ValueKey(Matrix.of(context).client),
                     future: controller.pusherFuture ??= Matrix.of(
                       context,
                     ).client.getPushers(),
                     builder: (context, snapshot) {
                       if (snapshot.hasError) {
-                        Center(
-                          child: Text(
-                            snapshot.error!.toLocalizedString(context),
-                          ),
+                        return NotionListRow(
+                          title: 'Could not load registered devices',
+                          subtitle: 'Check your connection and retry.',
+                          onTap: controller.retryPushers,
                         );
                       }
                       if (snapshot.connectionState != ConnectionState.done) {
-                        const Center(
-                          child: CircularProgressIndicator.adaptive(
-                            strokeWidth: 2,
-                          ),
+                        return const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: LinearProgressIndicator(),
                         );
                       }
                       final pushers = snapshot.data ?? [];
@@ -229,22 +263,20 @@ class SettingsNotificationsView extends StatelessWidget {
                           ),
                         );
                       }
-                      return SelectionArea(
-                        child: ListView.builder(
-                          physics: const NeverScrollableScrollPhysics(),
-                          shrinkWrap: true,
-                          itemCount: pushers.length,
-                          itemBuilder: (_, i) => ListTile(
-                            title: Text(pushers[i].appId),
-                            subtitle: Text(pushers[i].data.url.toString()),
-                            onTap: () => controller.onPusherTap(pushers[i]),
-                          ),
+                      return ListView.builder(
+                        physics: const NeverScrollableScrollPhysics(),
+                        shrinkWrap: true,
+                        itemCount: pushers.length,
+                        itemBuilder: (_, i) => ListTile(
+                          title: Text(pushers[i].appId),
+                          subtitle: Text(pushers[i].data.url.toString()),
+                          onTap: () => controller.onPusherTap(pushers[i]),
                         ),
                       );
                     },
                   ),
                 ],
-              ),
+              ],
             );
           },
         ),

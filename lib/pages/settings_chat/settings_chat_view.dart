@@ -8,6 +8,7 @@ import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/settings_switch_list_tile.dart';
@@ -26,15 +27,35 @@ class SettingsChatView extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(L10n.of(context).chat),
+        title: const Text('Chats & organization'),
         automaticallyImplyLeading: !FluffyThemes.isColumnMode(context),
-        centerTitle: FluffyThemes.isColumnMode(context),
+        centerTitle: false,
       ),
       body: ListTileTheme(
         iconColor: theme.textTheme.bodyLarge!.color,
         child: NotionSettingsBody(
           child: Column(
             children: [
+              NotionListRow(
+                leading: const Icon(Icons.tune),
+                title: 'Networks & chat rules',
+                subtitle:
+                    'Groups, ignored chats and private notification rules',
+                onTap: () => context.push('/rooms/settings/networks'),
+              ),
+              NotionListRow(
+                leading: const Icon(Icons.palette_outlined),
+                title: 'Conversation preferences',
+                subtitle: 'Private appearance and conversation preferences',
+                onTap: () => context.push('/rooms/settings/organization'),
+              ),
+              NotionListRow(
+                leading: const Icon(Icons.people_outline),
+                title: 'People & merged conversations',
+                subtitle: 'Keep one timeline across a person’s networks',
+                onTap: () => context.push('/rooms/settings/people'),
+              ),
+              const NotionSettingsSection('Messages & gestures'),
               SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).formattedMessages,
                 subtitle: L10n.of(context).formattedMessagesDescription,

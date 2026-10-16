@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/merged_chat_page.dart';
 import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -17,24 +18,6 @@ import 'package:uuid/uuid.dart';
 
 String? _privateText(Object? value) => value is String ? value : null;
 
-const _labelIcons = <String, IconData>{
-  'label': Icons.label_outline,
-  'work': Icons.work_outline,
-  'home': Icons.home_outlined,
-  'people': Icons.people_outline,
-  'favorite': Icons.favorite_border,
-  'school': Icons.school_outlined,
-};
-const _colors = <int>[
-  0xff496b43,
-  0xff355d92,
-  0xff7b4669,
-  0xff986225,
-  0xff3c7372,
-  0xff69528c,
-  0xff8b4646,
-  0xff575e6b,
-];
 const _bubbleColors = <int>[
   0xffdfebdb,
   0xffdbe6f5,
@@ -118,42 +101,6 @@ class _OrganizationPageState extends State<OrganizationPage> {
     await personal.put('org:${metadata.entityId}', value);
   }
 
-  Future<void> _editLabel({String? key}) async {
-    final current = key == null
-        ? <String, dynamic>{}
-        : personal.values[key] ?? {};
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => _LabelDialog(initial: current),
-    );
-    if (result != null) {
-      await personal.put(key ?? 'label:${const Uuid().v4()}', result);
-    }
-  }
-
-  Future<void> _deleteLabel(String key) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete this label?'),
-        content: const Text(
-          'Conversations and messages remain. Only this view is removed.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete label'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true) await personal.delete(key);
-  }
-
   Future<void> _nickname(ConversationMetadata metadata) async {
     final controller = TextEditingController(
       text:
@@ -229,26 +176,11 @@ class _OrganizationPageState extends State<OrganizationPage> {
     listenable: personal,
     builder: (context, _) {
       final room = widget.room;
-      final labels =
-          personal.values.entries
-              .where((e) => e.key.startsWith('label:'))
-              .toList()
-            ..sort(
-              (a, b) => (_privateText(a.value['name']) ?? '').compareTo(
-                _privateText(b.value['name']) ?? '',
-              ),
-            );
       final metadata = room == null ? null : projection.metadataFor(room);
       final key = metadata == null ? '' : 'org:${metadata.entityId}';
       final editing = metadata != null && _canEdit(key);
       return Scaffold(
-        appBar: AppBar(
-          title: Text(
-            room == null
-                ? 'Conversation organization'
-                : 'Private conversation preferences',
-          ),
-        ),
+        appBar: AppBar(title: Text('Private conversation preferences')),
         body: Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
@@ -260,9 +192,9 @@ class _OrganizationPageState extends State<OrganizationPage> {
                 if (!personal.ready)
                   const ListTile(
                     leading: Icon(Icons.lock_outline),
-                    title: Text('Private sync is not configured'),
+                    title: Text('Private sync is unavailable'),
                     subtitle: Text(
-                      'Set it up in Personal tools to sync preferences between your devices.',
+                      'Set it up in Settings → Sync & transcriptions to sync preferences between your devices.',
                     ),
                   ),
                 if (metadata != null && room != null) ...[
@@ -281,6 +213,19 @@ class _OrganizationPageState extends State<OrganizationPage> {
                       leading: Icon(Icons.sync),
                       title: Text('Change awaiting sync confirmation'),
                     ),
+                  ListTile(
+                    leading: const Icon(Icons.tune),
+                    title: const Text('Visibility & notifications'),
+                    subtitle: const Text(
+                      'Ignore, restore or override network rules',
+                    ),
+                    onTap: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            ChatPreferencesPage(personal: personal, room: room),
+                      ),
+                    ),
+                  ),
                   SwitchListTile(
                     title: const Text('Pin chat'),
                     value: metadata.isPinned,
@@ -323,16 +268,6 @@ class _OrganizationPageState extends State<OrganizationPage> {
                         ? (v) => _run(
                             () => _saveMetadata(metadata.setLowPriority(v)),
                           )
-                        : null,
-                  ),
-                  SwitchListTile(
-                    title: const Text('Mute'),
-                    subtitle: const Text(
-                      'Mentions and thread replies may still notify.',
-                    ),
-                    value: metadata.muted,
-                    onChanged: editing
-                        ? (v) => _run(() => _saveMetadata(metadata.setMuted(v)))
                         : null,
                   ),
                   const Divider(),
@@ -385,119 +320,33 @@ class _OrganizationPageState extends State<OrganizationPage> {
                             )
                           : null,
                     ),
-                  const Divider(),
-                  const ListTile(title: Text('Conversation labels')),
-                  if (labels.isEmpty)
-                    const ListTile(
-                      subtitle: Text('Add your first label below.'),
-                    ),
-                  for (final label in labels)
-                    CheckboxListTile(
-                      title: Text(_privateText(label.value['name']) ?? 'Label'),
-                      secondary: _labelIcon(label.value),
-                      value: projection.labelsFor(room).contains(label.key),
-                      onChanged:
-                          editing && !_waiting('labels:${metadata.entityId}')
-                          ? (v) => _run(() async {
-                              final selected = projection.labelsFor(room);
-                              v == true
-                                  ? selected.add(label.key)
-                                  : selected.remove(label.key);
-                              await personal.put(
-                                'labels:${metadata.entityId}',
-                                {'labels': selected.toList()..sort()},
-                              );
-                              await _saveMetadata(
-                                ConversationMetadata.fromJson({
-                                  ...metadata.toJson(),
-                                  'labelIds': selected.toList(),
-                                }),
-                              );
-                            })
-                          : null,
-                    ),
-                  const Divider(),
                 ],
-                ListTile(
-                  title: const Text('My labels'),
-                  trailing: IconButton(
-                    tooltip: 'Add label',
-                    icon: const Icon(Icons.add),
-                    onPressed: personal.ready && !_busy
-                        ? () => _run(_editLabel)
-                        : null,
-                  ),
-                ),
-                for (final label in labels)
-                  ListTile(
-                    leading: _labelIcon(label.value),
-                    title: Text(_privateText(label.value['name']) ?? 'Label'),
-                    subtitle: Text(
-                      label.value['showInInbox'] == false
-                          ? 'Conversations outside the main inbox'
-                          : 'Conversations visible in the inbox',
-                    ),
-                    onTap: _canEdit(label.key)
-                        ? () => _run(() => _editLabel(key: label.key))
-                        : null,
-                    trailing: IconButton(
-                      tooltip: 'Delete label',
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: _canEdit(label.key)
-                          ? () => _run(() => _deleteLabel(label.key))
-                          : null,
-                    ),
-                  ),
                 if (room == null) ...[
-                  const Divider(),
-                  ListTile(
-                    leading: const Icon(Icons.bookmarks_outlined),
-                    title: const Text('Search bookmarks'),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                        builder: (_) => BookmarkSearchPage(personal: personal),
-                      ),
+                  const ListTile(
+                    leading: Icon(Icons.chat_bubble_outline),
+                    title: Text('Choose a conversation'),
+                    subtitle: Text(
+                      'Open Chat details from a conversation to change its private appearance, nickname and visibility.',
                     ),
                   ),
-                  const Divider(),
-                  const ListTile(title: Text('Drafts needing a choice')),
-                  for (final conflict in personal.conflicts.entries.where(
-                    (e) => e.key.startsWith('draft:'),
-                  ))
+                  for (final source
+                      in projection
+                          .rooms(personal.client.rooms, filter: InboxFilter.all)
+                          .where((r) => r.membership == Membership.join))
                     ListTile(
-                      leading: const Icon(Icons.edit_note),
-                      title: const Text('Two draft versions'),
+                      leading: const Icon(Icons.chat_bubble_outline),
+                      title: Text(projection.displayName(source)),
                       subtitle: const Text(
-                        'Both versions retained. Choose one or combine the text.',
+                        'Private appearance and conversation preferences',
                       ),
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute<void>(
-                          builder: (_) => DraftConflictPage(
+                      onTap: () => Navigator.of(context).push<void>(
+                        MaterialPageRoute(
+                          builder: (_) => OrganizationPage(
                             personal: personal,
-                            entityKey: conflict.key,
+                            room: source,
                           ),
                         ),
                       ),
-                    ),
-                  if (!projection.hasDraftConflicts)
-                    const ListTile(
-                      subtitle: Text('No unresolved draft conflicts.'),
-                    ),
-                  for (final copy in personal.values.entries.where(
-                    (e) => e.key.startsWith('draft-copy:'),
-                  ))
-                    ExpansionTile(
-                      title: const Text('Retained draft copy'),
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: SelectableText(
-                            _privateText(copy.value['text']) ?? '',
-                          ),
-                        ),
-                      ],
                     ),
                 ],
               ],
@@ -509,10 +358,6 @@ class _OrganizationPageState extends State<OrganizationPage> {
   );
 }
 
-Widget _labelIcon(Map<String, dynamic> label) => Icon(
-  _labelIcons[label['icon']] ?? Icons.label_outline,
-  color: label['color'] is int ? Color(label['color'] as int) : null,
-);
 int _nextPinOrder(PersonalClient personal) {
   final orders = personal.values.entries
       .where((e) => e.key.startsWith('org:'))
@@ -549,97 +394,6 @@ Future<void> _movePinToTop(
   )) {
     await personal.put(entry.key, {...entry.value, 'pinOrder': order++});
   }
-}
-
-class _LabelDialog extends StatefulWidget {
-  final Map<String, dynamic> initial;
-  const _LabelDialog({required this.initial});
-  @override
-  State<_LabelDialog> createState() => _LabelDialogState();
-}
-
-class _LabelDialogState extends State<_LabelDialog> {
-  late final name = TextEditingController(
-    text: _privateText(widget.initial['name']) ?? '',
-  );
-  late String icon = _privateText(widget.initial['icon']) ?? 'label';
-  late int color = widget.initial['color'] is int
-      ? widget.initial['color'] as int
-      : _colors.first;
-  late bool showInInbox = widget.initial['showInInbox'] != false;
-  @override
-  void dispose() {
-    name.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.initial.isEmpty ? 'New label' : 'Edit label'),
-    content: SizedBox(
-      width: 420,
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: name,
-              autofocus: true,
-              maxLength: 80,
-              decoration: const InputDecoration(labelText: 'Name'),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 16),
-            const Text('Ikona'),
-            Wrap(
-              spacing: 4,
-              children: [
-                for (final entry in _labelIcons.entries)
-                  IconButton(
-                    tooltip: entry.key,
-                    isSelected: icon == entry.key,
-                    icon: Icon(entry.value),
-                    onPressed: () => setState(() => icon = entry.key),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            const Text('Kolor'),
-            _ColorChoices(
-              colors: _colors,
-              value: color,
-              onChanged: (v) => setState(() => color = v),
-            ),
-            const SizedBox(height: 8),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Show conversations in the inbox'),
-              value: showInInbox,
-              onChanged: (v) => setState(() => showInInbox = v),
-            ),
-          ],
-        ),
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FilledButton(
-        onPressed: name.text.trim().isEmpty
-            ? null
-            : () => Navigator.pop(context, {
-                'name': name.text.trim(),
-                'icon': icon,
-                'color': color,
-                'showInInbox': showInInbox,
-              }),
-        child: const Text('Save'),
-      ),
-    ],
-  );
 }
 
 class _ColorChoices extends StatelessWidget {
@@ -1030,7 +784,6 @@ String _metadataConflictSummary(Object? value, PersonalClient personal) {
   for (final entry in const {
     'name': 'Name',
     'nickname': 'Conversation name',
-    'showInInbox': 'Visible in the inbox',
     'archived': 'Archive',
     'lowPriority': 'Low priority',
     'muted': 'Privately muted',
@@ -1039,17 +792,6 @@ String _metadataConflictSummary(Object? value, PersonalClient personal) {
     if (field is String) parts.add('${entry.value}: $field');
     if (field is bool) parts.add('${entry.value}: ${field ? 'tak' : 'nie'}');
   }
-  if (value['labels'] is List) {
-    parts.add(
-      'Labels: ${(value['labels'] as List).whereType<String>().map((id) => personal.values[id]?['name'] as String? ?? 'Nieznana etykieta').join(', ')}',
-    );
-  }
-  if (value['labelIds'] is List) {
-    parts.add(
-      'Labels: ${(value['labelIds'] as List).whereType<String>().map((id) => personal.values[id]?['name'] as String? ?? 'Nieznana etykieta').join(', ')}',
-    );
-  }
-  if (value.containsKey('mxc')) parts.add('Private conversation avatar');
   if (value['theme'] is Map) parts.add('Custom conversation colors');
   return parts.isEmpty ? 'Private conversation settings' : parts.join('\n');
 }
@@ -1563,6 +1305,8 @@ class PersonalInboxFilters extends StatelessWidget {
               InboxFilter.unanswered: 'Unanswered',
               InboxFilter.direct: 'People',
               InboxFilter.groups: 'Groups',
+              InboxFilter.ignored: 'Ignored',
+              InboxFilter.technical: 'Technical',
               InboxFilter.archive: 'Archive',
               InboxFilter.lowPriority: 'Low priority',
               InboxFilter.all: 'All',
@@ -1573,18 +1317,6 @@ class PersonalInboxFilters extends StatelessWidget {
                   label: Text(entry.value),
                   selected: value == entry.key,
                   onSelected: (_) => onChanged(entry.key, null),
-                ),
-              ),
-            for (final label in personal.values.entries.where(
-              (e) => e.key.startsWith('label:'),
-            ))
-              Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: ChoiceChip(
-                  avatar: _labelIcon(label.value),
-                  label: Text(_privateText(label.value['name']) ?? 'Label'),
-                  selected: value == InboxFilter.label && labelKey == label.key,
-                  onSelected: (_) => onChanged(InboxFilter.label, label.key),
                 ),
               ),
           ],
