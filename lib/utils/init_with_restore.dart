@@ -66,7 +66,10 @@ extension InitWithRestoreExtension on Client {
     );
   }
 
-  Future<void> initWithRestore({void Function()? onMigration}) async {
+  Future<void> initWithRestore({
+    void Function()? onMigration,
+    bool allowSessionRestore = false,
+  }) async {
     final storageKey =
         '${AppSettings.applicationName.value}_session_backup_$clientName';
     final storage = PlatformInfos.isMobile || PlatformInfos.isLinux
@@ -79,7 +82,8 @@ extension InitWithRestoreExtension on Client {
           if (state == InitState.migratingDatabase) onMigration?.call();
         },
         waitForFirstSync: false,
-        waitUntilLoadCompletedLoaded: false,
+        waitUntilLoadCompletedLoaded: true,
+        preserveSessionOnInitFailure: true,
       );
       if (isLogged()) {
         final accessToken = this.accessToken;
@@ -113,7 +117,10 @@ extension InitWithRestoreExtension on Client {
         }
       }
     } catch (e) {
-      Logs().e('Client init failed: ${e.runtimeType}');
+      Logs().e('client_initialization_failed');
+      // Opening failed storage is not consent to replace its session from a
+      // backup. Startup retries the existing database without relogin/recovery.
+      if (!allowSessionRestore) rethrow;
       final l10n = await lookupL10n(PlatformDispatcher.instance.locale);
       final sessionBackupString = await storage?.read(key: storageKey);
       if (sessionBackupString == null) {
@@ -137,7 +144,8 @@ extension InitWithRestoreExtension on Client {
           newHomeserver: Uri.tryParse(sessionBackup.homeserver),
           newUserID: sessionBackup.userId,
           waitForFirstSync: false,
-          waitUntilLoadCompletedLoaded: false,
+          waitUntilLoadCompletedLoaded: true,
+          preserveSessionOnInitFailure: true,
           onInitStateChanged: (state) {
             if (state == InitState.migratingDatabase) onMigration?.call();
           },

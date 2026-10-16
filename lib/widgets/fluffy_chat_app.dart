@@ -9,7 +9,9 @@ import 'package:fluffychat/config/routes.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/widgets/app_lock.dart';
+import 'package:fluffychat/widgets/client_startup.dart';
 import 'package:fluffychat/widgets/layouts/call_overlay.dart';
 import 'package:fluffychat/widgets/theme_builder.dart';
 import 'package:go_router/go_router.dart';
@@ -25,6 +27,7 @@ class FluffyChatApp extends StatelessWidget {
   final List<Client> clients;
   final ({String? pincode, bool useBiometrics}) appLockSettings;
   final SharedPreferences store;
+  final ClientStartup? startup;
 
   const FluffyChatApp({
     super.key,
@@ -32,6 +35,7 @@ class FluffyChatApp extends StatelessWidget {
     required this.clients,
     required this.store,
     required this.appLockSettings,
+    this.startup,
   });
 
   /// getInitialLink may rereturn the value multiple times if this view is
@@ -93,7 +97,14 @@ class FluffyChatApp extends StatelessWidget {
             clients: clients,
             store: store,
             child: CallOverlay(
-              child: testWidget ?? child ?? const SizedBox.shrink(),
+              child: Column(
+                children: [
+                  if (startup != null) ClientStartupNotice(startup: startup!),
+                  Expanded(
+                    child: testWidget ?? child ?? const SizedBox.shrink(),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
+import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/personal/storage/storage_failure.dart';
 import 'package:fluffychat/utils/client_manager.dart';
+import 'package:fluffychat/utils/init_with_restore.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,7 +19,16 @@ class _FakeClient implements Client {
   bool isLogged() => loggedIn;
 
   @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+  dynamic noSuchMethod(Invocation invocation) {
+    if ({
+      #roomsLoading,
+      #accountDataLoading,
+      #userDeviceKeysLoading,
+    }.contains(invocation.memberName)) {
+      return null;
+    }
+    return super.noSuchMethod(invocation);
+  }
 }
 
 void main() {
@@ -93,4 +107,187 @@ void main() {
     expect(clients.single.clientName, 'only');
     expect(store.getStringList(ClientManager.clientNamespace), ['only']);
   });
+  for (final corrupt in <Object>[42, 'not-a-list', false]) {
+    test(
+      'invalid registry type is preserved without creating a client: ${corrupt.runtimeType}',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          ClientManager.clientNamespace: corrupt,
+        });
+        final store = await SharedPreferences.getInstance();
+        final startup = ClientStartup(
+          store: store,
+          clientFactory: (_, _) async {
+            fail('A corrupt registry must not create an apparent new account');
+          },
+        );
+        addTearDown(startup.dispose);
+        await startup.restore();
+        expect(startup.registryFailure?.code, 'account_registry_invalid');
+        expect(startup.clients, isEmpty);
+        expect(store.get(ClientManager.clientNamespace), corrupt);
+      },
+    );
+  }
+
+  test(
+    'single restore failure stays outside login and explicit retry reuses session',
+    () async {
+      final store = await savedAccounts(['saved']);
+      final client = _FakeClient('saved');
+      var attempts = 0;
+      var created = 0;
+      final startup = ClientStartup(
+        store: store,
+        clientFactory: (_, _) async {
+          created++;
+          return client;
+        },
+        initializeClient: (_, _) async {
+          if (++attempts == 1) {
+            throw const StorageFailure(StorageFailureCode.keyUnavailable);
+          }
+          client.loggedIn = true;
+        },
+      );
+      addTearDown(startup.dispose);
+      await startup.restore();
+      expect(startup.clients, isEmpty);
+      expect(startup.failedCount, 1);
+      expect(store.getStringList(ClientManager.clientNamespace), ['saved']);
+      await startup.restore();
+      expect(startup.clients, [client]);
+      expect(startup.hasFailures, isFalse);
+      expect(created, 1);
+    },
+  );
+
+  test(
+    'failed account factory does not block a healthy account or recreate it on retry',
+    () async {
+      final store = await savedAccounts(['bad', 'healthy']);
+      final calls = <String, int>{};
+      var recover = false;
+      final startup = ClientStartup(
+        store: store,
+        clientFactory: (name, _) async {
+          calls[name] = (calls[name] ?? 0) + 1;
+          if (name == 'bad' && !recover) {
+            throw const StorageFailure(StorageFailureCode.databaseUnavailable);
+          }
+          return _FakeClient(name)..loggedIn = true;
+        },
+        initializeClient: (_, _) async {},
+      );
+      addTearDown(startup.dispose);
+      await startup.restore();
+      final healthy = startup.clients.single;
+      expect(healthy.clientName, 'healthy');
+      expect(startup.failedCount, 1);
+      expect(store.getStringList(ClientManager.clientNamespace), [
+        'bad',
+        'healthy',
+      ]);
+      recover = true;
+      await startup.restore();
+      expect(startup.clients.first, same(healthy));
+      expect(startup.clients.map((c) => c.clientName), ['healthy', 'bad']);
+      expect(calls, {'bad': 2, 'healthy': 1});
+    },
+  );
+
+  test(
+    'registry retry rereads the corrected saved list without resetting it',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        ClientManager.clientNamespace: 7,
+      });
+      final store = await SharedPreferences.getInstance();
+      final startup = ClientStartup(
+        store: store,
+        clientFactory: (name, _) async => _FakeClient(name)..loggedIn = true,
+        initializeClient: (_, _) async {},
+      );
+      addTearDown(startup.dispose);
+      await startup.restore();
+      expect(startup.registryFailure, isNotNull);
+      await store.setStringList(ClientManager.clientNamespace, ['restored']);
+      await startup.restore();
+      expect(startup.clients.single.clientName, 'restored');
+      expect(startup.hasFailures, isFalse);
+    },
+  );
+
+  test(
+    'overlapping retries coalesce and dispose rejects late account publication',
+    () async {
+      final store = await savedAccounts(['saved']);
+      final gate = Completer<void>();
+      var attempts = 0;
+      final startup = ClientStartup(
+        store: store,
+        clientFactory: (name, _) async => _FakeClient(name)..loggedIn = true,
+        initializeClient: (_, _) async {
+          attempts++;
+          await gate.future;
+        },
+      );
+      final first = startup.restore();
+      final second = startup.restore();
+      expect(second, same(first));
+      await Future<void>.delayed(Duration.zero);
+      expect(attempts, 1);
+      startup.dispose();
+      gate.complete();
+      await first;
+      expect(startup.clients, isEmpty);
+      expect(store.getStringList(ClientManager.clientNamespace), ['saved']);
+    },
+  );
+
+  test(
+    'ordinary startup init failure never attempts backup-based session recovery',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      await AppSettings.init(loadWebConfigFile: false);
+      final client = _FailingInitClient();
+      await expectLater(client.initWithRestore(), throwsStateError);
+      expect(client.initializations, 1);
+      expect(client.initArguments?[#preserveSessionOnInitFailure], isTrue);
+      expect(client.initArguments?[#waitUntilLoadCompletedLoaded], isTrue);
+      expect(client.initArguments?[#waitForFirstSync], isFalse);
+      // Interface noSuchMethod forwarding includes omitted optional arguments
+      // with their default values. No replacement session may be supplied.
+      for (final field in [
+        #newToken,
+        #newRefreshToken,
+        #newTokenExpiresAt,
+        #newHomeserver,
+        #newUserID,
+        #newDeviceID,
+        #newDeviceName,
+        #newOlmAccount,
+        #newOidcClientId,
+      ]) {
+        expect(client.initArguments?[field], isNull, reason: '$field');
+      }
+    },
+  );
+}
+
+class _FailingInitClient extends _FakeClient {
+  _FailingInitClient() : super('saved');
+  int initializations = 0;
+  Map<Symbol, dynamic>? initArguments;
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (invocation.memberName == #init) {
+      initializations++;
+      initArguments = invocation.namedArguments;
+      return Future<void>.error(
+        StateError('synthetic existing database failure'),
+      );
+    }
+    return super.noSuchMethod(invocation);
+  }
 }

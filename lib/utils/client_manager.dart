@@ -7,6 +7,7 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/diagnostics.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/privacy_transport.dart';
 import 'package:fluffychat/utils/custom_http_client.dart';
@@ -20,6 +21,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:matrix/encryption/utils/key_verification.dart';
 import 'package:matrix/matrix.dart';
+// The vendored SDK exposes its restore exception through this pinned type.
+// ignore: implementation_imports
+import 'package:matrix/src/utils/client_init_exception.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_html/html.dart' as html;
 
@@ -36,63 +40,22 @@ abstract class ClientManager {
     @visibleForTesting
     Future<void> Function(Client, void Function())? initializeClient,
   }) async {
-    final clientNames = <String>{};
-    try {
-      final clientNamesList = store.getStringList(clientNamespace) ?? [];
-      clientNames.addAll(clientNamesList);
-    } catch (e, s) {
-      Logs().w('Client names in store are corrupted', e, s);
-      await store.remove(clientNamespace);
-    }
-    if (clientNames.isEmpty) {
-      clientNames.add(PlatformInfos.appDisplayName);
-      await store.setStringList(clientNamespace, clientNames.toList());
-    }
-    final clients = await Future.wait(
-      clientNames.map((name) => (clientFactory ?? createClient)(name, store)),
+    final startup = ClientStartup(
+      store: store,
+      clientFactory: clientFactory,
+      initializeClient: initializeClient,
+      initialize: initialize,
     );
-    final failedClients = <Client>{};
-    if (initialize) {
-      await Future.wait(
-        clients.map((client) async {
-          Future<void> onMigration() async {
-            final l10n = await lookupL10n(PlatformDispatcher.instance.locale);
-            await sendInitNotification(
-              l10n.databaseMigrationTitle,
-              l10n.databaseMigrationBody,
-            );
-          }
-
-          try {
-            if (initializeClient != null) {
-              await initializeClient(client, onMigration);
-            } else {
-              await client.initWithRestore(onMigration: onMigration);
-            }
-          } catch (error) {
-            failedClients.add(client);
-            Logs().e(
-              'client_initialization_failed',
-              error.runtimeType.toString(),
-            );
-          }
-        }),
-      );
+    await startup.restore();
+    if (startup.registryFailure != null) {
+      throw StateError('Account registry is invalid');
     }
-    // A failed database/key restore is not a logout. Keep its namespace so
-    // the existing encrypted session can be retried on the next launch.
-    if (initialize && clients.length > 1) {
-      final loggedOutClients = clients
-          .where((c) => !c.isLogged() && !failedClients.contains(c))
-          .toList();
-      for (final client in loggedOutClients) {
-        Logs().w('Removing a logged-out multi-account client.');
-        clientNames.remove(client.clientName);
-        clients.remove(client);
-      }
-      await store.setStringList(clientNamespace, clientNames.toList());
-    }
-    return clients;
+    // Compatibility for background/legacy callers. Foreground uses the explicit
+    // result and never routes a failed client into login.
+    return startup.accounts
+        .where((entry) => entry.client != null)
+        .map((entry) => entry.client!)
+        .toList();
   }
 
   static Future<void> addClientNameToStore(
@@ -150,6 +113,7 @@ abstract class ClientManager {
         'm.bridge',
         'uk.half-shot.bridge',
         'com.beeper.bridge',
+        'io.element.functional_members',
         'com.beeper.room_features',
         'pl.personal.chat.telegram.media_capabilities',
         // To make room emotes work
@@ -179,6 +143,7 @@ abstract class ClientManager {
         seconds: AppSettings.sendTimelineEventTimeout.value,
       ),
     );
+    client.syncErrorMaxTimeoutSec = 60;
     if (!PersonalPrivacy.policy.allowOnlinePresence) {
       client.syncPresence = PresenceType.offline;
     }
@@ -227,5 +192,171 @@ abstract class ClientManager {
         iOS: DarwinNotificationDetails(sound: 'notification.caf'),
       ),
     );
+  }
+}
+
+class ClientStartupAccount {
+  final String _name;
+  Client? client;
+  PersonalDiagnostic? failure;
+  bool available = false;
+  ClientStartupAccount(this._name);
+}
+
+/// Keeps failed account handles outside Matrix until an explicit retry succeeds.
+/// It never clears a registry, database or key in response to an error.
+class ClientStartup extends ChangeNotifier {
+  final SharedPreferences store;
+  final Future<Client> Function(String, SharedPreferences) _factory;
+  final Future<void> Function(Client, void Function())? _initializeClient;
+  final bool initialize;
+  final List<ClientStartupAccount> accounts = [];
+  // Matrix owns mutations caused by real login/logout; retain this list identity.
+  final List<Client> clients = [];
+  PersonalDiagnostic? registryFailure;
+  Future<void>? _restoring;
+  bool _disposed = false;
+  bool get busy => _restoring != null;
+  int get failedCount => accounts.where((a) => a.failure != null).length;
+  bool get hasFailures => registryFailure != null || failedCount != 0;
+
+  ClientStartup({
+    required this.store,
+    Future<Client> Function(String, SharedPreferences)? clientFactory,
+    Future<void> Function(Client, void Function())? initializeClient,
+    this.initialize = true,
+  }) : _factory = clientFactory ?? ClientManager.createClient,
+       _initializeClient = initializeClient;
+
+  Future<void> restore() {
+    if (_disposed) return Future.value();
+    if (_restoring != null) return _restoring!;
+    final restoring = _restoring = _restore()
+        .catchError((Object error) {
+          if (!_disposed) {
+            registryFailure = PersonalDiagnostic.from(
+              error,
+              PersonalFailurePhase.registry,
+            );
+          }
+        })
+        .whenComplete(() {
+          _restoring = null;
+          if (!_disposed) notifyListeners();
+        });
+    notifyListeners();
+    return restoring;
+  }
+
+  Future<void> _restore() async {
+    // Yield so busy is established even when preferences validation fails early.
+    await Future<void>.value();
+    if (_disposed) return;
+    if (accounts.isEmpty) {
+      try {
+        // Refresh only on retry: another isolate may have corrected preferences.
+        if (registryFailure != null) await store.reload();
+        if (_disposed) return;
+        final raw = store.get(ClientManager.clientNamespace);
+        if (raw != null &&
+            (raw is! List ||
+                raw.any((name) => name is! String || name.isEmpty))) {
+          throw StateError('Account registry is invalid');
+        }
+        final names = raw == null ? <String>[] : List<String>.from(raw as List);
+        if (names.isEmpty) {
+          names.add(PlatformInfos.appDisplayName);
+          await store.setStringList(ClientManager.clientNamespace, names);
+        }
+        if (_disposed) return;
+        accounts.addAll(names.toSet().map(ClientStartupAccount.new));
+        registryFailure = null;
+      } catch (_) {
+        registryFailure = const PersonalDiagnostic(
+          'account_registry_invalid',
+          PersonalFailurePhase.registry,
+        );
+        return;
+      }
+    }
+    await Future.wait(
+      accounts.where((a) => !a.available).map((entry) async {
+        try {
+          final client = entry.client ??= await _factory(entry._name, store);
+          if (_disposed) return;
+          if (initialize) {
+            void onMigration() {
+              // Migration notification is optional and must not fail restoration.
+              () async {
+                final l10n = await lookupL10n(
+                  PlatformDispatcher.instance.locale,
+                );
+                await ClientManager.sendInitNotification(
+                  l10n.databaseMigrationTitle,
+                  l10n.databaseMigrationBody,
+                );
+              }().catchError((Object _) {});
+            }
+
+            if (_initializeClient != null) {
+              await _initializeClient(client, onMigration);
+            } else {
+              await client.initWithRestore(onMigration: onMigration);
+            }
+            // Also cover alternate initializers: account usability includes local
+            // rooms, account metadata and trusted device keys, independently per account.
+            await Future.wait<dynamic>([
+              if (client.roomsLoading != null) client.roomsLoading!,
+              if (client.accountDataLoading != null) client.accountDataLoading!,
+              if (client.userDeviceKeysLoading != null)
+                client.userDeviceKeysLoading!,
+            ]);
+          }
+          if (_disposed) return;
+          entry.available = true;
+          entry.failure = null;
+          if ((!initialize || client.isLogged() || accounts.length == 1) &&
+              !clients.contains(client)) {
+            clients.add(client);
+          }
+          notifyListeners();
+        } catch (error) {
+          if (_disposed) return;
+          entry.failure = PersonalDiagnostic.from(
+            error is ClientInitException ? error.originalException : error,
+            PersonalFailurePhase.accountRestore,
+          );
+          Logs().e('client_initialization_failed', entry.failure!.code);
+          notifyListeners();
+        }
+      }),
+    );
+    if (_disposed) return;
+    // Only a completed, explicit logged-out state is eligible for removal.
+    // A failed restore is never interpreted as logout.
+    if (initialize && accounts.length > 1) {
+      final loggedOut = accounts
+          .where((a) => a.available && !a.client!.isLogged())
+          .toList();
+      if (loggedOut.isNotEmpty && loggedOut.length < accounts.length) {
+        for (final entry in loggedOut) {
+          accounts.remove(entry);
+          clients.remove(entry.client);
+        }
+        await store.setStringList(
+          ClientManager.clientNamespace,
+          accounts.map((a) => a._name).toList(),
+        );
+      }
+    }
+    for (final entry in accounts.where((entry) => entry.available)) {
+      if (!clients.contains(entry.client)) clients.add(entry.client!);
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 }

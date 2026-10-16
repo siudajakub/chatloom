@@ -3,24 +3,26 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:collection/collection.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat/events/round_mini_player.dart';
 import 'package:fluffychat/personal/media/media_access.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
+import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
 import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
-import 'package:fluffychat/pages/chat/events/round_mini_player.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/init_with_restore.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:fluffychat/utils/sync_network_recovery.dart';
 import 'package:fluffychat/utils/uia_request_manager.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/fluffy_chat_app.dart';
@@ -161,12 +163,18 @@ class MatrixState extends State<Matrix> {
 
   AudioPlayer? audioPlayer;
   RoundPlaybackHandle? audioPlaybackHandle;
-  RoundPlaybackHandle reserveAudio() => audioPlaybackHandle ??=
-      RoundPlaybackCoordinator.shared.register(pause:() async {
-        final current=audioPlayer;
-        if(current==null) { await closeAudioPlayer(); }
-        else { await current.pause(); }
-      },stop:closeAudioPlayer);
+  RoundPlaybackHandle reserveAudio() =>
+      audioPlaybackHandle ??= RoundPlaybackCoordinator.shared.register(
+        pause: () async {
+          final current = audioPlayer;
+          if (current == null) {
+            await closeAudioPlayer();
+          } else {
+            await current.pause();
+          }
+        },
+        stop: closeAudioPlayer,
+      );
   Future<void> playAudio() async {
     final player = audioPlayer;
     if (player == null) return;
@@ -277,6 +285,17 @@ class MatrixState extends State<Matrix> {
   }
 
   AppLifecycleListener? _listener;
+  StreamSubscription<List<ConnectivityResult>>? _networkChanges;
+
+  @override
+  void didUpdateWidget(covariant Matrix oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Startup retries append only successfully restored clients. Reuse the
+    // active healthy account and subscribe to the newly available account.
+    for (final client in widget.clients) {
+      _registerSubs(client.clientName);
+    }
+  }
 
   void _registerSubs(String name) {
     final c = getClientByName(name);
@@ -405,6 +424,17 @@ class MatrixState extends State<Matrix> {
       _registerSubs(c.clientName);
     }
 
+    if (PlatformInfos.isDesktop) {
+      _networkChanges = Connectivity().onConnectivityChanged.listen(
+        (networks) =>
+            unawaited(wakeSyncOnNetworkRecovery(widget.clients, networks)),
+        onError: (Object _, StackTrace __) {
+          // Keep automatic retries if the optional platform watcher is unavailable.
+          Logs().w('Network recovery watcher unavailable');
+        },
+      );
+    }
+
     if (PlatformInfos.isMobile) {
       backgroundPush = BackgroundPush(
         this,
@@ -448,12 +478,18 @@ class MatrixState extends State<Matrix> {
         client.backgroundSync = foreground;
         client.requestHistoryOnLimitedTimeline = !foreground;
         Logs().v('Set background sync to', foreground);
+      } else if (foreground) {
+        // Resume promptly even if the desktop sync loop is backing off offline.
+        unawaited(client.oneShotSync().catchError((Object _) {}));
       }
     }
   }
 
   @override
   void dispose() {
+    _cachedPasswordClearTimer?.cancel();
+    _cachedPassword = null;
+    backgroundPush?.detachMatrix(this);
     unawaited(
       RoundPlaybackCoordinator.shared.stopAll().catchError((Object _) {}),
     );
@@ -462,6 +498,7 @@ class MatrixState extends State<Matrix> {
     }
     closeAudioPlayer();
     _listener?.dispose();
+    unawaited(_networkChanges?.cancel());
 
     for (final sub in onPersonalReminder.values) {
       sub.cancel();
@@ -511,10 +548,11 @@ class MatrixState extends State<Matrix> {
                 constraints: const BoxConstraints(maxWidth: 480),
                 child: RoundMiniPlayer(
                   onOpenSource: (event) {
-                    if (client != event.room.client)
+                    if (client != event.room.client) {
                       setActiveClient(event.room.client);
+                    }
                     FluffyChatApp.router.go(
-                    '/rooms/${Uri.encodeComponent(event.room.id)}?event=${Uri.encodeComponent(event.eventId)}',
+                      '/rooms/${Uri.encodeComponent(event.room.id)}?event=${Uri.encodeComponent(event.eventId)}',
                     );
                   },
                 ),

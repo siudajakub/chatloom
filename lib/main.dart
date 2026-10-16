@@ -12,6 +12,7 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/personal/media/media_access.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/performance_probe.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
@@ -29,6 +30,7 @@ import 'package:universal_html/universal_html.dart' as web;
 
 import 'config/setting_keys.dart';
 import 'utils/background_push.dart';
+import 'widgets/client_startup.dart';
 import 'widgets/fluffy_chat_app.dart';
 
 ReceivePort? mainIsolateReceivePort;
@@ -67,6 +69,7 @@ void main(List<String> args) => runZonedGuarded(() async {
   // To make sure that the parts of flutter needed are started up already, we need to ensure that the
   // widget bindings are initialized already.
   WidgetsFlutterBinding.ensureInitialized();
+  PersonalPerformanceProbe.install();
 
   PersonalPrivacy.installLogging();
   if (!kIsWeb) {
@@ -108,9 +111,11 @@ void main(List<String> args) => runZonedGuarded(() async {
   if (PlatformInfos.isAndroid &&
       AppLifecycleState.detached == WidgetsBinding.instance.lifecycleState) {
     await ForegroundServices.startService('background_push');
-
+    try {
     ErrorReporter.startupPhase = 'background_clients';
-    final clients = await ClientManager.getClients(store: store);
+    final startup = ClientStartup(store: store);
+    await startup.restore();
+    final clients = startup.clients;
 
     // Do not send online presences when app is in background fetch mode.
     for (final client in clients) {
@@ -120,28 +125,39 @@ void main(List<String> args) => runZonedGuarded(() async {
 
     // In the background fetch mode we do not want to waste ressources with
     // starting the Flutter engine but process incoming push notifications.
-    BackgroundPush.clientOnly(clients);
+    await BackgroundPush.clientOnly(clients).ready;
     // To start the flutter engine afterwards we add an custom observer.
-    WidgetsBinding.instance.addObserver(AppStarter(clients, store));
+    WidgetsBinding.instance.addObserver(
+      AppStarter(clients, store, startup: startup),
+    );
     Logs().i(
       '${AppSettings.applicationName.value} started in background-fetch mode. No GUI will be created unless the app is no longer detached.',
     );
     return;
+    } finally {
+      await ForegroundServices.stopService('background_push');
+    }
   }
 
   ErrorReporter.startupPhase = 'clients';
-  final clients = await ClientManager.getClients(store: store);
+  final startup = ClientStartup(store: store);
+  unawaited(startup.restore());
+  final clients = startup.clients;
 
   // Started in foreground mode.
   Logs().i(
     '${AppSettings.applicationName.value} started in foreground mode. Rendering GUI...',
   );
   ErrorReporter.startupPhase = 'gui';
-  await startGui(clients, store);
+  await startGui(clients, store, startup: startup);
 }, ErrorReporter.onFlutterError);
 
 /// Fetch the pincode for the applock and start the flutter engine.
-Future<void> startGui(List<Client> clients, SharedPreferences store) async {
+Future<void> startGui(
+  List<Client> clients,
+  SharedPreferences store, {
+  ClientStartup? startup,
+}) async {
   // Fetch the pin for the applock if existing for mobile applications.
   String? pin;
   var useBiometrics = false;
@@ -155,8 +171,14 @@ Future<void> startGui(List<Client> clients, SharedPreferences store) async {
             key: 'chat.fluffy.use_biometrics',
           )) ==
           'true';
-    } catch (e, s) {
-      Logs().d('Unable to read PIN from Secure storage', e, s);
+    } catch (_) {
+      Logs().e('app_lock_storage_unavailable');
+      runApp(
+        StartupLockFailureView(
+          retry: () => startGui(clients, store, startup: startup),
+        ),
+      );
+      return;
     }
   }
 
@@ -164,17 +186,20 @@ Future<void> startGui(List<Client> clients, SharedPreferences store) async {
     JustAudioMediaKit.ensureInitialized();
   }
 
-  // Preload first client
-  final firstClient = clients.firstOrNull;
-  await firstClient?.roomsLoading;
-  await firstClient?.accountDataLoading;
+  // Render healthy accounts immediately; room/account loading is handled by
+  // their existing screens, independently of failed account restoration.
 
   runApp(
-    FluffyChatApp(
-      clients: clients,
-      appLockSettings: (pincode: pin, useBiometrics: useBiometrics),
-      store: store,
-    ),
+    startup != null
+        ? ClientStartupView(
+            startup: startup,
+            appLockSettings: (pincode: pin, useBiometrics: useBiometrics),
+          )
+        : FluffyChatApp(
+            clients: clients,
+            appLockSettings: (pincode: pin, useBiometrics: useBiometrics),
+            store: store,
+          ),
   );
 }
 
@@ -183,9 +208,10 @@ Future<void> startGui(List<Client> clients, SharedPreferences store) async {
 class AppStarter with WidgetsBindingObserver {
   final List<Client> clients;
   final SharedPreferences store;
+  final ClientStartup? startup;
   bool guiStarted = false;
 
-  AppStarter(this.clients, this.store);
+  AppStarter(this.clients, this.store, {this.startup});
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -205,6 +231,6 @@ class AppStarter with WidgetsBindingObserver {
     // Claim startup before its first await and release the one-shot observer.
     guiStarted = true;
     WidgetsBinding.instance.removeObserver(this);
-    unawaited(startGui(clients, store));
+    unawaited(startGui(clients, store, startup: startup));
   }
 }
