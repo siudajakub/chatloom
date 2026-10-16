@@ -18,6 +18,13 @@ class _LocalDatabase implements DatabaseApi {
     bool onlySending = false,
   }) async => events.skip(start).take(limit ?? 100).toList();
   @override
+  Future<List<String>> getEventIdList(
+    Room room, {
+    int start = 0,
+    int? limit,
+    bool includeSending = false,
+  }) async => [];
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -43,7 +50,7 @@ void main() {
     await AppSettings.init(loadWebConfigFile: false);
   });
   testWidgets(
-    'ordinary adapter mute targets its source and reports native failure',
+    'explicit account notifications target the source and report native failure',
     (tester) async {
       final client = Client(
         'fictional details source',
@@ -58,6 +65,7 @@ void main() {
         Event(
           room: room,
           type: EventTypes.RoomName,
+          stateKey: '',
           content: {'name': 'Fictional source'},
           eventId: r'$fixture-name',
           senderId: '@fixture:example.invalid',
@@ -80,8 +88,27 @@ void main() {
       );
       await tester.pump();
       expect(tester.takeException(), isNull);
-      await tester.tap(find.text('Mute'));
-      await tester.pump();
+      await tester.scrollUntilVisible(
+        find.text('Account notifications · Beeper / Matrix'),
+        250,
+      );
+      await tester.pumpAndSettle();
+      await Scrollable.ensureVisible(
+        tester.element(find.text('Account notifications · Beeper / Matrix')),
+        alignment: .5,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Account notifications · Beeper / Matrix'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Muted').last);
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text(
+          'Could not finish changing notifications. Check the current rule and try again.',
+        ),
+        -200,
+      );
+      await tester.pumpAndSettle();
       expect(room.writes, [PushRuleState.dontNotify]);
       expect(room.actual, PushRuleState.notify);
       expect(

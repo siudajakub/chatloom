@@ -354,24 +354,17 @@ Widget _settings() => NotionSettingsPage(
   data: NotionSettingsData(
     name: 'Jan',
     avatar: _avatar('Jan', 44),
-    incognito: true,
-    appLock: 'On',
-    appearance: 'Dark',
-    privateSync: 'Configured · awaiting worker',
+    summaries: const {
+      NotionSettingsCategory.account:
+          'Account · Profile and account management',
+      NotionSettingsCategory.security:
+          'Incognito on · App lock, devices and recovery',
+      NotionSettingsCategory.appearance: 'Dark · Text size and wallpaper',
+      NotionSettingsCategory.sync:
+          'Private sync configured · Services and transcriptions',
+    },
   ),
-  actions: NotionSettingsActions(
-    back: _noop,
-    overflow: _noop,
-    editProfile: _noop,
-    appLock: _noop,
-    devices: _noop,
-    notifications: _noop,
-    appearance: _noop,
-    transcriptions: _noop,
-    privateSync: _noop,
-    about: _noop,
-    incognito: (_) {},
-  ),
+  actions: NotionSettingsActions(back: _noop, open: (_) {}),
 );
 
 Future<void> _save(
@@ -460,7 +453,7 @@ void main() {
     await tester.pumpWidget(_host(_settings()));
     await _save(tester, 'settings-390');
     await tester.scrollUntilVisible(
-      find.text('About'),
+      find.text('Scheduled messages'),
       180,
       scrollable: find
           .byWidgetPredicate(
@@ -470,7 +463,7 @@ void main() {
           )
           .first,
     );
-    await tester.ensureVisible(find.text('About'));
+    await tester.ensureVisible(find.text('Scheduled messages'));
     await _save(tester, 'settings-390-preferences', scrollToTop: false);
     tester.view.physicalSize = const Size(320, 640);
     await tester.pumpWidget(_host(_inbox(extraPins: 6), scale: 2));

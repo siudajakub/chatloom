@@ -4,6 +4,7 @@ import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_row.dart';
 import 'package:fluffychat/personal/ui/notion_search_controls.dart';
+import 'package:personal_core/personal_core.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,6 +31,62 @@ void main() {
       ..addFont(rootBundle.load('assets/notion/fonts/Roboto-Bold.ttf'));
     await fonts.load();
   });
+
+  for (final scale in [1.0, 2.0]) {
+    testWidgets(
+      'view and network selection remain independent at text scale $scale',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(320, 1000);
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        var view = InboxFilter.inbox;
+        String? network = 'telegram';
+        var managed = 0;
+        await tester.pumpWidget(
+          host(
+            StatefulBuilder(
+              builder: (context, update) => Align(
+                alignment: Alignment.bottomCenter,
+                child: NotionInboxDock(
+                  onSettings: () {},
+                  onSearch: () {},
+                  networks: const ['telegram', 'whatsapp'],
+                  selectedNetwork: network,
+                  selectedView: view,
+                  onNetworkSelected: (value) => update(() => network = value),
+                  onViewSelected: (value) => update(() => view = value),
+                  onManageNetworks: () => managed++,
+                ),
+              ),
+            ),
+            scale: scale,
+          ),
+        );
+        await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Ignored'));
+        await tester.pumpAndSettle();
+        expect(view, InboxFilter.ignored);
+        expect(network, 'telegram');
+        await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
+        await tester.pumpAndSettle();
+        await tester.scrollUntilVisible(find.text('All networks'), 150);
+        await tester.tap(find.text('All networks'));
+        await tester.pumpAndSettle();
+        expect(view, InboxFilter.ignored);
+        expect(network, isNull);
+        await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
+        await tester.pumpAndSettle();
+        await tester.scrollUntilVisible(find.text('Manage networks'), 150);
+        await tester.tap(find.text('Manage networks'));
+        await tester.pumpAndSettle();
+        expect(managed, 1);
+        expect(find.text('Show chats'), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
   testWidgets('typing stays local; remote discovery needs an explicit press', (
     tester,
   ) async {
@@ -66,6 +123,43 @@ void main() {
     text.dispose();
     focus.dispose();
   });
+  for (final composing in [false, true]) {
+    testWidgets('search Escape respects active IME composition: $composing', (
+      tester,
+    ) async {
+      final text = TextEditingController();
+      final focus = FocusNode();
+      var closed = 0;
+      var remote = 0;
+      await tester.pumpWidget(
+        host(
+          NotionInboxSearch(
+            controller: text,
+            focusNode: focus,
+            onChanged: (_) {},
+            onClose: () => closed++,
+            onHistorySearch: () => remote++,
+            onPublicDiscovery: () => remote++,
+          ),
+        ),
+      );
+      await tester.enterText(find.byType(TextField), 'fictional query');
+      if (composing) {
+        text.value = text.value.copyWith(
+          composing: const TextRange(start: 0, end: 3),
+        );
+      }
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(closed, composing ? 0 : 1);
+      expect(text.text, 'fictional query');
+      expect(remote, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+      text.dispose();
+      focus.dispose();
+    });
+  }
   testWidgets('outside dismissal consumes the tap and restores network focus', (
     tester,
   ) async {
@@ -95,7 +189,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('All chats'));
+    await tester.tap(find.text('All networks'));
     await tester.pumpAndSettle();
     expect(find.text('Show chats'), findsOneWidget);
     await tester.tapAt(const Offset(30, 150));
@@ -106,7 +200,7 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'Inbox network filter',
     );
-    await tester.tap(find.text('All chats'));
+    await tester.tap(find.text('All networks'));
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
@@ -127,13 +221,13 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('All chats'));
+    await tester.tap(find.text('All networks'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Slack'));
     await tester.pumpAndSettle();
     expect(selected, ['slack']);
     expect(find.text('Show chats'), findsNothing);
-    await tester.tap(find.text('All chats'));
+    await tester.tap(find.text('All networks'));
     await tester.pumpAndSettle();
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();

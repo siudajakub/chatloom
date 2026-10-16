@@ -34,7 +34,13 @@ class TwoColumnLayout extends StatelessWidget {
               child: mainView,
             ),
             Container(width: 1.0, color: theme.dividerColor),
-            Expanded(child: ClipRRect(child: sideView)),
+            Expanded(
+              child: Semantics(
+                container: true,
+                explicitChildNodes: true,
+                child: ClipRRect(child: sideView),
+              ),
+            ),
           ],
         ),
       ),
