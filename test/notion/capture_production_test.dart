@@ -413,11 +413,11 @@ void main() {
   setUpAll(() async {
     final loader = FontLoader('Roboto');
     for (final name in ['Regular', 'Medium', 'Bold']) {
-      loader.addFont(rootBundle.load('assets/fonts/Roboto-$name.ttf'));
+      loader.addFont(rootBundle.load('assets/notion/fonts/Roboto-$name.ttf'));
     }
     await loader.load();
     final icons = FontLoader('MaterialIcons');
-    icons.addFont(rootBundle.load('assets/fonts/MaterialIcons-Regular.otf'));
+    icons.addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
     await icons.load();
   });
   testWidgets('capture production five screens and adaptive states', (

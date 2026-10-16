@@ -97,6 +97,8 @@ def prepare(flutter):
  for name in ('Roboto-Regular.ttf', 'Roboto-Medium.ttf', 'Roboto-Bold.ttf', 'Roboto_LICENSE.txt', 'MaterialIcons-Regular.otf', 'MaterialIcons_LICENSE.txt'):
   data = (fonts / name).read_bytes()
   write('assets/fonts/' + name, data)
+  if name.startswith('Roboto-') and name.endswith('.ttf'):
+   write('assets/notion/fonts/' + name, (ROOT / 'assets/notion/fonts' / name).read_bytes())
  reference = PROJECT / 'artifacts/ui-mockups-2026-10-12/notion-dark-v2/chat.png'
  write('assets/reference/chat.png', reference.read_bytes())
  overrides = ''.join(f'  {name}: "{version}"\n' for name, version in sorted(pinned.items()))
