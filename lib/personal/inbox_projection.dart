@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/conversation_classification.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -9,17 +10,66 @@ export 'package:personal_core/personal_core.dart' show InboxFilter, InboxRecord;
 /// Private inbox presentation. It never changes native room membership/state.
 class InboxProjection {
   final PersonalClient personal;
-  InboxProjection(this.personal);
+  InboxProjection(this.personal) : _snapshot = false;
+
+  /// Use only within one synchronous render/filter pass, never for actions.
+  InboxProjection.snapshot(this.personal) : _snapshot = true;
+  final bool _snapshot;
+  List<PersonGroup>? _groups;
+  Map<String, PersonGroup>? _groupIndex;
+  final _metadata = <String, ConversationMetadata>{};
+  Set<String>? _due;
+  late final classifier = ConversationClassifier(personal.client.rooms);
+
+  NetworkPreferences networkPreferences(String network) =>
+      NetworkPreferences.fromJson(
+        personal.values['network-policy:$network'] ?? {},
+        network,
+      );
+
+  ChatPlacement placementFor(Room room) {
+    final metadata = metadataFor(room);
+    if (metadata.ignored) return ChatPlacement.ignored;
+    if (metadata.placement != null) return metadata.placement!;
+    final kind = classifier.classify(room);
+    return kind.isGroup
+        ? networkPreferences(kind.network).groupPlacement
+        : ChatPlacement.inbox;
+  }
+
+  PersonalNotificationMode notificationModeFor(Room room) {
+    final metadata = metadataFor(room);
+    if (placementFor(room) == ChatPlacement.ignored)
+      return PersonalNotificationMode.muted;
+    final source = metadataForEntity(room.id);
+    final kind = classifier.classify(room);
+    final policy = networkPreferences(kind.network);
+    return source.notificationMode ??
+        metadata.notificationMode ??
+        (kind.isGroup ? policy.groupNotifications : null) ??
+        policy.notifications ??
+        ((metadata.muted ||
+                metadata.lowPriority ||
+                source.muted ||
+                source.lowPriority)
+            ? PersonalNotificationMode.mentionsOnly
+            : PersonalNotificationMode.all);
+  }
 
   static String? _text(Object? value) => value is String ? value : null;
 
-  List<PersonGroup> get _validGroups {
+  List<PersonGroup> get _validGroups =>
+      _snapshot ? (_groups ??= _parseValidGroups()) : _parseValidGroups();
+
+  List<PersonGroup> _parseValidGroups() {
     final parsed = <PersonGroup>[];
     for (final group in personal.groups) {
       if (group.members.every(
         (m) =>
             m.accountId == personal.client.userID &&
             personal.client.getRoomById(m.roomId)?.isDirectChat == true &&
+            personal.client.getRoomById(m.roomId)?.isDirectChatForDisplay ==
+                true &&
             personal.client.getRoomById(m.roomId)?.membership ==
                 Membership.join,
       )) {
@@ -38,6 +88,13 @@ class InboxProjection {
   }
 
   PersonGroup? groupFor(Room room) {
+    if (_snapshot) {
+      _groupIndex ??= {
+        for (final group in _validGroups)
+          for (final member in group.members) member.roomId: group,
+      };
+      return _groupIndex![room.id];
+    }
     for (final group in _validGroups) {
       if (group.members.any((m) => m.roomId == room.id)) return group;
     }
@@ -52,7 +109,11 @@ class InboxProjection {
   String metadataKey(Room room) => 'org:${entityFor(room)}';
   ConversationMetadata metadataFor(Room room) =>
       metadataForEntity(entityFor(room));
-  ConversationMetadata metadataForEntity(String entity) {
+  ConversationMetadata metadataForEntity(String entity) => _snapshot
+      ? _metadata.putIfAbsent(entity, () => _readMetadata(entity))
+      : _readMetadata(entity);
+
+  ConversationMetadata _readMetadata(String entity) {
     final value = personal.values['org:$entity'];
     if (value != null) {
       try {
@@ -86,7 +147,10 @@ class InboxProjection {
     return ConversationMetadata(entityId: entity);
   }
 
-  Set<String> _dueRoomIds() {
+  Set<String> _dueRoomIds() =>
+      _snapshot ? (_due ??= _readDueRoomIds()) : _readDueRoomIds();
+
+  Set<String> _readDueRoomIds() {
     final result = <String>{};
     for (final reminder in personal.reminders.values.where(
       (r) => r['state'] == 'done',
@@ -163,6 +227,18 @@ class InboxProjection {
     InboxFilter filter = InboxFilter.inbox,
     String query = '',
     String? labelKey,
+  }) => (_snapshot ? this : InboxProjection.snapshot(personal))._rooms(
+    input,
+    filter: filter,
+    query: query,
+    labelKey: labelKey,
+  );
+
+  List<Room> _rooms(
+    Iterable<Room> input, {
+    required InboxFilter filter,
+    required String query,
+    String? labelKey,
   }) {
     final available = {
       for (final room in input.where(
@@ -175,7 +251,9 @@ class InboxProjection {
     for (final group in groups) {
       // A network group room can never be hidden by an invalid DM merge.
       if (group.members.every(
-        (m) => available[m.roomId]?.isDirectChat == true,
+        (m) =>
+            available[m.roomId]?.isDirectChat == true &&
+            available[m.roomId]?.isDirectChatForDisplay == true,
       )) {
         for (final member in group.members) {
           members[member.roomId] = group;
@@ -217,9 +295,15 @@ class InboxProjection {
         entityId: entity,
         displayName: title,
         metadata: metadata,
-        networks: sourceRooms.map(PersonalClient.networkOf),
+        networks: sourceRooms.map(
+          (source) => classifier.classify(source).network,
+        ),
         labelKeys: labels,
-        isGroup: group == null && !room.isDirectChat,
+        isGroup: group == null && !room.isDirectChatForDisplay,
+        technical: sourceRooms.every(
+          (source) => classifier.classify(source).technical,
+        ),
+        placement: placementFor(representative),
         unread: sourceRooms.any((r) => r.isUnread),
         unreadCount: sourceRooms.fold(0, (n, r) => n + r.notificationCount),
         hasDraft:
@@ -243,23 +327,20 @@ class InboxProjection {
       records.add(record);
       representatives[representative.id] = representative;
     }
-    final hidden = personal.values.entries
-        .where(
-          (e) => e.key.startsWith('label:') && e.value['showInInbox'] == false,
-        )
-        .map((e) => e.key)
-        .toSet();
+    // Legacy labels remain stored, but no longer control inbox visibility.
     final visible = projectInbox(
       records,
-      filter: filter,
+      filter: filter == InboxFilter.label ? InboxFilter.inbox : filter,
       query: query,
-      labelKey: labelKey,
-      hiddenLabelKeys: hidden,
     );
     if (filter == InboxFilter.inbox) {
       final due = _dueRoomIds();
       final ids = visible.map((r) => r.entityId).toSet();
       for (final record in records) {
+        if (record.technical ||
+            record.placement != ChatPlacement.inbox ||
+            record.metadata.ignored)
+          continue;
         final group = members[record.representativeRoomId];
         if (due.contains(record.representativeRoomId) ||
             (group != null &&

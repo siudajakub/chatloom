@@ -2,6 +2,7 @@
 import 'dart:convert';
 
 import 'contracts.dart';
+import 'network_preferences.dart';
 
 class PersonalLabel {
   final String id;
@@ -77,6 +78,9 @@ class ConversationMetadata {
   final bool archived;
   final bool lowPriority;
   final bool muted;
+  final bool ignored;
+  final ChatPlacement? placement;
+  final PersonalNotificationMode? notificationMode;
   final String? nickname;
   final String? avatarAsset;
   final ChatTheme? theme;
@@ -88,6 +92,9 @@ class ConversationMetadata {
     this.archived = false,
     this.lowPriority = false,
     this.muted = false,
+    this.ignored = false,
+    this.placement,
+    this.notificationMode,
     this.nickname,
     this.avatarAsset,
     this.theme,
@@ -106,12 +113,20 @@ class ConversationMetadata {
   bool get isPinned => pinOrder != null;
   bool visibleInInbox(Iterable<PersonalLabel> labels) =>
       !archived &&
+      !ignored &&
+      (placement == null || placement == ChatPlacement.inbox) &&
       !lowPriority &&
       !labels.any((l) => labelIds.contains(l.id) && !l.showInInbox);
 
   /// Low Priority and mute allow only an explicit mention or a thread reply.
   bool shouldNotify({bool mentioned = false, bool threadReplyToMe = false}) =>
-      !(muted || lowPriority) || mentioned || threadReplyToMe;
+      !ignored &&
+      placement != ChatPlacement.ignored &&
+      notificationMode != PersonalNotificationMode.muted &&
+      ((notificationMode == PersonalNotificationMode.all ||
+              (notificationMode == null && !(muted || lowPriority))) ||
+          mentioned ||
+          threadReplyToMe);
 
   ConversationMetadata withLabel(String id, {bool add = true}) {
     if (id.isEmpty) throw ArgumentError('Invalid label');
@@ -128,6 +143,19 @@ class ConversationMetadata {
   ConversationMetadata setArchived(bool value) => _copy(archived: value);
   ConversationMetadata setLowPriority(bool value) => _copy(lowPriority: value);
   ConversationMetadata setMuted(bool value) => _copy(muted: value);
+  ConversationMetadata setIgnored(bool value) => _copy(ignored: value);
+  ConversationMetadata restoreIgnored({bool inheritedIgnored = false}) {
+    final restored = setIgnored(false);
+    return placement == ChatPlacement.ignored ||
+            (placement == null && inheritedIgnored)
+        ? restored.setPlacement(ChatPlacement.inbox)
+        : restored;
+  }
+
+  ConversationMetadata setPlacement(ChatPlacement? value) =>
+      _copy(placement: () => value);
+  ConversationMetadata setNotificationMode(PersonalNotificationMode? value) =>
+      _copy(notificationMode: () => value);
   ConversationMetadata setPin(int? order) => _copy(pinOrder: () => order);
   ConversationMetadata setNickname(String? value) =>
       _copy(nickname: () => value?.trim());
@@ -141,6 +169,9 @@ class ConversationMetadata {
     bool? archived,
     bool? lowPriority,
     bool? muted,
+    bool? ignored,
+    ChatPlacement? Function()? placement,
+    PersonalNotificationMode? Function()? notificationMode,
     String? Function()? nickname,
     String? Function()? avatarAsset,
     ChatTheme? Function()? theme,
@@ -151,6 +182,11 @@ class ConversationMetadata {
     archived: archived ?? this.archived,
     lowPriority: lowPriority ?? this.lowPriority,
     muted: muted ?? this.muted,
+    ignored: ignored ?? this.ignored,
+    placement: placement == null ? this.placement : placement(),
+    notificationMode: notificationMode == null
+        ? this.notificationMode
+        : notificationMode(),
     nickname: nickname == null ? this.nickname : nickname(),
     avatarAsset: avatarAsset == null ? this.avatarAsset : avatarAsset(),
     theme: theme == null ? this.theme : theme(),
@@ -163,6 +199,9 @@ class ConversationMetadata {
     'archived': archived,
     'lowPriority': lowPriority,
     'muted': muted,
+    'ignored': ignored,
+    'placement': placement?.name,
+    'notificationMode': notificationMode?.name,
     'nickname': nickname,
     'avatarAsset': avatarAsset,
     'theme': theme?.toJson(),
@@ -176,6 +215,12 @@ class ConversationMetadata {
         archived: j['archived'] as bool? ?? false,
         lowPriority: j['lowPriority'] as bool? ?? false,
         muted: j['muted'] as bool? ?? false,
+        ignored: j['ignored'] as bool? ?? false,
+        placement: preferenceEnum(ChatPlacement.values, j['placement']),
+        notificationMode: preferenceEnum(
+          PersonalNotificationMode.values,
+          j['notificationMode'],
+        ),
         nickname: j['nickname'] as String?,
         avatarAsset: j['avatarAsset'] as String?,
         theme: j['theme'] == null

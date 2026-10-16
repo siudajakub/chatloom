@@ -12,9 +12,12 @@ import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/conversation_classification.dart';
 import 'package:fluffychat/personal/merged_chat_page.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
+import 'package:personal_core/personal_core.dart' show ChatPlacement;
 import 'package:fluffychat/personal/ui/notion_network_filter.dart';
 import 'package:fluffychat/personal/ui/notion_network_adapter.dart';
 import 'package:fluffychat/ui/notion/metadata_actions.dart';
@@ -185,9 +188,9 @@ class ChatListController extends State<ChatList>
       case ActiveFilter.allChats:
         return (room) => true;
       case ActiveFilter.messages:
-        return (room) => !room.isSpace && room.isDirectChat;
+        return (room) => !room.isSpace && room.isDirectChatForDisplay;
       case ActiveFilter.groups:
-        return (room) => !room.isSpace && !room.isDirectChat;
+        return (room) => !room.isSpace && !room.isDirectChatForDisplay;
       case ActiveFilter.unread:
         return (room) => room.isUnreadOrInvited;
       case ActiveFilter.tag:
@@ -195,17 +198,32 @@ class ChatListController extends State<ChatList>
     }
   }
 
-  InboxFilter personalFilter = InboxFilter.inbox;
-  String? personalLabel;
+  final _personalViews = <String, (InboxFilter, String?)>{};
+  InboxFilter get personalFilter =>
+      _personalViews[inboxAccountKey]?.$1 ?? InboxFilter.inbox;
+  set personalFilter(InboxFilter filter) =>
+      _personalViews[inboxAccountKey] = (filter, personalLabel);
+  String? get personalLabel => _personalViews[inboxAccountKey]?.$2;
+  set personalLabel(String? label) =>
+      _personalViews[inboxAccountKey] = (personalFilter, label);
   PersonalClient get personal => PersonalClient.of(Matrix.of(context).client);
   void setPersonalFilter(InboxFilter filter, String? label) => setState(() {
     personalFilter = filter;
     personalLabel = label;
+    activeFilter = ActiveFilter.allChats;
+    activeTag = null;
   });
   final networkSelections = NotionAccountNetworkSelection();
   String get inboxAccountKey =>
       '${Matrix.of(context).client.clientName}:${Matrix.of(context).client.userID}';
-  String? get selectedNetwork => networkSelections.forAccount(inboxAccountKey);
+  String? get selectedNetwork {
+    final saved = networkSelections.forAccount(inboxAccountKey);
+    if (saved == null) return null;
+    final canonical =
+        canonicalNetwork(saved) ?? (saved == 'other' ? saved : null);
+    return availableNetworks.contains(canonical) ? canonical : null;
+  }
+
   void setNetwork(String? network) => setState(() {
     networkSelections.select(inboxAccountKey, network);
   });
@@ -219,12 +237,13 @@ class ChatListController extends State<ChatList>
       .where(getRoomFilterByActiveFilter(activeFilter))
       .toList();
   List<String> get availableNetworks {
-    final projection = InboxProjection(personal);
-    final networks = projection
-        .rooms(
-          Matrix.of(context).client.rooms,
-          filter: personalFilter,
-          labelKey: personalLabel,
+    final projection = InboxProjection.snapshot(personal);
+    final networks = Matrix.of(context).client.rooms
+        .where(
+          (room) =>
+              !room.isSpace &&
+              !PersonalPrivacy.isJournal(room) &&
+              !projection.classifier.classify(room).technical,
         )
         .expand((room) => notionRoomNetworks(projection, room))
         .toSet()
@@ -235,21 +254,26 @@ class ChatListController extends State<ChatList>
     return networks;
   }
 
-  List<Room> get filteredRooms => InboxProjection(personal)
-      .rooms(
-        Matrix.of(context).client.rooms,
-        filter: personalFilter,
-        query: searchController.text,
-        labelKey: personalLabel,
-      )
-      .where(getRoomFilterByActiveFilter(activeFilter))
-      .where(
-        (room) => notionMatchesNetwork(
-          notionRoomNetworks(InboxProjection(personal), room),
-          selectedNetwork,
-        ),
-      )
-      .toList();
+  List<Room> get filteredRooms => filterRooms();
+
+  List<Room> filterRooms({InboxProjection? projection}) {
+    projection ??= InboxProjection.snapshot(personal);
+    return projection
+        .rooms(
+          Matrix.of(context).client.rooms,
+          filter: personalFilter,
+          query: searchController.text,
+          labelKey: personalLabel,
+        )
+        .where(getRoomFilterByActiveFilter(activeFilter))
+        .where(
+          (room) => notionMatchesNetwork(
+            notionRoomNetworks(projection!, room),
+            selectedNetwork,
+          ),
+        )
+        .toList();
+  }
 
   bool isSearchMode = false;
   Future<QueryPublicRoomsResponse>? publicRoomsResponse;
@@ -499,6 +523,7 @@ class ChatListController extends State<ChatList>
   String? get activeChat => widget.activeChat;
 
   void _processIncomingSharedMedia(List<SharedMediaFile> files) {
+    if (!mounted) return;
     files.removeWhere(
       (file) => file.path.startsWith(AppConfig.deepLinkPrefix) == true,
     );
@@ -538,15 +563,19 @@ class ChatListController extends State<ChatList>
     if (PlatformInfos.isAndroid) {
       final shortcuts = FlutterShortcuts();
       shortcuts.initialize().then(
-        (_) => shortcuts.listenAction((action) {
+        (_) {
+          if (!mounted) return;
+          shortcuts.listenAction((action) {
           if (!mounted) return;
           UrlLauncher(context, action).launchUrl();
-        }),
+          });
+        },
       );
     }
   }
 
   void _joinCallWith(CallKitParams params) {
+    if (!mounted) return;
     final roomId = params.extra?.tryGet<String>('roomId');
     final clientName = params.extra?.tryGet<String>('clientName');
     if (roomId != null) {
@@ -607,6 +636,7 @@ class ChatListController extends State<ChatList>
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       if (mounted) {
         searchServer = Matrix.of(
           context,
@@ -664,6 +694,7 @@ class ChatListController extends State<ChatList>
     final report = store.getStringList(AppConfig.pushHelperCrashReportKey);
     if (report == null) return;
     store.remove(AppConfig.pushHelperCrashReportKey);
+    if (report.length < 2) return;
     ErrorReporter(
       context,
       'Push Helper has been crashed',
@@ -675,6 +706,8 @@ class ChatListController extends State<ChatList>
     BuildContext posContext, [
     Room? space,
   ]) async {
+    final owner = personal;
+    final account = inboxAccountKey;
     final overlay =
         Overlay.of(posContext).context.findRenderObject() as RenderBox;
 
@@ -725,21 +758,19 @@ class ChatListController extends State<ChatList>
         if (room.membership == Membership.join) ...[
           PopupMenuItem(
             value: ChatContextAction.mute,
-            child: Row(
-              mainAxisSize: .min,
-              children: [
-                Icon(
-                  room.pushRuleState == PushRuleState.notify
-                      ? Icons.notifications_off_outlined
-                      : Icons.notifications_off,
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  room.pushRuleState == PushRuleState.notify
-                      ? L10n.of(context).muteChat
-                      : L10n.of(context).unmuteChat,
-                ),
-              ],
+            child: const Text('Visibility & notifications'),
+          ),
+          PopupMenuItem(
+            value: ChatContextAction.ignore,
+            enabled: canEditChatPreferences(
+              personal,
+              'org:${InboxProjection(personal).entityFor(room)}',
+            ),
+            child: Text(
+              InboxProjection(personal).placementFor(room) ==
+                      ChatPlacement.ignored
+                  ? 'Restore chat'
+                  : 'Ignore chat',
             ),
           ),
           PopupMenuItem(
@@ -907,7 +938,11 @@ class ChatListController extends State<ChatList>
     }
 
     if (action == null) return;
-    if (!mounted) return;
+    if (!mounted ||
+        inboxAccountKey != account ||
+        !identical(personal, owner) ||
+        !identical(room.client, owner.client))
+      return;
 
     switch (action) {
       case ChatContextAction.goToSpace:
@@ -930,12 +965,40 @@ class ChatListController extends State<ChatList>
         );
         return;
       case ChatContextAction.mute:
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => ChatPreferencesPage(personal: personal, room: room),
+          ),
+        );
+        return;
+      case ChatContextAction.ignore:
+        if (!canEditChatPreferences(
+          owner,
+          'org:${InboxProjection(owner).entityFor(room)}',
+        ))
+          return;
+        final projection = InboxProjection(personal);
+        final metadata = projection.metadataFor(room);
+        final ignored = projection.placementFor(room) == ChatPlacement.ignored;
+        final kind = projection.classifier.classify(room);
+        final updated = ignored
+            ? metadata.restoreIgnored(
+                inheritedIgnored:
+                    kind.isGroup &&
+                    projection
+                            .networkPreferences(kind.network)
+                            .groupPlacement ==
+                        ChatPlacement.ignored,
+              )
+            : metadata.setIgnored(true);
         await showFutureLoadingDialog(
           context: context,
-          future: () => room.setPushRuleState(
-            room.pushRuleState == PushRuleState.notify
-                ? PushRuleState.mentionsOnly
-                : PushRuleState.notify,
+          future: () => personal.put(
+            'org:${metadata.entityId}',
+            {
+              ...?personal.values['org:${metadata.entityId}'],
+              ...updated.toJson(),
+            }.cast<String, dynamic>(),
           ),
         );
         return;
@@ -1145,6 +1208,14 @@ class ChatListController extends State<ChatList>
     setState(() {
       activeTag = tag;
       activeFilter = filter;
+      if (filter == ActiveFilter.groups) {
+        personalFilter = InboxFilter.groups;
+        personalLabel = null;
+      }
+      if (filter == ActiveFilter.messages) {
+        personalFilter = InboxFilter.inbox;
+        personalLabel = null;
+      }
     });
     AppSettings.chatFilter.setItem(
       filter == ActiveFilter.tag ? tag! : filter.name,
@@ -1294,6 +1365,7 @@ enum ChatContextAction {
   removeTag,
   markUnread,
   mute,
+  ignore,
   leave,
   addToSpace,
   block,

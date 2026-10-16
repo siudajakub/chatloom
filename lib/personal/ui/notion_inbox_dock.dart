@@ -2,6 +2,7 @@
 import 'package:fluffychat/personal/ui/notion_network_filter.dart';
 import 'package:fluffychat/personal/ui/notion_network_selector.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:personal_core/personal_core.dart';
 
 /// Reserve enough room for two scaled network-label lines as well as its icon.
 double notionInboxDockHeight(TextScaler scaler) =>
@@ -13,6 +14,9 @@ class NotionInboxDock extends StatefulWidget {
   final ValueChanged<String?> onNetworkSelected;
   final List<String> networks;
   final String? selectedNetwork;
+  final InboxFilter selectedView;
+  final ValueChanged<InboxFilter>? onViewSelected;
+  final VoidCallback? onManageNetworks;
   const NotionInboxDock({
     super.key,
     required this.onSettings,
@@ -20,6 +24,9 @@ class NotionInboxDock extends StatefulWidget {
     required this.onNetworkSelected,
     required this.networks,
     this.selectedNetwork,
+    this.selectedView = InboxFilter.inbox,
+    this.onViewSelected,
+    this.onManageNetworks,
   });
   @override
   State<NotionInboxDock> createState() => _NotionInboxDockState();
@@ -45,6 +52,9 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
       networks: widget.networks,
       selected: widget.selectedNetwork,
       onSelected: widget.onNetworkSelected,
+      selectedView: widget.selectedView,
+      onViewSelected: widget.onViewSelected,
+      onManageNetworks: widget.onManageNetworks,
     );
     if (!mounted) return;
     setState(() => _expanded = false);
@@ -54,9 +64,12 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
   @override
   Widget build(BuildContext context) {
     final large = MediaQuery.textScalerOf(context).scale(16) > 22;
-    final label = widget.selectedNetwork == null
-        ? 'All chats'
+    final networkLabel = widget.selectedNetwork == null
+        ? 'All networks'
         : notionNetworkLabel(widget.selectedNetwork!);
+    final label = widget.selectedView == InboxFilter.inbox
+        ? networkLabel
+        : '${inboxViewLabel(widget.selectedView)} · $networkLabel';
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainer,
       shape: RoundedRectangleBorder(
@@ -199,7 +212,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
     child: InkWell(
       onTap: onTap,
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: large ? 4 : 10, vertical: 10),
+        padding: EdgeInsets.symmetric(horizontal: large ? 4 : 6, vertical: 10),
         child: large
             ? Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -219,9 +232,15 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(icon, size: 26),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
                   Flexible(
-                    child: Text(label, style: const TextStyle(fontSize: 15)),
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 15),
+                    ),
                   ),
                 ],
               ),

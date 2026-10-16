@@ -35,17 +35,35 @@ class NotionAccountNetworkSelection {
   }
 }
 
+String inboxViewLabel(InboxFilter filter) => switch (filter) {
+  InboxFilter.groups => 'Groups',
+  InboxFilter.ignored => 'Ignored',
+  InboxFilter.technical => 'Technical',
+  InboxFilter.inbox => 'Messages',
+  InboxFilter.unread => 'Unread',
+  InboxFilter.drafts => 'Drafts',
+  InboxFilter.unanswered => 'Unanswered',
+  InboxFilter.direct => 'People',
+  InboxFilter.archive => 'Archive',
+  InboxFilter.lowPriority => 'Low priority',
+  InboxFilter.label => 'Messages',
+  InboxFilter.all => 'All chats',
+};
+
 String notionNetworkLabel(String network) => switch (network.toLowerCase()) {
   'whatsapp' => 'WhatsApp',
   'slack' => 'Slack',
-  'facebook' || 'messenger' => 'Messenger',
-  'instagram' => 'Instagram',
+  'facebook' || 'facebookgo' || 'messenger' => 'Messenger',
+  'instagram' || 'instagramgo' => 'Instagram',
   'telegram' => 'Telegram',
   'signal' => 'Signal',
   'discord' => 'Discord',
   'imessage' => 'iMessage',
   'sms' => 'SMS',
   'matrix' => 'Matrix',
-  'unknown' => 'Unknown network',
-  _ => network,
+  'unknown' || 'other' => 'Other',
+  _ =>
+    RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$').hasMatch(network)
+        ? 'Other'
+        : network,
 };

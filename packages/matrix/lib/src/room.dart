@@ -198,7 +198,14 @@ class Room {
       if (ownUser != null) await requestUser(ownUser.senderId);
     }
 
-    var heroes = summary.mHeroes;
+    var heroes = summary.mHeroes?.toList();
+    final bridge = _bridgePresentation;
+    if (bridge != null) {
+      heroes = {
+        ...?heroes,
+        if (bridge.partnerId != null) bridge.partnerId!,
+      }.where((id) => !bridge.serviceMembers.contains(id)).toList();
+    }
     if (heroes == null) {
       final directChatMatrixID = this.directChatMatrixID;
       if (directChatMatrixID != null) {
@@ -228,7 +235,34 @@ class Room {
   String getLocalizedDisplayname([
     MatrixLocalizations i18n = const MatrixDefaultLocalizations(),
   ]) {
-    if (name.isNotEmpty) return name;
+    if (name.trim().isNotEmpty) return name;
+
+    final bridge = _bridgePresentation;
+    if (bridge != null) {
+      if (bridge.name != null) return bridge.name!;
+      final partner = bridge.partnerId;
+      if (partner != null) {
+        return unsafeGetUserFromMemoryOrFallback(
+          partner,
+        ).calcDisplayname(i18n: i18n);
+      }
+      final people =
+          {
+            ...?summary.mHeroes,
+            ...getParticipants().map((user) => user.id),
+          }.where(
+            (id) =>
+                id.isNotEmpty &&
+                id != client.userID &&
+                !bridge.serviceMembers.contains(id),
+          );
+      final names = people.map(
+        (id) =>
+            unsafeGetUserFromMemoryOrFallback(id).calcDisplayname(i18n: i18n),
+      );
+      // A bridge service account is never a conversation's contact name.
+      return names.isEmpty ? i18n.emptyChat : i18n.groupWith(names.join(', '));
+    }
 
     final canonicalAlias = this.canonicalAlias.localpart;
     if (canonicalAlias != null && canonicalAlias.isNotEmpty) {
@@ -236,7 +270,7 @@ class Room {
     }
 
     final directChatMatrixID = this.directChatMatrixID;
-    final heroes = summary.mHeroes ?? [];
+    final heroes = summary.mHeroes?.toList() ?? <String>[];
     if (directChatMatrixID != null && heroes.isEmpty) {
       heroes.add(directChatMatrixID);
     }
@@ -300,6 +334,15 @@ class Room {
       return Uri.tryParse(avatarUrl);
     }
 
+    final bridge = _bridgePresentation;
+    if (bridge != null) {
+      if (bridge.avatar != null) return bridge.avatar;
+      final partner = bridge.partnerId;
+      return partner == null
+          ? null
+          : unsafeGetUserFromMemoryOrFallback(partner).avatarUrl;
+    }
+
     // Room has no avatar and is not a direct chat
     final directChatMatrixID = this.directChatMatrixID;
     if (directChatMatrixID != null) {
@@ -307,6 +350,112 @@ class Room {
     }
 
     return null;
+  }
+
+  /// Presentation only; bridge metadata never grants DM merge/send permissions.
+  bool get isDirectChatForDisplay =>
+      _bridgePresentation?.isDirect ?? isDirectChat;
+
+  /// Contact shown by the UI; it does not replace the native `m.direct` mapping.
+  String? get directChatMatrixIDForDisplay {
+    final bridge = _bridgePresentation;
+    return bridge == null ? directChatMatrixID : bridge.partnerId;
+  }
+
+  _BridgePresentation? get _bridgePresentation {
+    final infos = <StrippedStateEvent>[];
+    for (final type in [
+      'm.bridge',
+      'uk.half-shot.bridge',
+      'com.beeper.bridge',
+    ]) {
+      for (final event in states[type]?.values ?? <StrippedStateEvent>[]) {
+        final protocol = event.content['protocol'];
+        final bot = event.content['bridgebot'];
+        if (protocol is Map &&
+            protocol['id'] is String &&
+            (protocol['id'] as String).trim().isNotEmpty &&
+            bot is String &&
+            bot.isValidMatrixIdStrict()) {
+          infos.add(event);
+        }
+      }
+    }
+    if (infos.isEmpty || isSpace) return null;
+    final serviceMembers = <String>{
+      for (final info in infos) info.content['bridgebot'] as String,
+    };
+    final functional = getState(
+      'io.element.functional_members',
+    )?.content['service_members'];
+    if (functional is List)
+      serviceMembers.addAll(functional.whereType<String>());
+    String? text(Object? value) =>
+        value is String && value.trim().isNotEmpty ? value.trim() : null;
+    String? channelText(String key) {
+      for (final info in infos) {
+        final channel = info.content['channel'];
+        final value = channel is Map ? text(channel[key]) : null;
+        if (value != null) return value;
+      }
+      return null;
+    }
+
+    final channelName = channelText('displayname');
+    final avatar = channelText('avatar_url');
+    // The legacy "dm" value includes group DMs; v2 distinguishes them.
+    final types = infos
+        .map(
+          (event) =>
+              text(event.content['com.beeper.room_type.v2']) ??
+              text(event.content['com.beeper.room_type']),
+        )
+        .whereType<String>()
+        .toSet();
+    final explicitGroup = types.any((type) => type != 'dm');
+    final direct = directChatMatrixID;
+    String? partner;
+    if (!explicitGroup && direct != null && !serviceMembers.contains(direct)) {
+      partner = direct;
+    } else if (!explicitGroup) {
+      final participants = getParticipants([
+        Membership.join,
+        Membership.invite,
+      ]);
+      final candidates =
+          {...?summary.mHeroes, ...participants.map((user) => user.id)}
+              .where(
+                (id) =>
+                    id.isNotEmpty &&
+                    id != client.userID &&
+                    !serviceMembers.contains(id),
+              )
+              .toSet();
+      final joined = summary.mJoinedMemberCount;
+      final invited = summary.mInvitedMemberCount;
+      final complete =
+          joined != null &&
+          invited != null &&
+          participants.length == joined + invited;
+      final explicitDM = infos.any(
+        (event) => event.content['com.beeper.room_type.v2'] == 'dm',
+      );
+      if (candidates.length == 1 && (complete || explicitDM)) {
+        partner = candidates.single;
+      }
+    }
+    return _BridgePresentation(
+      name: channelName,
+      avatar: avatar == null ? null : Uri.tryParse(avatar),
+      partnerId: partner,
+      serviceMembers: serviceMembers,
+      isDirect:
+          !explicitGroup &&
+          (partner != null ||
+              infos.any(
+                (event) => event.content['com.beeper.room_type.v2'] == 'dm',
+              )),
+    );
   }
 
   /// The address in the format: #roomname:homeserver.org.
@@ -3027,6 +3176,22 @@ class Room {
 
   @override
   int get hashCode => Object.hashAll([id]);
+}
+
+class _BridgePresentation {
+  final String? name;
+  final Uri? avatar;
+  final String? partnerId;
+  final Set<String> serviceMembers;
+  final bool isDirect;
+
+  const _BridgePresentation({
+    required this.name,
+    required this.avatar,
+    required this.partnerId,
+    required this.serviceMembers,
+    required this.isDirect,
+  });
 }
 
 enum EncryptionHealthState { allVerified, unverifiedDevices }

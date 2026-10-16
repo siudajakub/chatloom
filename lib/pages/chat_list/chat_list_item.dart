@@ -46,6 +46,7 @@ Widget notionInboxAvatar(
 
 class ChatListItem extends StatelessWidget {
   final Room room;
+  final InboxProjection? projection;
   final Room? space;
   final bool activeChat;
   final void Function(BuildContext context)? onLongPress;
@@ -54,6 +55,7 @@ class ChatListItem extends StatelessWidget {
   final String? filter;
   const ChatListItem(
     this.room, {
+    this.projection,
     this.activeChat = false,
     required this.onTap,
     this.onLongPress,
@@ -66,7 +68,10 @@ class ChatListItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final personal = PersonalClient.of(room.client);
-    final projection = InboxProjection(personal);
+    final supplied = this.projection;
+    final projection = supplied != null && identical(supplied.personal, personal)
+        ? supplied
+        : InboxProjection.snapshot(personal);
     final metadata = projection.metadataFor(room);
     final group = projection.groupFor(room);
     final sources = group == null
@@ -101,7 +106,7 @@ class ChatListItem extends StatelessWidget {
         sources.any(
           (source) => personal.conflicts.containsKey('draft:${source.id}'),
         );
-    final directId = lastEvent?.room.directChatMatrixID;
+    final directId = lastEvent?.room.directChatMatrixIDForDisplay;
     final prefix =
         lastEvent?.senderId == room.client.userID ||
         directId == null ||
@@ -150,7 +155,7 @@ class ChatListItem extends StatelessWidget {
                       .getState(EventTypes.RoomMember, room.client.userID!)
                       ?.content
                       .tryGet<String>('reason') ??
-                  (room.isDirectChat
+                  (room.isDirectChatForDisplay
                       ? l10n.newChatRequest
                       : l10n.inviteGroupChat)
             : conflict

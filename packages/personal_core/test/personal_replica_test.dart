@@ -59,6 +59,102 @@ PersonalOperation metadataAck(PersonalOperation command, int revision) =>
 
 void main() {
   setUp(() => id = 0);
+  test(
+    'network defaults and chat exceptions survive restart, ACK and conflict',
+    () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      const key = 'network-policy:telegram';
+      final policy = NetworkPreferences(
+        groupPlacement: ChatPlacement.groups,
+        groupNotifications: PersonalNotificationMode.muted,
+      ).toJson();
+      await r.queueMetadata(key, policy);
+      final op = (await r.markPublishing(r.pending.keys.single))!;
+      expect(replica(store).values[key], policy);
+      await r.acceptResult(metadataAck(op, 1));
+      final chat = ConversationMetadata(
+        entityId: 'fixture',
+        placement: ChatPlacement.inbox,
+        notificationMode: PersonalNotificationMode.mentionsOnly,
+      ).setIgnored(true);
+      await r.queueMetadata(
+        'org:fixture',
+        chat.toJson().cast<String, dynamic>(),
+      );
+      final restarted = replica(store);
+      expect(
+        NetworkPreferences.fromJson(
+          restarted.values[key]!,
+          'telegram',
+        ).groupNotifications,
+        PersonalNotificationMode.muted,
+      );
+      final restored = ConversationMetadata.fromJson(
+        restarted.values['org:fixture']!,
+      );
+      expect(restored.ignored, isTrue);
+      expect(restored.restoreIgnored().placement, ChatPlacement.inbox);
+      expect(
+        restored.restoreIgnored().notificationMode,
+        PersonalNotificationMode.mentionsOnly,
+      );
+      await restarted.queueMetadata(key, {
+        ...policy,
+        'groupNotifications': 'mentionsOnly',
+      });
+      final own = restarted.pending.values.singleWhere(
+        (op) => op.entityId == key,
+      );
+      await restarted.markPublishing(own.opId);
+      await restarted.acceptResult(
+        result('remote-conflict', key, 'metadata.result', {
+          'state': 'conflict',
+          'revision': 2,
+          'acceptedOpId': own.opId,
+          'existingValue': policy,
+          'proposedValue': own.payload['value'],
+        }),
+      );
+      expect(replica(store).conflicts, contains(key));
+      expect(replica(store).conflicts[key]!['existingValue'], policy);
+    },
+  );
+  test(
+    'old metadata retains mentions-only semantics and restores placement',
+    () {
+      final old = ConversationMetadata.fromJson({
+        'entityId': 'fixture',
+        'muted': true,
+      });
+      expect(old.shouldNotify(), isFalse);
+      expect(old.shouldNotify(mentioned: true), isTrue);
+      expect(old.setIgnored(true).shouldNotify(mentioned: true), isFalse);
+      expect(old.setIgnored(true).restoreIgnored().muted, isTrue);
+      expect(
+        old.restoreIgnored(inheritedIgnored: true).placement,
+        ChatPlacement.inbox,
+      );
+    },
+  );
+
+  test('restoring ignored chat stays durable while original ignore awaits ACK', () async {
+    final store = MemoryStore(); final r = replica(store);
+    const key = 'org:fixture';
+    final original = ConversationMetadata(entityId: 'fixture', notificationMode: PersonalNotificationMode.mentionsOnly);
+    await r.queueMetadata(key, original.setIgnored(true).toJson().cast<String, dynamic>());
+    final ignore = (await r.markPublishing(r.pending.keys.single))!;
+    await r.queueMetadata(key, original.setIgnored(true).restoreIgnored().toJson().cast<String, dynamic>());
+    final restarted = replica(store);
+    expect(restarted.values[key]!['ignored'], isFalse);
+    expect(restarted.pending[ignore.opId]!.toJson(), ignore.toJson());
+    await restarted.acceptResult(metadataAck(ignore, 1));
+    final restore = restarted.pending.values.single;
+    expect(restore.baseRevision, 1);
+    expect((restore.payload['value'] as Map)['ignored'], isFalse);
+    expect(replica(store).values[key]!['notificationMode'], 'mentionsOnly');
+  });
+
   group('durable transcription cancellation', () {
     Future<PersonalOperation> request(PersonalReplica r) async {
       final job = TranscriptionJob(

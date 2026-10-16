@@ -9,8 +9,8 @@ import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
 import 'package:fluffychat/pages/chat_list/client_chooser_button.dart';
 import 'package:fluffychat/pages/chat_list/space_view.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/ui/notion_network_filter.dart';
 import 'package:fluffychat/personal/organization_page.dart';
-import 'package:fluffychat/personal/personal_hub.dart';
 import 'package:fluffychat/personal/personal_search_page.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
@@ -43,51 +43,49 @@ class ChatListViewBody extends StatelessWidget {
         onChatTab: controller.onChatTap,
         activeChat: controller.activeChat,
       );
-    final spaces = client.rooms.where((room) => room.isSpace);
-    final delegated = <String, Room>{};
-    for (final space in spaces) {
-      for (final child in space.spaceChildren) {
-        if (child.roomId != null) delegated[child.roomId!] = space;
-      }
-    }
-    return StreamBuilder<Object>(
-      key: ValueKey(client.clientName),
-      stream: StreamGroup.merge<Object>([
-        client.onSync.stream.where((s) => s.hasRoomUpdate),
-        client.onSyncStatus.stream,
-        controller.personal.changes,
-      ]).rateLimit(const Duration(milliseconds: 200)),
+    return _InboxUpdates(
+      key: ObjectKey(client),
+      client: client,
+      personalChanges: controller.personal.changes,
       builder: (context, _) {
-        final projection = InboxProjection(controller.personal);
-        final rooms = controller.filteredRooms
+        final delegated = <String, Room>{};
+        for (final space in client.rooms.where((room) => room.isSpace)) {
+          for (final child in space.spaceChildren) {
+            if (child.roomId != null) delegated[child.roomId!] = space;
+          }
+        }
+        final projection = InboxProjection.snapshot(controller.personal);
+        final rooms = controller
+            .filterRooms(projection: projection)
             .where(
               (room) =>
                   !AppSettings.hideRoomsInSpaces.value ||
                   delegated[room.id] == null,
             )
             .toList();
-        final pins = rooms
-            .where((room) => projection.metadataFor(room).isPinned)
-            .map(
-              (room) => NotionPinnedShortcut(
-                name: projection.displayName(room),
-                avatar: notionInboxAvatar(
-                  controller.personal,
-                  projection,
-                  room,
-                  size: 28,
-                ),
-                onTap: () => controller.onChatTap(room),
-                onLongPress: () => controller.chatContextAction(
-                  room,
-                  context,
-                  delegated[room.id],
-                ),
-                order: projection.metadataFor(room).pinOrder!,
-                isGroup: !room.isDirectChat,
-              ),
-            )
-            .toList();
+        final pins =
+            (controller.personalFilter == InboxFilter.inbox ? rooms : <Room>[])
+                .where((room) => projection.metadataFor(room).isPinned)
+                .map(
+                  (room) => NotionPinnedShortcut(
+                    name: projection.displayName(room),
+                    avatar: notionInboxAvatar(
+                      controller.personal,
+                      projection,
+                      room,
+                      size: 28,
+                    ),
+                    onTap: () => controller.onChatTap(room),
+                    onLongPress: () => controller.chatContextAction(
+                      room,
+                      context,
+                      delegated[room.id],
+                    ),
+                    order: projection.metadataFor(room).pinOrder!,
+                    isGroup: !room.isDirectChatForDisplay,
+                  ),
+                )
+                .toList();
         final status = client.onSyncStatus.value;
         final failed = status?.status == SyncStatus.error;
         return NotionInboxPage(
@@ -96,6 +94,7 @@ class ChatListViewBody extends StatelessWidget {
               .map(
                 (room) => ChatListItem(
                   room,
+                  projection: projection,
                   space: delegated[room.id],
                   key: ValueKey('chat_list_item_${room.id}'),
                   onTap: () => controller.onChatTap(room),
@@ -116,7 +115,7 @@ class ChatListViewBody extends StatelessWidget {
               ? 'No chats from this network in the current view.'
               : controller.personalFilter != InboxFilter.inbox ||
                     controller.activeFilter != ActiveFilter.allChats
-              ? 'No chats in this view. Change the inbox filter to see other conversations.'
+              ? 'No chats in ${inboxViewLabel(controller.personalFilter)}. Choose another view or network.'
               : 'No chats yet. Start a new chat.',
           status: failed
               ? Padding(
@@ -148,6 +147,9 @@ class ChatListViewBody extends StatelessWidget {
           onSearch: controller.startSearch,
           networks: controller.availableNetworks,
           selectedNetwork: controller.selectedNetwork,
+          selectedView: controller.personalFilter,
+          onViewSelected: (view) => controller.setPersonalFilter(view, null),
+          onManageNetworks: () => context.push('/rooms/settings/networks'),
           onNetworkSelected: controller.setNetwork,
           searchTools: controller.isSearchMode
               ? Column(
@@ -244,7 +246,11 @@ class ChatListViewBody extends StatelessWidget {
                     label: Text(space.getLocalizedDisplayname()),
                   ),
               ],
-              const PersonalHubButton(),
+              IconButton(
+                tooltip: 'Sync & transcriptions',
+                icon: const Icon(Icons.sync_outlined),
+                onPressed: () => context.push('/rooms/settings/sync'),
+              ),
             ],
           ),
         ),
@@ -318,6 +324,35 @@ class ChatListViewBody extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Keep the sync subscription when search, selection or the keyboard rebuilds
+/// the parent. A different account gets a fresh state and cancels the old one.
+class _InboxUpdates extends StatefulWidget {
+  final Client client;
+  final Stream<Object?> personalChanges;
+  final AsyncWidgetBuilder<Object> builder;
+  const _InboxUpdates({
+    super.key,
+    required this.client,
+    required this.personalChanges,
+    required this.builder,
+  });
+
+  @override
+  State<_InboxUpdates> createState() => _InboxUpdatesState();
+}
+
+class _InboxUpdatesState extends State<_InboxUpdates> {
+  late final updates = StreamGroup.merge<Object?>([
+    widget.client.onSync.stream.where((s) => s.hasRoomUpdate),
+    widget.client.onSyncStatus.stream,
+    widget.personalChanges,
+  ]).rateLimit(const Duration(milliseconds: 200));
+
+  @override
+  Widget build(BuildContext context) =>
+      StreamBuilder<Object>(stream: updates, builder: widget.builder);
 }
 
 class PublicRoomsHorizontalList extends StatelessWidget {

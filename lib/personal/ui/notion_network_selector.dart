@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:math' as math;
+import 'package:personal_core/personal_core.dart';
 import 'package:fluffychat/personal/ui/notion_network_filter.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:flutter/services.dart';
@@ -171,6 +172,9 @@ Future<String?> showNotionNetworkSelector(
   required List<String> networks,
   required String? selected,
   required ValueChanged<String?> onSelected,
+  InboxFilter selectedView = InboxFilter.inbox,
+  ValueChanged<InboxFilter>? onViewSelected,
+  VoidCallback? onManageNetworks,
 }) => showGeneralDialog<String>(
   context: context,
   barrierDismissible: true,
@@ -229,6 +233,19 @@ Future<String?> showNotionNetworkSelector(
                             child: NotionNetworkMenu(
                               networks: networks,
                               selected: selected,
+                              selectedView: selectedView,
+                              onViewSelected: onViewSelected == null
+                                  ? null
+                                  : (view) {
+                                      Navigator.of(context).pop();
+                                      onViewSelected(view);
+                                    },
+                              onManageNetworks: onManageNetworks == null
+                                  ? null
+                                  : () {
+                                      Navigator.of(context).pop();
+                                      onManageNetworks();
+                                    },
                               onSelected: (network) {
                                 onSelected(network);
                                 Navigator.of(context).pop(network);
@@ -269,11 +286,17 @@ class NotionNetworkMenu extends StatelessWidget {
   final List<String> networks;
   final String? selected;
   final ValueChanged<String?> onSelected;
+  final InboxFilter selectedView;
+  final ValueChanged<InboxFilter>? onViewSelected;
+  final VoidCallback? onManageNetworks;
   const NotionNetworkMenu({
     super.key,
     required this.networks,
     required this.selected,
     required this.onSelected,
+    this.selectedView = InboxFilter.inbox,
+    this.onViewSelected,
+    this.onManageNetworks,
   });
   @override
   Widget build(BuildContext context) => Column(
@@ -287,15 +310,51 @@ class NotionNetworkMenu extends StatelessWidget {
           style: NotionTokens.body.copyWith(fontWeight: FontWeight.w600),
         ),
       ),
+      if (onViewSelected != null) ...[
+        for (final view in [
+          InboxFilter.inbox,
+          InboxFilter.groups,
+          InboxFilter.ignored,
+          InboxFilter.technical,
+        ])
+          ListTile(
+            dense: true,
+            selected: selectedView == view,
+            title: Text(
+              view == InboxFilter.inbox ? 'Main list' : inboxViewLabel(view),
+            ),
+            leading: Icon(switch (view) {
+              InboxFilter.groups => Icons.group_outlined,
+              InboxFilter.ignored => Icons.visibility_off_outlined,
+              InboxFilter.technical => Icons.build_outlined,
+              _ => Icons.chat_bubble_outline,
+            }),
+            trailing: selectedView == view
+                ? const Icon(Icons.check, size: 20)
+                : null,
+            onTap: () => onViewSelected!(view),
+          ),
+        const Divider(height: 1),
+        const Padding(padding: EdgeInsets.all(12), child: Text('Networks')),
+      ],
       _option(context, null),
       for (final network in networks) _option(context, network),
+      if (onManageNetworks != null) ...[
+        const Divider(height: 1),
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.tune),
+          title: const Text('Manage networks'),
+          onTap: onManageNetworks,
+        ),
+      ],
       const SizedBox(height: 4),
     ],
   );
 
   Widget _option(BuildContext context, String? network) {
     final active = selected == network;
-    final name = network == null ? 'All chats' : notionNetworkLabel(network);
+    final name = network == null ? 'All networks' : notionNetworkLabel(network);
     return Semantics(
       selected: active,
       button: true,

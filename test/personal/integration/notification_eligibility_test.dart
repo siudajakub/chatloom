@@ -87,6 +87,40 @@ Future<void> main() async {
     await personalNotificationEligible(_event(room), lowPriority),
     'Low priority differs from private mute in the background',
   );
+
+  _check(
+    !await personalNotificationEligible(
+      _event(
+        room,
+        mentions: {
+          'user_ids': [_owner],
+        },
+      ),
+      normal,
+      notificationMode: PersonalNotificationMode.muted,
+    ),
+    'Fully muted mention escaped suppression',
+  );
+  _check(
+    !await personalNotificationEligible(
+      _event(room),
+      normal,
+      notificationMode: PersonalNotificationMode.muted,
+    ),
+    'Fully muted thread reply escaped suppression',
+  );
+  _check(
+    !await personalNotificationEligible(
+      _event(
+        room,
+        mentions: {
+          'user_ids': [_owner],
+        },
+      ),
+      normal.setIgnored(true),
+    ),
+    'Ignored mention escaped suppression',
+  );
   final before = database.reads;
   _check(
     await personalNotificationEligible(_event(room, relation: null), normal),

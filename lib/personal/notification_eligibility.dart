@@ -7,9 +7,21 @@ import 'package:personal_core/personal_core.dart';
 /// history/keys never triggers a network lookup or changes read state.
 Future<bool> personalNotificationEligible(
   Event event,
-  ConversationMetadata metadata,
-) async {
-  if (!metadata.muted && !metadata.lowPriority) return true;
+  ConversationMetadata metadata, {
+  PersonalNotificationMode? notificationMode,
+}) async {
+  if (metadata.ignored || metadata.placement == ChatPlacement.ignored)
+    return false;
+  final mode =
+      notificationMode ??
+      (metadata.ignored || metadata.placement == ChatPlacement.ignored
+          ? PersonalNotificationMode.muted
+          : metadata.notificationMode ??
+                ((metadata.muted || metadata.lowPriority)
+                    ? PersonalNotificationMode.mentionsOnly
+                    : PersonalNotificationMode.all));
+  if (mode == PersonalNotificationMode.muted) return false;
+  if (mode == PersonalNotificationMode.all) return true;
   final room = event.room;
   final client = room.client;
   final account = client.userID;

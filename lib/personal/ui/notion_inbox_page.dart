@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:fluffychat/personal/ui/notion_inbox_dock.dart';
+import 'package:fluffychat/personal/ui/notion_network_filter.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:personal_core/personal_core.dart';
 
 /// Production inbox composition. Account adapters supply rows and real actions.
 class NotionInboxPage extends StatelessWidget {
@@ -14,6 +16,9 @@ class NotionInboxPage extends StatelessWidget {
   final ValueChanged<String?> onNetworkSelected;
   final List<String> networks;
   final String? selectedNetwork;
+  final InboxFilter selectedView;
+  final ValueChanged<InboxFilter>? onViewSelected;
+  final VoidCallback? onManageNetworks;
   final ScrollController? scrollController;
   final Widget? searchTools;
   final Widget? status;
@@ -29,6 +34,9 @@ class NotionInboxPage extends StatelessWidget {
     required this.onNetworkSelected,
     required this.networks,
     this.selectedNetwork,
+    this.selectedView = InboxFilter.inbox,
+    this.onViewSelected,
+    this.onManageNetworks,
     this.scrollController,
     this.searchTools,
     this.status,
@@ -88,7 +96,7 @@ class NotionInboxPage extends StatelessWidget {
               ),
               sliver: SliverToBoxAdapter(
                 child: Text(
-                  'Messages',
+                  inboxViewLabel(selectedView),
                   style: NotionTokens.title.copyWith(fontSize: 28),
                 ),
               ),
@@ -138,6 +146,9 @@ class NotionInboxPage extends StatelessWidget {
             onNetworkSelected: onNetworkSelected,
             networks: networks,
             selectedNetwork: selectedNetwork,
+            selectedView: selectedView,
+            onViewSelected: onViewSelected,
+            onManageNetworks: onManageNetworks,
           ),
         ),
       ],

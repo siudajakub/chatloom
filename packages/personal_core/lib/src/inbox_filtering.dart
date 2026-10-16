@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'organization.dart';
+import 'network_preferences.dart';
 
 enum InboxFilter {
   inbox,
@@ -8,6 +9,8 @@ enum InboxFilter {
   unanswered,
   direct,
   groups,
+  ignored,
+  technical,
   label,
   archive,
   lowPriority,
@@ -21,6 +24,8 @@ class InboxRecord {
   final Set<String> networks;
   final Set<String> labelKeys;
   final bool isGroup;
+  final bool technical;
+  final ChatPlacement placement;
   final bool unread;
   final int unreadCount;
   final bool hasDraft;
@@ -35,6 +40,8 @@ class InboxRecord {
     Iterable<String> networks = const [],
     Iterable<String> labelKeys = const [],
     this.isGroup = false,
+    this.technical = false,
+    this.placement = ChatPlacement.inbox,
     this.unread = false,
     this.unreadCount = 0,
     this.hasDraft = false,
@@ -55,7 +62,21 @@ List<InboxRecord> projectInbox(
 }) {
   final terms = query.toLowerCase().trim().split(RegExp(r'\s+'));
   final result = records.where((record) {
+    final placement = record.metadata.placement ?? record.placement;
+    final ignored =
+        record.metadata.ignored || placement == ChatPlacement.ignored;
+    if (record.technical)
+      return filter == InboxFilter.technical &&
+          terms.every(
+            '${record.displayName} ${record.networks.join(' ')}'
+                .toLowerCase()
+                .contains,
+          );
+    if (filter == InboxFilter.technical) return false;
+    if (ignored && filter != InboxFilter.ignored) return false;
+    if (!ignored && filter == InboxFilter.ignored) return false;
     final inInbox =
+        placement == ChatPlacement.inbox &&
         !record.metadata.archived &&
         !record.metadata.lowPriority &&
         !record.labelKeys.any(hiddenLabelKeys.contains);
@@ -65,12 +86,18 @@ List<InboxRecord> projectInbox(
       InboxFilter.drafts => inInbox && record.hasDraft,
       InboxFilter.unanswered => inInbox && record.unanswered,
       InboxFilter.direct => inInbox && !record.isGroup,
-      InboxFilter.groups => inInbox && record.isGroup,
+      InboxFilter.groups =>
+        !record.metadata.archived &&
+            !record.metadata.lowPriority &&
+            record.isGroup &&
+            !record.labelKeys.any(hiddenLabelKeys.contains),
+      InboxFilter.ignored => ignored,
+      InboxFilter.technical => false,
       InboxFilter.label =>
         labelKey != null && record.labelKeys.contains(labelKey),
       InboxFilter.archive => record.metadata.archived,
       InboxFilter.lowPriority => record.metadata.lowPriority,
-      InboxFilter.all => true,
+      InboxFilter.all => placement == ChatPlacement.inbox,
     };
     final searchable = '${record.displayName}\n${record.networks.join(' ')}'
         .toLowerCase();
