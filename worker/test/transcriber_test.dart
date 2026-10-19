@@ -132,6 +132,75 @@ void main() {
     expect(await directory.list().toList(), isEmpty);
   });
   test(
+    'selected language, including Armenian, is sent as languages[]',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'worker-audio-test-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final bodies = <String>[];
+      OpenAiTranscriber service() => OpenAiTranscriber(
+        'synthetic-key',
+        temporaryRoot: directory.path,
+        clientFactory: () => MockClient((request) async {
+          bodies.add(latin1.decode(request.bodyBytes));
+          return http.Response(jsonEncode({'text': 'Synthetic'}), 200);
+        }),
+      );
+      for (final language in ['hy', null]) {
+        await service().transcribe(
+          AudioSource(syntheticWav(), 'audio/wav'),
+          language,
+          Cancellation(),
+          (_, _) {},
+        );
+      }
+      expect(
+        bodies.first,
+        matches(RegExp(r'name="languages\[\]"\r\n\r\nhy\r\n')),
+      );
+      expect(bodies.last, isNot(contains('languages[]')));
+      expect(await directory.list().toList(), isEmpty);
+    },
+  );
+  test('a limit thrown from estimate stops before any upload', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'worker-audio-test-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    var calls = 0;
+    final service = OpenAiTranscriber(
+      'synthetic-key',
+      temporaryRoot: directory.path,
+      clientFactory: () => MockClient((_) async {
+        calls++;
+        return http.Response('{}', 200);
+      }),
+    );
+    double? measured;
+    await expectLater(
+      service.transcribe(
+        AudioSource(syntheticWav(seconds: 2), 'audio/wav'),
+        null,
+        Cancellation(),
+        (duration, _) {
+          measured = duration;
+          throw const WorkerFailure('auto_skipped_duration');
+        },
+      ),
+      throwsA(
+        isA<WorkerFailure>().having(
+          (e) => e.code,
+          'code',
+          'auto_skipped_duration',
+        ),
+      ),
+    );
+    expect(measured, closeTo(2, 0.05));
+    expect(calls, 0);
+    expect(await directory.list().toList(), isEmpty);
+  });
+  test(
     'missing ffprobe decodes duration with exact configured ffmpeg',
     () async {
       final directory = await Directory.systemTemp.createTemp(

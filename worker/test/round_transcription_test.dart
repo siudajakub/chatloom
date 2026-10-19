@@ -146,6 +146,59 @@ void main() {
     expect(ordinaryAudio.downloads, 1);
   });
 
+  test('disappearing messages and chats never reach the loader', () async {
+    final client = Client('round worker fixture', database: _UnusedDatabase());
+    final room = _SourceRoom(client);
+    final transport = _Transport(client, room);
+    Future<void> refused(Map<String, dynamic> content) async {
+      final event = room.source = _SourceEvent(room, content);
+      await expectLater(
+        transport.loadAudio(sourceRef, Cancellation()),
+        throwsA(
+          isA<WorkerFailure>().having((e) => e.code, 'code', 'protected_media'),
+        ),
+      );
+      expect(event.downloads, 0);
+    }
+
+    final voice = {
+      'msgtype': MessageTypes.Audio,
+      'body': 'audio.ogg',
+      'info': {'mimetype': 'audio/ogg', 'size': 3},
+    };
+    // mautrix bridgev2 marks the message itself.
+    await refused({
+      ...voice,
+      beeperDisappearingTimerKey: {'type': 'after_read', 'timer': 60000},
+    });
+    await refused({...voice, beeperDisappearingTimerKey: 'garbled'});
+    await refused(
+      _content(
+        extra: {
+          beeperDisappearingTimerKey: {'type': 'after_send', 'timer': 1000},
+        },
+      ),
+    );
+    // The chat's current setting (room state), including malformed values.
+    void roomTimer(Map<String, dynamic> content) => room.setState(
+      StrippedStateEvent(
+        type: beeperDisappearingTimerKey,
+        content: content,
+        senderId: '@bridge:example.invalid',
+        stateKey: '',
+      ),
+    );
+    roomTimer({'type': 'after_read', 'timer': 86400000});
+    await refused(voice);
+    roomTimer({'type': 7});
+    await refused(voice);
+    // An explicit "off" ({} from mautrix) allows ordinary transcription.
+    roomTimer(<String, dynamic>{});
+    final allowed = room.source = _SourceEvent(room, voice);
+    await transport.loadAudio(sourceRef, Cancellation());
+    expect(allowed.downloads, 1);
+  });
+
   test(
     'protection appearing during download prevents decoder/provider access',
     () async {

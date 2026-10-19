@@ -9,6 +9,10 @@ const transcriptionMaxBytes = 25000000;
 const transcriptionModel = 'gpt-transcribe';
 const transcriptionPricePerMinute = 0.0045;
 const _audioInputRestrictions = [
+  // Limit decoder threads as well as output encoder/filter threads below.
+  // The default otherwise scales each conversion with all host CPU cores.
+  '-threads',
+  '1',
   '-protocol_whitelist',
   'file,pipe',
   '-format_whitelist',
@@ -109,6 +113,10 @@ class OpenAiTranscriber implements Transcriber {
         '-hide_banner',
         '-v',
         'error',
+        '-filter_threads',
+        '1',
+        '-filter_complex_threads',
+        '1',
         ..._audioInputRestrictions,
         '-i',
         input.path,
@@ -121,6 +129,8 @@ class OpenAiTranscriber implements Transcriber {
         '16000',
         '-c:a',
         'pcm_s16le',
+        '-threads',
+        '1',
         '-f',
         's16le',
         'pipe:1',
@@ -160,12 +170,18 @@ class OpenAiTranscriber implements Transcriber {
       await input.writeAsBytes(audio.bytes, flush: true);
       final duration = await _probeDuration(input, cancel);
       final cost = duration / 60 * transcriptionPricePerMinute;
+      // Pre-upload gate: automatic-job limits throw here, before conversion
+      // or any provider request; the finally block removes the plaintext.
       estimate(duration, cost);
       // 15 min segments at 48 kbps are well below 25 MB. Metadata is removed.
       await _run(ffmpeg, [
         '-nostdin',
         '-v',
         'error',
+        '-filter_threads',
+        '1',
+        '-filter_complex_threads',
+        '1',
         ..._audioInputRestrictions,
         '-i',
         input.path,
@@ -180,6 +196,8 @@ class OpenAiTranscriber implements Transcriber {
         '24000',
         '-c:a',
         'libmp3lame',
+        '-threads',
+        '1',
         '-b:a',
         '48k',
         '-f',
