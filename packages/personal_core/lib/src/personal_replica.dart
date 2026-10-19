@@ -28,6 +28,150 @@ enum TranscriptCancellation {
   alreadyFinished,
 }
 
+/// How one journal event bears on a resumable replay.
+enum JournalSettlement {
+  /// Applied already, or irrelevant to every future trust/decryption state
+  /// (commands, heartbeats, redactions, foreign or plaintext senders).
+  settled,
+
+  /// May still matter: not decrypted yet, sent by an own device which may be
+  /// verified later, or a due reminder whose alert was not claimed yet.
+  held,
+
+  /// Not a durable journal position yet (local echo); replay stops here.
+  barrier,
+}
+
+/// One journal event as seen by [JournalWatermark.advance].
+class JournalPosition {
+  final String eventId;
+  final DateTime originServerTs;
+  final JournalSettlement settlement;
+  const JournalPosition(this.eventId, this.originServerTs, this.settlement);
+}
+
+/// A resumable position in the private journal, stored beside the replica.
+///
+/// Invariant: every journal event at or before [eventId] in journal order is
+/// settled or listed in [held]. A client resumes by paging back until
+/// [eventId] and a safety margin before it are loaded, then replays the newer
+/// events, the margin and the held events (re-read by id). Re-applying a
+/// result is idempotent, so an older watermark only costs time. A missing,
+/// malformed, other-room or other-schema record means full replay.
+class JournalWatermark {
+  static const schema = 1;
+  static const storageKey = 'journal:watermark';
+
+  /// Beyond this many unsettled events the watermark stops advancing; later
+  /// starts page back to it instead of losing track of any of them.
+  static const maxHeld = 128;
+
+  final String roomId;
+  final String eventId;
+  final DateTime originServerTs;
+  final List<String> held;
+
+  JournalWatermark({
+    required this.roomId,
+    required this.eventId,
+    required this.originServerTs,
+    List<String> held = const [],
+  }) : held = List.unmodifiable(held);
+
+  Map<String, dynamic> toJson() => {
+    'schema': schema,
+    'roomId': roomId,
+    'eventId': eventId,
+    'originServerTs': originServerTs.millisecondsSinceEpoch,
+    'held': held,
+  };
+
+  static bool _isEventId(Object? id) =>
+      id is String && id.length > 1 && id.startsWith(r'$');
+
+  /// Null for anything but a complete record of this [schema].
+  static JournalWatermark? tryParse(Map<String, dynamic>? json) {
+    if (json == null || json['schema'] != schema) return null;
+    final roomId = json['roomId'];
+    final eventId = json['eventId'];
+    final ts = json['originServerTs'];
+    final held = json['held'];
+    if (roomId is! String ||
+        roomId.isEmpty ||
+        !_isEventId(eventId) ||
+        ts is! int ||
+        held is! List ||
+        held.length > maxHeld ||
+        !held.every(_isEventId)) {
+      return null;
+    }
+    return JournalWatermark(
+      roomId: roomId,
+      eventId: eventId as String,
+      originServerTs: DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true),
+      held: held.cast<String>(),
+    );
+  }
+
+  bool sameAs(JournalWatermark? other) {
+    if (other == null ||
+        other.roomId != roomId ||
+        other.eventId != eventId ||
+        other.originServerTs != originServerTs ||
+        other.held.length != held.length) {
+      return false;
+    }
+    for (var i = 0; i < held.length; i++) {
+      if (other.held[i] != held[i]) return false;
+    }
+    return true;
+  }
+
+  /// Moves [previous] over [newer]: the events after it in journal order,
+  /// oldest first. [resolved] are previously held ids which are settled now
+  /// (or permanently unavailable). Without [previous], [newer] must start at
+  /// the beginning of the journal. Returns null when nothing is covered yet.
+  static JournalWatermark? advance({
+    required String roomId,
+    required JournalWatermark? previous,
+    required Iterable<JournalPosition> newer,
+    Set<String> resolved = const {},
+    int maxHeld = JournalWatermark.maxHeld,
+  }) {
+    if (previous != null && previous.roomId != roomId) {
+      throw ArgumentError('Journal watermark belongs to another room');
+    }
+    final held = <String>[
+      for (final id in previous?.held ?? const <String>[])
+        if (!resolved.contains(id)) id,
+    ];
+    final known = held.toSet();
+    var eventId = previous?.eventId;
+    var originServerTs = previous?.originServerTs;
+    for (final position in newer) {
+      if (position.settlement == JournalSettlement.barrier ||
+          !_isEventId(position.eventId)) {
+        break;
+      }
+      if (position.settlement == JournalSettlement.held &&
+          !known.contains(position.eventId)) {
+        if (held.length >= maxHeld) break;
+        held.add(position.eventId);
+        known.add(position.eventId);
+      }
+      eventId = position.eventId;
+      originServerTs = position.originServerTs;
+    }
+    if (eventId == null || originServerTs == null) return null;
+    return JournalWatermark(
+      roomId: roomId,
+      eventId: eventId,
+      originServerTs: originServerTs,
+      held: held,
+    );
+  }
+}
+
 /// A durable per-entity replica. Its single-record commits contain optimistic
 /// state, revisions, conflict copies and outbox entries together. Network
 /// publication happens outside its serialized mutation queue.
@@ -520,6 +664,21 @@ class PersonalReplica {
     await write(seenKey, {'seen': true});
     _seen.add(result.opId);
   });
+
+  /// The persisted journal resume point for [roomId]; null means full replay
+  /// (new or migrated store, other journal room, unknown or broken record).
+  Future<JournalWatermark?> journalWatermark(String roomId) =>
+      _serial(() async {
+        final watermark = JournalWatermark.tryParse(
+          await read(JournalWatermark.storageKey),
+        );
+        return watermark?.roomId == roomId ? watermark : null;
+      });
+
+  /// Serialized behind every earlier replica commit, so a watermark is never
+  /// durable before the results it covers.
+  Future<void> saveJournalWatermark(JournalWatermark watermark) =>
+      _serial(() => write(JournalWatermark.storageKey, watermark.toJson()));
 
   /// Migration from older split records. Nothing is published during migration.
   Future<void> importLegacy(

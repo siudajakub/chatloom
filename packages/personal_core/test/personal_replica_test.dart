@@ -138,22 +138,39 @@ void main() {
     },
   );
 
-  test('restoring ignored chat stays durable while original ignore awaits ACK', () async {
-    final store = MemoryStore(); final r = replica(store);
-    const key = 'org:fixture';
-    final original = ConversationMetadata(entityId: 'fixture', notificationMode: PersonalNotificationMode.mentionsOnly);
-    await r.queueMetadata(key, original.setIgnored(true).toJson().cast<String, dynamic>());
-    final ignore = (await r.markPublishing(r.pending.keys.single))!;
-    await r.queueMetadata(key, original.setIgnored(true).restoreIgnored().toJson().cast<String, dynamic>());
-    final restarted = replica(store);
-    expect(restarted.values[key]!['ignored'], isFalse);
-    expect(restarted.pending[ignore.opId]!.toJson(), ignore.toJson());
-    await restarted.acceptResult(metadataAck(ignore, 1));
-    final restore = restarted.pending.values.single;
-    expect(restore.baseRevision, 1);
-    expect((restore.payload['value'] as Map)['ignored'], isFalse);
-    expect(replica(store).values[key]!['notificationMode'], 'mentionsOnly');
-  });
+  test(
+    'restoring ignored chat stays durable while original ignore awaits ACK',
+    () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      const key = 'org:fixture';
+      final original = ConversationMetadata(
+        entityId: 'fixture',
+        notificationMode: PersonalNotificationMode.mentionsOnly,
+      );
+      await r.queueMetadata(
+        key,
+        original.setIgnored(true).toJson().cast<String, dynamic>(),
+      );
+      final ignore = (await r.markPublishing(r.pending.keys.single))!;
+      await r.queueMetadata(
+        key,
+        original
+            .setIgnored(true)
+            .restoreIgnored()
+            .toJson()
+            .cast<String, dynamic>(),
+      );
+      final restarted = replica(store);
+      expect(restarted.values[key]!['ignored'], isFalse);
+      expect(restarted.pending[ignore.opId]!.toJson(), ignore.toJson());
+      await restarted.acceptResult(metadataAck(ignore, 1));
+      final restore = restarted.pending.values.single;
+      expect(restore.baseRevision, 1);
+      expect((restore.payload['value'] as Map)['ignored'], isFalse);
+      expect(replica(store).values[key]!['notificationMode'], 'mentionsOnly');
+    },
+  );
 
   group('durable transcription cancellation', () {
     Future<PersonalOperation> request(PersonalReplica r) async {
@@ -922,4 +939,215 @@ void main() {
       expect(restored.transcripts[job.id]!.text, isNull);
     },
   );
+
+  group('journal watermark', () {
+    const room = '!fixture-journal';
+    final t0 = DateTime.utc(2026, 10, 17, 12);
+    JournalPosition at(
+      String id,
+      int minute, [
+      JournalSettlement settlement = JournalSettlement.settled,
+    ]) => JournalPosition(id, t0.add(Duration(minutes: minute)), settlement);
+
+    test('new or migrated store has no watermark: full replay', () async {
+      final store = MemoryStore();
+      store.data['replica:draft:fixture'] = {
+        'revision': 1,
+        'commands': <String, dynamic>{},
+      };
+      expect(await replica(store).journalWatermark(room), isNull);
+    });
+
+    test('round-trips through the store and survives restart', () async {
+      final store = MemoryStore();
+      final watermark = JournalWatermark(
+        roomId: room,
+        eventId: r'$fixture-b',
+        originServerTs: t0,
+        held: [r'$fixture-utd'],
+      );
+      await replica(store).saveJournalWatermark(watermark);
+      final restored = await replica(store).journalWatermark(room);
+      expect(restored?.sameAs(watermark), isTrue);
+      expect(restored!.originServerTs, t0);
+      expect(restored.held, [r'$fixture-utd']);
+      expect(
+        await replica(store).journalWatermark('!another-journal'),
+        isNull,
+        reason: 'A new journal room starts with a full replay',
+      );
+    });
+
+    test('unknown schema or malformed record means full replay', () async {
+      final valid = JournalWatermark(
+        roomId: room,
+        eventId: r'$fixture',
+        originServerTs: t0,
+      ).toJson();
+      for (final broken in <Map<String, dynamic>>[
+        {...valid, 'schema': JournalWatermark.schema + 1},
+        {...valid}..remove('schema'),
+        {...valid, 'eventId': 'local-echo'},
+        {...valid, 'eventId': 42},
+        {...valid, 'originServerTs': '2026'},
+        {...valid, 'roomId': ''},
+        {...valid, 'held': 'not-a-list'},
+        {
+          ...valid,
+          'held': [r'$ok', 'txn-not-an-event'],
+        },
+        {
+          ...valid,
+          'held': [
+            for (var i = 0; i <= JournalWatermark.maxHeld; i++) '\$held-$i',
+          ],
+        },
+      ]) {
+        final store = MemoryStore()..data[JournalWatermark.storageKey] = broken;
+        expect(
+          await replica(store).journalWatermark(room),
+          isNull,
+          reason: jsonEncode(broken),
+        );
+      }
+    });
+
+    test('is never durable before the results it covers', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      final applying = r.acceptResult(
+        result('fixture-result', 'reminder:fixture', 'reminder.result', {
+          'revision': 1,
+          'state': 'done',
+        }),
+      );
+      final saving = r.saveJournalWatermark(
+        JournalWatermark(roomId: room, eventId: r'$after', originServerTs: t0),
+      );
+      await Future.wait([applying, saving]);
+      expect(store.writes, [
+        'replica:reminder:fixture',
+        'seen:fixture-result',
+        JournalWatermark.storageKey,
+      ]);
+    });
+
+    test('a failed result commit keeps the previous watermark', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      final previous = JournalWatermark(
+        roomId: room,
+        eventId: r'$before',
+        originServerTs: t0,
+      );
+      await r.saveJournalWatermark(previous);
+      store.failNextKey = 'replica:reminder:fixture';
+      await expectLater(
+        r.acceptResult(
+          result('fixture-result', 'reminder:fixture', 'reminder.result', {
+            'revision': 1,
+            'state': 'done',
+          }),
+        ),
+        throwsStateError,
+      );
+      // The client advances only after every acceptResult succeeded.
+      expect((await r.journalWatermark(room))?.sameAs(previous), isTrue);
+      expect(store.data.containsKey('seen:fixture-result'), isFalse);
+    });
+
+    test('advances over settled events from the journal start', () {
+      final next = JournalWatermark.advance(
+        roomId: room,
+        previous: null,
+        newer: [at(r'$create', 0), at(r'$a', 1), at(r'$b', 2)],
+      );
+      expect(next?.eventId, r'$b');
+      expect(next?.originServerTs, t0.add(const Duration(minutes: 2)));
+      expect(next?.held, isEmpty);
+      expect(
+        JournalWatermark.advance(roomId: room, previous: null, newer: []),
+        isNull,
+      );
+    });
+
+    test('held events are kept by id and the position moves past them', () {
+      final first = JournalWatermark.advance(
+        roomId: room,
+        previous: null,
+        newer: [
+          at(r'$a', 0),
+          at(r'$utd', 1, JournalSettlement.held),
+          at(r'$b', 2),
+          at(r'$untrusted', 3, JournalSettlement.held),
+        ],
+      )!;
+      expect(first.eventId, r'$untrusted');
+      expect(first.held, [r'$utd', r'$untrusted']);
+      final second = JournalWatermark.advance(
+        roomId: room,
+        previous: first,
+        newer: [at(r'$c', 4)],
+        resolved: {r'$utd'},
+      )!;
+      expect(second.eventId, r'$c');
+      expect(second.held, [r'$untrusted']);
+      final unchanged = JournalWatermark.advance(
+        roomId: room,
+        previous: second,
+        newer: [],
+      );
+      expect(unchanged?.sameAs(second), isTrue);
+    });
+
+    test('stops at a local echo and at the held limit', () {
+      final echo = JournalWatermark.advance(
+        roomId: room,
+        previous: null,
+        newer: [
+          at(r'$a', 0),
+          at(r'$sending', 1, JournalSettlement.barrier),
+          at(r'$b', 2),
+        ],
+      );
+      expect(echo?.eventId, r'$a');
+      final txn = JournalWatermark.advance(
+        roomId: room,
+        previous: null,
+        newer: [at(r'$a', 0), at('txn-1', 1), at(r'$b', 2)],
+      );
+      expect(txn?.eventId, r'$a');
+      final limited = JournalWatermark.advance(
+        roomId: room,
+        previous: null,
+        maxHeld: 2,
+        newer: [
+          at(r'$a', 0),
+          at(r'$h1', 1, JournalSettlement.held),
+          at(r'$b', 2),
+          at(r'$h2', 3, JournalSettlement.held),
+          at(r'$c', 4),
+          at(r'$h3', 5, JournalSettlement.held),
+          at(r'$d', 6),
+        ],
+      )!;
+      expect(limited.eventId, r'$c', reason: 'A third unsettled event waits');
+      expect(limited.held, [r'$h1', r'$h2']);
+    });
+
+    test('a watermark of another journal room is rejected', () {
+      expect(
+        () => JournalWatermark.advance(
+          roomId: room,
+          previous: JournalWatermark(
+            roomId: '!other',
+            eventId: r'$x',
+            originServerTs: t0,
+          ),
+          newer: [],
+        ),
+        throwsArgumentError,
+      );
+    });
+  });
 }

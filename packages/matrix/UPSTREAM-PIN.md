@@ -21,3 +21,16 @@ insertion between separate ID and row reads. Cursor state rolls back after a
 database error. Future/fragmented/network history and decryption remain SDK paths.
 Regression: app `test/notion/content_history_controller_test.dart`; before/after
 logs under `artifacts/profile-content-2026-10-16` in the Personal project.
+
+### 2026-10-18 — off-isolate `/sync` decoding
+
+`Api.sync` (generated `api.dart`) hands the response bytes to
+`matrix_api_lite/utils/sync_body_decoder.dart`. Bodies above 256 KiB run UTF-8 +
+JSON + `SyncUpdate.fromJson` in `Isolate.run`; the decoded graph returns through
+`Isolate.exit` without a second copy. Smaller bodies and web (conditional import,
+no shared-heap isolates) decode inline exactly as upstream. HTTP status handling,
+request parameters, sync processing order, database transactions, transport and
+cryptography are unchanged; decode errors still fail the same `sync()` future.
+Re-apply after regenerating `api.dart`. Regression: app
+`test/personal/sync_body_decoder_test.dart` (inline/isolate equivalence on the
+SDK sync fixture and a >256 KiB body through `MatrixApi.sync`).

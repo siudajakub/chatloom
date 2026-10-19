@@ -9,6 +9,7 @@ import '../model/matrix_keys.dart';
 import '../model/sync_update.dart';
 import '../model/matrix_event.dart';
 import '../model/children_state.dart';
+import '../utils/sync_body_decoder.dart';
 
 // ignore_for_file: provide_deprecation_message
 
@@ -5404,9 +5405,8 @@ class Api {
     final response = await httpClient.send(request);
     final responseBody = await response.stream.toBytes();
     if (response.statusCode != 200) unexpectedResponse(response, responseBody);
-    final responseString = utf8.decode(responseBody);
-    final json = jsonDecode(responseString);
-    return SyncUpdate.fromJson(json as Map<String, Object?>);
+    // Local patch (UPSTREAM-PIN.md): large bodies decode off the UI isolate.
+    return decodeSyncUpdateBody(responseBody);
   }
 
   /// Retrieve an array of third-party network locations from a Matrix room

@@ -33,7 +33,7 @@ class RoundBridgeCapabilities {
         !extension.trusted) {
       return denied(
         CapabilityStatus.unverified,
-        'Brak zaufanej deklaracji mostu.',
+        'No trusted bridge declaration.',
       );
     }
     final content = mediaEvent!.content;
@@ -41,7 +41,7 @@ class RoundBridgeCapabilities {
         content['round_video_permission'] == 'denied') {
       return denied(
         CapabilityStatus.unavailable,
-        'Most blokuje wiadomości wideo.',
+        'The bridge blocks video messages.',
       );
     }
     if (content['round_video'] != true ||
@@ -50,7 +50,7 @@ class RoundBridgeCapabilities {
         runtimeUploadLimitBytes <= 0) {
       return denied(
         CapabilityStatus.unverified,
-        'Nie potwierdzono praw lub limitu uploadu.',
+        'Upload permission or size limit not confirmed.',
       );
     }
     final evidence = BridgeRoomCapabilities.fromState(
@@ -87,7 +87,7 @@ class RoundBridgeCapabilities {
         ].every((key) => positive(profile[key]))) {
       return denied(
         CapabilityStatus.unverified,
-        'Nie potwierdzono pełnego profilu kółeczek.',
+        'Full round video profile not confirmed.',
       );
     }
     int minimum(List<int> values) => values.reduce((a, b) => a < b ? a : b);
@@ -114,7 +114,7 @@ class RoundBridgeCapabilities {
     return RoundBridgeCapabilities._(
       const CapabilityResult(
         CapabilityStatus.available,
-        'Most potwierdza wysyłanie kółeczek.',
+        'The bridge supports sending round videos.',
       ),
       encoding,
       extension,
@@ -469,8 +469,8 @@ class BridgeRoomCapabilities {
       CapabilityResult(
         CapabilityStatus.available,
         level == 1
-            ? 'Most deklaruje częściową obsługę; możliwa konwersja.'
-            : 'Most deklaruje obsługę.',
+            ? 'Partially supported by the bridge; may be converted.'
+            : 'Supported by the bridge.',
       ),
       supportLevel: level,
     );
@@ -493,35 +493,32 @@ class BridgeRoomCapabilities {
   );
 
   static String _reason(String code) => switch (code) {
-    'missingState' => 'Most nie potwierdził obsługi tej funkcji.',
-    'rejected' => 'Most odrzuca tę funkcję.',
-    'dropped' => 'Most pomija tę funkcję.',
+    'missingState' => 'The bridge has not confirmed support for this feature.',
+    'rejected' => 'The bridge rejects this feature.',
+    'dropped' => 'The bridge drops this feature.',
     'unsupportedFallback' =>
-      'Most może zastosować uproszczony zamiennik tej funkcji.',
-    'mediaTypeRejected' => 'Most nie obsługuje tego rodzaju załącznika.',
+      'The bridge may use a simplified fallback for this feature.',
+    'mediaTypeRejected' => "The bridge doesn't support this attachment type.",
     'mimeRejected' ||
-    'noSupportedMime' => 'Most nie obsługuje tego formatu pliku.',
+    'noSupportedMime' => "The bridge doesn't support this file format.",
     'missingMediaDeclaration' =>
-      'Most nie zadeklarował obsługiwanych formatów.',
-    'missingMediaMeasurement' =>
-      'Nie sprawdzono jeszcze parametrów wybranego pliku.',
-    'mediaLimit' =>
-      'Plik przekracza limit rozmiaru, wymiarów lub czasu nagrania.',
-    'captionLimit' => 'Podpis załącznika przekracza limit długości.',
-    'messageTooOld' => 'Minął czas dozwolony na tę zmianę wiadomości.',
-    'editLimit' => 'Wyczerpano dozwoloną liczbę edycji wiadomości.',
-    'reactionNotAllowed' => 'Ta reakcja nie jest obsługiwana w tej rozmowie.',
-    'reactionLimit' => 'Osiągnięto limit reakcji na tę wiadomość.',
-    'pollLimit' => 'Ankieta przekracza limit opcji lub ich długości.',
+      "The bridge hasn't declared supported formats.",
+    'missingMediaMeasurement' => "The selected file hasn't been checked yet.",
+    'mediaLimit' => 'The file exceeds the size, dimension or duration limit.',
+    'captionLimit' => 'The caption is too long.',
+    'messageTooOld' => "It's too late to change this message.",
+    'editLimit' => 'No more edits are allowed for this message.',
+    'reactionNotAllowed' => "This reaction isn't supported in this chat.",
+    'reactionLimit' => 'Reaction limit reached for this message.',
+    'pollLimit' => 'The poll exceeds the option count or length limit.',
     'timerUnsupported' ||
-    'noAllowedTimers' => 'Most nie obsługuje znikających wiadomości.',
-    'timerTypeUnsupported' =>
-      'Ten tryb znikania wiadomości nie jest obsługiwany.',
+    'noAllowedTimers' => "The bridge doesn't support disappearing messages.",
+    'timerTypeUnsupported' => "This disappearing-message mode isn't supported.",
     'timerValueUnsupported' =>
-      'Ten czas znikania wiadomości nie jest obsługiwany.',
-    'missingTimerStatePermission' || 'missingTimerDeclaration' =>
-      'Brak potwierdzenia obsługi znikających wiadomości.',
-    _ => 'Nie udało się potwierdzić obsługi tej funkcji.',
+      "This disappearing-message duration isn't supported.",
+    'missingTimerStatePermission' ||
+    'missingTimerDeclaration' => 'Disappearing-message support not confirmed.',
+    _ => 'Could not confirm support for this feature.',
   };
   static Map<String, Object?> _snapshot(Map input) => Map.unmodifiable(
     input.map(

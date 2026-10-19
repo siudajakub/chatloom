@@ -5,12 +5,15 @@ const personalSchemaVersion = 1;
 const personalEventType = 'pl.personal.client.operation.v1';
 const personalRoomMarker = 'pl.personal.client.journal.v1';
 
+// Keys are hot in merged timelines; both ref classes are immutable.
+final _refKeys = Expando<String>('personal ref keys');
+
 class ConversationRef {
   final String accountId;
   final String roomId;
   final String network;
   const ConversationRef({required this.accountId, required this.roomId, this.network = 'unknown'});
-  String get key => jsonEncode([accountId, roomId]);
+  String get key => _refKeys[this] ??= jsonEncode([accountId, roomId]);
   Map<String, Object?> toJson() => {'accountId': accountId, 'roomId': roomId, 'network': network};
   factory ConversationRef.fromJson(Map<String, dynamic> j) => ConversationRef(accountId: j['accountId'] as String, roomId: j['roomId'] as String, network: j['network'] as String? ?? 'unknown');
   @override bool operator ==(Object other) => other is ConversationRef && other.accountId == accountId && other.roomId == roomId;
@@ -22,7 +25,7 @@ class SourceEventRef {
   final ConversationRef conversation;
   final String eventId;
   const SourceEventRef({required this.conversation, required this.eventId});
-  String get key => jsonEncode([conversation.accountId, conversation.roomId, eventId]);
+  String get key => _refKeys[this] ??= jsonEncode([conversation.accountId, conversation.roomId, eventId]);
   Map<String, Object?> toJson() => {'conversation': conversation.toJson(), 'eventId': eventId};
   factory SourceEventRef.fromJson(Map<String,dynamic> j) => SourceEventRef(conversation: ConversationRef.fromJson(Map<String,dynamic>.from(j['conversation'] as Map)), eventId: j['eventId'] as String);
   @override String toString() => 'SourceEventRef(redacted)';
@@ -80,6 +83,13 @@ class PersonalOperation {
   @override String toString() => 'PersonalOperation($kind, redacted)';
 }
 
+/// Who asked for a transcription. Older workers ignore the field, so absent
+/// means manual and manual jobs keep their original JSON shape.
+enum TranscriptionOrigin { manual, auto }
+
+TranscriptionOrigin transcriptionOriginFromJson(Object? value) =>
+    value == TranscriptionOrigin.auto.name ? TranscriptionOrigin.auto : TranscriptionOrigin.manual;
+
 class TranscriptionJob {
   final String id;
   final SourceEventRef source;
@@ -90,9 +100,11 @@ class TranscriptionJob {
   final double? durationSeconds;
   final double? estimatedCostUsd;
   final String? errorCode;
-  const TranscriptionJob({required this.id,required this.source,required this.state,this.language,this.text,this.model='gpt-transcribe',this.durationSeconds,this.estimatedCostUsd,this.errorCode});
-  Map<String,Object?> toJson()=>{'id':id,'source':source.toJson(),'state':state.name,'language':language,'text':text,'model':model,'durationSeconds':durationSeconds,'estimatedCostUsd':estimatedCostUsd,'errorCode':errorCode};
-  factory TranscriptionJob.fromJson(Map<String,dynamic> j)=>TranscriptionJob(id:j['id'] as String,source:SourceEventRef.fromJson(Map<String,dynamic>.from(j['source'] as Map)),state:JobState.values.byName(j['state'] as String),language:j['language'] as String?,text:j['text'] as String?,model:j['model'] as String? ?? 'gpt-transcribe',durationSeconds:(j['durationSeconds'] as num?)?.toDouble(),estimatedCostUsd:(j['estimatedCostUsd'] as num?)?.toDouble(),errorCode:j['errorCode'] as String?);
+  final TranscriptionOrigin origin;
+  const TranscriptionJob({required this.id,required this.source,required this.state,this.language,this.text,this.model='gpt-transcribe',this.durationSeconds,this.estimatedCostUsd,this.errorCode,this.origin=TranscriptionOrigin.manual});
+  bool get automatic => origin == TranscriptionOrigin.auto;
+  Map<String,Object?> toJson()=>{'id':id,'source':source.toJson(),'state':state.name,'language':language,'text':text,'model':model,'durationSeconds':durationSeconds,'estimatedCostUsd':estimatedCostUsd,'errorCode':errorCode,if (origin != TranscriptionOrigin.manual) 'origin':origin.name};
+  factory TranscriptionJob.fromJson(Map<String,dynamic> j)=>TranscriptionJob(id:j['id'] as String,source:SourceEventRef.fromJson(Map<String,dynamic>.from(j['source'] as Map)),state:JobState.values.byName(j['state'] as String),language:j['language'] as String?,text:j['text'] as String?,model:j['model'] as String? ?? 'gpt-transcribe',durationSeconds:(j['durationSeconds'] as num?)?.toDouble(),estimatedCostUsd:(j['estimatedCostUsd'] as num?)?.toDouble(),errorCode:j['errorCode'] as String?,origin:transcriptionOriginFromJson(j['origin']));
   @override String toString()=>'TranscriptionJob(${state.name}, redacted)';
 }
 

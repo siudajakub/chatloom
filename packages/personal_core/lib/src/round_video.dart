@@ -191,6 +191,38 @@ class RoundVideoDescriptor {
   String toString() => 'RoundVideoDescriptor(redacted)';
 }
 
+/// Matrix key used by mautrix bridgev2 for disappearing messages, both in
+/// message content (`{type, timer}` per message) and as room state (the
+/// chat's current setting). `timer` is in milliseconds.
+const beeperDisappearingTimerKey = 'com.beeper.disappearing_timer';
+
+enum DisappearingTimerState { off, active, malformed }
+
+/// Classifies a `com.beeper.disappearing_timer` value. `null` and `{}` (or a
+/// type of `''`/`none` without a positive timer) are off; mautrix writes `{}`
+/// when the timer is disabled. Any other value is active, and an unexpected
+/// shape is malformed, which callers treat as active (fail closed).
+DisappearingTimerState disappearingTimerState(Object? value) {
+  if (value == null) return DisappearingTimerState.off;
+  if (value is! Map) return DisappearingTimerState.malformed;
+  final type = value['type'];
+  final timer = value['timer'];
+  if ((type != null && type is! String) ||
+      (timer != null && (timer is! num || timer < 0 || timer.isNaN))) {
+    return DisappearingTimerState.malformed;
+  }
+  final typed = type is String && type.isNotEmpty && type != 'none';
+  final timed = timer is num && timer > 0;
+  return typed || timed
+      ? DisappearingTimerState.active
+      : DisappearingTimerState.off;
+}
+
+/// True unless [value] (message content entry or room state content) says
+/// the disappearing timer is off. Malformed values count as disappearing.
+bool disappearingTimerLimits(Object? value) =>
+    disappearingTimerState(value) != DisappearingTimerState.off;
+
 /// Guard before SDK download/decrypt, preload, thumbnail or cache access.
 /// Limited media stays a placeholder until a proven lazy-consumption transport.
 class RoundMediaPolicy {
@@ -273,6 +305,18 @@ class RoundMediaPolicy {
           malformed = true;
         } else {
           limited |= (v['timer'] as int) > 0;
+        }
+      }
+      // mautrix bridgev2 marks each disappearing message in its content.
+      if (map.containsKey(beeperDisappearingTimerKey)) {
+        switch (disappearingTimerState(map[beeperDisappearingTimerKey])) {
+          case DisappearingTimerState.off:
+            break;
+          case DisappearingTimerState.active:
+            limited = true;
+          case DisappearingTimerState.malformed:
+            limited = true;
+            malformed = true;
         }
       }
       for (final key in [
@@ -361,13 +405,13 @@ class TelegramMediaCapabilities {
     if (!trusted || value is! bool)
       return const CapabilityResult(
         CapabilityStatus.unverified,
-        'Most nie potwierdził tej operacji.',
+        "The bridge hasn't confirmed this operation.",
       );
     return CapabilityResult(
       value ? CapabilityStatus.available : CapabilityStatus.unavailable,
       value
-          ? 'Most potwierdza tę operację.'
-          : 'Most nie obsługuje tej operacji.',
+          ? 'The bridge supports this operation.'
+          : "The bridge doesn't support this operation.",
     );
   }
 

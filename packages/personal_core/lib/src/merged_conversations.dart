@@ -19,13 +19,16 @@ class MergedEvent<T> {
     if (revision < 0) throw ArgumentError('Invalid event revision');
   }
 
+  /// Stable identity of the source event, computed once per merged event.
+  late final String key = source.key;
+
   @override
   String toString() => 'MergedEvent(redacted, revision: $revision)';
 }
 
 int compareMergedEvents<T>(MergedEvent<T> a, MergedEvent<T> b) {
   final byTime = a.timestamp.compareTo(b.timestamp);
-  return byTime != 0 ? byTime : a.source.key.compareTo(b.source.key);
+  return byTime != 0 ? byTime : a.key.compareTo(b.key);
 }
 
 class _SourcePageState {
@@ -41,6 +44,8 @@ class MergedTimelineBuffer<T> {
   final List<ConversationRef> members;
   final Map<String, _SourcePageState> _pages = {};
   final Map<String, MergedEvent<T>> _events = {};
+  List<MergedEvent<T>>? _sorted;
+  List<MergedEvent<T>>? _covered;
 
   MergedTimelineBuffer(Iterable<ConversationRef> members)
     : members = List.unmodifiable(members) {
@@ -53,10 +58,10 @@ class MergedTimelineBuffer<T> {
     }
   }
 
-  List<MergedEvent<T>> get events {
-    final result = _events.values.toList()..sort(compareMergedEvents);
-    return List.unmodifiable(result);
-  }
+  /// Sorted once per mutation; repeated reads during one render are free.
+  List<MergedEvent<T>> get events => _sorted ??= List.unmodifiable(
+    _events.values.toList()..sort(compareMergedEvents),
+  );
 
   bool get initialized => _pages.values.every((p) => p.initialized);
   bool get hasMore => _pages.values.any((p) => p.hasMore);
@@ -64,7 +69,9 @@ class MergedTimelineBuffer<T> {
   /// Only expose a complete prefix of newest history: a lagging member must
   /// fetch further before older globally interleaved events can be published.
   /// Equal timestamps at a page boundary remain buffered until fully covered.
-  List<MergedEvent<T>> get coveredEvents {
+  List<MergedEvent<T>> get coveredEvents => _covered ??= _computeCovered();
+
+  List<MergedEvent<T>> _computeCovered() {
     if (!initialized) return const [];
     DateTime? frontier;
     for (final page in _pages.values.where((p) => p.hasMore)) {
@@ -72,11 +79,15 @@ class MergedTimelineBuffer<T> {
       if (oldest == null) return const [];
       if (frontier == null || oldest.isAfter(frontier)) frontier = oldest;
     }
+    if (frontier == null) return events;
     return List.unmodifiable(
-      events.where(
-        (event) => frontier == null || event.timestamp.isAfter(frontier),
-      ),
+      events.where((event) => event.timestamp.isAfter(frontier!)),
     );
+  }
+
+  void _invalidate() {
+    _sorted = null;
+    _covered = null;
   }
 
   String? cursorFor(ConversationRef member) => _page(member).cursor;
@@ -118,6 +129,7 @@ class MergedTimelineBuffer<T> {
     page.initialized = true;
     page.hasMore = hasMore;
     page.cursor = hasMore ? cursor : null;
+    _invalidate();
   }
 
   void addLive(MergedEvent<T> event) {
@@ -126,9 +138,10 @@ class MergedTimelineBuffer<T> {
   }
 
   void _upsert(MergedEvent<T> event) {
-    final previous = _events[event.source.key];
+    final previous = _events[event.key];
     if (previous == null || event.revision > previous.revision) {
-      _events[event.source.key] = event;
+      _events[event.key] = event;
+      _invalidate();
     }
   }
 
