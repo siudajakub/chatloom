@@ -2,6 +2,8 @@
 Description=Personal silent Matrix feature worker
 Wants=network-online.target
 After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -19,6 +21,13 @@ UMask=0077
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=45
+KillMode=control-group
+OOMPolicy=kill
+MemoryHigh=768M
+MemoryMax=1536M
+MemorySwapMax=0
+TasksMax=128
+CPUQuota=100%
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

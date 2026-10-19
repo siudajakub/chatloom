@@ -1,0 +1,42 @@
+[Unit]
+Description=Personal read-only local Beeper source adapter
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=eouser
+Group=personalworker
+Environment=HOME=/home/eouser
+ExecStart=/usr/bin/python3 /opt/personal-worker/local_sources.py
+RuntimeDirectory=personal-worker-source
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=15
+KillMode=control-group
+OOMPolicy=kill
+MemoryHigh=256M
+MemoryMax=512M
+MemorySwapMax=0
+TasksMax=32
+CPUQuota=100%
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/eouser/.beeper /home/eouser/.config /home/eouser/.local/share /run/personal-worker-source
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

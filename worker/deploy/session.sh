@@ -21,6 +21,9 @@ exec systemd-run --quiet --collect --wait --pty \
   --property="BindPaths=$state_volume:/var/lib/personal-worker" \
   --property=LoadCredential=credentials.json:/etc/personal-worker/credentials.json \
   --property=UMask=0077 --property=NoNewPrivileges=true \
+  --property=KillMode=control-group --property=OOMPolicy=kill \
+  --property=MemoryHigh=768M --property=MemoryMax=1536M --property=MemorySwapMax=0 \
+  --property=TasksMax=128 --property=CPUQuota=100% --property=TimeoutStopSec=45 \
   --property=ProtectSystem=strict --property=ProtectHome=true \
   --property=PrivateTmp=true \
   --property='ReadWritePaths=/var/lib/personal-worker /run/personal-worker' \
