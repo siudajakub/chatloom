@@ -3,12 +3,14 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 import 'dart:ui';
 
 import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/person_location.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/notification_client_routing.dart';
@@ -50,11 +52,32 @@ extension NotificationResponseJson on NotificationResponse {
   }
 }
 
-Future<void> waitForPushIsolateDone() async {
-  if (IsolateNameServer.lookupPortByName(AppConfig.pushIsolatePortName) !=
-      null) {
-    Logs().i('Wait for Push Isolate to be done...');
-    await Future.delayed(const Duration(milliseconds: 300));
+/// Waits (bounded) for a background notification action to release storage.
+///
+/// Never throws: startup awaits this before `runApp`, so a slow or crashed
+/// action must not leave the app on a frozen splash. After [timeout] the
+/// mapping is treated as stale and removed (a still-running action only ever
+/// removes its own port), and startup continues. Returns whether the action
+/// finished in time.
+Future<bool> waitForPushIsolateDone({
+  Duration timeout = const Duration(seconds: 30),
+  Duration poll = const Duration(milliseconds: 100),
+}) async {
+  final clock = Stopwatch()..start();
+  try {
+    while (IsolateNameServer.lookupPortByName(AppConfig.pushIsolatePortName) !=
+        null) {
+      if (clock.elapsed >= timeout) {
+        Logs().w('[Push] background_action_wait_timeout');
+        IsolateNameServer.removePortNameMapping(AppConfig.pushIsolatePortName);
+        return false;
+      }
+      await Future<void>.delayed(poll);
+    }
+    return true;
+  } catch (error) {
+    Logs().w('[Push] background_action_wait_failed', error.runtimeType);
+    return false;
   }
 }
 
@@ -78,19 +101,28 @@ Future<void> notificationTapBackground(
   // Opening a notification without a running UI has no background action.
   // Validate before opening storage or initializing crypto/network resources.
   if (notificationResponse.notificationResponseType !=
-      NotificationResponseType.selectedNotificationAction) return;
+      NotificationResponseType.selectedNotificationAction) {
+    return;
+  }
   final action = FluffyChatNotificationActions.values.singleWhereOrNull(
     (action) => action.name == notificationResponse.actionId,
   );
+  // Dismiss needs no account; legacy mute never changes server push rules.
   if (action == null ||
       action == FluffyChatNotificationActions.open ||
-      action == FluffyChatNotificationActions.enterCall) return;
+      action == FluffyChatNotificationActions.enterCall ||
+      action == FluffyChatNotificationActions.dismiss ||
+      action == FluffyChatNotificationActions.mute) {
+    return;
+  }
   final payload = FluffyChatPushPayload.fromString(
     notificationResponse.payload ?? '',
   );
   if (payload.roomId == null) return;
   if (action == FluffyChatNotificationActions.reply &&
-      (notificationResponse.input?.isEmpty ?? true)) return;
+      (notificationResponse.input?.isEmpty ?? true)) {
+    return;
+  }
 
   final pushIsolateReceivePort = ReceivePort();
   final ownsPort = IsolateNameServer.registerPortWithName(
@@ -110,7 +142,12 @@ Future<void> notificationTapBackground(
     }
     final store = await AppSettings.init();
     final names = store.getStringList(ClientManager.clientNamespace) ?? [];
-    final clientName = selectNotificationClient(names, payload.clientName, (name) => name);
+    // Notification payloads always carry the account that showed them.
+    final clientName = selectNotificationClient(
+      names,
+      payload.clientName,
+      (name) => name,
+    );
     if (clientName == null) return;
     client = await ClientManager.createClient(clientName, store);
     client.backgroundSync = false;
@@ -119,6 +156,7 @@ Future<void> notificationTapBackground(
       waitUntilLoadCompletedLoaded: true,
       preserveSessionOnInitFailure: true,
     );
+    unawaited(client.firstSyncReceived?.catchError((Object _) {}));
     if (!client.isLogged()) return;
     await notificationTap(notificationResponse, clients: [client]);
   } catch (error) {
@@ -151,14 +189,23 @@ Future<void> notificationTap(
     notificationResponse.payload ?? '',
   );
   if (payload.roomId == null) return;
-  final client = selectNotificationClient(clients, payload.clientName, (client) => client.clientName);
+  final client = selectNotificationClient(
+    clients,
+    payload.clientName,
+    (client) => client.clientName,
+    isLoggedIn: (client) => client.isLogged(),
+  );
   if (client == null || !client.isLogged()) return;
 
-  await updateSummaryNotification(
-    flutterLocalNotificationsPlugin: FlutterLocalNotificationsPlugin(),
-    clientName: client.clientName,
-    l10n: await lookupL10n(PlatformDispatcher.instance.locale),
-  );
+  try {
+    await updateSummaryNotification(
+      flutterLocalNotificationsPlugin: FlutterLocalNotificationsPlugin(),
+      clientName: client.clientName,
+      l10n: l10n ?? await lookupL10n(AppConfig.appLocale),
+    );
+  } catch (_) {
+    // A stale summary must not block opening the chat.
+  }
 
   switch (notificationResponse.notificationResponseType) {
     case NotificationResponseType.selectedNotification:
@@ -178,9 +225,12 @@ Future<void> notificationTap(
             .timeout(const Duration(seconds: 30));
       }
       router.go(
-        client.getRoomById(roomId)?.membership == Membership.invite
-            ? '/rooms?client=${client.clientName}'
-            : '/rooms/$roomId?client=${client.clientName}',
+        notificationRoute(
+          client,
+          roomId,
+          payload,
+          personGroupId: await personGroupIdForNotification(client, roomId),
+        ),
       );
     case NotificationResponseType.selectedNotificationAction:
       final actionType = FluffyChatNotificationActions.values.singleWhereOrNull(
@@ -188,6 +238,11 @@ Future<void> notificationTap(
       );
       if (actionType == null) {
         throw Exception('Selected notification with action but no action ID');
+      }
+      // The plugin already removed the notification; nothing is sent.
+      if (actionType == FluffyChatNotificationActions.dismiss ||
+          actionType == FluffyChatNotificationActions.mute) {
+        return;
       }
       final roomId = payload.roomId;
       if (roomId == null) {
@@ -221,13 +276,18 @@ Future<void> notificationTap(
             parseCommands: false,
             displayPendingEvent: false,
           );
+        case FluffyChatNotificationActions.dismiss:
         case FluffyChatNotificationActions.mute:
-          await room.setPushRuleState(PushRuleState.mentionsOnly);
+          // Handled above: never a receipt and never a server push rule.
+          return;
         case FluffyChatNotificationActions.open:
           router?.go(
-            client.getRoomById(roomId)?.membership == Membership.invite
-                ? '/rooms?client=${client.clientName}'
-                : '/rooms/$roomId?client=${client.clientName}',
+            notificationRoute(
+              client,
+              roomId,
+              payload,
+              personGroupId: await personGroupIdForNotification(client, roomId),
+            ),
           );
         case FluffyChatNotificationActions.enterCall:
           router?.go('/rooms/$roomId?client=${client.clientName}&action=call');
@@ -237,4 +297,38 @@ Future<void> notificationTap(
   }
 }
 
-enum FluffyChatNotificationActions { markAsRead, reply, mute, open, enterCall }
+/// Where tapping a notification leads. Reminders open their message. A room
+/// merged into a person ([personGroupId]) opens the person's conversation
+/// with that room as the initial send source.
+String notificationRoute(
+  Client client,
+  String roomId,
+  FluffyChatPushPayload payload, {
+  String? personGroupId,
+}) {
+  if (client.getRoomById(roomId)?.membership == Membership.invite) {
+    return '/rooms?client=${client.clientName}';
+  }
+  final event = payload.reminder ? payload.eventId : null;
+  if (personGroupId != null) {
+    return personChatLocation(
+      personGroupId,
+      clientName: client.clientName,
+      sourceRoomId: roomId,
+      eventId: event,
+    );
+  }
+  return '/rooms/$roomId?client=${client.clientName}'
+      '${event == null ? '' : '&event=${Uri.encodeQueryComponent(event)}'}';
+}
+
+/// `mute` is kept only so actions on old notifications parse; it no longer
+/// changes the account's server push rules (Personal Chat modes are private).
+enum FluffyChatNotificationActions {
+  markAsRead,
+  reply,
+  mute,
+  open,
+  enterCall,
+  dismiss,
+}

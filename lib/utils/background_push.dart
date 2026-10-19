@@ -11,11 +11,17 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
 
+import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
 import 'package:fcm_shared_isolate/fcm_shared_isolate.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/main.dart';
+import 'package:fluffychat/personal/automatic_push.dart';
+import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/own_sender.dart';
+import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/push_diagnostics.dart';
 import 'package:fluffychat/personal/push_registration.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/push_helper.dart';
@@ -25,6 +31,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart' show PersonalNotificationMode;
 import 'package:unifiedpush/unifiedpush.dart';
 import 'package:unifiedpush_ui/unifiedpush_ui.dart';
 
@@ -32,6 +39,7 @@ import '../config/app_config.dart';
 import '../config/setting_keys.dart';
 import '../widgets/matrix.dart';
 import 'platform_infos.dart';
+import 'push_registration_retry.dart';
 import 'start_push_foreground_service.dart';
 
 class BackgroundPush {
@@ -50,15 +58,30 @@ class BackgroundPush {
   /// and its callbacks while retaining the registered push listeners.
   void detachMatrix(MatrixState owner) {
     if (!identical(matrix, owner)) return;
+    setRegistrationForeground(false);
     _clients = List<Client>.from(owner.widget.clients);
     matrix = null;
     onFcmError = null;
   }
+
+  void forgetClients(Iterable<Client> abandoned) {
+    final owned = abandoned.toSet();
+    for (final client in owned) {
+      _registrationRetry.forget(client);
+      _pusherPhases.remove(client);
+    }
+    _clients = _clients.where((client) => !owned.contains(client)).toList();
+  }
+
   final _registration = PushRegistration();
   final registrationChanges = ValueNotifier<int>(0);
   final _pusherPhases = <Client, PushRegistrationPhase>{};
   Future<void> _registrationQueue = Future<void>.value();
   Future<void> _tokenPersistence = Future<void>.value();
+  late final PushRegistrationRetry<Client> _registrationRetry;
+
+  void setRegistrationForeground(bool foreground) =>
+      _registrationRetry.setForeground(foreground);
   int get registrationRevision => _registration.revision;
 
   String? get _fcmToken => _registration.token;
@@ -75,6 +98,7 @@ class BackgroundPush {
   Future<void> _acceptFcmToken(String token) {
     if (token.isEmpty) return Future<void>.value();
     if (_registration.observe(token)) {
+      _registrationRetry.reset();
       _pusherPhases.clear();
       _changed();
     }
@@ -117,6 +141,7 @@ class BackgroundPush {
   }
 
   void beginRegistrationUpdate() {
+    _registrationRetry.reset();
     _registration.beginUpdate();
     _pusherPhases.clear();
     _changed();
@@ -129,6 +154,7 @@ class BackgroundPush {
   }
 
   void invalidateRegistration() {
+    _registrationRetry.reset();
     _registration.invalidate();
     _pusherPhases.clear();
     _changed();
@@ -146,7 +172,10 @@ class BackgroundPush {
       }
       await setupPusher(
         client: client,
-        gatewayUrl: AppSettings.pushNotificationsGatewayUrl.value,
+        gatewayUrl:
+            usesAutomaticPush(AppSettings.pushNotificationsGatewayUrl.value)
+            ? personalPushGateway
+            : AppSettings.pushNotificationsGatewayUrl.value,
         token: token,
       );
     });
@@ -162,7 +191,7 @@ class BackgroundPush {
     // inspired by _lookupL10n in .dart_tool/flutter_gen/gen_l10n/l10n.dart
     l10n ??=
         (context != null && context.mounted ? L10n.of(context) : null) ??
-        (await L10n.delegate.load(PlatformDispatcher.instance.locale));
+        (await L10n.delegate.load(AppConfig.appLocale));
   }
 
   final pendingTests = <String, Completer<void>>{};
@@ -250,6 +279,19 @@ class BackgroundPush {
   }
 
   BackgroundPush._(this._clients) {
+    _registrationRetry = PushRegistrationRetry<Client>(
+      retry: _queueFirebaseRegistration,
+      eligible: (client) =>
+          clients.contains(client) &&
+          client.isLogged() &&
+          !upAction &&
+          !_registration.updating &&
+          usesAutomaticPush(AppSettings.pushNotificationsGatewayUrl.value),
+      onExhausted: (client) {
+        _pusherPhases[client] = PushRegistrationPhase.failed;
+        _changed();
+      },
+    );
     ready = _init();
   }
 
@@ -265,24 +307,73 @@ class BackgroundPush {
   }) {
     final instance = BackgroundPush.clientOnly(matrix.widget.clients);
     instance.matrix = matrix;
-    // ignore: prefer_initializing_formals
-    instance.onFcmError = onFcmError;
+    instance.setRegistrationForeground(
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+    );
+    // Surfaces that only need the shared instance (e.g. settings) must not
+    // drop the error callback registered by MatrixState.
+    if (onFcmError != null) instance.onFcmError = onFcmError;
+    unawaited(instance._openLaunchNotification());
     return instance;
   }
 
+  /// A notification tap that launched the app opens its chat as soon as the
+  /// router has rendered and an account is signed in, independent of push
+  /// registration (which may wait for permission dialogs or the network).
+  Future<void> _openLaunchNotification() async {
+    if (_wentToRoomOnStartup) return;
+    try {
+      await ready;
+      final details = await _flutterLocalNotificationsPlugin
+          .getNotificationAppLaunchDetails();
+      final response = details?.notificationResponse;
+      if (details == null ||
+          !details.didNotificationLaunchApp ||
+          response == null ||
+          _wentToRoomOnStartup) {
+        return;
+      }
+      _wentToRoomOnStartup = true;
+      await WidgetsBinding.instance.endOfFrame;
+      final deadline = DateTime.now().add(const Duration(seconds: 30));
+      while (!clients.any((client) => client.isLogged()) &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      await notificationTap(
+        response,
+        clients: clients,
+        router: FluffyChatApp.router,
+        l10n: l10n,
+      );
+    } catch (_) {
+      Logs().w('[Push] launch_notification_failed');
+    }
+  }
+
   /// Update only this account/device's pusher while its session and token are
-  /// current. The private gateway allowlist is configured separately by J.
+  /// current. The default gateway enrolls with an OpenID identity proof first.
   Future<void> setupPusher({
     required Client client,
     String? gatewayUrl,
     String? token,
   }) async {
     if (gatewayUrl == null || token == null || token.isEmpty) return;
+    if (!clients.contains(client) || !client.isLogged()) return;
     final owner = client.userID;
     final device = client.deviceID;
+    final configuredGateway = AppSettings.pushNotificationsGatewayUrl.value;
     final ownFcmGateway =
-        gatewayUrl == AppSettings.pushNotificationsGatewayUrl.value &&
+        (gatewayUrl == configuredGateway ||
+            (usesAutomaticPush(configuredGateway) &&
+                gatewayUrl == personalPushGateway)) &&
         token == _fcmToken;
+    final automatic = ownFcmGateway && usesAutomaticPush(configuredGateway);
+    if (automatic && clients.where((c) => c.isLogged()).length != 1) {
+      _pusherPhases[client] = PushRegistrationPhase.multipleAccounts;
+      _changed();
+      return;
+    }
     final revision = _registration.revision;
     bool current() =>
         clients.contains(client) &&
@@ -291,10 +382,12 @@ class BackgroundPush {
         client.deviceID == device &&
         owner != null &&
         device != null &&
+        (!automatic || clients.where((c) => c.isLogged()).length == 1) &&
         (!ownFcmGateway ||
             (!upAction &&
                 !_registration.updating &&
-                gatewayUrl == AppSettings.pushNotificationsGatewayUrl.value &&
+                configuredGateway ==
+                    AppSettings.pushNotificationsGatewayUrl.value &&
                 _registration.current(revision, token, true)));
     if (!current()) return;
     final appDisplayName = PlatformInfos.appDisplayName;
@@ -304,6 +397,8 @@ class BackgroundPush {
     var pushers = <Pusher>[];
     Pusher? desired;
     var alreadySet = false;
+    var permissionGranted = true;
+    String? nonce;
     if (ownFcmGateway) {
       _pusherPhases[client] = PushRegistrationPhase.registering;
       _changed();
@@ -314,18 +409,49 @@ class BackgroundPush {
         prepare: () async {
           if (PlatformInfos.isIOS) await firebase.requestPermission();
           if (PlatformInfos.isAndroid && !isIntegrationTest) {
-            await _flutterLocalNotificationsPlugin
-                .resolvePlatformSpecificImplementation<
-                  AndroidFlutterLocalNotificationsPlugin
-                >()
-                ?.requestNotificationsPermission();
+            permissionGranted =
+                await _flutterLocalNotificationsPlugin
+                    .resolvePlatformSpecificImplementation<
+                      AndroidFlutterLocalNotificationsPlugin
+                    >()
+                    ?.areNotificationsEnabled() ??
+                false;
           }
+          if (!current()) return;
           pushers = await client.getPushers() ?? [];
-          final nonce = ownFcmGateway
+          if (!current()) return;
+          nonce = ownFcmGateway
               ? await const FlutterSecureStorage().read(
                   key: 'personal_gateway_nonce',
                 )
               : null;
+          if (!current()) return;
+          if (automatic) {
+            if (!validGatewayNonce(nonce)) {
+              nonce = newPushNonce();
+              await const FlutterSecureStorage().write(
+                key: 'personal_gateway_nonce',
+                value: nonce,
+              );
+            }
+            if (!current()) return;
+            final transport = http.Client();
+            try {
+              final enrolled = await enrollAutomaticPush(
+                transport: transport,
+                user: owner!,
+                appId: thisAppId,
+                token: token,
+                nonce: nonce!,
+                openId: () async =>
+                    (await client.requestOpenIdToken(owner, {})).toJson(),
+                current: current,
+              );
+              if (!enrolled) return;
+            } finally {
+              transport.close();
+            }
+          }
           if (ownFcmGateway && !validGatewayNonce(nonce)) {
             throw StateError('Private gateway registration required');
           }
@@ -337,7 +463,9 @@ class BackgroundPush {
             lang: 'en',
             data: PusherData(
               url: Uri.parse(gatewayUrl),
-              format: AppSettings.pushNotificationsPusherFormat.value,
+              format: automatic
+                  ? 'event_id_only'
+                  : AppSettings.pushNotificationsPusherFormat.value,
               additionalProperties: {
                 'client_name': client.clientName,
                 'data_message': pusherDataMessageFormat,
@@ -383,14 +511,29 @@ class BackgroundPush {
           }
         },
       );
-      if (completed && ownFcmGateway) {
-        _pusherPhases[client] = PushRegistrationPhase.pusherConfigured;
+      if (completed && ownFcmGateway && current()) {
+        _registrationRetry.forget(client);
+        _pusherPhases[client] = !permissionGranted
+            ? PushRegistrationPhase.permissionRequired
+            : automatic
+            ? PushRegistrationPhase.automaticallyConfigured
+            : PushRegistrationPhase.pusherConfigured;
         _changed();
       }
-    } catch (_) {
+    } catch (error) {
       if (current() && ownFcmGateway) {
-        _pusherPhases[client] = PushRegistrationPhase.failed;
+        _pusherPhases[client] =
+            error is PushEnrollmentFailure && error.forbidden
+            ? PushRegistrationPhase.notAuthorized
+            : automatic
+            ? PushRegistrationPhase.retrying
+            : PushRegistrationPhase.failed;
         _changed();
+        if (automatic && !(error is PushEnrollmentFailure && error.forbidden)) {
+          _registrationRetry.failed(client);
+        } else {
+          _registrationRetry.forget(client);
+        }
       }
       // No raw exception, token, account or gateway URL in diagnostics.
       Logs().w('[Push] registration_failed');
@@ -398,9 +541,12 @@ class BackgroundPush {
   }
 
   Future<void> _processPush(Future<void> Function() process) async {
-    final inBackground = PlatformInfos.isAndroid &&
+    final inBackground =
+        PlatformInfos.isAndroid &&
         WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
-    if (inBackground) await ForegroundServices.startService('background_push');
+    final acquired =
+        inBackground &&
+        await ForegroundServices.startService('background_push');
     try {
       await process();
     } catch (error) {
@@ -408,27 +554,98 @@ class BackgroundPush {
       // Handle failures here without exposing a payload or account identifier.
       Logs().w('[Push] processing_failed', error.runtimeType.toString());
     } finally {
-      if (inBackground) await ForegroundServices.stopService('background_push');
+      if (acquired) await ForegroundServices.stopService('background_push');
     }
   }
 
-  Future<void> handleFcmMessage(Map<String, dynamic> message) => _processPush(() async {
-    final data = message.tryGetMap<String, Object>('data') ?? message;
-    if (data['personal_wake'] == 'reminder') {
-      await personalReminderWake(
-        clients: clients,
-        plugin: _flutterLocalNotificationsPlugin,
-      );
-      return;
-    }
-    await pushHelper(
-      PushNotification.fromJson(data),
-      clients: clients,
-      l10n: l10n,
-      activeRoomId: matrix?.activeRoomId,
-      flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
+  /// Real FCM messages: a remote `personal_test` key is ignored.
+  Future<void> handleFcmMessage(Map<String, dynamic> message) =>
+      _handleFcmMessage(message);
+
+  Future<void> _handleFcmMessage(
+    Map<String, dynamic> message, {
+    bool test = false,
+  }) =>
+      _processPush(() async {
+        final data = message.tryGetMap<String, Object>('data') ?? message;
+        final kind = pushKindOf(data, test: test);
+        await PushDiagnostics.received(kind);
+        if (kind == PushKind.reminder) {
+          await personalReminderWake(
+            clients: clients,
+            plugin: _flutterLocalNotificationsPlugin,
+          );
+          return;
+        }
+        await pushHelper(
+          PushNotification.fromJson(data),
+          clients: clients,
+          l10n: l10n,
+          activeRoomId: matrix?.activeRoomId,
+          flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
+          test: kind == PushKind.test,
+        );
+      });
+
+  /// Runs the real FCM message path with the gateway's exact data map for
+  /// the newest message from someone else. Only the "already read" and
+  /// "chat open" checks are skipped; the title says "(test)". Returns the
+  /// recorded outcome; nothing leaves the device.
+  Future<PushDiagnosticsEntry?> sendTestNotification(Client client) async {
+    final room = await testNotificationRoom(client);
+    if (room == null) return null;
+    final unread = client.rooms.fold<int>(
+      0,
+      (count, room) => count + room.notificationCount,
     );
-  });
+    await _handleFcmMessage(
+      testFcmData(
+        eventId: room.lastEvent!.eventId,
+        roomId: room.id,
+        unread: unread,
+      ),
+      test: true,
+    );
+    return (await PushDiagnostics.read()).last;
+  }
+
+  /// Read-only checks of this device's pusher against local registration
+  /// state. Exposes yes/no answers only, never the values.
+  Future<PushPusherCheck?> checkPusher(Client client) async {
+    final device = client.deviceID;
+    if (!client.isLogged() || device == null) return null;
+    var appId = '${AppConfig.pushNotificationsAppId}.$device';
+    if (appId.length > 64) appId = appId.substring(0, 64);
+    final pushers = (await client.getPushers() ?? const <Pusher>[])
+        .where((p) => p.appId == appId && p.kind == 'http')
+        .toList();
+    final token = _fcmToken;
+    final pusher =
+        pushers.firstWhereOrNull((p) => p.pushkey == token) ??
+        pushers.firstOrNull;
+    final configured = AppSettings.pushNotificationsGatewayUrl.value;
+    final gateway = usesAutomaticPush(configured)
+        ? personalPushGateway
+        : configured;
+    String? nonce;
+    try {
+      nonce = await const FlutterSecureStorage().read(
+        key: 'personal_gateway_nonce',
+      );
+    } catch (_) {
+      nonce = null;
+    }
+    return PushPusherCheck(
+      exists: pusher != null,
+      tokenMatches: pusher != null && token != null && pusher.pushkey == token,
+      urlMatches: pusher != null && pusher.data.url.toString() == gateway,
+      formatEventIdOnly: pusher?.data.format == 'event_id_only',
+      nonceMatches:
+          pusher != null &&
+          nonce != null &&
+          pusher.data.additionalProperties['gateway_nonce'] == nonce,
+    );
+  }
 
   final pusherDataMessageFormat = Platform.isAndroid;
 
@@ -437,7 +654,23 @@ class BackgroundPush {
   Future<void> setupPush(BuildContext context) async {
     await ready;
     if (!context.mounted) return;
+    final foreground =
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    setRegistrationForeground(foreground);
+    if (foreground) _registrationRetry.reset();
+    // Permission dialogs belong to a visible setup, never to token callbacks
+    // or automatic background retries.
+    if (PlatformInfos.isAndroid && !isIntegrationTest) {
+      await _flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestNotificationsPermission();
+      if (!context.mounted) return;
+    }
     if (PlatformInfos.isAndroid &&
+        (!usesAutomaticPush(AppSettings.pushNotificationsGatewayUrl.value) ||
+            AppSettings.unifiedPushRegistered.value) &&
         (await UnifiedPush.getDistributors()).isNotEmpty &&
         context.mounted) {
       await UnifiedPushUi(
@@ -448,7 +681,7 @@ class BackgroundPush {
         onNoDistribDialogDismissed: () {}, // TODO: Implement me
       ).registerAppWithDialog();
     } else {
-      for (final client in clients) {
+      for (final client in List<Client>.from(clients)) {
         Logs().d('SetupPush for Client ${client.clientName}');
         if (client.onLoginStateChanged.value != LoginState.loggedIn ||
             !PlatformInfos.isMobile ||
@@ -463,27 +696,8 @@ class BackgroundPush {
         await setupFirebase(client);
       }
     }
-
-    // ignore: unawaited_futures
-    _flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails().then((
-      details,
-    ) {
-      if (details == null ||
-          !details.didNotificationLaunchApp ||
-          _wentToRoomOnStartup) {
-        return;
-      }
-      _wentToRoomOnStartup = true;
-      final response = details.notificationResponse;
-      if (response != null) {
-        notificationTap(
-          response,
-          clients: clients,
-          router: FluffyChatApp.router,
-          l10n: l10n,
-        );
-      }
-    });
+    // A notification that launched the app is opened by
+    // _openLaunchNotification, independent of this setup.
   }
 
   Future<void> _noFcmWarning() async {
@@ -536,6 +750,7 @@ class BackgroundPush {
       await _tokenPersistence;
       await _queueFirebaseRegistration(client);
     } catch (_) {
+      if (!clients.contains(client) || !client.isLogged()) return;
       _pusherPhases[client] = PushRegistrationPhase.failed;
       _changed();
     }
@@ -589,22 +804,98 @@ class BackgroundPush {
     await AppSettings.unifiedPushRegistered.setItem(false);
   }
 
-  Future<void> _onUpMessage(PushMessage pushMessage, String i) => _processPush(() async {
-    final message = pushMessage.content;
-    upAction = true;
-    final data = Map<String, dynamic>.from(
-      json.decode(utf8.decode(message))['notification'],
-    );
-    // UP may strip the devices list
-    data['devices'] ??= [];
-    await pushHelper(
-      PushNotification.fromJson(data),
-      clients: clients,
-      l10n: l10n,
-      activeRoomId: matrix?.activeRoomId,
-      flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
-    );
+  Future<void> _onUpMessage(PushMessage pushMessage, String i) =>
+      _processPush(() async {
+        final message = pushMessage.content;
+        upAction = true;
+        final data = Map<String, dynamic>.from(
+          json.decode(utf8.decode(message))['notification'],
+        );
+        // UP may strip the devices list
+        data['devices'] ??= [];
+        await PushDiagnostics.received(
+          data['event_id'] is String ? PushKind.message : PushKind.countOnly,
+        );
+        await pushHelper(
+          PushNotification.fromJson(data),
+          clients: clients,
+          l10n: l10n,
+          activeRoomId: matrix?.activeRoomId,
+          flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
+        );
+      });
+}
+
+/// Exactly the data map the Personal gateway sends to FCM. The test flag is
+/// passed in-process, never inside the data.
+Map<String, String> testFcmData({
+  required String eventId,
+  required String roomId,
+  required int unread,
+}) => {
+  'event_id': eventId,
+  'room_id': roomId,
+  'counts': jsonEncode({'unread': unread}),
+  'devices': '[]',
+};
+
+/// Newest joined chat whose last event is a message from somebody else,
+/// preferring chats that notify for every message.
+Future<Room?> testNotificationRoom(Client client) async {
+  final own = OwnSenderResolver.of(client);
+  final candidates =
+      client.rooms.where((room) {
+        final last = room.lastEvent;
+        return room.membership == Membership.join &&
+            !PersonalPrivacy.isJournal(room) &&
+            last != null &&
+            last.eventId.startsWith(r'$') &&
+            {
+              EventTypes.Message,
+              EventTypes.Encrypted,
+              EventTypes.Sticker,
+            }.contains(last.type) &&
+            last.messageType != MessageTypes.Notice &&
+            !own.isOwnEvent(last);
+      }).toList()..sort(
+        (a, b) =>
+            b.lastEvent!.originServerTs.compareTo(a.lastEvent!.originServerTs),
+      );
+  if (candidates.isEmpty) return null;
+  InboxProjection? projection;
+  try {
+    final personal = PersonalClient.of(client);
+    await personal.loadLocal();
+    projection = InboxProjection(personal);
+  } catch (_) {
+    projection = null;
+  }
+  return candidates.firstWhereOrNull(
+        (room) =>
+            room.pushRuleState == PushRuleState.notify &&
+            (projection == null ||
+                projection.notificationModeFor(room) ==
+                    PersonalNotificationMode.all),
+      ) ??
+      candidates.first;
+}
+
+class PushPusherCheck {
+  final bool exists;
+  final bool tokenMatches;
+  final bool urlMatches;
+  final bool formatEventIdOnly;
+  final bool nonceMatches;
+  const PushPusherCheck({
+    required this.exists,
+    required this.tokenMatches,
+    required this.urlMatches,
+    required this.formatEventIdOnly,
+    required this.nonceMatches,
   });
+
+  bool get healthy =>
+      exists && tokenMatches && urlMatches && formatEventIdOnly && nonceMatches;
 }
 
 class UPFunctions extends UnifiedPushFunctions {

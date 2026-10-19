@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -41,6 +42,7 @@ abstract class ForegroundServices {
       return;
     }
     if (PlatformInfos.isMobile) {
+      if (!await FlutterForegroundTask.isRunningService) return;
       final result = await FlutterForegroundTask.stopService();
       if (result is! ServiceRequestSuccess) {
         throw StateError('Foreground service stop failed');
@@ -48,56 +50,56 @@ abstract class ForegroundServices {
     }
   }
 
-  static Future<void> startService(String name) async {
+  static Future<bool> startService(String name) async {
     try {
       await _controller.start(name);
+      return true;
     } catch (_) {
       Logs().w('[PushHelper] Foreground service start failed');
+      return false;
     }
   }
 
   static Future<void> _startNativeService() async {
-      if (kIsWeb) {
-        html.window.addEventListener('beforeunload', _beforeUnload);
+    if (kIsWeb) {
+      html.window.addEventListener('beforeunload', _beforeUnload);
+      return;
+    }
+    if (PlatformInfos.isMobile) {
+      final l10n = await L10n.delegate.load(AppConfig.appLocale);
+      FlutterForegroundTask.init(
+        androidNotificationOptions: AndroidNotificationOptions(
+          channelId: 'fluffychat_sync',
+          channelName: l10n.loadingMessages,
+          channelDescription: l10n.loadingMessages,
+          onlyAlertOnce: true,
+          playSound: false,
+          enableVibration: false,
+          priority: NotificationPriority.LOW,
+        ),
+        iosNotificationOptions: const IOSNotificationOptions(
+          showNotification: false,
+          playSound: false,
+        ),
+        foregroundTaskOptions: ForegroundTaskOptions(
+          eventAction: ForegroundTaskEventAction.nothing(),
+          allowWakeLock: true,
+        ),
+      );
+      if (await FlutterForegroundTask.isRunningService) {
+        Logs().d('[PushHelper] Foreground service already running');
         return;
       }
-      if (PlatformInfos.isMobile) {
-        final l10n = await L10n.delegate.load(
-          PlatformDispatcher.instance.locale,
-        );
-        FlutterForegroundTask.init(
-          androidNotificationOptions: AndroidNotificationOptions(
-            channelId: 'fluffychat_sync',
-            channelName: l10n.loadingMessages,
-            channelDescription: l10n.loadingMessages,
-            onlyAlertOnce: true,
-            playSound: false,
-            enableVibration: false,
-            priority: NotificationPriority.LOW,
-          ),
-          iosNotificationOptions: const IOSNotificationOptions(
-            showNotification: false,
-            playSound: false,
-          ),
-          foregroundTaskOptions: ForegroundTaskOptions(
-            eventAction: ForegroundTaskEventAction.nothing(),
-            allowWakeLock: true,
-          ),
-        );
-        if (await FlutterForegroundTask.isRunningService) {
-          Logs().d('[PushHelper] Foreground service already running');
-          return;
-        }
-        final result = await FlutterForegroundTask.startService(
-          serviceTypes: [ForegroundServiceTypes.shortService],
-          notificationTitle: 'FluffyChat',
-          notificationText: l10n.loadingMessages,
-          notificationIcon: NotificationIcon(metaDataName: 'ic_launcher'),
-        );
-        if (result is! ServiceRequestSuccess) {
-          throw StateError('Foreground service start failed');
-        }
+      final result = await FlutterForegroundTask.startService(
+        serviceTypes: [ForegroundServiceTypes.shortService],
+        notificationTitle: 'FluffyChat',
+        notificationText: l10n.loadingMessages,
+        notificationIcon: NotificationIcon(metaDataName: 'ic_launcher'),
+      );
+      if (result is! ServiceRequestSuccess) {
+        throw StateError('Foreground service start failed');
       }
-      return;
+    }
+    return;
   }
 }

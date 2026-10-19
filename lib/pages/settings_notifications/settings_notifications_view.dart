@@ -8,6 +8,7 @@ import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_notifications/push_rule_extensions.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/personal/ui/push_diagnostics_page.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/background_push.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -70,53 +71,34 @@ class SettingsNotificationsView extends StatelessWidget {
             return Column(
               children: [
                 if (!controller.widget.registrationDetails) ...[
-                  if (pushService != null)
-                    ListenableBuilder(
-                      listenable: pushService.registrationChanges,
-                      builder: (context, _) => NotionListRow(
-                        leading: const Icon(Icons.phonelink_setup_outlined),
-                        title: 'Push setup & registration',
-                        subtitle: pushService.registrationDescription(
-                          Matrix.of(context).client,
-                        ),
-                        onTap: () => context.push('/rooms/settings/push'),
-                      ),
-                    )
-                  else
-                    NotionListRow(
-                      title: 'Push setup & registration',
-                      subtitle: 'Registration status is unavailable.',
-                      onTap: () => context.push('/rooms/settings/push'),
-                    ),
-                  const NotionSettingsSection('Notification rules'),
-                  if (pushRules == null)
-                    const ListTile(
-                      title: Text('Rules are not available yet'),
-                      subtitle: Text(
-                        'Reconnect to load account notification rules. Device setup remains available.',
-                      ),
-                    ),
-                  if (controller.widget.registrationDetails &&
-                      kDebugMode &&
-                      lastReceivedPush != null)
-                    ListTile(
-                      title: Text('Last received push notification'),
-                      subtitle: Text(lastReceivedPush.toIso8601String()),
-                    ),
+                  SettingsSwitchListTile.adaptive(
+                    title: 'Show sender and message preview',
+                    subtitle:
+                        'Decrypted on this device. Shown on the lock screen '
+                        'unless Android hides sensitive content; hidden while '
+                        'the app lock is on.',
+                    setting: AppSettings.personalNotificationPreviews,
+                  ),
                   if (kIsWeb)
                     SettingsSwitchListTile.adaptive(
                       title: L10n.of(context).playSoundOnNotification,
                       setting: AppSettings.webNotificationSound,
                     ),
+                  const NotionSectionHeader(title: 'Rules'),
+                  if (pushRules == null)
+                    const NotionListRow(
+                      title: 'Rules are not available yet',
+                      subtitle:
+                          'Reconnect to load account notification rules. '
+                          'Device setup remains available.',
+                    ),
                   if (pushRules != null)
                     for (final category in pushCategories) ...[
-                      ListTile(
-                        title: Text(
-                          category.kind.localized(L10n.of(context)),
-                          style: TextStyle(
-                            color: theme.colorScheme.secondary,
-                            fontWeight: FontWeight.bold,
-                          ),
+                      NotionSectionHeader(
+                        title: category.kind.localized(L10n.of(context)),
+                        padding: const EdgeInsets.only(
+                          top: NotionSpace.md,
+                          bottom: NotionSpace.xxs,
                         ),
                       ),
                       for (final rule in category.rules)
@@ -166,10 +148,44 @@ class SettingsNotificationsView extends StatelessWidget {
                                   ),
                           ),
                         ),
-                      Divider(color: theme.dividerColor),
                     ],
+                  const NotionSectionHeader(title: 'Troubleshooting'),
+                  if (pushService != null)
+                    ListenableBuilder(
+                      listenable: pushService.registrationChanges,
+                      builder: (context, _) => NotionListRow(
+                        leading: const Icon(Icons.phonelink_setup_outlined),
+                        title: 'Push setup & registration',
+                        subtitle: pushService.registrationDescription(
+                          Matrix.of(context).client,
+                        ),
+                        onTap: () => context.push('/rooms/settings/push'),
+                      ),
+                    )
+                  else
+                    NotionListRow(
+                      leading: const Icon(Icons.phonelink_setup_outlined),
+                      title: 'Push setup & registration',
+                      subtitle: 'Registration status is unavailable.',
+                      onTap: () => context.push('/rooms/settings/push'),
+                    ),
+                  NotionListRow(
+                    leading: const Icon(Icons.troubleshoot_outlined),
+                    title: 'Notification diagnostics',
+                    subtitle: 'Checks, recent outcomes and a test notification',
+                    onTap: () => context.push(
+                      '/rooms/settings/notifications/diagnostics',
+                    ),
+                  ),
+                  if (PlatformInfos.isAndroid)
+                    const BatteryOptimizationStatus(),
                 ],
                 if (controller.widget.registrationDetails) ...[
+                  if (kDebugMode && lastReceivedPush != null)
+                    ListTile(
+                      title: const Text('Last received push notification'),
+                      subtitle: Text(lastReceivedPush.toIso8601String()),
+                    ),
                   if (pushService?.firebaseEnabled != true)
                     ListTile(
                       title: Text(L10n.of(context).buildDoesNotSupportFirebase),
@@ -226,15 +242,7 @@ class SettingsNotificationsView extends StatelessWidget {
                         );
                       },
                     ),
-                  ListTile(
-                    title: Text(
-                      L10n.of(context).devices,
-                      style: TextStyle(
-                        color: theme.colorScheme.secondary,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
+                  NotionSectionHeader(title: L10n.of(context).devices),
                   FutureBuilder<List<Pusher>?>(
                     key: ValueKey(Matrix.of(context).client),
                     future: controller.pusherFuture ??= Matrix.of(
@@ -251,7 +259,10 @@ class SettingsNotificationsView extends StatelessWidget {
                       if (snapshot.connectionState != ConnectionState.done) {
                         return const Padding(
                           padding: EdgeInsets.all(16),
-                          child: LinearProgressIndicator(),
+                          child: NotionDelayedReveal(
+                            placeholder: SizedBox(height: 4),
+                            child: LinearProgressIndicator(),
+                          ),
                         );
                       }
                       final pushers = snapshot.data ?? [];

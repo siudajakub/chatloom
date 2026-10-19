@@ -9,6 +9,11 @@ enum PushRegistrationPhase {
   gatewayRequired,
   registering,
   pusherConfigured,
+  automaticallyConfigured,
+  permissionRequired,
+  notAuthorized,
+  multipleAccounts,
+  retrying,
   failed,
 }
 
@@ -57,17 +62,25 @@ class PushRegistration {
     PushRegistrationPhase.tokenUnavailable =>
       'The device notification token is unavailable. Retry notification setup.',
     PushRegistrationPhase.gatewayRequired =>
-      rotated
-          ? 'The device token changed. Copy the current registration into your private gateway configuration, then retry setup.'
-          : 'Copy this device registration into your private gateway configuration, then retry setup.',
+      'This device is waiting for notification setup.',
     PushRegistrationPhase.registering =>
-      'Registering the Matrix pusher. Private gateway registration is still unverified.',
+      'Setting up notifications for this device…',
+    PushRegistrationPhase.automaticallyConfigured =>
+      'Device registered automatically. Notification delivery has not been tested.',
+    PushRegistrationPhase.permissionRequired =>
+      'Allow notifications in Android settings, then retry setup.',
+    PushRegistrationPhase.notAuthorized =>
+      'The notification service could not authorize this account. Retry setup; if it continues, the service configuration needs attention.',
+    PushRegistrationPhase.multipleAccounts =>
+      'Automatic notifications currently support one signed-in Matrix account on this device.',
     PushRegistrationPhase.pusherConfigured =>
       rotated
           ? 'Matrix pusher updated. The token changed: update the private gateway registration. Phone delivery is unverified.'
           : 'Matrix pusher configured. Private gateway registration and phone delivery are unverified.',
     PushRegistrationPhase.failed =>
-      'Notification registration failed. Check private gateway configuration and retry setup.',
+      'Notification setup could not finish. Retry setup.',
+    PushRegistrationPhase.retrying =>
+      'Notification setup could not finish. It will retry automatically; you can also retry now.',
   };
 }
 

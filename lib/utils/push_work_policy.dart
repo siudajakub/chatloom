@@ -49,7 +49,12 @@ Future<void> pollIncomingCall({
       // Leave the native incoming-call timeout in charge when offline.
       return;
     }
-    if (!budget.active || await finished()) return;
+    if (!budget.active) return;
+    try {
+      if (await budget.wait(finished)) return;
+    } on TimeoutException {
+      return;
+    }
     final remaining = budget.remaining;
     if (remaining <= Duration.zero) return;
     await pause(remaining < interval ? remaining : interval);

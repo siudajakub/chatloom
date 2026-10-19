@@ -3,16 +3,21 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/diagnostics.dart';
+import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/message_notification.dart';
+import 'package:fluffychat/personal/message_preview.dart';
 import 'package:fluffychat/personal/notification_eligibility.dart';
+import 'package:fluffychat/personal/own_sender.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/reminder_notification.dart';
 import 'package:fluffychat/personal/round_video/telegram_media_protocol.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
+import 'package:fluffychat/utils/notification_client_routing.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:fluffychat/widgets/fluffy_chat_app.dart';
 import 'package:fluffychat/widgets/incoming_call_dialog.dart';
@@ -31,38 +36,31 @@ extension LocalNotificationsExtension on MatrixState {
   Future<void> showLocalNotification(Event event) async {
     if (isTelegramMediaControl(event.type)) return;
     if (PersonalPrivacy.isJournal(event.room)) {
-      final target = await PersonalPrivacy.reminderTarget(event);
-      if (target != null && !kIsWeb) {
-        await PersonalClient.of(event.room.client).presentReminder(
+      // Same presenter, claim and trust checks as the background paths.
+      if (!kIsWeb) {
+        await presentDueReminder(
           event,
-          () => FlutterLocalNotificationsPlugin().show(
-            id: ('reminder_${event.content['entityId']}').hashCode,
-            title: 'Personal Chat',
-            body: 'Masz przypomnienie o rozmowie.',
-            notificationDetails: const NotificationDetails(
-              android: AndroidNotificationDetails(
-                AppConfig.pushNotificationsChannelId,
-                'Przypomnienia',
-                importance: Importance.high,
-                visibility: NotificationVisibility.private,
-              ),
-              macOS: DarwinNotificationDetails(),
-            ),
-            payload: FluffyChatPushPayload(
-              event.room.client.clientName,
-              target.id,
-              null,
-            ).toString(),
-          ),
+          plugin: FlutterLocalNotificationsPlugin(),
         );
       }
       return;
     }
-    final personal = PersonalClient.of(event.room.client);
-    await personal.load();
-    if (!kIsWeb &&
-        personal.syncFailure == PrivateSyncFailure.storageUnavailable)
+    final client = event.room.client;
+    if (event.senderId == client.userID ||
+        OwnSenderResolver.of(client).isStronglyOwnEvent(event)) {
       return;
+    }
+    final personal = PersonalClient.of(client);
+    try {
+      // Eligibility needs local private metadata only, never the journal.
+      await personal.loadLocal();
+    } catch (_) {
+      if (!kIsWeb) return;
+    }
+    if (!kIsWeb &&
+        personal.syncFailure == PrivateSyncFailure.storageUnavailable) {
+      return;
+    }
     final projection = InboxProjection(personal);
     if (!await personalNotificationEligible(
       event,
@@ -78,7 +76,7 @@ extension LocalNotificationsExtension on MatrixState {
           FluffyChatApp.router.routerDelegate.navigatorKey.currentContext ??
           this.context;
       if (!context.mounted) return;
-      showDialog<bool>(
+      showNotionCustomDialog<bool>(
         context: context,
         builder: (_) => IncomingCallDialog(event: event),
       ).then((joinCall) {
@@ -98,8 +96,20 @@ extension LocalNotificationsExtension on MatrixState {
       }
     }
 
-    const title = 'Personal Chat';
-    const body = 'Open the app to read your message.';
+    // The app lock hides names and previews even when previews are on.
+    final locked = await personalAppLockConfigured();
+    final previews = !locked && AppSettings.personalNotificationPreviews.value;
+    final available = previews && notificationContentAvailable(event);
+    final text = messageNotificationText(
+      previews: previews,
+      chatName: projection.displayName(event.room),
+      senderName: event.senderFromMemoryOrFallback.calcDisplayname(),
+      preview: available ? personalPreviewLabel(event) : null,
+      group: !event.room.isDirectChat,
+      locked: locked,
+    );
+    final title = text.title;
+    final body = text.body;
     if (!mounted) return;
     if (kIsWeb) {
       if (AppSettings.webNotificationSound.value) _audioPlayer.play();
@@ -109,7 +119,7 @@ extension LocalNotificationsExtension on MatrixState {
     }
 
     FlutterLocalNotificationsPlugin().show(
-      id: event.room.id.hashCode,
+      id: messageNotificationId(client.clientName, event.room.id),
       title: title,
       body: body,
       notificationDetails: NotificationDetails(
@@ -119,14 +129,11 @@ extension LocalNotificationsExtension on MatrixState {
             EventTypes.Message ||
             EventTypes.Encrypted ||
             EventTypes.Sticker => [
-              LinuxNotificationAction(
-                key: FluffyChatNotificationActions.markAsRead.name,
-                label: l10n.markAsRead,
-              ),
-              LinuxNotificationAction(
-                key: FluffyChatNotificationActions.mute.name,
-                label: l10n.mute,
-              ),
+              if (!AppSettings.personalIncognito.value)
+                LinuxNotificationAction(
+                  key: FluffyChatNotificationActions.markAsRead.name,
+                  label: l10n.markAsRead,
+                ),
             ],
             RtcNotificationContent.eventType => [
               LinuxNotificationAction(

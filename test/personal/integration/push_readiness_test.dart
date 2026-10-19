@@ -171,14 +171,37 @@ Future<void> main() async {
     !worker.freshAt(at.subtract(const Duration(seconds: 1))),
     'Future heartbeat accepted',
   );
+  // Heartbeats arrive every five minutes: one may be missed before stale.
   check(
-    worker.freshAt(at.add(const Duration(seconds: 179))) &&
-        !worker.freshAt(at.add(const Duration(minutes: 3))),
+    worker.freshAt(at.add(const Duration(minutes: 10, seconds: 59))) &&
+        !worker.freshAt(at.add(const Duration(minutes: 11))),
     'Heartbeat freshness boundary',
   );
   check(
-    worker.describe(at.add(const Duration(minutes: 3))).contains('unknown'),
+    worker.describe(at.add(const Duration(minutes: 11))).contains('unknown'),
     'Stale status remained ready',
+  );
+  check(
+    worker ==
+            WorkerReadiness.fromPayload({
+              'healthy': true,
+              'verified': true,
+              'transcription': 'blocked_codec_sandbox',
+              'reminderPush': 'not_configured',
+              'pending': 2,
+              'pendingReminderHints': 3,
+            }, at) &&
+        worker != WorkerReadiness.fromPayload({'healthy': true}, at) &&
+        worker !=
+            WorkerReadiness.fromPayload({
+              'healthy': true,
+              'verified': true,
+              'transcription': 'blocked_codec_sandbox',
+              'reminderPush': 'not_configured',
+              'pending': 2,
+              'pendingReminderHints': 3,
+            }, at.add(const Duration(minutes: 5))),
+    'Readiness equality drives change notifications',
   );
   final invalid = WorkerReadiness.fromPayload({
     'healthy': 'true',

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Standalone actual-source regression; use worker's pure-Dart package config.
-// ignore_for_file: avoid_relative_lib_imports
+// Actual-source regression; runs with `flutter test` (the eligibility now
+// consults the app's own-sender resolver).
 import 'dart:async';
 
+import 'package:fluffychat/personal/notification_eligibility.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
-
-import '../../../lib/personal/notification_eligibility.dart';
 
 const _owner = '@synthetic-owner:example.invalid';
 
@@ -63,11 +63,15 @@ Event _event(
     'msgtype': 'm.text',
     'body': 'Synthetic fixture',
     'm.relates_to': relation,
-    if (mentions != null) 'm.mentions': mentions,
+    'm.mentions': ?mentions,
   },
 );
 
-Future<void> main() async {
+void main() {
+  test('notification eligibility regressions', _regressions);
+}
+
+Future<void> _regressions() async {
   final database = _Database();
   final client = _Client(database);
   final room = Room(id: '!synthetic:example.invalid', client: client);
@@ -125,6 +129,13 @@ Future<void> main() async {
   _check(
     await personalNotificationEligible(_event(room, relation: null), normal),
     'Ordinary conversation incorrectly filtered',
+  );
+  _check(
+    !await personalNotificationEligible(
+      _event(room, relation: null, sender: _owner),
+      normal,
+    ),
+    'Own message was eligible for a notification',
   );
   _check(
     await personalNotificationEligible(
@@ -242,8 +253,4 @@ Future<void> main() async {
     _event(room, id: r'$synthetic-parent', sender: _owner),
   );
   _check(!await changedAccount, 'Account replacement retained delayed intent');
-  print(
-    'PASS notification eligibility: foreground/background parity, local-only '
-    'source-bound parent, mentions, malformed/missing keys and account/device races',
-  );
 }

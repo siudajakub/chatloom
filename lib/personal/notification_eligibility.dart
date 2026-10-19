@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:fluffychat/personal/own_sender.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -10,8 +11,9 @@ Future<bool> personalNotificationEligible(
   ConversationMetadata metadata, {
   PersonalNotificationMode? notificationMode,
 }) async {
-  if (metadata.ignored || metadata.placement == ChatPlacement.ignored)
+  if (metadata.ignored || metadata.placement == ChatPlacement.ignored) {
     return false;
+  }
   final mode =
       notificationMode ??
       (metadata.ignored || metadata.placement == ChatPlacement.ignored
@@ -21,6 +23,12 @@ Future<bool> personalNotificationEligible(
                     ? PersonalNotificationMode.mentionsOnly
                     : PersonalNotificationMode.all));
   if (mode == PersonalNotificationMode.muted) return false;
+  // Own messages sent from a native app arrive as the owner's bridge ghost.
+  // Only account/receiver evidence may suppress an alert (or a mention):
+  // weaker DM-structure or name evidence never hides a contact's message.
+  if (OwnSenderResolver.of(event.room.client).isStronglyOwnEvent(event)) {
+    return false;
+  }
   if (mode == PersonalNotificationMode.all) return true;
   final room = event.room;
   final client = room.client;

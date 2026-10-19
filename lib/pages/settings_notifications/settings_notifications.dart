@@ -11,6 +11,7 @@ import 'package:fluffychat/pages/settings_notifications/push_rule_extensions.dar
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:material_ui/material_ui.dart';
@@ -114,7 +115,7 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
     final account = Matrix.of(context).client;
     final revision = _accountRevision;
     final theme = Theme.of(context);
-    final action = await showAdaptiveDialog<PushRuleDialogAction>(
+    final action = await showNotionAdaptiveDialog<PushRuleDialogAction>(
       context: context,
       builder: (context) => ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 256),
