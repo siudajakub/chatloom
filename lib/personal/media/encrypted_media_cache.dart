@@ -85,6 +85,17 @@ class EncryptedMediaCache {
     return rows.single['bytes']! as Uint8List;
   });
 
+  /// Presence probe for prefetch: no BLOB read and no access-time write.
+  /// Uses the same retention window as [getFile], so a hit is playable.
+  Future<bool> hasFile(Uri mxcUri) => preserveOnStorageFailure(() async {
+    final rows = await _cacheDatabase.rawQuery(
+      'SELECT 1 FROM personal_media_cache '
+      'WHERE media_key = ? AND saved_at > ? LIMIT 1',
+      [mxcUri.toString(), _now().subtract(retention).millisecondsSinceEpoch],
+    );
+    return rows.isNotEmpty;
+  });
+
   Future<bool> deleteFile(Uri mxcUri) => preserveOnStorageFailure(() async {
     return await _cacheDatabase.delete(
           'personal_media_cache',

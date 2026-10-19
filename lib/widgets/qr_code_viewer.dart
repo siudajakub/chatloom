@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -19,7 +20,7 @@ import 'package:qr_image/qr_image.dart';
 import '../config/themes.dart';
 
 Future<void> showQrCodeViewer(BuildContext context, String content) =>
-    showDialog(
+    showNotionCustomDialog(
       context: context,
       builder: (context) => QrCodeViewer(content: content),
     );

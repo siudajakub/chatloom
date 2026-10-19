@@ -5,27 +5,101 @@
 
 import 'dart:async';
 
-import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as path_lib;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:uuid/uuid.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'events/audio_player.dart';
+import 'recording_output_cleanup.dart';
 import 'recording_waveform.dart';
+
+/// User-facing voice capture preferences (Settings → Chats & organization →
+/// Voice & video messages). Kept separate from [AppSettings] so the mapping
+/// to the platform recorder stays a pure, testable function.
+@immutable
+class VoiceCaptureOptions {
+  final bool noiseSuppress;
+  final bool autoGain;
+  final bool echoCancel;
+
+  /// Platform voice-communication path: forces echo cancellation and noise
+  /// suppression and lets the device apply its call-grade processing. Cleaner
+  /// in noisy places, but may sound narrower.
+  final bool isolation;
+
+  /// Higher bitrate (Opus 96 kbps / AAC 128 kbps) for larger files.
+  final bool highQuality;
+
+  const VoiceCaptureOptions({
+    this.noiseSuppress = true,
+    this.autoGain = true,
+    this.echoCancel = false,
+    this.isolation = false,
+    this.highQuality = false,
+  });
+
+  factory VoiceCaptureOptions.fromSettings() => VoiceCaptureOptions(
+    noiseSuppress: AppSettings.audioRecordingNoiseSuppress.value,
+    autoGain: AppSettings.audioRecordingAutoGain.value,
+    echoCancel: AppSettings.audioRecordingEchoCancel.value,
+    isolation: AppSettings.personalVoiceIsolation.value,
+    highQuality: AppSettings.personalVoiceHighQuality.value,
+  );
+}
+
+/// Maps [options] to a mono speech recording config for [encoder].
+///
+/// Opus records at its native 48 kHz (Ogg container, Android 10+); the AAC-LC
+/// fallback uses 44.1 kHz, which every Android/iOS AAC encoder accepts. The
+/// default Android source is `VOICE_RECOGNITION` (flat, unprocessed-by-OEM
+/// response that suits speech and transcription); voice isolation switches to
+/// `VOICE_COMMUNICATION` with echo cancellation and noise suppression on.
+/// Effects are attached by the plugin only when the device reports them.
+RecordConfig buildVoiceRecordConfig(
+  AudioEncoder encoder,
+  VoiceCaptureOptions options,
+) {
+  final opus = encoder == AudioEncoder.opus;
+  return RecordConfig(
+    encoder: encoder,
+    sampleRate: opus ? 48000 : 44100,
+    bitRate: opus
+        ? (options.highQuality ? 96000 : 64000)
+        : (options.highQuality ? 128000 : 64000),
+    numChannels: 1,
+    autoGain: options.autoGain,
+    echoCancel: options.echoCancel || options.isolation,
+    noiseSuppress: options.noiseSuppress || options.isolation,
+    audioInterruption: AudioInterruptionMode.pause,
+    androidConfig: AndroidRecordConfig(
+      audioSource: options.isolation
+          ? AndroidAudioSource.voiceCommunication
+          : AndroidAudioSource.voiceRecognition,
+      manageBluetooth: true,
+    ),
+  );
+}
 
 class RecordingViewModel extends StatefulWidget {
   final Widget Function(BuildContext, RecordingViewModelState) builder;
+  final RecordingOutputCleanup? cleanupOutput;
 
-  const RecordingViewModel({required this.builder, super.key});
+  const RecordingViewModel({
+    required this.builder,
+    this.cleanupOutput,
+    super.key,
+  });
 
   @override
   RecordingViewModelState createState() => RecordingViewModelState();
@@ -33,6 +107,12 @@ class RecordingViewModel extends StatefulWidget {
 
 class RecordingViewModelState extends State<RecordingViewModel> {
   static const maxVisibleAmplitudes = 120;
+
+  /// Safety cap: a forgotten recording pauses itself and can still be sent.
+  static const maxDuration = Duration(minutes: 15);
+
+  /// Deleting a recording longer than this asks for confirmation first.
+  static const confirmDiscardAfter = Duration(seconds: 5);
   Timer? _recorderSubscription;
   Duration duration = Duration.zero;
   final Stopwatch _clock = Stopwatch();
@@ -40,6 +120,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
   int _generation = 0, _sampleGeneration = 0;
   bool _starting = false, _transitioning = false, _sending = false;
   bool _wakeHeld = false;
+  bool _limitReached = false;
   Future<void> _wakeTail = Future<void>.value();
   Future<void> _cleanup = Future<void>.value();
   _VoiceRecordingSession? _session;
@@ -47,7 +128,16 @@ class RecordingViewModelState extends State<RecordingViewModel> {
   bool get isRecording => _session != null;
   bool get controlsBusy => _starting || _transitioning || _sending;
   bool get isSending => _sending;
-  bool get canResume => !controlsBusy && _session?.stopped != true;
+  bool get isStarting => _starting;
+  bool get canResume =>
+      !controlsBusy && !_limitReached && _session?.stopped != true;
+
+  /// True once [maxDuration] paused the recording; it can only be sent or
+  /// deleted afterwards.
+  bool get limitReached => _limitReached;
+
+  /// Exact recorded time (the [duration] field only advances per sample).
+  Duration get elapsed => _clock.elapsed;
 
   final List<double> amplitudeTimeline = [];
 
@@ -61,7 +151,9 @@ class RecordingViewModelState extends State<RecordingViewModel> {
   Future<void> _setAwake(bool enabled) {
     if (_wakeHeld == enabled) return _wakeTail;
     _wakeHeld = enabled;
-    final operation = _wakeTail.then((_) => WakelockPlus.toggle(enable: enabled));
+    final operation = _wakeTail.then(
+      (_) => WakelockPlus.toggle(enable: enabled),
+    );
     _wakeTail = operation.catchError((Object _) {});
     return operation;
   }
@@ -76,7 +168,9 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       if (!mounted || generation != _generation) return;
       // Server configuration preloading must not turn a failed request into an
       // unhandled asynchronous error while microphone permission is pending.
-      unawaited(room.client.getConfig().then<void>((_) {}, onError: (Object _) {}));
+      unawaited(
+        room.client.getConfig().then<void>((_) {}, onError: (Object _) {}),
+      );
       if (PlatformInfos.isAndroid) {
         final info = await DeviceInfoPlugin().androidInfo;
         if (!mounted || generation != _generation) return;
@@ -90,7 +184,10 @@ class RecordingViewModelState extends State<RecordingViewModel> {
           return;
         }
       }
-      session = _session = _VoiceRecordingSession(AudioRecorder());
+      session = _session = _VoiceRecordingSession(
+        AudioRecorder(),
+        cleanupOutput: widget.cleanupOutput ?? cleanupRecordingOutput,
+      );
       final audioRecorder = session.recorder;
       setState(() {});
       final permission = await audioRecorder.hasPermission();
@@ -112,21 +209,17 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       if (!kIsWeb) {
         final tempDir = await getTemporaryDirectory();
         if (!_current(generation, session)) return;
-        path = path_lib.join(tempDir.path, fileName);
+        path = path_lib.join(
+          tempDir.path,
+          'voice_${const Uuid().v4()}.${codec.fileExtension}',
+        );
+        session.ownedNativePath = path;
       }
       await _setAwake(true);
       if (!_current(generation, session)) return;
 
-      await audioRecorder.start(
-        RecordConfig(
-          bitRate: AppSettings.audioRecordingBitRate.value,
-          sampleRate: AppSettings.audioRecordingSamplingRate.value,
-          numChannels: AppSettings.audioRecordingNumChannels.value,
-          autoGain: AppSettings.audioRecordingAutoGain.value,
-          echoCancel: AppSettings.audioRecordingEchoCancel.value,
-          noiseSuppress: AppSettings.audioRecordingNoiseSuppress.value,
-          encoder: codec,
-        ),
+      await session.start(
+        buildVoiceRecordConfig(codec, VoiceCaptureOptions.fromSettings()),
         path: path ?? '',
       );
       if (!_current(generation, session)) return;
@@ -134,6 +227,8 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       _clock.start();
       setState(() => duration = Duration.zero);
       _subscribe();
+      _listenToRecorderState(generation, session);
+      unawaited(_haptic(HapticFeedback.mediumImpact));
     } catch (_) {
       if (mounted && generation == _generation) {
         _showError();
@@ -165,7 +260,9 @@ class RecordingViewModelState extends State<RecordingViewModel> {
     _recorderSubscription = Timer.periodic(const Duration(milliseconds: 100), (
       _,
     ) async {
-      if (pending || !_current(generation, session) || isPaused || _sending) return;
+      if (pending || !_current(generation, session) || isPaused || _sending) {
+        return;
+      }
       pending = true;
       try {
         final amplitude = await session.recorder.getAmplitude();
@@ -183,6 +280,19 @@ class RecordingViewModelState extends State<RecordingViewModel> {
           _waveform.add(value);
           duration = _clock.elapsed;
         });
+        if (_clock.elapsed >= maxDuration && !_limitReached) {
+          _limitReached = true;
+          unawaited(pause());
+          if (!mounted) return;
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Voice messages are limited to 15 minutes. '
+                'Send or delete this recording.',
+              ),
+            ),
+          );
+        }
       } catch (_) {
         // Device interruptions or a rejected sample must not escape the timer
         // or leave a recorder/wakelock running without a working UI.
@@ -194,6 +304,59 @@ class RecordingViewModelState extends State<RecordingViewModel> {
         pending = false;
       }
     });
+  }
+
+  /// Mirrors system-driven recorder state into the UI. With
+  /// [AudioInterruptionMode.pause] the platform pauses on calls, alarms or
+  /// another app taking audio focus; the clock must stop with it.
+  void _listenToRecorderState(int generation, _VoiceRecordingSession session) {
+    session.stateSubscription = session.recorder.onStateChanged().listen(
+      (state) => _onRecorderState(generation, session, state),
+      onError: (Object _) {},
+    );
+  }
+
+  Future<void> _onRecorderState(
+    int generation,
+    _VoiceRecordingSession session,
+    RecordState state,
+  ) async {
+    if (state == RecordState.stop) return; // Stops are always ours.
+    final paused = state == RecordState.pause;
+    // Our own pause/resume/stop transitions update the state themselves.
+    bool stale() =>
+        !_current(generation, session) ||
+        controlsBusy ||
+        session.stopped ||
+        isPaused == paused ||
+        (!paused && _limitReached);
+    if (stale()) return;
+    // A late event from an earlier pause/resume must not override what the
+    // recorder reports now; without that query the event is trusted.
+    try {
+      if (await session.recorder.isPaused() != paused) return;
+    } catch (_) {}
+    if (stale()) return;
+    if (paused) {
+      _stopSampling();
+      _clock.stop();
+      setState(() {
+        isPaused = true;
+        duration = _clock.elapsed;
+      });
+      unawaited(_setAwake(false).catchError((Object _) {}));
+    } else {
+      _clock.start();
+      setState(() => isPaused = false);
+      unawaited(_setAwake(true).catchError((Object _) {}));
+      _subscribe();
+    }
+  }
+
+  static Future<void> _haptic(Future<void> Function() feedback) async {
+    try {
+      await feedback();
+    } catch (_) {}
   }
 
   void _stopSampling() {
@@ -219,11 +382,41 @@ class RecordingViewModelState extends State<RecordingViewModel> {
     amplitudeTimeline.clear();
     _waveform.clear();
     isPaused = false;
+    _limitReached = false;
     _starting = _transitioning = _sending = false;
   }
 
+  /// Discards the recording immediately (slide-to-cancel, too short holds).
   void cancel() {
+    if (_session != null) unawaited(_haptic(HapticFeedback.lightImpact));
     setState(_reset);
+  }
+
+  /// Delete button: short recordings are discarded at once; longer ones are
+  /// paused and need confirmation. Returns whether the recording was deleted.
+  Future<bool> requestDiscard() async {
+    final session = _session;
+    if (session == null || _sending) return false;
+    if (_clock.elapsed <= confirmDiscardAfter) {
+      cancel();
+      return true;
+    }
+    final generation = _generation;
+    if (!isPaused) await pause();
+    if (!mounted || !_current(generation, session) || _sending) return false;
+    final result = await showOkCancelAlertDialog(
+      context: context,
+      title: 'Delete voice message?',
+      message: 'This recording will be discarded.',
+      okLabel: 'Delete',
+      cancelLabel: 'Keep',
+      isDestructive: true,
+    );
+    if (result != OkCancelResult.ok || !_current(generation, session)) {
+      return false;
+    }
+    cancel();
+    return true;
   }
 
   Future<void> pause() async {
@@ -273,7 +466,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
   }
 
   Future<void> stopAndSend(
-    Future<void> Function(
+    Future<bool> Function(
       String path,
       int duration,
       List<int> waveform,
@@ -297,10 +490,16 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       await _setAwake(false);
       if (!_current(generation, session)) return;
       if (path == null) throw StateError('Recording failed');
+      unawaited(_haptic(HapticFeedback.lightImpact));
       // Keep the recorded file and source-bound callback until the normal send
       // path accepts it. A failed send remains available for explicit retry.
-      await onSend(path, duration.inMilliseconds, waveform, name);
-      if (_current(generation, session)) setState(_reset);
+      final accepted = await onSend(
+        path,
+        duration.inMilliseconds,
+        waveform,
+        name,
+      );
+      if (accepted && _current(generation, session)) setState(_reset);
     } catch (_) {
       if (_current(generation, session)) {
         isPaused = true;
@@ -327,21 +526,70 @@ class RecordingViewModelState extends State<RecordingViewModel> {
 /// Stop/dispose is idempotent even when cancellation races a native callback.
 class _VoiceRecordingSession {
   final AudioRecorder recorder;
+  final RecordingOutputCleanup cleanupOutput;
+  String? ownedNativePath;
+  String? _stoppedBlobUrl;
+  StreamSubscription<RecordState>? stateSubscription;
+  Future<void>? _starting;
   Future<String?>? _stop;
   Future<void>? _release;
-  _VoiceRecordingSession(this.recorder);
+  _VoiceRecordingSession(this.recorder, {required this.cleanupOutput});
   bool get stopped => _stop != null;
-  Future<String?> stop() => _stop ??= recorder.stop();
+  Future<void> start(RecordConfig config, {required String path}) =>
+      _starting = recorder.start(config, path: path);
+  Future<String?> stop() => _stop ??= _stopAndRemember();
+  Future<String?> _stopAndRemember() async {
+    final output = await recorder.stop();
+    if (output != null && Uri.tryParse(output)?.scheme == 'blob') {
+      _stoppedBlobUrl = output;
+    }
+    return output;
+  }
+
   Future<void> release() => _release ??= _close();
   Future<void> _close() async {
     try {
-      await stop();
-    } catch (_) {
-      // Even a rejected stop must release the native recorder/state stream.
+      try {
+        await stateSubscription?.cancel();
+      } catch (_) {}
+      stateSubscription = null;
+      // Active SDK cancel deletes its own unfinished file/blob. Standard
+      // Android cancel cannot remove an already stopped output, so retain our
+      // assigned path and any earlier web Blob URL for explicit cleanup below.
+      try {
+        await recorder.cancel();
+      } catch (_) {}
+      var startFailed = false;
+      final starting = _starting;
+      if (starting != null) {
+        try {
+          await starting;
+        } catch (_) {
+          startFailed = true;
+        }
+      }
+      // Android's failed native start can leave a non-recording thread whose
+      // stop callback never fires. Cancel/dispose plus our owned path handles
+      // that partial output without waiting forever for an impossible stop.
+      if (!startFailed || _stop != null) {
+        try {
+          await stop();
+        } catch (_) {}
+      }
     } finally {
       try {
         await recorder.dispose();
       } catch (_) {}
+      if (ownedNativePath != null || _stoppedBlobUrl != null) {
+        try {
+          await cleanupOutput(
+            ownedNativePath: ownedNativePath,
+            stoppedBlobUrl: _stoppedBlobUrl,
+          );
+        } catch (_) {
+          // A cleanup/storage failure never falls back to deleting other paths.
+        }
+      }
     }
   }
 }

@@ -25,14 +25,52 @@ import 'package:fluffychat/widgets/adaptive_dialogs/dialog_text_field.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart' hide Result;
 import 'package:mime/mime.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../utils/resize_video.dart';
+
+/// Captured before a picker or trust dialog can change the active composer.
+class FrozenAttachmentContext {
+  final Room room;
+  final Event? replyTo;
+  final String? threadRootEventId, threadLastEventId;
+  final bool Function() isCurrent;
+  final String? _accountId;
+
+  FrozenAttachmentContext({
+    required this.room,
+    required this.isCurrent,
+    this.replyTo,
+    this.threadRootEventId,
+    this.threadLastEventId,
+  }) : _accountId = room.client.userID;
+
+  void validate() {
+    if (!isCurrent() ||
+        room.client.userID != _accountId ||
+        !room.canSendDefaultMessages ||
+        (replyTo != null &&
+            (!identical(replyTo!.room.client, room.client) ||
+                replyTo!.room.id != room.id ||
+                replyTo!.redacted))) {
+      throw StateError('The conversation changed. Open attachments again.');
+    }
+  }
+}
+
+class AttachmentSendResult {
+  final String caption;
+  const AttachmentSendResult(this.caption);
+}
 
 class SendFileDialog extends StatefulWidget {
   final Room room;
   final List<XFile> files;
   final BuildContext outerContext;
   final String? threadLastEventId, threadRootEventId;
+  final Event? replyTo;
+  final String initialCaption;
+  final FrozenAttachmentContext? composeContext;
 
   const SendFileDialog({
     required this.room,
@@ -40,6 +78,9 @@ class SendFileDialog extends StatefulWidget {
     required this.outerContext,
     required this.threadLastEventId,
     required this.threadRootEventId,
+    this.replyTo,
+    this.initialCaption = '',
+    this.composeContext,
     super.key,
   });
 
@@ -49,11 +90,21 @@ class SendFileDialog extends StatefulWidget {
 
 class SendFileDialogState extends State<SendFileDialog> {
   bool compress = true;
+  bool _sending = false, _uncertain = false, _attempted = false;
+  int _accepted = 0;
+  String? _problem;
+  late final _transactionIds = List.generate(
+    _files.length,
+    (_) => const Uuid().v4(),
+  );
+  final _prepared = <int, (MatrixFile, MatrixImageFile?)>{};
 
   /// Images smaller than 20kb don't need compression.
   static const int minSizeToCompress = 20 * 1000;
 
-  final TextEditingController _labelTextController = TextEditingController();
+  late final TextEditingController _labelTextController = TextEditingController(
+    text: widget.initialCaption,
+  );
 
   /// Mutable working copy of [SendFileDialog.files]. Editing an image replaces
   /// its entry with a new [XFile] whose bytes, mimetype and filename extension
@@ -62,7 +113,17 @@ class SendFileDialogState extends State<SendFileDialog> {
   late final List<XFile> _files = List<XFile>.of(widget.files);
 
   Future<void> _editImage(int index) async {
-    final bytes = await _files[index].readAsBytes();
+    if (_sending || _attempted) return;
+    Uint8List bytes;
+    try {
+      bytes = await _files[index].readAsBytes();
+    } catch (_) {
+      if (mounted)
+        setState(
+          () => _problem = 'This image could not be opened. Select it again.',
+        );
+      return;
+    }
     if (!mounted) return;
     final result = await showScaffoldDialog<Uint8List?>(
       context: context,
@@ -77,93 +138,103 @@ class SendFileDialogState extends State<SendFileDialog> {
         result,
         mimeType: 'image/png',
         name: '$baseName.png',
+        path: '$baseName.png',
         length: result.length,
       );
     });
   }
 
-  Future<void> _send(String? uniqueFileType) async {
-    final l10n = L10n.of(context);
-    final scaffoldMessenger = ScaffoldMessenger.of(widget.outerContext);
-
-    final proceed = await showTrustUserInRoomDialog(
-      widget.outerContext,
-      widget.room,
-    );
-    if (!context.mounted || !proceed) return;
-
-    if (ForegroundServices.platformSupported) {
-      await ForegroundServices.startService('send_files');
-    } else {
-      scaffoldMessenger.showLoadingSnackBar(
-        l10n.sendingFilesDoNotExit(widget.files.length),
-      );
-    }
+  Future<void> _send() async {
+    if (_sending || _uncertain) return;
+    final label = _labelTextController.text.trim();
+    var foregroundStarted = false;
+    var transportStarted = false;
+    setState(() {
+      _sending = true;
+      _problem = null;
+    });
     try {
+      widget.composeContext?.validate();
+      final proceed = await showTrustUserInRoomDialog(context, widget.room);
+      if (!mounted || !proceed) return;
+      widget.composeContext?.validate();
       if (!widget.room.otherPartyCanReceiveMessages) {
         throw OtherPartyCanNotReceiveMessages();
       }
+      final clientConfig = await widget.room.client.getConfig();
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: false).pop();
-      final clientConfig = await Result.capture(widget.room.client.getConfig());
-      final maxUploadSize =
-          clientConfig.asValue?.value.mUploadSize ?? 100 * 1000 * 1000;
+      widget.composeContext?.validate();
+      final maxUploadSize = clientConfig.mUploadSize ?? 100 * 1000 * 1000;
 
-      for (var i = 0; i < _files.length; i++) {
+      if (ForegroundServices.platformSupported) {
+        foregroundStarted = await ForegroundServices.startService('send_files');
+      }
+
+      for (var i = _accepted; i < _files.length; i++) {
+        if (!mounted) return;
+        widget.composeContext?.validate();
         final xfile = _files[i];
         final MatrixFile file;
         MatrixImageFile? thumbnail;
         final mimeType = xfile.mimeType ?? lookupMimeType(xfile.path);
 
-        // Generate video thumbnail
-        if (PlatformInfos.isMobile &&
-            mimeType != null &&
-            mimeType.startsWith('video')) {
-          thumbnail = await xfile.getVideoThumbnail();
-        }
-
-        // If file is a video, shrink it!
-        if (PlatformInfos.isMobile &&
-            mimeType != null &&
-            mimeType.startsWith('video')) {
-          final lengthResult = await Result.capture(xfile.length());
-          final length = lengthResult.asValue?.value;
-          scaffoldMessenger.clearSnackBars();
-          scaffoldMessenger.showLoadingSnackBar(l10n.compressingVideo);
-          file = await xfile.getVideoInfo(
-            compress: length != null && length > minSizeToCompress && compress,
-          );
-          scaffoldMessenger.clearSnackBars();
-          if (!ForegroundServices.platformSupported) {
-            scaffoldMessenger.showLoadingSnackBar(
-              l10n.sendingFilesDoNotExit(widget.files.length),
-            );
-          }
+        final cached = _prepared[i];
+        if (cached != null) {
+          file = cached.$1;
+          thumbnail = cached.$2;
         } else {
-          // Else we just create a MatrixFile
-          file = MatrixFile(
-            bytes: await _files[i].readAsBytes(),
-            name: xfile.name,
-            mimeType: mimeType,
-          ).detectFileType;
-        }
+          // Generate video thumbnail
+          if (PlatformInfos.isMobile &&
+              mimeType != null &&
+              mimeType.startsWith('video')) {
+            thumbnail = await xfile.getVideoThumbnail();
+          }
 
-        if (file.bytes.length > maxUploadSize) {
-          throw FileTooBigMatrixException(file.bytes.length, maxUploadSize);
-        }
+          // If file is a video, shrink it!
+          if (PlatformInfos.isMobile &&
+              mimeType != null &&
+              mimeType.startsWith('video')) {
+            final lengthResult = await Result.capture(xfile.length());
+            final length = lengthResult.asValue?.value;
+            file = await xfile.getVideoInfo(
+              compress:
+                  length != null && length > minSizeToCompress && compress,
+            );
+          } else {
+            // Else we just create a MatrixFile
+            file = MatrixFile(
+              bytes: await _files[i].readAsBytes(),
+              name: xfile.name,
+              mimeType: mimeType,
+            ).detectFileType;
+          }
 
-        final label = _labelTextController.text.trim();
+          if (file.bytes.length > maxUploadSize) {
+            throw FileTooBigMatrixException(file.bytes.length, maxUploadSize);
+          }
+          _prepared[i] = (file, thumbnail);
+        }
+        if (!mounted) return;
+        widget.composeContext?.validate();
+        _attempted = true;
+        transportStarted = true;
 
         try {
-          await widget.room.sendFileEvent(
+          final eventId = await widget.room.sendFileEvent(
             file,
+            txid: _transactionIds[i],
+            inReplyTo: widget.replyTo,
             thumbnail: thumbnail,
             shrinkImageMaxDimension: compress ? 1600 : null,
             extraContent: label.isEmpty ? null : {'body': label},
             threadRootEventId: widget.threadRootEventId,
             threadLastEventId: widget.threadLastEventId,
           );
+          if (eventId == null || !eventId.startsWith(r'$')) {
+            throw StateError('Acceptance unknown');
+          }
         } on MatrixException catch (e) {
+          transportStarted = false;
           final retryAfterMs = e.retryAfterMs;
           if (e.error != MatrixError.M_LIMIT_EXCEEDED || retryAfterMs == null) {
             rethrow;
@@ -173,21 +244,50 @@ class SendFileDialogState extends State<SendFileDialog> {
           );
 
           await Future.delayed(retryAfterDuration);
-
-          await widget.room.sendFileEvent(
+          if (!mounted) return;
+          widget.composeContext?.validate();
+          transportStarted = true;
+          final eventId = await widget.room.sendFileEvent(
             file,
+            txid: _transactionIds[i],
+            inReplyTo: widget.replyTo,
             thumbnail: thumbnail,
             shrinkImageMaxDimension: compress ? 1600 : null,
             extraContent: label.isEmpty ? null : {'body': label},
+            threadRootEventId: widget.threadRootEventId,
+            threadLastEventId: widget.threadLastEventId,
           );
+          if (eventId == null || !eventId.startsWith(r'$')) {
+            throw StateError('Acceptance unknown');
+          }
         }
+        transportStarted = false;
+        if (mounted) setState(() => _accepted = i + 1);
+      }
+      if (mounted) {
+        setState(() => _sending = false);
+        Navigator.of(context).pop(AttachmentSendResult(label));
+      }
+    } on MatrixException catch (_) {
+      if (mounted)
+        setState(
+          () => _problem =
+              'The server rejected this attachment. Your selection and caption are kept. Try again when the source is ready.',
+        );
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _uncertain = transportStarted;
+          _problem = _uncertain
+              ? 'Sending was not confirmed. Check this conversation before sending again. Your selection and caption are kept.'
+              : 'Attachments could not be prepared in this conversation. Your selection and caption are kept.';
+        });
       }
     } finally {
-      if (ForegroundServices.platformSupported) {
-        await ForegroundServices.stopService('send_files');
-      } else {
-        scaffoldMessenger.clearSnackBars();
+      if (foregroundStarted) {
+        await Result.capture(ForegroundServices.stopService('send_files'));
       }
+      if (mounted) setState(() => _sending = false);
     }
 
     return;
@@ -242,77 +342,74 @@ class SendFileDialogState extends State<SendFileDialog> {
     return FutureBuilder<String>(
       future: _calcCombinedFileSize(),
       builder: (context, snapshot) {
-        final sizeString =
-            snapshot.data ?? L10n.of(context).calculatingFileSize;
+        final sizeString = snapshot.hasError
+            ? 'Size unavailable'
+            : snapshot.data ?? L10n.of(context).calculatingFileSize;
 
-        return AlertDialog.adaptive(
-          title: Text(sendStr),
-          content: SizedBox(
-            width: 256,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: .min,
-                children: [
-                  const SizedBox(height: 12),
-                  if (uniqueFileType == 'image')
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 16.0),
-                      child: SizedBox(
-                        height: 256,
-                        child: Center(
-                          child: ListView.builder(
-                            shrinkWrap: true,
-                            itemCount: _files.length,
-                            scrollDirection: Axis.horizontal,
-                            itemBuilder: (context, i) => Padding(
-                              padding: const EdgeInsets.only(right: 8.0),
-                              child: Stack(
-                                children: [
-                                  Material(
-                                    borderRadius: BorderRadius.circular(
-                                      AppConfig.borderRadius / 2,
-                                    ),
-                                    color: Colors.black,
-                                    clipBehavior: Clip.hardEdge,
-                                    child: FutureBuilder(
-                                      future: _files[i].readAsBytes(),
-                                      builder: (context, snapshot) {
-                                        final bytes = snapshot.data;
-                                        if (bytes == null) {
-                                          return const Center(
-                                            child:
-                                                CircularProgressIndicator.adaptive(),
-                                          );
-                                        }
-                                        if (snapshot.error != null) {
-                                          Logs().w(
-                                            'Unable to preview image',
-                                            snapshot.error,
-                                            snapshot.stackTrace,
-                                          );
-                                          return const Center(
-                                            child: SizedBox(
-                                              width: 256,
-                                              height: 256,
-                                              child: Icon(
-                                                Icons.broken_image_outlined,
-                                                size: 64,
-                                              ),
-                                            ),
-                                          );
-                                        }
-                                        return Image.memory(
-                                          bytes,
-                                          height: 256,
-                                          width: _files.length == 1
-                                              ? 256 - 36
-                                              : null,
-                                          fit: BoxFit.contain,
-                                          errorBuilder: (context, e, s) {
+        return PopScope(
+          canPop: !_sending,
+          child: AlertDialog.adaptive(
+            insetPadding: const EdgeInsets.all(16),
+            title: Text(
+              sendStr,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+            ),
+            content: SizedBox(
+              width: 256,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: .min,
+                  children: [
+                    if (_accepted > 0)
+                      Text(
+                        '$_accepted of ${_files.length} attachments accepted. Accepted files will be skipped on retry.',
+                      ),
+                    if (_problem != null)
+                      Semantics(
+                        liveRegion: true,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(
+                            _problem!,
+                            style: TextStyle(color: theme.colorScheme.error),
+                          ),
+                        ),
+                      ),
+                    if (_sending) ...[
+                      const LinearProgressIndicator(),
+                      const SizedBox(height: 12),
+                      const Text('Sending attachments…'),
+                    ],
+                    const SizedBox(height: 12),
+                    if (uniqueFileType == 'image')
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16.0),
+                        child: SizedBox(
+                          height: 256,
+                          child: Center(
+                            child: ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: _files.length,
+                              scrollDirection: Axis.horizontal,
+                              itemBuilder: (context, i) => Padding(
+                                padding: const EdgeInsets.only(right: 8.0),
+                                child: Stack(
+                                  children: [
+                                    Material(
+                                      borderRadius: BorderRadius.circular(
+                                        AppConfig.borderRadius / 2,
+                                      ),
+                                      color: Colors.black,
+                                      clipBehavior: Clip.hardEdge,
+                                      child: FutureBuilder(
+                                        future: _files[i].readAsBytes(),
+                                        builder: (context, snapshot) {
+                                          final bytes = snapshot.data;
+                                          if (snapshot.error != null) {
                                             Logs().w(
                                               'Unable to preview image',
-                                              e,
-                                              s,
+                                              snapshot.error,
+                                              snapshot.stackTrace,
                                             );
                                             return const Center(
                                               child: SizedBox(
@@ -324,153 +421,192 @@ class SendFileDialogState extends State<SendFileDialog> {
                                                 ),
                                               ),
                                             );
-                                          },
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                  Positioned(
-                                    top: 4,
-                                    right: 4,
-                                    child: Material(
-                                      color: Colors.black54,
-                                      shape: const CircleBorder(),
-                                      child: IconButton(
-                                        tooltip: L10n.of(context).editImage,
-                                        icon: const Icon(
-                                          Icons.edit_outlined,
-                                          color: Colors.white,
-                                          size: 20,
-                                        ),
-                                        onPressed: () => _editImage(i),
+                                          }
+                                          if (bytes == null) {
+                                            return const Center(
+                                              child:
+                                                  CircularProgressIndicator.adaptive(),
+                                            );
+                                          }
+                                          return Image.memory(
+                                            bytes,
+                                            height: 256,
+                                            width: _files.length == 1
+                                                ? 256 - 36
+                                                : null,
+                                            fit: BoxFit.contain,
+                                            errorBuilder: (context, e, s) {
+                                              Logs().w(
+                                                'Unable to preview image',
+                                                e,
+                                                s,
+                                              );
+                                              return const Center(
+                                                child: SizedBox(
+                                                  width: 256,
+                                                  height: 256,
+                                                  child: Icon(
+                                                    Icons.broken_image_outlined,
+                                                    size: 64,
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                          );
+                                        },
                                       ),
                                     ),
-                                  ),
-                                ],
+                                    Positioned(
+                                      top: 4,
+                                      right: 4,
+                                      child: Material(
+                                        color: Colors.black54,
+                                        shape: const CircleBorder(),
+                                        child: IconButton(
+                                          tooltip: L10n.of(context).editImage,
+                                          icon: const Icon(
+                                            Icons.edit_outlined,
+                                            color: Colors.white,
+                                            size: 20,
+                                          ),
+                                          onPressed: _sending || _attempted
+                                              ? null
+                                              : () => _editImage(i),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  if (uniqueFileType != 'image')
+                    if (uniqueFileType != 'image')
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16.0),
+                        child: Row(
+                          children: [
+                            Icon(
+                              uniqueFileType == null
+                                  ? Icons.description_outlined
+                                  : uniqueFileType == 'video'
+                                  ? Icons.video_file_outlined
+                                  : uniqueFileType == 'audio'
+                                  ? Icons.audio_file_outlined
+                                  : Icons.description_outlined,
+                              size: 32,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                mainAxisSize: .min,
+                                crossAxisAlignment: .start,
+                                children: [
+                                  Text(
+                                    fileName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  Text(
+                                    '$sizeString - $fileTypes',
+                                    style: theme.textTheme.labelSmall,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 16.0),
-                      child: Row(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: DialogTextField(
+                        controller: _labelTextController,
+                        readOnly: _sending || _attempted,
+                        labelText: L10n.of(context).optionalMessage,
+                        minLines: 1,
+                        maxLines: 3,
+                        maxLength: 255,
+                        counterText: '',
+                      ),
+                    ),
+                    // Workaround for SwitchListTile.adaptive crashes in CupertinoDialog
+                    if ({'image', 'video'}.contains(uniqueFileType))
+                      Row(
+                        crossAxisAlignment: .center,
                         children: [
-                          Icon(
-                            uniqueFileType == null
-                                ? Icons.description_outlined
-                                : uniqueFileType == 'video'
-                                ? Icons.video_file_outlined
-                                : uniqueFileType == 'audio'
-                                ? Icons.audio_file_outlined
-                                : Icons.description_outlined,
-                            size: 32,
-                          ),
-                          const SizedBox(width: 8),
+                          if ({
+                            TargetPlatform.iOS,
+                            TargetPlatform.macOS,
+                          }.contains(theme.platform))
+                            CupertinoSwitch(
+                              value: compressionSupported && compress,
+                              onChanged:
+                                  compressionSupported &&
+                                      !_sending &&
+                                      !_attempted
+                                  ? (v) => setState(() => compress = v)
+                                  : null,
+                            )
+                          else
+                            Switch.adaptive(
+                              value: compressionSupported && compress,
+                              onChanged:
+                                  compressionSupported &&
+                                      !_sending &&
+                                      !_attempted
+                                  ? (v) => setState(() => compress = v)
+                                  : null,
+                            ),
+                          const SizedBox(width: 16),
                           Expanded(
                             child: Column(
                               mainAxisSize: .min,
                               crossAxisAlignment: .start,
                               children: [
                                 Text(
-                                  fileName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                  L10n.of(context).compress,
+                                  style: theme.textTheme.titleMedium,
+                                  textAlign: TextAlign.left,
                                 ),
-                                Text(
-                                  '$sizeString - $fileTypes',
-                                  style: theme.textTheme.labelSmall,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                                if (!compress)
+                                  Text(
+                                    ' ($sizeString)',
+                                    style: theme.textTheme.labelSmall,
+                                  ),
+                                if (!compressionSupported)
+                                  Text(
+                                    L10n.of(context).notSupportedOnThisDevice,
+                                    style: theme.textTheme.labelSmall,
+                                  ),
                               ],
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  if (_files.length == 1)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8.0),
-                      child: DialogTextField(
-                        controller: _labelTextController,
-                        labelText: L10n.of(context).optionalMessage,
-                        minLines: 1,
-                        maxLines: 1,
-                        maxLength: 255,
-                        counterText: '',
-                      ),
-                    ),
-                  // Workaround for SwitchListTile.adaptive crashes in CupertinoDialog
-                  if ({'image', 'video'}.contains(uniqueFileType))
-                    Row(
-                      crossAxisAlignment: .center,
-                      children: [
-                        if ({
-                          TargetPlatform.iOS,
-                          TargetPlatform.macOS,
-                        }.contains(theme.platform))
-                          CupertinoSwitch(
-                            value: compressionSupported && compress,
-                            onChanged: compressionSupported
-                                ? (v) => setState(() => compress = v)
-                                : null,
-                          )
-                        else
-                          Switch.adaptive(
-                            value: compressionSupported && compress,
-                            onChanged: compressionSupported
-                                ? (v) => setState(() => compress = v)
-                                : null,
-                          ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            mainAxisSize: .min,
-                            crossAxisAlignment: .start,
-                            children: [
-                              Row(
-                                mainAxisSize: .min,
-                                children: [
-                                  Text(
-                                    L10n.of(context).compress,
-                                    style: theme.textTheme.titleMedium,
-                                    textAlign: TextAlign.left,
-                                  ),
-                                ],
-                              ),
-                              if (!compress)
-                                Text(
-                                  ' ($sizeString)',
-                                  style: theme.textTheme.labelSmall,
-                                ),
-                              if (!compressionSupported)
-                                Text(
-                                  L10n.of(context).notSupportedOnThisDevice,
-                                  style: theme.textTheme.labelSmall,
-                                ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
+            actions: <Widget>[
+              AdaptiveDialogAction(
+                onPressed: _sending
+                    ? null
+                    : () => Navigator.of(context, rootNavigator: false).pop(),
+                child: Text(
+                  _uncertain
+                      ? 'Close without retrying'
+                      : L10n.of(context).cancel,
+                ),
+              ),
+              AdaptiveDialogAction(
+                onPressed: _sending || _uncertain ? null : _send,
+                child: Text(L10n.of(context).send),
+              ),
+            ],
           ),
-          actions: <Widget>[
-            AdaptiveDialogAction(
-              onPressed: () =>
-                  Navigator.of(context, rootNavigator: false).pop(),
-              child: Text(L10n.of(context).cancel),
-            ),
-            AdaptiveDialogAction(
-              onPressed: () => _send(uniqueFileType),
-              child: Text(L10n.of(context).send),
-            ),
-          ],
         );
       },
     );
@@ -934,28 +1070,6 @@ class _ImageEditPageState extends State<_ImageEditPage> {
             ),
     );
   }
-}
-
-extension on ScaffoldMessengerState {
-  void showLoadingSnackBar(String title) => showSnackBar(
-    SnackBar(
-      showCloseIcon: false,
-      persist: true,
-      content: Row(
-        spacing: 8,
-        children: [
-          Expanded(child: Text(title, overflow: .ellipsis, maxLines: 1)),
-          SizedBox.square(
-            dimension: 16,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: Theme.of(context).colorScheme.onInverseSurface,
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
 }
 
 /// Freehand drawing surface with pinch-to-zoom.

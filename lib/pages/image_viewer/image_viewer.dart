@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/pages/image_viewer/image_viewer_view.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/show_scaffold_dialog.dart';
 import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
@@ -15,6 +15,18 @@ import 'package:personal_core/personal_core.dart';
 import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 
 import '../../utils/matrix_sdk_extensions/event_extension.dart';
+
+/// Opens [event] full screen: the viewer fades in while it scales up from
+/// the dialog start scale, and leaves the same way (or follows a downward
+/// swipe, see [ImageViewerController]).
+Future<void> showImageViewer(
+  BuildContext context,
+  Event event, {
+  Timeline? timeline,
+}) => showNotionCustomDialog<void>(
+  context: context,
+  builder: (_) => ImageViewer(event, timeline: timeline, outerContext: context),
+);
 
 class ImageViewer extends StatefulWidget {
   final Event event;
@@ -32,8 +44,64 @@ class ImageViewer extends StatefulWidget {
   ImageViewerController createState() => ImageViewerController();
 }
 
-class ImageViewerController extends State<ImageViewer> {
+class ImageViewerController extends State<ImageViewer>
+    with SingleTickerProviderStateMixin {
   final FocusNode focusNode = FocusNode();
+
+  /// Vertical offset of the media while it is swiped away (or springs
+  /// back). The backdrop fades and the media shrinks with it.
+  final ValueNotifier<double> dismissOffset = ValueNotifier(0);
+  late final AnimationController _settle = AnimationController.unbounded(
+    vsync: this,
+  )..addListener(() => dismissOffset.value = _settle.value);
+  final Map<String, TransformationController> _transforms = {};
+  bool _dismissDrag = false;
+
+  /// Swipe distance (logical px) or speed (px/s) that closes the viewer.
+  static const double dismissDistance = 120;
+  static const double dismissVelocity = 900;
+
+  /// Zoom state of one page; a zoomed image pans instead of dismissing.
+  TransformationController transformFor(Event event) =>
+      _transforms.putIfAbsent(event.eventId, TransformationController.new);
+
+  void onInteractionStart(ScaleStartDetails details) {
+    final zoomed =
+        transformFor(currentEventOrInitial).value.getMaxScaleOnAxis() > 1.01;
+    _dismissDrag = details.pointerCount == 1 && !zoomed;
+    if (_dismissDrag) _settle.stop();
+  }
+
+  void onInteractionUpdate(ScaleUpdateDetails details) {
+    if (!_dismissDrag) return;
+    if (details.pointerCount > 1) {
+      // A pinch takes over: put the media back.
+      _dismissDrag = false;
+      _springBack(0);
+      return;
+    }
+    dismissOffset.value += details.focalPointDelta.dy;
+  }
+
+  void _springBack(double velocity) {
+    if (NotionMotion.reduced(context)) {
+      _settle.value = 0;
+      return;
+    }
+    _settle
+      ..value = dismissOffset.value
+      ..animateWith(
+        NotionMotion.springTo(
+          NotionMotion.snappy,
+          dismissOffset.value,
+          0,
+          velocity: velocity,
+        ),
+      );
+  }
+
+  Event get currentEventOrInitial =>
+      pageController.hasClients ? currentEvent : widget.event;
 
   @override
   void initState() {
@@ -75,8 +143,8 @@ class ImageViewerController extends State<ImageViewer> {
 
   Future<void> prevImage() async {
     await pageController.previousPage(
-      duration: FluffyThemes.animationDuration,
-      curve: FluffyThemes.animationCurve,
+      duration: NotionMotion.long,
+      curve: NotionMotion.emphasized,
     );
     if (!mounted) return;
     setState(() {});
@@ -84,8 +152,8 @@ class ImageViewerController extends State<ImageViewer> {
 
   Future<void> nextImage() async {
     await pageController.nextPage(
-      duration: FluffyThemes.animationDuration,
-      curve: FluffyThemes.animationCurve,
+      duration: NotionMotion.long,
+      curve: NotionMotion.emphasized,
     );
     if (!mounted) return;
     setState(() {});
@@ -127,9 +195,20 @@ class ImageViewerController extends State<ImageViewer> {
 
   /// Go back if user swiped it away
   void onInteractionEnds(ScaleEndDetails endDetails) {
+    final velocity = endDetails.velocity.pixelsPerSecond.dy;
+    if (_dismissDrag) {
+      _dismissDrag = false;
+      if (dismissOffset.value.abs() > dismissDistance ||
+          (velocity.abs() > dismissVelocity &&
+              velocity.sign == dismissOffset.value.sign)) {
+        Navigator.of(context, rootNavigator: false).pop();
+      } else {
+        _springBack(velocity);
+      }
+      return;
+    }
     if (PlatformInfos.usesTouchscreen == false) {
-      if (endDetails.velocity.pixelsPerSecond.dy >
-          MediaQuery.sizeOf(context).height * maxScaleFactor) {
+      if (velocity > MediaQuery.sizeOf(context).height * maxScaleFactor) {
         Navigator.of(context, rootNavigator: false).pop();
       }
     }
@@ -137,6 +216,11 @@ class ImageViewerController extends State<ImageViewer> {
 
   @override
   void dispose() {
+    _settle.dispose();
+    dismissOffset.dispose();
+    for (final transform in _transforms.values) {
+      transform.dispose();
+    }
     focusNode.dispose();
     pageController.dispose();
     super.dispose();

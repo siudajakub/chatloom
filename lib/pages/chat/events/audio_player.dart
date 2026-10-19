@@ -9,7 +9,10 @@ import 'dart:io';
 import 'package:async/async.dart';
 import 'package:fluffychat/pages/chat/notion_conversation.dart';
 import 'package:fluffychat/personal/media/media_access.dart';
+import 'package:fluffychat/personal/media/media_inflight.dart';
+import 'package:fluffychat/personal/person_location.dart';
 import 'package:fluffychat/personal/transcript_panel.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
@@ -119,16 +122,24 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
                       matrix.playAudio();
                     }
                   },
-                  icon: audioPlayer.playing && !audioPlayer.isAtEndPosition
-                      ? const Icon(Icons.pause_outlined)
-                      : const Icon(Icons.play_arrow_outlined),
+                  icon: NotionMorphSwitcher(
+                    child: audioPlayer.playing && !audioPlayer.isAtEndPosition
+                        ? const Icon(
+                            Icons.pause_outlined,
+                            key: ValueKey('pause'),
+                          )
+                        : const Icon(
+                            Icons.play_arrow_outlined,
+                            key: ValueKey('play'),
+                          ),
+                  ),
                 ),
               ),
               content: StreamBuilder(
                 stream: audioPlayer.positionStream.asBroadcastStream(),
                 builder: (context, _) => GestureDetector(
                   onTap: () => FluffyChatApp.router.go(
-                    '/rooms/${event.room.id}?event=${event.eventId}',
+                    conversationLocation(event.room, eventId: event.eventId),
                   ),
                   child: Text(
                     '🎙️ ${audioPlayer.position.minuteSecondString} / ${audioPlayer.duration?.minuteSecondString} - ${event.senderFromMemoryOrFallback.calcDisplayname()}',
@@ -201,6 +212,11 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
         final fileSize = widget.event.content
             .tryGetMap<String, Object?>('info')
             ?.tryGet<int>('size');
+        // Wait briefly for a matching prefetch; a newer play stops waiting.
+        await MediaInflight.settle(
+          widget.event.attachmentMxcUrl,
+          cancelled: () => request != matrix.audioRequestGeneration || !mounted,
+        );
         matrixFile = await widget.event.downloadAndDecryptAttachment(
           onDownloadProgress: fileSize != null && fileSize > 0
               ? (progress) {
@@ -339,15 +355,8 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
   }
 
   void _showPlaybackError() {
-    final pl = Localizations.localeOf(context).languageCode == 'pl';
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          pl
-              ? 'Nie udało się zmienić odtwarzania. Spróbuj ponownie.'
-              : 'Could not change playback. Try again.',
-        ),
-      ),
+      const SnackBar(content: Text('Could not change playback. Try again.')),
     );
   }
 
@@ -456,7 +465,10 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
                     ? null
                     : () => _toggleSpeed(audioPlayer),
               ),
-              TranscriptPanel(event: widget.event),
+              TranscriptPanel(
+                event: widget.event,
+                foregroundColor: widget.color,
+              ),
               if (fileDescription != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),

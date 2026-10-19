@@ -81,14 +81,7 @@ class EventVideoPlayer extends StatelessWidget {
               borderRadius: BorderRadius.circular(NotionTokens.radius),
               child: InkWell(
                 onTap: () => supportsVideoPlayer
-                    ? showDialog(
-                        context: context,
-                        builder: (_) => ImageViewer(
-                          event,
-                          timeline: timeline,
-                          outerContext: context,
-                        ),
-                      )
+                    ? showImageViewer(context, event, timeline: timeline)
                     : event.saveFile(context),
                 borderRadius: BorderRadius.circular(NotionTokens.radius),
                 child: SizedBox(

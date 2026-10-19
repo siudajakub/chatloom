@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:fluffychat/pages/chat/notion_conversation.dart';
 import 'package:fluffychat/pages/chat/conversation_bubble.dart';
 import 'package:fluffychat/pages/chat/conversation_message_gestures.dart';
+import 'package:fluffychat/personal/ui/notion_transcribe_button.dart';
 import 'package:fluffychat/ui/notion/notion_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
@@ -321,9 +322,9 @@ void main() {
                                 onSpeed: () {},
                                 onDownload: () {},
                               ),
-                              NotionTranscribeAction(
-                                label: 'Transkrybuj',
-                                onPressed: () {},
+                              NotionTranscribeSplitButton(
+                                onTranscribe: () {},
+                                onLanguageSelected: (_) {},
                               ),
                             ],
                           ),

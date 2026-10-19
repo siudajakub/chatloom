@@ -30,10 +30,11 @@ class ImageViewerView extends StatelessWidget {
       backgroundColor: Colors.black.withAlpha(200),
       foregroundColor: Colors.white,
     );
+    final backdrop = Colors.black.withAlpha(128);
     return GestureDetector(
       onTap: () => Navigator.of(context).pop(),
       child: Scaffold(
-        backgroundColor: Colors.black.withAlpha(128),
+        backgroundColor: Colors.transparent,
         extendBodyBehindAppBar: true,
         appBar: AppBar(
           elevation: 0,
@@ -114,93 +115,115 @@ class ImageViewerView extends StatelessWidget {
         body: HoverBuilder(
           builder: (context, hovered) => Stack(
             children: [
-              KeyboardListener(
-                focusNode: controller.focusNode,
-                onKeyEvent: controller.onKeyEvent,
-                child: PointersListener(
-                  builder: (context, moreThanOnePointer) => PageView.builder(
-                    physics: !moreThanOnePointer
-                        ? BouncingScrollPhysics()
-                        : NeverScrollableScrollPhysics(),
-                    scrollDirection: Axis.horizontal,
-                    controller: controller.pageController,
-                    onPageChanged: (_) =>
-                        RoundPlaybackCoordinator.shared.stopAll(suspend: false),
-                    itemCount: controller.allEvents.length,
-                    itemBuilder: (context, i) {
-                      final event = controller.allEvents[i];
-                      final policy = RoundMediaPolicy.fromContent(
-                        event.content,
-                      );
-                      final round =
-                          RoundVideoDescriptor.fromContent(
-                            event.content,
-                            redacted: event.redacted,
-                          ) !=
-                          null;
-                      if (!policy.canPlay || round || event.redacted) {
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 52),
-                          child: Center(
-                            child: GestureDetector(
-                              onTap: () {},
-                              child: round
-                                  ? RoundVideoBridgeMessage(
-                                      event,
-                                      key: ValueKey((
-                                        event.room.client,
-                                        event.room.id,
-                                        event.eventId,
-                                      )),
-                                      textColor: Colors.white,
-                                    )
-                                  : RoundVideoMessage(
-                                      event,
-                                      textColor: Colors.white,
-                                      showThumbnail: false,
-                                    ),
-                            ),
-                          ),
+              // The backdrop fades while the media is swiped away.
+              Positioned.fill(
+                child: ValueListenableBuilder<double>(
+                  valueListenable: controller.dismissOffset,
+                  child: ColoredBox(color: backdrop),
+                  builder: (context, offset, child) => Opacity(
+                    opacity: (1 - offset.abs() / 400).clamp(0.0, 1.0),
+                    child: child,
+                  ),
+                ),
+              ),
+              _DismissTransform(
+                offset: controller.dismissOffset,
+                child: KeyboardListener(
+                  focusNode: controller.focusNode,
+                  onKeyEvent: controller.onKeyEvent,
+                  child: PointersListener(
+                    builder: (context, moreThanOnePointer) => PageView.builder(
+                      physics: !moreThanOnePointer
+                          ? BouncingScrollPhysics()
+                          : NeverScrollableScrollPhysics(),
+                      scrollDirection: Axis.horizontal,
+                      controller: controller.pageController,
+                      onPageChanged: (_) => RoundPlaybackCoordinator.shared
+                          .stopAll(suspend: false),
+                      itemCount: controller.allEvents.length,
+                      itemBuilder: (context, i) {
+                        final event = controller.allEvents[i];
+                        final policy = RoundMediaPolicy.fromContent(
+                          event.content,
                         );
-                      }
-                      switch (event.messageType) {
-                        case MessageTypes.Video:
+                        final round =
+                            RoundVideoDescriptor.fromContent(
+                              event.content,
+                              redacted: event.redacted,
+                            ) !=
+                            null;
+                        if (!policy.canPlay || round || event.redacted) {
                           return Padding(
-                            padding: const EdgeInsets.only(top: 52.0),
+                            padding: const EdgeInsets.only(top: 52),
                             child: Center(
                               child: GestureDetector(
-                                // Ignore taps to not go back here:
                                 onTap: () {},
-                                child: EventVideoPlayer(event),
+                                child: round
+                                    ? RoundVideoBridgeMessage(
+                                        event,
+                                        key: ValueKey((
+                                          event.room.client,
+                                          event.room.id,
+                                          event.eventId,
+                                        )),
+                                        textColor: Colors.white,
+                                        enlargeOnPlay: false,
+                                      )
+                                    : RoundVideoMessage(
+                                        event,
+                                        textColor: Colors.white,
+                                        showThumbnail: false,
+                                        enlargeOnPlay: false,
+                                      ),
                               ),
                             ),
                           );
-                        case MessageTypes.Image:
-                        case MessageTypes.Sticker:
-                        default:
-                          return InteractiveViewer(
-                            minScale: 1.0,
-                            maxScale: 10.0,
-                            onInteractionEnd: controller.onInteractionEnds,
-                            child: Center(
-                              child: Hero(
-                                tag: event.eventId,
+                        }
+                        switch (event.messageType) {
+                          case MessageTypes.Video:
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 52.0),
+                              child: Center(
                                 child: GestureDetector(
                                   // Ignore taps to not go back here:
                                   onTap: () {},
-                                  child: MxcImage(
-                                    key: ValueKey(event.eventId),
-                                    event: event,
-                                    fit: BoxFit.contain,
-                                    isThumbnail: false,
-                                    animated: true,
+                                  child: EventVideoPlayer(event),
+                                ),
+                              ),
+                            );
+                          case MessageTypes.Image:
+                          case MessageTypes.Sticker:
+                          default:
+                            return InteractiveViewer(
+                              minScale: 1.0,
+                              maxScale: 10.0,
+                              transformationController: controller.transformFor(
+                                event,
+                              ),
+                              onInteractionStart: controller.onInteractionStart,
+                              onInteractionUpdate:
+                                  controller.onInteractionUpdate,
+                              onInteractionEnd: controller.onInteractionEnds,
+                              child: Center(
+                                child: Hero(
+                                  tag: event.eventId,
+                                  child: GestureDetector(
+                                    // Ignore taps to not go back here:
+                                    onTap: () {},
+                                    child: MxcImage(
+                                      key: ValueKey(event.eventId),
+                                      event: event,
+                                      fit: BoxFit.contain,
+                                      isThumbnail: false,
+                                      animated: true,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          );
-                      }
-                    },
+                            );
+                        }
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -236,6 +259,28 @@ class ImageViewerView extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Moves the pages with a dismiss swipe: down (or up) by the finger, and a
+/// little smaller the further they travel.
+class _DismissTransform extends AnimatedWidget {
+  const _DismissTransform({
+    required ValueNotifier<double> offset,
+    required this.child,
+  }) : super(listenable: offset);
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final offset = (listenable as ValueNotifier<double>).value;
+    final height = MediaQuery.sizeOf(context).height;
+    final shrink = height <= 0 ? 0.0 : (offset.abs() / height).clamp(0.0, 1.0);
+    return Transform.translate(
+      offset: Offset(0, offset),
+      child: Transform.scale(scale: 1 - .15 * shrink, child: child),
     );
   }
 }

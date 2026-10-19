@@ -11,6 +11,7 @@ import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/bounded_byte_cache.dart';
 import 'package:fluffychat/utils/client_download_content_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
@@ -87,6 +88,10 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   Timer? _retryTimer;
   int _generation = 0, _failures = 0;
   bool _loading = false;
+
+  /// Bytes came from the memory cache before the first frame: render them
+  /// directly, without the placeholder cross-fade.
+  bool _fromCache = false;
   Client? _dependencyClient;
   double? _dependencyDpr;
 
@@ -105,24 +110,28 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     });
   }
 
+  _ImageKey? _cacheKey(Client client) {
+    final cacheKey = widget.cacheKey;
+    if (cacheKey == null) return null;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return (
+      client,
+      widget.cacheName ?? '',
+      cacheKey,
+      widget.uri?.toString() ?? widget.event?.eventId,
+      widget.width == null ? null : widget.width! * dpr,
+      widget.height == null ? null : widget.height! * dpr,
+      widget.isThumbnail,
+      widget.animated,
+    );
+  }
+
   Future<void> _load(int generation) async {
     final client =
         widget.client ?? widget.event?.room.client ?? Matrix.of(context).client;
     final uri = widget.uri;
     final event = widget.event;
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-    final key = widget.cacheKey == null
-        ? null
-        : (
-            client,
-            widget.cacheName ?? '',
-            widget.cacheKey!,
-            widget.uri?.toString() ?? widget.event?.eventId,
-            widget.width == null ? null : widget.width! * dpr,
-            widget.height == null ? null : widget.height! * dpr,
-            widget.isThumbnail,
-            widget.animated,
-          );
+    final key = _cacheKey(client);
     final cached = key == null ? null : _imageDataCache.get(key);
     if (cached != null) {
       _accept(cached, null, generation);
@@ -136,14 +145,23 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       final height = widget.height;
       final realHeight = height == null ? null : height * devicePixelRatio;
 
-      final remoteData = await client.downloadMxcCached(
-        uri,
-        width: realWidth,
-        height: realHeight,
-        thumbnailMethod: widget.thumbnailMethod,
-        isThumbnail: widget.isThumbnail,
-        animated: widget.animated,
-      );
+      Uint8List remoteData;
+      try {
+        remoteData = await client.downloadMxcCached(
+          uri,
+          width: realWidth,
+          height: realHeight,
+          thumbnailMethod: widget.thumbnailMethod,
+          isThumbnail: widget.isThumbnail,
+          animated: widget.animated,
+        );
+      } on MatrixException catch (e) {
+        if (!widget.isThumbnail) rethrow;
+        // Some bridge and remote media has no thumbnail (404/unrecognized);
+        // the original still loads.
+        Logs().d('Thumbnail unavailable, loading original', e);
+        remoteData = await client.downloadMxcCached(uri);
+      }
       _accept(remoteData, key, generation);
       return;
     }
@@ -217,6 +235,23 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     _loading = false;
     _failures = 0;
     _imageData = _lottieData = null;
+    _fromCache = false;
+    if (widget.uri != null || widget.event != null) {
+      final client =
+          widget.client ??
+          widget.event?.room.client ??
+          Matrix.of(context).client;
+      final key = _cacheKey(client);
+      final cached = key == null ? null : _imageDataCache.get(key);
+      if (cached != null) {
+        // Synchronous memory hit: no post-frame load, no fade-in on rebuilds
+        // and list reorders.
+        _imageData = cached;
+        _lottieData = _ungzipLottie(cached);
+        _fromCache = true;
+        return;
+      }
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _tryLoad());
   }
 
@@ -224,7 +259,8 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _tryLoad());
+    // didChangeDependencies (always called next) resolves the cache or
+    // schedules the load.
   }
 
   @override
@@ -327,6 +363,46 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       );
     }
 
+    final placeholder = _MxcImagePlaceholder(
+      width: widget.width,
+      height: widget.height,
+      placeholder: widget.placeholder,
+    );
+    // A network or disk load fades the first decoded frame in over the
+    // placeholder (initials, spinner) instead of popping; memory hits and
+    // synchronous decodes show at once, so scrolling never flickers.
+    Widget fadeInFrame(
+      BuildContext context,
+      Widget child,
+      int? frame,
+      bool wasSynchronouslyLoaded,
+    ) {
+      if (wasSynchronouslyLoaded || _fromCache) return child;
+      final duration = NotionMotion.reduced(context)
+          ? Duration.zero
+          : widget.animationDuration;
+      final decoded = frame != null;
+      return Stack(
+        alignment: Alignment.center,
+        children: [
+          Positioned.fill(
+            child: AnimatedOpacity(
+              opacity: decoded ? 0 : 1,
+              duration: duration,
+              curve: NotionMotion.exitFast,
+              child: placeholder,
+            ),
+          ),
+          AnimatedOpacity(
+            opacity: decoded ? 1 : 0,
+            duration: duration,
+            curve: widget.animationCurve,
+            child: child,
+          ),
+        ],
+      );
+    }
+
     final imageChild = data == null
         ? _MxcImagePlaceholder(
             width: widget.width,
@@ -349,23 +425,23 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
                   filterQuality: widget.isThumbnail
                       ? FilterQuality.low
                       : FilterQuality.medium,
+                  frameBuilder: fadeInFrame,
                   errorBuilder: errorFallback,
                 ));
 
-    return AnimatedCrossFade(
-      duration: FluffyThemes.animationDuration,
-      firstChild: ClipRRect(
-        borderRadius: widget.borderRadius,
-        child: imageChild,
-      ),
-      secondChild: _MxcImagePlaceholder(
-        width: widget.width,
-        height: widget.height,
-        placeholder: widget.placeholder,
-      ),
-      crossFadeState: hasData
-          ? CrossFadeState.showFirst
-          : CrossFadeState.showSecond,
+    final clipped = widget.borderRadius == BorderRadius.zero
+        ? imageChild
+        : ClipRRect(borderRadius: widget.borderRadius, child: imageChild);
+    if (_fromCache && hasData) return clipped;
+    if (!hasData) return placeholder;
+    // Images fade their first frame in (above); a Lottie sticker fades in
+    // once when it arrives.
+    if (ungzippedLottieData == null) return clipped;
+    return NotionEntrance(
+      rise: 0,
+      afterRoute: false,
+      duration: widget.animationDuration,
+      child: clipped,
     );
   }
 }
@@ -388,7 +464,7 @@ class _MxcImagePlaceholder extends StatelessWidget {
           width: width,
           height: height,
           alignment: Alignment.center,
-          child: const CircularProgressIndicator.adaptive(strokeWidth: 2),
+          child: const NotionDelayedSpinner(),
         );
   }
 }
