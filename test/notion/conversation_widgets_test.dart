@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:fluffychat/pages/chat/notion_conversation.dart';
 import 'package:fluffychat/pages/chat/conversation_bubble.dart';
+import 'package:fluffychat/personal/ui/notion_transcribe_button.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -196,7 +197,10 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: NotionTranscribeAction(onPressed: () => requests++),
+            body: NotionTranscribeSplitButton(
+              onTranscribe: () => requests++,
+              onLanguageSelected: (_) {},
+            ),
           ),
         ),
       );
@@ -205,20 +209,23 @@ void main() {
       await tester.tap(find.text('Transcribe'));
       expect(requests, 1);
       await tester.pumpWidget(
-        const MaterialApp(
+        MaterialApp(
           home: Scaffold(
-            body: NotionTranscribeAction(
+            body: NotionTranscribeSplitButton(
               busy: true,
-              label: 'Waiting for confirmation',
+              label: 'Sending…',
+              onTranscribe: () => requests++,
             ),
           ),
         ),
       );
       expect(
-        tester.widget<TextButton>(find.byType(TextButton)).onPressed,
+        tester
+            .widget<TextButton>(find.byKey(const ValueKey('transcribe-primary')))
+            .onPressed,
         isNull,
       );
-      expect(find.text('Waiting for confirmation'), findsOneWidget);
+      expect(find.text('Sending…'), findsOneWidget);
     },
   );
 

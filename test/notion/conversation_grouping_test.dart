@@ -10,6 +10,7 @@ ConversationGroupingItem item({
   String? thread,
   String state = 'sent',
   bool boundary = false,
+  bool startsSeries = false,
 }) => ConversationGroupingItem(
   accountId: account,
   sourceId: source,
@@ -19,6 +20,7 @@ ConversationGroupingItem item({
   threadId: thread,
   deliveryState: state,
   boundary: boundary,
+  startsSeries: startsSeries,
 );
 
 void main() {
@@ -164,4 +166,23 @@ void main() {
       );
     },
   );
+
+  test('a reply opens a new group but later messages join it', () {
+    final reply = item(startsSeries: true);
+    expect(
+      conversationGroupPosition(item: reply, older: older, newer: newer),
+      ConversationGroupPosition.first,
+    );
+    expect(
+      conversationGroupPosition(item: older, newer: reply),
+      ConversationGroupPosition.single,
+    );
+    expect(
+      conversationGroupPosition(
+        item: newer,
+        older: reply,
+      ),
+      ConversationGroupPosition.last,
+    );
+  });
 }

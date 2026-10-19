@@ -7,6 +7,7 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/compact_composer.dart';
 import 'package:fluffychat/pages/chat/events/message.dart';
 import 'package:fluffychat/pages/chat/conversation_message_gestures.dart';
+import 'package:fluffychat/pages/chat/voice_record_button.dart';
 import 'package:fluffychat/personal/merged_chat_page.dart';
 import 'package:fluffychat/ui/notion/notion_theme.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -231,6 +232,80 @@ void main() {
           keyboard: 0,
           state: 'group',
         ),
+        (
+          width: 320,
+          scale: 1,
+          theme: Brightness.dark,
+          rtl: false,
+          merged: false,
+          keyboard: 0,
+          state: 'actions',
+        ),
+        (
+          width: 390,
+          scale: 1,
+          theme: Brightness.light,
+          rtl: true,
+          merged: true,
+          keyboard: 0,
+          state: 'actions',
+        ),
+        (
+          width: 390,
+          scale: 1,
+          theme: Brightness.dark,
+          rtl: false,
+          merged: false,
+          keyboard: 0,
+          state: 'actions',
+        ),
+        (
+          width: 390,
+          scale: 1,
+          theme: Brightness.dark,
+          rtl: false,
+          merged: false,
+          keyboard: 0,
+          state: 'hold',
+        ),
+        (
+          width: 320,
+          scale: 1,
+          theme: Brightness.light,
+          rtl: true,
+          merged: false,
+          keyboard: 0,
+          state: 'hold',
+        ),
+        // The merged person chat renders through the same timeline and
+        // composer as the ordinary chat.
+        (
+          width: 390,
+          scale: 1,
+          theme: Brightness.dark,
+          rtl: false,
+          merged: true,
+          keyboard: 0,
+          state: 'text',
+        ),
+        (
+          width: 390,
+          scale: 1,
+          theme: Brightness.dark,
+          rtl: false,
+          merged: true,
+          keyboard: 0,
+          state: 'reply',
+        ),
+        (
+          width: 390,
+          scale: 1.3,
+          theme: Brightness.light,
+          rtl: false,
+          merged: true,
+          keyboard: 0,
+          state: 'select',
+        ),
       ];
   for (var index = 0; index < cases.length; index++) {
     final c = cases[index];
@@ -326,6 +401,9 @@ void main() {
           'bridgebot': '@bridge:example.invalid',
           'com.beeper.room_type.v2': 'group',
         }, key: 'fixture');
+      if (c.merged) {
+        b.message(r'$messenger', 'Saw your message on Messenger.', minute: 45);
+      }
       final personal = ConversationPersonal(client);
       final group = PersonGroup(
         id: 'capture',
@@ -335,6 +413,7 @@ void main() {
       );
       final scroll = ScrollController();
       final editor = TextEditingController();
+      final hold = VoiceRecordHold();
       final timeline = Timeline(
         room: a,
         chunk: TimelineChunk(events: a.sourceEvents),
@@ -394,27 +473,52 @@ void main() {
                 ),
                 SafeArea(
                   top: false,
-                  child: CompactComposer(
-                    input: TextField(
-                      controller: editor,
-                      minLines: 1,
-                      maxLines: 4,
-                      decoration: const InputDecoration(
-                        hintText: 'Message…',
-                        hintMaxLines: 1,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        filled: false,
+                  child: ListenableBuilder(
+                    listenable: hold,
+                    builder: (context, _) => CompactComposer(
+                      input: TextField(
+                        controller: editor,
+                        minLines: 1,
+                        maxLines: 4,
+                        decoration: const InputDecoration(
+                          hintText: 'Message…',
+                          hintMaxLines: 1,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          filled: false,
+                        ),
                       ),
-                    ),
-                    source: const ConversationSourceChip(network: 'whatsapp'),
-                    addAction: IconButton(
-                      icon: const Icon(Icons.add),
-                      onPressed: () {},
-                    ),
-                    primaryAction: IconButton(
-                      icon: const Icon(Icons.mic_none_outlined),
-                      onPressed: () {},
+                      source: const ConversationSourceChip(network: 'whatsapp'),
+                      actions: [
+                        ComposerAction(
+                          icon: Icons.attach_file_outlined,
+                          label: 'Attach media or a file',
+                          onPressed: () {},
+                        ),
+                        ComposerAction(
+                          icon: Icons.add_reaction_outlined,
+                          label: 'Emoji picker',
+                          onPressed: () {},
+                        ),
+                        ComposerAction(
+                          icon: Icons.videocam_outlined,
+                          label: 'Round video',
+                          onPressed: () {},
+                        ),
+                      ],
+                      collapseOnText: editor,
+                      inputOverlay: hold.capturing
+                          ? VoiceRecordHoldOverlay(
+                              hold: hold,
+                              duration: const Duration(seconds: 7),
+                            )
+                          : null,
+                      primaryAction: VoiceRecordButton(
+                        hold: hold,
+                        onStart: () async => true,
+                        onSend: () async {},
+                        onCancel: () {},
+                      ),
                     ),
                   ),
                 ),
@@ -465,6 +569,31 @@ void main() {
             .onReply!();
         await tester.pumpAndSettle();
       }
+      if (c.state == 'select') {
+        await tester.longPress(find.text('Exactly. I’ll send you the location.'));
+        await tester.pumpAndSettle();
+        expect(find.byTooltip('React 👍'), findsOneWidget);
+      }
+      if (c.state == 'actions') {
+        await tester.tap(find.byTooltip('More message actions'));
+        await tester.pumpAndSettle();
+        expect(find.byTooltip('Hide message actions'), findsOneWidget);
+        expect(find.byTooltip('Attach media or a file'), findsOneWidget);
+      }
+      TestGesture? held;
+      if (c.state == 'hold') {
+        held = await tester.startGesture(
+          tester.getCenter(find.byType(VoiceRecordButton)),
+        );
+        await tester.pump();
+        await tester.pump(VoiceRecordLayout.enter);
+        // Halfway to the lock: the pill rises and its lock closes.
+        await held.moveBy(const Offset(0, -40));
+        await tester.pump();
+        expect(hold.phase, VoiceRecordPhase.holding);
+        expect(find.byKey(const Key('voice_lock_pill')), findsOneWidget);
+        expect(find.text('0:07'), findsOneWidget);
+      }
       if (c.state == 'picker') {
         await tester.tap(find.byType(ConversationSourceChip));
         await tester.pumpAndSettle();
@@ -512,7 +641,13 @@ void main() {
         ),
         0,
       );
+      if (held != null) {
+        await held.cancel();
+        await tester.pump();
+        expect(hold.phase, VoiceRecordPhase.idle);
+      }
       await tester.pumpWidget(const SizedBox.shrink());
+      hold.dispose();
       timeline.cancelSubscriptions();
       scroll.dispose();
       editor.dispose();

@@ -129,7 +129,7 @@ class ConversationRoom extends Room {
 
 class ConversationPersonal extends PersonalClient {
   final drafts = <({SendTarget target, String text})>[];
-  final sends = <({Room room, String text, Event? reply})>[];
+  final sends = <({Room room, String text, Event? reply, String? edit})>[];
   ImmediateSendState sendState = ImmediateSendState.accepted;
   ConversationPersonal(super.client)
     : super.forTesting(openStore: () => throw StateError('No fixture store'));
@@ -155,7 +155,7 @@ class ConversationPersonal extends PersonalClient {
     String? editEventId,
     String? threadId,
   }) async {
-    sends.add((room: room, text: text, reply: replyTo));
+    sends.add((room: room, text: text, reply: replyTo, edit: editEventId));
     return ImmediateSendResult(
       state: sendState,
       actionId: 'fixture-action',

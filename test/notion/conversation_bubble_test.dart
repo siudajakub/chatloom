@@ -1,5 +1,6 @@
 import 'package:fluffychat/pages/chat/conversation_bubble.dart';
 import 'package:fluffychat/pages/chat/conversation_grouping.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -154,15 +155,17 @@ void main() {
         .widget<ClipRRect>(fill('last'))
         .borderRadius
         .resolve(TextDirection.ltr);
-    expect(first.topLeft, const Radius.circular(20));
-    expect(first.bottomLeft, const Radius.circular(5));
-    expect(middle.topRight, const Radius.circular(5));
-    expect(middle.bottomRight, const Radius.circular(5));
-    expect(last.topLeft, const Radius.circular(5));
-    expect(last.bottomLeft, const Radius.circular(20));
+    const outer = Radius.circular(NotionBubble.outer);
+    const joined = Radius.circular(NotionBubble.joined);
+    expect(first.topLeft, outer);
+    expect(first.bottomLeft, joined);
+    expect(middle.topRight, joined);
+    expect(middle.bottomRight, joined);
+    expect(last.topLeft, joined);
+    expect(last.bottomLeft, outer);
     expect(
       tester.getRect(fill('middle')).top - tester.getRect(fill('first')).bottom,
-      3,
+      NotionBubble.groupGap,
     );
   });
 
@@ -350,10 +353,8 @@ void main() {
           heading: const Text('Fictional sender'),
           footer: const Text('16:40'),
           reactions: const Text('👍 1'),
-          surfaceBuilder: (surface) => Transform.translate(
-            offset: Offset(offset, 0),
-            child: surface,
-          ),
+          surfaceBuilder: (surface) =>
+              Transform.translate(offset: Offset(offset, 0), child: surface),
         ),
       ),
     );
@@ -367,7 +368,10 @@ void main() {
     final beforeReactions = tester.getRect(find.text('👍 1'));
     offset = 64;
     await render();
-    expect(tester.getRect(fill('moving')), beforeFill.shift(const Offset(64, 0)));
+    expect(
+      tester.getRect(fill('moving')),
+      beforeFill.shift(const Offset(64, 0)),
+    );
     expect(
       tester.getRect(find.text('A moving message')),
       beforeBody.shift(const Offset(64, 0)),
@@ -377,5 +381,168 @@ void main() {
     expect(tester.getRect(find.text('16:40')), beforeFooter);
     expect(tester.getRect(find.text('👍 1')), beforeReactions);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('chromeless bubbles have no fill and a circular selection ring', (
+    tester,
+  ) async {
+    Widget bubble({required bool selected, required bool outgoing}) =>
+        ConversationBubble(
+          key: Key('round-$outgoing'),
+          outgoing: outgoing,
+          chromeless: true,
+          selected: selected,
+          groupPosition: ConversationGroupPosition.middle,
+          avatar: const Text('Avatar'),
+          footer: const Text('16:40'),
+          body: const ConversationSelectionRing(
+            child: SizedBox.square(key: Key('circle'), dimension: 200),
+          ),
+        );
+    await tester.pumpWidget(
+      host(
+        Column(
+          children: [
+            bubble(selected: false, outgoing: false),
+            bubble(selected: true, outgoing: true),
+          ],
+        ),
+      ),
+    );
+    expect(fill('round-false'), findsNothing);
+    expect(fill('round-true'), findsNothing);
+    final circles = tester.getRect(find.byKey(const Key('circle')).first);
+    expect(circles.size, const Size.square(200));
+    expect(circles.left, 36, reason: 'avatar slot kept, no padding');
+    final ring = find.byKey(const ValueKey('conversation-selection-ring'));
+    expect(ring, findsOneWidget);
+    final decoration = tester.widget<DecoratedBox>(ring).decoration;
+    expect((decoration as ShapeDecoration).shape, isA<CircleBorder>());
+    expect(tester.getRect(find.byKey(const Key('circle')).last).right, 390);
+    // Consecutive chromeless items keep at least 8 px between them.
+    final gap =
+        tester.getTopLeft(find.byKey(const Key('circle')).last).dy -
+        tester.getBottomLeft(find.byKey(const Key('circle')).first).dy;
+    expect(gap, greaterThanOrEqualTo(8));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('one-line bubble is a pill', (tester) async {
+    await tester.pumpWidget(
+      host(
+        const ConversationBubble(
+          key: Key('pill'),
+          outgoing: true,
+          body: Text('ojoj'),
+        ),
+      ),
+    );
+    final rect = tester.getRect(fill('pill'));
+    // Corners of at least ~half the height leave no visible flat side.
+    expect(NotionBubble.outer, greaterThanOrEqualTo(rect.height / 2 - 2));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('reply quote sits above the fill, which covers its bottom', (
+    tester,
+  ) async {
+    var opened = 0;
+    var bubbleTaps = 0;
+    await tester.pumpWidget(
+      host(
+        ConversationBubble(
+          key: const Key('reply'),
+          outgoing: true,
+          avatar: const Text('Avatar'),
+          quote: ConversationReplyQuote(
+            key: const Key('quote'),
+            text: 'jestem w pracy',
+            fill: const Color(0xFF2D2D2D),
+            textColor: const Color(0xFFAAAAA5),
+            outgoing: true,
+            caption: const Text('Replied to Anna'),
+            onTap: () => opened++,
+          ),
+          body: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => bubbleTaps++,
+            child: const Text('ojoj'),
+          ),
+        ),
+      ),
+    );
+    final quoteRect = tester.getRect(
+      find.descendant(
+        of: find.byKey(const Key('quote')),
+        matching: find.byType(DecoratedBox),
+      ),
+    );
+    final fillRect = tester.getRect(fill('reply'));
+    final caption = tester.getRect(find.text('Replied to Anna'));
+    expect(caption.bottom, lessThanOrEqualTo(quoteRect.top));
+    // Outgoing: quote and bubble share the end edge.
+    expect(quoteRect.right, fillRect.right);
+    expect(
+      quoteRect.bottom - fillRect.top,
+      moreOrLessEquals(NotionBubble.quoteOverlap),
+    );
+    // The quoted text stays above the covered strip.
+    expect(
+      tester.getRect(find.text('jestem w pracy')).bottom,
+      lessThanOrEqualTo(fillRect.top),
+    );
+    // Taps on the visible quote open the original; on the covered strip
+    // they reach the bubble.
+    await tester.tapAt(Offset(quoteRect.right - 8, quoteRect.top + 6));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tapAt(Offset(fillRect.center.dx, fillRect.top + 10));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(opened, 1);
+    expect(bubbleTaps, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('quote colours stay opaque and readable on every chat palette', () {
+    const pages = [
+      Color(0xFF191919),
+      Color(0xFFFAF9F6),
+      Color(0xFFFAFAFA),
+      Color(0xFFF0F2F4),
+      Color(0xFFF8F4EC),
+      Color(0xFFECF3F0),
+      Color(0xFF202329),
+      Color(0xFF292329),
+    ];
+    const sides = [
+      Color(0xFF2B2B2B),
+      Color(0xFF414141),
+      Color(0xFFF0EFEB),
+      Color(0xFFE8E7E3),
+      Color(0xFFDFEBDB),
+      Color(0xFFDBE6F5),
+      Color(0xFFF0DFE9),
+      Color(0xFFF1E6D2),
+      Color(0xFFD8EEEC),
+      Color(0xFFE5DEF2),
+      Color(0xFFF2DDDD),
+      Color(0xFFE5E7EB),
+    ];
+    for (final page in pages) {
+      for (final side in sides) {
+        for (final muted in const [Color(0xFFACACA8), Color(0xFF65655F)]) {
+          final colors = ConversationReplyQuote.colorsFor(
+            side: side,
+            page: page,
+            muted: muted,
+          );
+          expect(colors.fill.a, 1);
+          expect(
+            NotionContrast.ratio(colors.text, colors.fill),
+            greaterThanOrEqualTo(NotionContrast.minimum),
+            reason: 'side $side on page $page',
+          );
+        }
+      }
+    }
   });
 }

@@ -220,6 +220,44 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('source choices remain above an already visible keyboard', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(viewInsets: const EdgeInsets.only(bottom: 240)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showConversationSourcePicker(
+                context,
+                sources: options,
+                selected: first,
+              ),
+              child: const Text('Choose source'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Choose source'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getBottomRight(find.byType(ListView)).dy,
+      lessThanOrEqualTo(460),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('Cancel source selection'));
+    await tester.pumpAndSettle();
+  });
+
   for (final width in [390.0, 1000.0]) {
     for (final chooseSource in [false, true]) {
       testWidgets(

@@ -6,9 +6,11 @@ import 'package:fluffychat/pages/chat/events/message.dart';
 import 'package:fluffychat/pages/chat/events/message_content.dart';
 import 'package:fluffychat/pages/chat/events/reply_content.dart';
 import 'package:fluffychat/pages/chat/conversation_bubble.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/ui/notion/notion_theme.dart';
 import 'package:fluffychat/pages/chat/chat.dart';
 import 'package:fluffychat/pages/chat/chat_input_row.dart';
+import 'package:fluffychat/pages/chat/reply_display.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:fluffychat/personal/merged_chat_page.dart';
@@ -73,6 +75,12 @@ class _ComposerController extends ChatController {
   @override
   void emojiPickerAction() {
     emojiOpens++;
+  }
+
+  final attachments = <AddPopupMenuActions>[];
+  @override
+  void onAddPopupMenuButtonSelected(AddPopupMenuActions choice) {
+    attachments.add(choice);
   }
 }
 
@@ -186,7 +194,7 @@ void main() {
           .widgetList<ConversationMessageGestures>(
             find.byType(ConversationMessageGestures),
           )
-          .firstWhere((w) => w.identity == personal.source(original).key);
+          .firstWhere((w) => w.identity == original.eventId);
       gesture.onReply!();
       await tester.pumpAndSettle();
       expect(
@@ -265,7 +273,7 @@ void main() {
           .widgetList<ConversationMessageGestures>(
             find.byType(ConversationMessageGestures),
           )
-          .firstWhere((w) => w.identity == personal.source(original).key)
+          .firstWhere((w) => w.identity == original.eventId)
           .onReply!();
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('send_button')));
@@ -280,7 +288,12 @@ void main() {
             .locked,
         isTrue,
       );
-      await tester.tap(find.byTooltip('Cancel reply'));
+      await tester.tap(
+        find.descendant(
+          of: find.byType(ReplyDisplay),
+          matching: find.byIcon(Icons.close),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(
         tester
@@ -295,7 +308,7 @@ void main() {
     },
   );
   testWidgets(
-    'ordinary plus exposes schedule/media/emoji and dismisses before dispatch',
+    'ordinary plus opens inline media/emoji actions without schedule or popping',
     (tester) async {
       final client = ConversationClient();
       final room = ConversationRoom(client, '!input:example.invalid');
@@ -309,45 +322,112 @@ void main() {
         Scaffold(body: ChatInputRow(controller)),
         client,
       );
+      final editor = tester.state(find.byType(EditableText));
       await tester.tap(find.byTooltip('More message actions'));
       await tester.pumpAndSettle();
+      // Inline row in the composer bar, not a bottom sheet.
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.byTooltip('Hide message actions'), findsOneWidget);
       expect(find.byTooltip('Attach media or a file'), findsOneWidget);
-      expect(find.byTooltip('Schedule a message'), findsOneWidget);
-      await tester.tap(find.byTooltip('Schedule a message'));
+      expect(find.byTooltip('Emoji picker'), findsOneWidget);
+      // Send later lives only in the conversation three-dots menu.
+      expect(find.byTooltip('Schedule a message'), findsNothing);
+      expect(find.text('Schedule text'), findsNothing);
+      await tester.tap(find.byTooltip('Attach media or a file'));
       await tester.pumpAndSettle();
-      expect(find.text('Schedule text'), findsOneWidget);
-      expect(find.text('Schedule an attachment'), findsOneWidget);
-      await tester.tapAt(const Offset(4, 4));
+      final l10n = L10n.of(tester.element(find.byType(ChatInputRow)));
+      final file = l10n.sendFile;
+      expect(find.text(file), findsOneWidget);
+      // Library media, then (mobile) capture, then structured content.
+      final order = [
+        l10n.sendImage,
+        l10n.sendVideo,
+        file,
+        l10n.startPoll,
+      ].map((label) => tester.getCenter(find.text(label)).dy).toList();
+      for (var i = 1; i < order.length; i++) {
+        expect(order[i], greaterThan(order[i - 1]));
+      }
+      expect(find.text('Record a round video silently'), findsNothing);
+      await tester.tap(find.text(file));
+      await tester.pumpAndSettle();
+      // The selection dispatches once and never pops the chat route.
+      expect(controller.attachments, [AddPopupMenuActions.file]);
+      expect(find.byType(ChatInputRow), findsOneWidget);
+      expect(find.byTooltip('More message actions'), findsOneWidget);
+      await tester.tap(find.byTooltip('More message actions'));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Emoji picker'));
       await tester.pumpAndSettle();
       expect(controller.emojiOpens, 1);
-      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.byType(ChatInputRow), findsOneWidget);
+      expect(find.byTooltip('More message actions'), findsOneWidget);
+      expect(tester.state(find.byType(EditableText)), same(editor));
       await tester.pumpWidget(const SizedBox.shrink());
       controller.sendController.dispose();
       controller.inputFocus.dispose();
       controller.scrollController.dispose();
     },
   );
-  testWidgets(
-    'light outgoing quote has readable sender and source text contrast',
-    (tester) async {
+  testWidgets('merged plus is inline, compact chip keeps its picker', (
+    tester,
+  ) async {
+    final client = ConversationClient();
+    final a = ConversationRoom(client, '!tray-a:example.invalid');
+    final b = ConversationRoom(client, '!tray-b:example.invalid');
+    a.message(r'$tray-a', 'A');
+    final personal = ConversationPersonal(client);
+    addTearDown(personal.dispose);
+    await mountConversation(
+      tester,
+      MergedChatPage(personal: personal, group: group(personal, a, b)),
+      client,
+    );
+    expect(
+      tester.getSize(find.byType(ConversationSourceChip)).width,
+      lessThanOrEqualTo(56),
+    );
+    await tester.tap(find.byTooltip('More message actions'));
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byTooltip('Attach media or a file'), findsOneWidget);
+    // Silent rounds live in the attach popup, never as a bare tray icon.
+    expect(find.byIcon(Icons.notifications_off_outlined), findsNothing);
+    expect(find.byTooltip('Send options'), findsNothing);
+    expect(find.text('Schedule text'), findsNothing);
+    await tester.enterText(find.byType(TextField), 'Typed');
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('More message actions'), findsOneWidget);
+    expect(find.byType(MergedChatPage), findsOneWidget);
+  });
+  for (final brightness in Brightness.values) {
+    testWidgets('${brightness.name} reply quote has readable text on its fill', (
+      tester,
+    ) async {
       final client = ConversationClient();
       final room = ConversationRoom(client, '!quote-contrast:example.invalid');
       final event = room.message(r'$quote-contrast', 'Fictional quote body');
-      late Color surface;
+      late Color fill;
       await tester.pumpWidget(
         MaterialApp(
-          theme: NotionTheme.build(Brightness.light),
+          theme: NotionTheme.build(brightness),
           localizationsDelegates: L10n.localizationsDelegates,
           supportedLocales: L10n.supportedLocales,
           home: Scaffold(
             body: Builder(
               builder: (context) {
-                surface = ConversationBubbleColors.of(context).outgoing;
-                return ColoredBox(
-                  color: surface,
-                  child: ReplyContent(event, ownMessage: true),
+                final bubble = ConversationBubbleColors.of(context);
+                final colors = ConversationReplyQuote.colorsFor(
+                  side: bubble.outgoing,
+                  page: context.notion.colors.background,
+                  muted: bubble.metadata,
+                );
+                fill = colors.fill;
+                return ReplyContent(
+                  event,
+                  fill: colors.fill,
+                  textColor: colors.text,
+                  outgoing: true,
                 );
               },
             ),
@@ -355,16 +435,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      for (final text in ['Anna:', 'Fictional quote body']) {
-        final color = tester.widget<Text>(find.text(text)).style!.color!;
-        final a = surface.computeLuminance(), b = color.computeLuminance();
-        expect(
-          ((a > b ? a : b) + .05) / ((a > b ? b : a) + .05),
-          greaterThanOrEqualTo(4.5),
-        );
-      }
-    },
-  );
+      final color = tester
+          .widget<Text>(find.text('Fictional quote body'))
+          .style!
+          .color!;
+      expect(
+        NotionContrast.ratio(color, fill),
+        greaterThanOrEqualTo(NotionContrast.minimum),
+      );
+    });
+  }
   testWidgets(
     'merged private palette preserves direction and readable source content',
     (tester) async {
