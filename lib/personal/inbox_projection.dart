@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:fluffychat/personal/own_sender.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/conversation_classification.dart';
@@ -85,6 +86,14 @@ class InboxProjection {
     return parsed
         .where((g) => g.members.every((m) => counts[m.roomId] == 1))
         .toList();
+  }
+
+  /// The valid person group with [id], if any.
+  PersonGroup? groupById(String id) {
+    for (final group in _validGroups) {
+      if (group.id == id) return group;
+    }
+    return null;
   }
 
   PersonGroup? groupFor(Room room) {
@@ -210,6 +219,29 @@ class InboxProjection {
         : group?.name ?? room.getLocalizedDisplayname();
   }
 
+  /// Network avatar of the conversation: the room's own, or for a merged
+  /// person the first source room that has one (the default network may
+  /// have no photo). Private avatars are resolved by the widgets.
+  Uri? avatarFor(Room room) {
+    final own = room.avatar;
+    if (own != null) return own;
+    final group = groupFor(room);
+    if (group == null) return null;
+    return avatarForGroup(group);
+  }
+
+  Uri? avatarForGroup(PersonGroup group) {
+    final rooms = [
+      group.defaultRoomId,
+      ...group.members.map((m) => m.roomId),
+    ].map(personal.client.getRoomById).whereType<Room>();
+    for (final source in rooms) {
+      final avatar = source.avatar;
+      if (avatar != null) return avatar;
+    }
+    return null;
+  }
+
   int unreadCount(Room room) {
     final group = groupFor(room);
     if (group == null) return room.notificationCount;
@@ -227,24 +259,29 @@ class InboxProjection {
     InboxFilter filter = InboxFilter.inbox,
     String query = '',
     String? labelKey,
-  }) => (_snapshot ? this : InboxProjection.snapshot(personal))._rooms(
-    input,
-    filter: filter,
-    query: query,
-    labelKey: labelKey,
-  );
-
-  List<Room> _rooms(
-    Iterable<Room> input, {
-    required InboxFilter filter,
-    required String query,
-    String? labelKey,
   }) {
+    final projection = _snapshot ? this : InboxProjection.snapshot(personal);
+    return projection.select(
+      projection.buildIndex(input),
+      filter: filter,
+      query: query,
+    );
+  }
+
+  /// Snapshot only: drops cached metadata so the next read sees fresh state.
+  void forgetEntity(String entity) {
+    _metadata.remove(entity);
+  }
+
+  static bool _candidate(Room room) =>
+      !room.isSpace && !PersonalPrivacy.isJournal(room);
+
+  /// All inbox records of [input], unfiltered. Reusable across filter/search
+  /// changes; [InboxIndex.updateRooms] refreshes single rooms in place.
+  InboxIndex buildIndex(Iterable<Room> input) {
+    assert(_snapshot, 'An index caches state; build it from a snapshot.');
     final available = {
-      for (final room in input.where(
-        (r) => !r.isSpace && !PersonalPrivacy.isJournal(r),
-      ))
-        room.id: room,
+      for (final room in input.where(_candidate)) room.id: room,
     };
     final groups = _validGroups;
     final members = <String, PersonGroup>{};
@@ -260,73 +297,86 @@ class InboxProjection {
         }
       }
     }
-    final emitted = <String>{};
-    final records = <InboxRecord>[];
-    final representatives = <String, Room>{};
+    final index = InboxIndex._(this, available, members);
     for (final room in available.values) {
       final group = members[room.id];
       final entity = group == null ? room.id : 'person:${group.id}';
-      if (!emitted.add(entity)) continue;
-      final sourceRooms = group == null
-          ? [room]
-          : group.members.map((m) => available[m.roomId]!).toList();
-      final representative = group == null
-          ? room
-          : available[group.defaultRoomId] ?? sourceRooms.first;
-      final lastEvents =
-          sourceRooms.map((r) => r.lastEvent).whereType<Event>().toList()
-            ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
-      final latest = lastEvents.firstOrNull;
-      final metadata = metadataForEntity(entity);
-      final nickname =
-          metadata.nickname ??
-          _text(personal.values['nickname:$entity']?['name']);
-      final title = nickname?.trim().isNotEmpty == true
-          ? nickname!
-          : group?.name ?? room.getLocalizedDisplayname();
-      final labels = personal.values.containsKey('labels:$entity')
-          ? _legacyLabels(entity).toSet()
-          : {
-              ...metadata.labelIds,
-              for (final source in sourceRooms) ..._legacyLabels(source.id),
-            };
-      final record = InboxRecord(
-        representativeRoomId: representative.id,
-        entityId: entity,
-        displayName: title,
-        metadata: metadata,
-        networks: sourceRooms.map(
-          (source) => classifier.classify(source).network,
-        ),
-        labelKeys: labels,
-        isGroup: group == null && !room.isDirectChatForDisplay,
-        technical: sourceRooms.every(
-          (source) => classifier.classify(source).technical,
-        ),
-        placement: placementFor(representative),
-        unread: sourceRooms.any((r) => r.isUnread),
-        unreadCount: sourceRooms.fold(0, (n, r) => n + r.notificationCount),
-        hasDraft:
-            (_text(personal.values['draft:$entity']?['text']) ?? '')
-                .isNotEmpty ||
-            personal.conflicts.containsKey('draft:$entity') ||
-            sourceRooms.any(
-              (r) =>
-                  (_text(personal.values['draft:${r.id}']?['text']) ?? '')
-                      .isNotEmpty ||
-                  personal.conflicts.containsKey('draft:${r.id}'),
-            ),
-        unanswered:
-            latest != null &&
-            latest.type == EventTypes.Message &&
-            !latest.redacted &&
-            latest.senderId != personal.client.userID &&
-            sourceRooms.any((r) => r.canSendDefaultMessages),
-        lastActivity: latest?.originServerTs,
-      );
-      records.add(record);
-      representatives[representative.id] = representative;
+      if (index._records.containsKey(entity)) continue;
+      index._put(entity, _record(room, entity, group, available));
     }
+    return index;
+  }
+
+  (InboxRecord, Room) _record(
+    Room room,
+    String entity,
+    PersonGroup? group,
+    Map<String, Room> available,
+  ) {
+    final sourceRooms = group == null
+        ? [room]
+        : group.members.map((m) => available[m.roomId]!).toList();
+    final representative = group == null
+        ? room
+        : available[group.defaultRoomId] ?? sourceRooms.first;
+    final lastEvents =
+        sourceRooms.map((r) => r.lastEvent).whereType<Event>().toList()
+          ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
+    final latest = lastEvents.firstOrNull;
+    final metadata = metadataForEntity(entity);
+    final nickname =
+        metadata.nickname ??
+        _text(personal.values['nickname:$entity']?['name']);
+    final title = nickname?.trim().isNotEmpty == true
+        ? nickname!
+        : group?.name ?? room.getLocalizedDisplayname();
+    final labels = personal.values.containsKey('labels:$entity')
+        ? _legacyLabels(entity).toSet()
+        : {
+            ...metadata.labelIds,
+            for (final source in sourceRooms) ..._legacyLabels(source.id),
+          };
+    final kinds = sourceRooms.map(classifier.classify).toList();
+    final record = InboxRecord(
+      representativeRoomId: representative.id,
+      entityId: entity,
+      displayName: title,
+      metadata: metadata,
+      networks: kinds.map((kind) => kind.network),
+      labelKeys: labels,
+      isGroup: group == null && !room.isDirectChatForDisplay,
+      technical: kinds.every((kind) => kind.technical),
+      placement: placementFor(representative),
+      unread: sourceRooms.any((r) => r.isUnread),
+      unreadCount: sourceRooms.fold(0, (n, r) => n + r.notificationCount),
+      hasDraft:
+          (_text(personal.values['draft:$entity']?['text']) ?? '').isNotEmpty ||
+          personal.conflicts.containsKey('draft:$entity') ||
+          sourceRooms.any(
+            (r) =>
+                (_text(personal.values['draft:${r.id}']?['text']) ?? '')
+                    .isNotEmpty ||
+                personal.conflicts.containsKey('draft:${r.id}'),
+          ),
+      unanswered:
+          latest != null &&
+          latest.type == EventTypes.Message &&
+          !latest.redacted &&
+          !OwnSenderResolver.of(personal.client).isOwnEvent(latest) &&
+          sourceRooms.any((r) => r.canSendDefaultMessages),
+      lastActivity: latest?.originServerTs,
+    );
+    return (record, representative);
+  }
+
+  /// Applies the private view rules to an index (pure, no state reads except
+  /// the cached due-reminder set).
+  List<Room> select(
+    InboxIndex index, {
+    InboxFilter filter = InboxFilter.inbox,
+    String query = '',
+  }) {
+    final records = index.records;
     // Legacy labels remain stored, but no longer control inbox visibility.
     final visible = projectInbox(
       records,
@@ -341,7 +391,7 @@ class InboxProjection {
             record.placement != ChatPlacement.inbox ||
             record.metadata.ignored)
           continue;
-        final group = members[record.representativeRoomId];
+        final group = index._members[record.representativeRoomId];
         if (due.contains(record.representativeRoomId) ||
             (group != null &&
                 group.members.any((m) => due.contains(m.roomId)))) {
@@ -350,11 +400,74 @@ class InboxProjection {
       }
       return projectInbox(records, filter: InboxFilter.all, query: query)
           .where((r) => ids.contains(r.entityId))
-          .map((r) => representatives[r.representativeRoomId]!)
+          .map((r) => index._representatives[r.representativeRoomId]!)
           .toList(growable: false);
     }
     return visible
-        .map((r) => representatives[r.representativeRoomId]!)
+        .map((r) => index._representatives[r.representativeRoomId]!)
         .toList(growable: false);
+  }
+}
+
+/// Unfiltered inbox records of one snapshot plus what selection needs.
+class InboxIndex {
+  final InboxProjection projection;
+  final Map<String, Room> _available;
+  final Map<String, PersonGroup> _members;
+  final _records = <String, InboxRecord>{};
+  final _representatives = <String, Room>{};
+  List<InboxRecord>? _list;
+  InboxIndex._(this.projection, this._available, this._members);
+
+  void _put(String entity, (InboxRecord, Room) value) {
+    _records[entity] = value.$1;
+    _representatives[value.$2.id] = value.$2;
+    _list = null;
+  }
+
+  List<InboxRecord> get records => _list ??= List.unmodifiable(_records.values);
+  Iterable<Room> get rooms => _available.values;
+  InboxRecord? recordFor(Room room) =>
+      _records[_members[room.id] == null
+          ? room.id
+          : 'person:${_members[room.id]!.id}'];
+
+  /// Recomputes the records of [roomIds] in place. Returns false when the
+  /// change may affect other records (room set, merged persons, bridges) and
+  /// the caller must build a new index instead.
+  bool updateRooms(Iterable<String> roomIds, Iterable<Room> current) {
+    final client = projection.personal.client;
+    var count = 0;
+    for (final room in current) {
+      if (InboxProjection._candidate(room)) count++;
+    }
+    if (count != _available.length) return false;
+    final grouped = {
+      for (final group in projection.personal.groups)
+        for (final member in group.members) member.roomId,
+    };
+    final changed = <Room>[];
+    for (final id in roomIds) {
+      final room = client.getRoomById(id);
+      final known = _available[id];
+      if (room == null) {
+        if (known != null) return false;
+        continue;
+      }
+      if (!identical(room, known) ||
+          !InboxProjection._candidate(room) ||
+          grouped.contains(id) ||
+          _members.containsKey(id) ||
+          !projection.classifier.covers(room)) {
+        if (known == null && !InboxProjection._candidate(room)) continue;
+        return false;
+      }
+      changed.add(room);
+    }
+    for (final room in changed) {
+      projection.forgetEntity(room.id);
+      _put(room.id, projection._record(room, room.id, null, _available));
+    }
+    return true;
   }
 }

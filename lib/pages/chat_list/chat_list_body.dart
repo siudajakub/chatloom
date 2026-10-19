@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:async/async.dart';
-import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
 import 'package:fluffychat/pages/chat_list/client_chooser_button.dart';
+import 'package:fluffychat/pages/chat_list/inbox_health_status.dart';
 import 'package:fluffychat/pages/chat_list/space_view.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/ui/notion_network_filter.dart';
@@ -16,7 +15,6 @@ import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
 import 'package:fluffychat/personal/ui/notion_search_controls.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/stream_extension.dart';
 import 'package:fluffychat/utils/sync_status_localization.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/public_room_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/user_dialog.dart';
@@ -36,33 +34,22 @@ class ChatListViewBody extends StatelessWidget {
     final client = Matrix.of(context).client;
     final activeSpace = controller.activeSpaceId;
     if (activeSpace != null)
-      return SpaceView(
-        key: ValueKey(activeSpace),
-        spaceId: activeSpace,
-        onBack: controller.clearActiveSpace,
-        onChatTab: controller.onChatTap,
-        activeChat: controller.activeChat,
+      return Scaffold(
+        body: SpaceView(
+          key: ValueKey(activeSpace),
+          spaceId: activeSpace,
+          onBack: controller.clearActiveSpace,
+          onChatTab: controller.onChatTap,
+          activeChat: controller.activeChat,
+        ),
       );
-    return _InboxUpdates(
-      key: ObjectKey(client),
-      client: client,
-      personalChanges: controller.personal.changes,
+    final inbox = controller.inbox;
+    return ListenableBuilder(
+      listenable: inbox,
       builder: (context, _) {
-        final delegated = <String, Room>{};
-        for (final space in client.rooms.where((room) => room.isSpace)) {
-          for (final child in space.spaceChildren) {
-            if (child.roomId != null) delegated[child.roomId!] = space;
-          }
-        }
-        final projection = InboxProjection.snapshot(controller.personal);
-        final rooms = controller
-            .filterRooms(projection: projection)
-            .where(
-              (room) =>
-                  !AppSettings.hideRoomsInSpaces.value ||
-                  delegated[room.id] == null,
-            )
-            .toList();
+        final projection = inbox.projection;
+        final delegated = inbox.delegated;
+        final rooms = controller.filterRooms();
         final pins =
             (controller.personalFilter == InboxFilter.inbox ? rooms : <Room>[])
                 .where((room) => projection.metadataFor(room).isPinned)
@@ -86,29 +73,41 @@ class ChatListViewBody extends StatelessWidget {
                   ),
                 )
                 .toList();
+        final failed = inbox.syncFailed;
         final status = client.onSyncStatus.value;
-        final failed = status?.status == SyncStatus.error;
+        final positions = <String, int>{
+          for (final (index, room) in rooms.indexed) room.id: index,
+        };
         return NotionInboxPage(
           scrollController: controller.scrollController,
-          rows: rooms
-              .map(
-                (room) => ChatListItem(
-                  room,
-                  projection: projection,
-                  space: delegated[room.id],
-                  key: ValueKey('chat_list_item_${room.id}'),
-                  onTap: () => controller.onChatTap(room),
-                  onLongPress: (posContext) => controller.chatContextAction(
-                    room,
-                    posContext,
-                    delegated[room.id],
-                  ),
-                  activeChat: controller.activeChat == room.id,
-                ),
-              )
-              .toList(),
+          rowCount: rooms.length,
+          rowBuilder: (context, index) {
+            final room = rooms[index];
+            return ChatListItem(
+              room,
+              projection: projection,
+              space: delegated[room.id],
+              key: ValueKey(chatListItemKey(room.id)),
+              onTap: () => controller.onChatTap(room),
+              onLongPress: (posContext) => controller.chatContextAction(
+                room,
+                posContext,
+                delegated[room.id],
+              ),
+              activeChat:
+                  controller.activeChat == room.id ||
+                  (controller.activeGroup != null &&
+                      projection.groupFor(room)?.id == controller.activeGroup),
+            );
+          },
+          rowIndexOf: (key) {
+            if (key is! ValueKey<String>) return null;
+            final value = key.value;
+            if (!value.startsWith(_rowKeyPrefix)) return null;
+            return positions[value.substring(_rowKeyPrefix.length)];
+          },
           pins: pins,
-          loading: client.prevBatch == null && !failed,
+          loading: inbox.loading,
           emptyMessage: controller.searchController.text.trim().isNotEmpty
               ? 'No matching chats in the current view. Try another name or change the filter.'
               : controller.selectedNetwork != null
@@ -117,31 +116,38 @@ class ChatListViewBody extends StatelessWidget {
                     controller.activeFilter != ActiveFilter.allChats
               ? 'No chats in ${inboxViewLabel(controller.personalFilter)}. Choose another view or network.'
               : 'No chats yet. Start a new chat.',
-          status: failed
-              ? Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.cloud_off_outlined, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '${status!.calcLocalizedString(context)}. Showing loaded chats.',
-                          style: const TextStyle(fontSize: 12, height: 1.4),
-                        ),
+          // Connection first, then encryption and private sync health; each
+          // takes no space while there is nothing to say.
+          status: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // The offline notice grows in and shrinks away with the
+              // connection instead of shifting the list in one jump.
+              NotionSizeReveal(
+                visible: failed && status != null,
+                revealOnMount: true,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: NotionSpace.xs),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: NotionCallout(
+                      icon: Icons.cloud_off_outlined,
+                      title: status?.calcLocalizedString(context) ?? '',
+                      message: 'Showing loaded chats.',
+                      actionLabel: 'Retry',
+                      onAction: () => showFutureLoadingDialog(
+                        context: context,
+                        future: () =>
+                            client.oneShotSync(timeout: Duration.zero),
                       ),
-                      TextButton(
-                        onPressed: () => showFutureLoadingDialog(
-                          context: context,
-                          future: () =>
-                              client.oneShotSync(timeout: Duration.zero),
-                        ),
-                        child: const Text('Retry'),
-                      ),
-                    ],
+                    ),
                   ),
-                )
-              : null,
+                ),
+              ),
+              InboxHealthStatus(key: ValueKey(client), client: client),
+            ],
+          ),
           onCompose: () => context.go('/rooms/newprivatechat'),
           onSettings: () => context.go('/rooms/settings'),
           onSearch: controller.startSearch,
@@ -326,34 +332,10 @@ class ChatListViewBody extends StatelessWidget {
   }
 }
 
-/// Keep the sync subscription when search, selection or the keyboard rebuilds
-/// the parent. A different account gets a fresh state and cancels the old one.
-class _InboxUpdates extends StatefulWidget {
-  final Client client;
-  final Stream<Object?> personalChanges;
-  final AsyncWidgetBuilder<Object> builder;
-  const _InboxUpdates({
-    super.key,
-    required this.client,
-    required this.personalChanges,
-    required this.builder,
-  });
+const _rowKeyPrefix = 'chat_list_item_';
 
-  @override
-  State<_InboxUpdates> createState() => _InboxUpdatesState();
-}
-
-class _InboxUpdatesState extends State<_InboxUpdates> {
-  late final updates = StreamGroup.merge<Object?>([
-    widget.client.onSync.stream.where((s) => s.hasRoomUpdate),
-    widget.client.onSyncStatus.stream,
-    widget.personalChanges,
-  ]).rateLimit(const Duration(milliseconds: 200));
-
-  @override
-  Widget build(BuildContext context) =>
-      StreamBuilder<Object>(stream: updates, builder: widget.builder);
-}
+/// Stable inbox row key (also used by tests and captures).
+String chatListItemKey(String roomId) => '$_rowKeyPrefix$roomId';
 
 class PublicRoomsHorizontalList extends StatelessWidget {
   const PublicRoomsHorizontalList({super.key, required this.publicRooms});

@@ -11,9 +11,10 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
+import 'package:fluffychat/pages/chat_list/inbox_controller.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/conversation_classification.dart';
-import 'package:fluffychat/personal/merged_chat_page.dart';
+import 'package:fluffychat/personal/person_route.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
@@ -25,6 +26,7 @@ import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart'
     show ExceptionContext;
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/owned_async_wait.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/show_scaffold_dialog.dart';
 import 'package:fluffychat/utils/show_update_snackbar.dart';
@@ -70,12 +72,17 @@ extension LocalizedActiveFilter on ActiveFilter {
 
 class ChatList extends StatefulWidget {
   final String? activeChat;
+
+  /// Person group whose merged chat (or one of its source chats) is open in
+  /// the side column; its inbox row is shown as selected.
+  final String? activeGroup;
   final String? activeSpace;
   final bool displayNavigationRail;
 
   const ChatList({
     super.key,
     required this.activeChat,
+    this.activeGroup,
     this.activeSpace,
     this.displayNavigationRail = false,
   });
@@ -84,8 +91,11 @@ class ChatList extends StatefulWidget {
   ChatListController createState() => ChatListController();
 }
 
-class ChatListController extends State<ChatList>
-    with TickerProviderStateMixin, RouteAware {
+class ChatListController extends State<ChatList> with TickerProviderStateMixin {
+  static ChatListController? _shortcutOwner;
+  OwnedAsyncWait? _firstSyncWait;
+  int _firstSyncGeneration = 0;
+
   StreamSubscription? _intentDataStreamSubscription;
 
   StreamSubscription? _intentFileStreamSubscription;
@@ -136,11 +146,7 @@ class ChatListController extends State<ChatList>
   Future<void> onChatTap(Room room) async {
     final group = InboxProjection(personal).groupFor(room);
     if (group != null) {
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => MergedChatPage(personal: personal, group: group),
-        ),
-      );
+      context.go(personChatLocation(group.id));
       return;
     }
 
@@ -227,52 +233,82 @@ class ChatListController extends State<ChatList>
   void setNetwork(String? network) => setState(() {
     networkSelections.select(inboxAccountKey, network);
   });
-  List<Room> get visibleRooms => InboxProjection(personal)
-      .rooms(
-        Matrix.of(context).client.rooms,
-        filter: personalFilter,
-        query: searchController.text,
-        labelKey: personalLabel,
-      )
-      .where(getRoomFilterByActiveFilter(activeFilter))
-      .toList();
-  List<String> get availableNetworks {
-    final projection = InboxProjection.snapshot(personal);
-    final networks = Matrix.of(context).client.rooms
-        .where(
-          (room) =>
-              !room.isSpace &&
-              !PersonalPrivacy.isJournal(room) &&
-              !projection.classifier.classify(room).technical,
-        )
-        .expand((room) => notionRoomNetworks(projection, room))
-        .toSet()
-        .toList();
-    networks.sort(
-      (a, b) => notionNetworkLabel(a).compareTo(notionNetworkLabel(b)),
-    );
-    return networks;
+
+  InboxController? _inbox;
+  bool _inboxVisible = true;
+
+  /// Cached inbox of the active account; recreated when the account changes.
+  InboxController get inbox {
+    final client = Matrix.of(context).client;
+    final personal = PersonalClient.of(client);
+    final current = _inbox;
+    if (current != null &&
+        identical(current.client, client) &&
+        identical(current.personal, personal)) {
+      return current;
+    }
+    if (current != null) {
+      // Listeners rebuild onto the new controller first; release afterwards.
+      current.detach();
+      WidgetsBinding.instance.addPostFrameCallback((_) => current.dispose());
+    }
+    _selectionKey = null;
+    return _inbox = InboxController(client, personal)..active = _inboxVisible;
   }
 
-  List<Room> get filteredRooms => filterRooms();
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Covered by a chat (mobile) → stop recomputing; refresh once on return.
+    _inboxVisible = ModalRoute.isCurrentOf(context) ?? true;
+    _inbox?.active = _inboxVisible;
+  }
 
-  List<Room> filterRooms({InboxProjection? projection}) {
-    projection ??= InboxProjection.snapshot(personal);
-    return projection
-        .rooms(
-          Matrix.of(context).client.rooms,
-          filter: personalFilter,
-          query: searchController.text,
-          labelKey: personalLabel,
-        )
-        .where(getRoomFilterByActiveFilter(activeFilter))
+  /// Networks of non-technical chats (computed once per inbox change).
+  List<String> get availableNetworks => inbox.networks;
+
+  Object? _selectionKey;
+  List<Room> _selection = const [];
+
+  /// Visible rooms for the current view, search, network and space settings.
+  /// Selection runs over cached records and is memoised until the inbox or
+  /// one of the inputs changes.
+  List<Room> filterRooms() {
+    final inbox = this.inbox;
+    final network = selectedNetwork;
+    final query = searchController.text;
+    final hideInSpaces = AppSettings.hideRoomsInSpaces.value;
+    final key = (
+      inbox,
+      inbox.generation,
+      personalFilter,
+      personalLabel,
+      query,
+      activeFilter,
+      activeTag,
+      network,
+      hideInSpaces,
+    );
+    if (key == _selectionKey) return _selection;
+    final index = inbox.index;
+    final delegated = inbox.delegated;
+    final roomFilter = getRoomFilterByActiveFilter(activeFilter);
+    _selection = inbox.projection
+        .select(index, filter: personalFilter, query: query)
+        .where(roomFilter)
         .where(
-          (room) => notionMatchesNetwork(
-            notionRoomNetworks(projection!, room),
-            selectedNetwork,
-          ),
+          (room) =>
+              network == null ||
+              notionMatchesNetwork(
+                index.recordFor(room)?.networks ??
+                    notionRoomNetworks(inbox.projection, room),
+                network,
+              ),
         )
-        .toList();
+        .where((room) => !hideInSpaces || delegated[room.id] == null)
+        .toList(growable: false);
+    _selectionKey = key;
+    return _selection;
   }
 
   bool isSearchMode = false;
@@ -492,8 +528,6 @@ class ChatListController extends State<ChatList>
     }
   }
 
-  BoxConstraints? snappingSheetContainerSize;
-
   final ScrollController scrollController = ScrollController();
   final ValueNotifier<bool> scrolledToTop = ValueNotifier(true);
 
@@ -521,6 +555,7 @@ class ChatListController extends State<ChatList>
       Matrix.of(context).client.rooms.where((r) => r.isSpace).toList();
 
   String? get activeChat => widget.activeChat;
+  String? get activeGroup => widget.activeGroup;
 
   void _processIncomingSharedMedia(List<SharedMediaFile> files) {
     if (!mounted) return;
@@ -561,17 +596,30 @@ class ChatListController extends State<ChatList>
     );
 
     if (PlatformInfos.isAndroid) {
-      final shortcuts = FlutterShortcuts();
-      shortcuts.initialize().then(
-        (_) {
-          if (!mounted) return;
-          shortcuts.listenAction((action) {
-          if (!mounted) return;
-          UrlLauncher(context, action).launchUrl();
-          });
-        },
-      );
+      unawaited(bindLauncherShortcuts());
     }
+  }
+
+  // The plugin stores this tear-off in a process-wide MethodChannel. It must
+  // never capture a widget; dispose releases the separately held owner.
+  static void _dispatchShortcut(String action) {
+    final owner = _shortcutOwner;
+    if (owner == null || !owner.mounted) return;
+    owner.onLauncherShortcut(action);
+  }
+
+  @protected
+  void onLauncherShortcut(String action) =>
+      UrlLauncher(context, action).launchUrl();
+
+  @protected
+  Future<void> bindLauncherShortcuts() async {
+    if (!mounted) return;
+    _shortcutOwner = this;
+    final shortcuts = FlutterShortcuts();
+    await shortcuts.initialize();
+    if (!mounted || !identical(_shortcutOwner, this)) return;
+    await shortcuts.listenAction(_dispatchShortcut);
   }
 
   void _joinCallWith(CallKitParams params) {
@@ -623,7 +671,7 @@ class ChatListController extends State<ChatList>
     _activeSpaceId = widget.activeSpace;
 
     scrollController.addListener(_onScroll);
-    _waitForFirstSync();
+    waitForInitialSync();
     if (PlatformInfos.isMobile) {
       _callEventSubscription = FlutterCallkitIncoming.onEvent.listen(
         _onCallEvent,
@@ -674,6 +722,8 @@ class ChatListController extends State<ChatList>
 
   @override
   void dispose() {
+    _cancelFirstSyncWait();
+    if (identical(_shortcutOwner, this)) _shortcutOwner = null;
     _searchScrollGeneration++;
     _coolDown?.cancel();
     _intentDataStreamSubscription?.cancel();
@@ -686,6 +736,8 @@ class ChatListController extends State<ChatList>
     scrollController.dispose();
     scrolledToTop.dispose();
     _clientStream.close();
+    _inbox?.dispose();
+    _inbox = null;
     super.dispose();
   }
 
@@ -1150,54 +1202,46 @@ class ChatListController extends State<ChatList>
 
   bool waitForFirstSync = false;
 
-  Future<void> _waitForFirstSync() async {
-    final router = GoRouter.of(context);
-    final client = Matrix.of(context).client;
-    await client.roomsLoading;
-    await client.accountDataLoading;
-    await client.userDeviceKeysLoading;
-    if (!mounted || Matrix.of(context).client != client) return;
-    if (client.prevBatch == null) {
-      await client.onSyncStatus.stream.firstWhere(
-        (status) => status.status == SyncStatus.finished,
-      );
+  void _cancelFirstSyncWait() {
+    _firstSyncGeneration++;
+    _firstSyncWait?.cancel();
+    _firstSyncWait = null;
+  }
 
-      if (!mounted || Matrix.of(context).client != client) return;
+  @protected
+  Future<void> waitForInitialSync() async {
+    if (!mounted) return;
+    _cancelFirstSyncWait();
+    final generation = _firstSyncGeneration;
+    final wait = OwnedAsyncWait();
+    _firstSyncWait = wait;
+    final client = Matrix.of(context).client;
+    bool current() =>
+        mounted &&
+        generation == _firstSyncGeneration &&
+        identical(Matrix.of(context).client, client);
+    try {
+      if (!await wait.until(client.roomsLoading) || !current()) return;
+      if (!await wait.until(client.accountDataLoading) || !current()) return;
+      if (!await wait.until(client.userDeviceKeysLoading) || !current()) return;
+      if (client.prevBatch == null &&
+          !await wait.firstWhere(
+            client.onSyncStatus.stream,
+            (status) => status.status == SyncStatus.finished,
+          )) {
+        return;
+      }
+      if (!current()) return;
+      // Unverified sessions, key backup and private sync health show in the
+      // inbox status row (InboxHealthStatus), not as a per-launch snackbar.
       setState(() {
         waitForFirstSync = true;
       });
-    }
-    if (!mounted || Matrix.of(context).client != client) return;
-    setState(() {
-      waitForFirstSync = true;
-    });
-
-    if (client.userDeviceKeys[client.userID!]?.deviceKeys.values.any(
-          (device) => !device.verified && !device.blocked,
-        ) ??
-        false) {
-      late final ScaffoldFeatureController controller;
-      final theme = Theme.of(context);
-      controller = ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 15),
-          showCloseIcon: true,
-          backgroundColor: theme.colorScheme.errorContainer,
-          closeIconColor: theme.colorScheme.onErrorContainer,
-          content: Text(
-            L10n.of(context).oneOfYourDevicesIsNotVerified,
-            style: TextStyle(color: theme.colorScheme.onErrorContainer),
-          ),
-          action: SnackBarAction(
-            onPressed: () {
-              controller.close();
-              router.go('/rooms/settings/devices');
-            },
-            textColor: theme.colorScheme.onErrorContainer,
-            label: L10n.of(context).settings,
-          ),
-        ),
-      );
+    } catch (_) {
+      if (current()) Logs().w('Initial sync readiness is unavailable');
+    } finally {
+      wait.cancel();
+      if (identical(_firstSyncWait, wait)) _firstSyncWait = null;
     }
   }
 
@@ -1223,6 +1267,7 @@ class ChatListController extends State<ChatList>
   }
 
   void setActiveClient(Client client) {
+    _cancelFirstSyncWait();
     _searchScrollGeneration++;
     _searchGeneration++;
     _coolDown?.cancel();
@@ -1244,10 +1289,11 @@ class ChatListController extends State<ChatList>
     _listenRoomTags(client);
     _updateRoomTags();
     _loadAccountInbox(client);
-    _waitForFirstSync();
+    waitForInitialSync();
   }
 
   void setActiveBundle(String bundle) {
+    _cancelFirstSyncWait();
     _searchScrollGeneration++;
     _searchGeneration++;
     _coolDown?.cancel();
@@ -1275,7 +1321,7 @@ class ChatListController extends State<ChatList>
     _listenRoomTags(client);
     _updateRoomTags();
     _loadAccountInbox(client);
-    _waitForFirstSync();
+    waitForInitialSync();
   }
 
   Future<void> editBundlesForAccount(
@@ -1327,10 +1373,6 @@ class ChatListController extends State<ChatList>
     }
   }
 
-  bool get displayBundles =>
-      Matrix.of(context).hasComplexBundles &&
-      Matrix.of(context).accountBundles.keys.length > 1;
-
   String? get secureActiveBundle {
     if (Matrix.of(context).activeBundle == null ||
         !Matrix.of(
@@ -1341,18 +1383,8 @@ class ChatListController extends State<ChatList>
     return Matrix.of(context).activeBundle;
   }
 
-  void resetActiveBundle() {
-    WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
-      setState(() {
-        Matrix.of(context).activeBundle = null;
-      });
-    });
-  }
-
   @override
   Widget build(BuildContext context) => ChatListView(this);
-
-  Future<void> dehydrate() => Matrix.of(context).dehydrateAction(context);
 }
 
 enum EditBundleAction { addToBundle, removeFromBundle }

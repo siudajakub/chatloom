@@ -3,8 +3,11 @@
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/active_call_indicator.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/message_preview.dart';
 import 'package:fluffychat/personal/organization_page.dart';
+import 'package:fluffychat/personal/own_sender.dart';
 import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/private_avatar.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_row.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
@@ -22,29 +25,52 @@ Widget notionInboxAvatar(
   InboxProjection projection,
   Room room, {
   double size = 40,
+}) => personalConversationAvatar(
+  personal,
+  entityId: projection.entityFor(room),
+  avatar: projection.avatarFor(room),
+  name: projection.displayName(room),
+  client: room.client,
+  size: size,
+);
+
+/// Private avatar when set (network avatar while it loads or if it fails),
+/// otherwise the network avatar, otherwise initials.
+Widget personalConversationAvatar(
+  PersonalClient personal, {
+  required String entityId,
+  required Uri? avatar,
+  required String name,
+  Client? client,
+  double size = 40,
+  VoidCallback? onTap,
 }) {
-  final entity = projection.entityFor(room);
+  final network = Avatar(
+    client: client ?? personal.client,
+    mxContent: avatar,
+    name: name,
+    size: size,
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+    shapeBorder: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+    ),
+  );
+  // Avatar clips itself (superellipse Material); only the private preview
+  // needs an explicit clip.
+  if (!personal.values.containsKey(privateAvatarKey(entityId))) return network;
   return ClipRRect(
     borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
-    child: personal.values.containsKey('avatar:$entity')
-        ? PrivateAvatarPreview(
-            personal: personal,
-            entityId: entity,
-            radius: size / 2,
-          )
-        : Avatar(
-            mxContent: room.avatar,
-            name: projection.displayName(room),
-            size: size,
-            borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
-            shapeBorder: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
-            ),
-          ),
+    child: PrivateAvatarPreview(
+      personal: personal,
+      entityId: entityId,
+      radius: size / 2,
+      fallback: network,
+    ),
   );
 }
 
-class ChatListItem extends StatelessWidget {
+class ChatListItem extends StatefulWidget {
   final Room room;
   final InboxProjection? projection;
   final Room? space;
@@ -66,10 +92,50 @@ class ChatListItem extends StatelessWidget {
   });
 
   @override
+  State<ChatListItem> createState() => _ChatListItemState();
+}
+
+class _ChatListItemState extends State<ChatListItem> {
+  String? _senderRequested;
+
+  /// Newest incoming event seen by this row; when a newer one arrives the
+  /// row flashes once (it usually just moved to the top). Starts with the
+  /// event present at first build, so scrolling never flashes.
+  String? _incomingId;
+  int _incomingTs = 0;
+  int _highlight = 0;
+
+  void _trackIncoming(Event? event, bool own) {
+    if (event == null || own || event.status.isSending) return;
+    final ts = event.originServerTs.millisecondsSinceEpoch;
+    if (_incomingId == null) {
+      _incomingId = event.eventId;
+      _incomingTs = ts;
+      return;
+    }
+    if (event.eventId == _incomingId || ts <= _incomingTs) return;
+    _incomingId = event.eventId;
+    _incomingTs = ts;
+    _highlight++;
+  }
+
+  /// Loads a missing sender member once per event (group "Name: …"
+  /// prefixes); the preview itself is computed synchronously every build.
+  void _requestSender(Event event) {
+    if (_senderRequested == event.eventId) return;
+    _senderRequested = event.eventId;
+    event.fetchSenderUser().then((user) {
+      if (mounted && user != null) setState(() {});
+    }, onError: (_) {});
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final room = widget.room;
     final personal = PersonalClient.of(room.client);
-    final supplied = this.projection;
-    final projection = supplied != null && identical(supplied.personal, personal)
+    final supplied = widget.projection;
+    final projection =
+        supplied != null && identical(supplied.personal, personal)
         ? supplied
         : InboxProjection.snapshot(personal);
     final metadata = projection.metadataFor(room);
@@ -106,15 +172,6 @@ class ChatListItem extends StatelessWidget {
         sources.any(
           (source) => personal.conflicts.containsKey('draft:${source.id}'),
         );
-    final directId = lastEvent?.room.directChatMatrixIDForDisplay;
-    final prefix =
-        lastEvent?.senderId == room.client.userID ||
-        directId == null ||
-        lastEvent?.senderId != directId;
-    final needSender =
-        lastEvent != null &&
-        lastEvent.room.getState(EventTypes.RoomMember, lastEvent.senderId) ==
-            null;
     final l10n = L10n.of(context);
     final nativeRules = sources.map((source) => source.pushRuleState).toSet();
     final nativeLimited = nativeRules.any(
@@ -127,100 +184,92 @@ class ChatListItem extends StatelessWidget {
         : nativeRules.firstOrNull == PushRuleState.dontNotify
         ? 'Muted on this source'
         : 'Mentions only on this source';
-    return FutureBuilder<String>(
-      key: ValueKey(
-        '${lastEvent?.eventId}_${lastEvent?.type}_${lastEvent?.redacted}',
-      ),
-      future: needSender
-          ? lastEvent.calcLocalizedBody(
-              MatrixLocals(l10n),
-              hideReply: true,
-              hideEdit: true,
-              plaintextBody: true,
-              removeMarkdown: true,
-              withSenderNamePrefix: prefix,
+    String? lastPreview;
+    if (lastEvent != null) {
+      final own = OwnSenderResolver.of(room.client).isOwnEvent(lastEvent);
+      _trackIncoming(lastEvent, own);
+      final showsSender = personalPreviewShowsSender(lastEvent);
+      if (!own &&
+          showsSender &&
+          lastEvent.room.getState(EventTypes.RoomMember, lastEvent.senderId) ==
+              null) {
+        _requestSender(lastEvent);
+      }
+      lastPreview = personalPreview(
+        lastEvent,
+        own: own,
+        group: showsSender,
+        i18n: MatrixLocals(l10n),
+      );
+    }
+    final preview = room.membership == Membership.invite
+        ? room
+                  .getState(EventTypes.RoomMember, room.client.userID!)
+                  ?.content
+                  .tryGet<String>('reason') ??
+              (room.isDirectChatForDisplay
+                  ? l10n.newChatRequest
+                  : l10n.inviteGroupChat)
+        : conflict
+        ? 'Draft conflict — review in chat'
+        : draft != null
+        ? 'Draft: $draft'
+        : typingText.isNotEmpty
+        ? typingText
+        : lastPreview == null || lastPreview.isEmpty
+        ? l10n.noMessagesYet
+        : lastPreview;
+    return NotionInboxRow(
+      avatar: notionInboxAvatar(personal, projection, room),
+      name: name,
+      preview: preview,
+      time: lastEvent?.originServerTs.localizedTimeShort(context),
+      unreadCount: projection.unreadCount(room),
+      unread: sources.any((source) => source.isUnread),
+      muted: metadata.muted || nativeLimited,
+      notificationLabel: notificationLabel,
+      selected: widget.activeChat,
+      draft: draft != null || conflict,
+      redacted: lastEvent?.redacted == true && draft == null,
+      previewLeading: room.hasActiveMatrixRtcCall
+          ? ActiveCallIndicator(room: room)
+          : lastEvent?.status.isSending == true
+          // Only a send that takes noticeably long shows a spinner.
+          ? const NotionDelayedSpinner(size: 12, strokeWidth: 1.5)
+          : lastEvent?.relationshipType == RelationshipTypes.thread
+          ? const Icon(Icons.forum_outlined, size: 12)
+          : null,
+      highlight: _highlight == 0 ? null : _highlight,
+      onTap: widget.onTap,
+      onLongPress: widget.onLongPress == null
+          ? null
+          : () => widget.onLongPress!(context),
+      action: widget.onForget != null
+          ? IconButton(
+              icon: const Icon(Icons.delete_outlined),
+              tooltip: l10n.delete,
+              onPressed: widget.onForget,
+            )
+          : room.membership == Membership.invite
+          ? IconButton(
+              tooltip: l10n.declineInvitation,
+              icon: const Icon(Icons.close, size: 20),
+              onPressed: () async {
+                final consent = await showOkCancelAlertDialog(
+                  context: context,
+                  title: l10n.declineInvitation,
+                  message: l10n.areYouSure,
+                  okLabel: l10n.yes,
+                  isDestructive: true,
+                );
+                if (consent != OkCancelResult.ok || !context.mounted) return;
+                await showFutureLoadingDialog(
+                  context: context,
+                  future: room.leave,
+                );
+              },
             )
           : null,
-      initialData: lastEvent?.calcLocalizedBodyFallback(
-        MatrixLocals(l10n),
-        hideReply: true,
-        hideEdit: true,
-        plaintextBody: true,
-        removeMarkdown: true,
-        withSenderNamePrefix: prefix,
-      ),
-      builder: (context, snapshot) {
-        final preview = room.membership == Membership.invite
-            ? room
-                      .getState(EventTypes.RoomMember, room.client.userID!)
-                      ?.content
-                      .tryGet<String>('reason') ??
-                  (room.isDirectChatForDisplay
-                      ? l10n.newChatRequest
-                      : l10n.inviteGroupChat)
-            : conflict
-            ? 'Draft conflict — review in chat'
-            : draft != null
-            ? 'Draft: $draft'
-            : typingText.isNotEmpty
-            ? typingText
-            : snapshot.data?.trim().replaceAll('\n', ' ') ?? l10n.noMessagesYet;
-        return NotionInboxRow(
-          avatar: notionInboxAvatar(personal, projection, room),
-          name: name,
-          preview: preview,
-          time: lastEvent?.originServerTs.localizedTimeShort(context),
-          unreadCount: projection.unreadCount(room),
-          unread: sources.any((source) => source.isUnread),
-          muted: metadata.muted || nativeLimited,
-          notificationLabel: notificationLabel,
-          selected: activeChat,
-          draft: draft != null || conflict,
-          redacted: lastEvent?.redacted == true && draft == null,
-          previewLeading: room.hasActiveMatrixRtcCall
-              ? ActiveCallIndicator(room: room)
-              : lastEvent?.status.isSending == true
-              ? const SizedBox.square(
-                  dimension: 12,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.5,
-                    semanticsLabel: 'Sending',
-                  ),
-                )
-              : lastEvent?.relationshipType == RelationshipTypes.thread
-              ? const Icon(Icons.forum_outlined, size: 12)
-              : null,
-          onTap: onTap,
-          onLongPress: onLongPress == null ? null : () => onLongPress!(context),
-          action: onForget != null
-              ? IconButton(
-                  icon: const Icon(Icons.delete_outlined),
-                  tooltip: l10n.delete,
-                  onPressed: onForget,
-                )
-              : room.membership == Membership.invite
-              ? IconButton(
-                  tooltip: l10n.declineInvitation,
-                  icon: const Icon(Icons.close, size: 20),
-                  onPressed: () async {
-                    final consent = await showOkCancelAlertDialog(
-                      context: context,
-                      title: l10n.declineInvitation,
-                      message: l10n.areYouSure,
-                      okLabel: l10n.yes,
-                      isDestructive: true,
-                    );
-                    if (consent != OkCancelResult.ok || !context.mounted)
-                      return;
-                    await showFutureLoadingDialog(
-                      context: context,
-                      future: room.leave,
-                    );
-                  },
-                )
-              : null,
-        );
-      },
     );
   }
 }

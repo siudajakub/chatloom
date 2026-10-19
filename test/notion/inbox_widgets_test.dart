@@ -4,11 +4,11 @@ import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_row.dart';
 import 'package:fluffychat/personal/ui/notion_search_controls.dart';
-import 'package:personal_core/personal_core.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:personal_core/personal_core.dart';
 
 Widget host(Widget child, {double scale = 1}) => MaterialApp(
   theme: ThemeData(brightness: Brightness.dark, fontFamily: 'Roboto'),
@@ -346,6 +346,91 @@ void main() {
       scroll.dispose();
     },
   );
+  test('large dock label splits only between words', () {
+    expect(notionInboxDockLabelLines('All networks'), ['All', 'networks']);
+    expect(notionInboxDockLabelLines('Unread · Google Messages'), [
+      'Unread',
+      'Google Messages',
+    ]);
+    expect(notionInboxDockLabelLines('Telegram'), ['Telegram']);
+  });
+
+  testWidgets('dock network label never wraps mid-word at 200% text', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 800);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      host(
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: NotionInboxDock(
+            onSettings: () {},
+            onSearch: () {},
+            onNetworkSelected: (_) {},
+            networks: const ['telegram'],
+          ),
+        ),
+        scale: 2,
+      ),
+    );
+    final labels = find.descendant(
+      of: find.byKey(const ValueKey('notion_dock_network')),
+      matching: find.byType(Text),
+    );
+    expect(labels, findsNWidgets(2));
+    for (final text in tester.widgetList<Text>(labels)) {
+      expect(text.softWrap, isFalse);
+      expect(text.maxLines, 1);
+    }
+    expect(find.text('All'), findsOneWidget);
+    expect(find.text('networks'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('row marks manual unread with a dot and brightens the time', (
+    tester,
+  ) async {
+    Future<Color?> timeColor({
+      int count = 0,
+      bool unread = false,
+      bool muted = false,
+    }) async {
+      await tester.pumpWidget(
+        host(
+          NotionInboxRow(
+            avatar: avatar(),
+            name: 'Ada',
+            preview: 'Preview',
+            time: '09:12',
+            unreadCount: count,
+            unread: unread,
+            muted: muted,
+            onTap: () {},
+          ),
+        ),
+      );
+      return tester.widget<Text>(find.text('09:12')).style?.color;
+    }
+
+    final read = await timeColor();
+    final manual = await timeColor(unread: true);
+    expect(find.byKey(const ValueKey('notion_inbox_unread_dot')), findsOne);
+    expect(find.text('•'), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('notion_inbox_unread_dot'))),
+      const Size.square(10),
+    );
+    expect(manual, isNot(read));
+    final counted = await timeColor(count: 4);
+    expect(counted, manual);
+    expect(find.text('4'), findsOneWidget);
+    expect(find.byKey(const ValueKey('notion_inbox_unread_dot')), findsNothing);
+    expect(await timeColor(count: 4, muted: true), read);
+  });
+
   testWidgets('row exposes full unread identity in semantics despite ellipsis', (
     tester,
   ) async {

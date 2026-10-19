@@ -39,7 +39,7 @@ class ChatListView extends StatelessWidget {
               onTap: FocusManager.instance.primaryFocus?.unfocus,
               excludeFromSemantics: true,
               behavior: HitTestBehavior.translucent,
-              child: Scaffold(body: ChatListViewBody(controller)),
+              child: ChatListViewBody(controller),
             ),
           ),
         ],

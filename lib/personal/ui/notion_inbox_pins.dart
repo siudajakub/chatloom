@@ -81,58 +81,67 @@ class _PinnedCard extends StatelessWidget {
   Widget build(BuildContext context) => Semantics(
     button: true,
     label: 'Pinned chat, ${pin.name}',
-    child: Material(
-      color: Theme.of(context).colorScheme.surfaceContainer,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: Theme.of(context).dividerColor),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: pin.onTap,
-        onLongPress: pin.onLongPress,
-        onSecondaryTap: pin.onLongPress,
-        child: Column(
-          children: [
-            Container(
-              height: 58,
-              width: double.infinity,
-              color: NotionTokens.cover,
-              child: Center(
-                child: SvgPicture.asset(
-                  pin.isGroup
-                      ? 'assets/notion/pinned/desk.svg'
-                      : 'assets/notion/pinned/coffee.svg',
-                  height: 48,
-                  excludeFromSemantics: true,
+    child: NotionPressable(
+      scale: NotionMotion.pressButton,
+      child: Material(
+        color: Theme.of(context).colorScheme.surfaceContainer,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: Theme.of(context).dividerColor),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: pin.onTap,
+          onLongPress: pin.onLongPress,
+          onSecondaryTap: pin.onLongPress,
+          child: Column(
+            children: [
+              Container(
+                height: 58,
+                width: double.infinity,
+                color: NotionTokens.cover,
+                child: Center(
+                  child: SvgPicture.asset(
+                    pin.isGroup
+                        ? 'assets/notion/pinned/desk.svg'
+                        : 'assets/notion/pinned/coffee.svg',
+                    height: 48,
+                    excludeFromSemantics: true,
+                  ),
                 ),
               ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-                child: Row(
-                  children: [
-                    ExcludeSemantics(
-                      child: SizedBox.square(dimension: 28, child: pin.avatar),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        pin.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    children: [
+                      ExcludeSemantics(
+                        child: SizedBox.square(
+                          dimension: 28,
+                          child: pin.avatar,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          pin.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     ),

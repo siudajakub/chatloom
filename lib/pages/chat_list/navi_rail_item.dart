@@ -5,6 +5,7 @@
 
 import 'package:badges/badges.dart';
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/hover_builder.dart';
 import 'package:fluffychat/widgets/unread_rooms_badge.dart';
 import 'package:material_ui/material_ui.dart';
@@ -65,30 +66,33 @@ class NaviRailItem extends StatelessWidget {
                 ),
               ),
               Center(
-                child: AnimatedScale(
-                  scale: hovered ? 1.1 : 1.0,
-                  duration: FluffyThemes.animationDuration,
-                  curve: FluffyThemes.animationCurve,
-                  child: Material(
-                    borderRadius: borderRadius,
-                    color: isSelected
-                        ? theme.colorScheme.secondaryContainer
-                        : theme.colorScheme.surfaceContainerHighest,
-                    child: Tooltip(
-                      message: toolTip,
-                      child: InkWell(
-                        borderRadius: borderRadius,
-                        onTap: onTap,
-                        child: unreadBadgeFilter == null
-                            ? icon
-                            : UnreadRoomsBadge(
-                                filter: unreadBadgeFilter,
-                                badgePosition: BadgePosition.topEnd(
-                                  top: -12,
-                                  end: -8,
+                child: NotionPressable(
+                  scale: NotionMotion.pressIcon,
+                  child: AnimatedScale(
+                    scale: hovered ? 1.1 : 1.0,
+                    duration: FluffyThemes.animationDuration,
+                    curve: FluffyThemes.animationCurve,
+                    child: Material(
+                      borderRadius: borderRadius,
+                      color: isSelected
+                          ? theme.colorScheme.secondaryContainer
+                          : theme.colorScheme.surfaceContainerHighest,
+                      child: Tooltip(
+                        message: toolTip,
+                        child: InkWell(
+                          borderRadius: borderRadius,
+                          onTap: onTap,
+                          child: unreadBadgeFilter == null
+                              ? icon
+                              : UnreadRoomsBadge(
+                                  filter: unreadBadgeFilter,
+                                  badgePosition: BadgePosition.topEnd(
+                                    top: -12,
+                                    end: -8,
+                                  ),
+                                  child: icon,
                                 ),
-                                child: icon,
-                              ),
+                        ),
                       ),
                     ),
                   ),

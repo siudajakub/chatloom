@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -11,13 +12,18 @@ class UnreadBubble extends StatelessWidget {
   final Room room;
   final int? countOverride;
   final bool? unreadOverride;
-  const UnreadBubble({required this.room,this.countOverride,this.unreadOverride,super.key});
+  const UnreadBubble({
+    required this.room,
+    this.countOverride,
+    this.unreadOverride,
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final unread = unreadOverride ?? room.isUnread;
-    final count=countOverride ?? room.notificationCount;
+    final count = countOverride ?? room.notificationCount;
     final hasNotifications = count > 0;
     final unreadBubbleSize = unread || room.hasNewMessages
         ? count > 0
@@ -32,8 +38,7 @@ class UnreadBubble extends StatelessWidget {
       height: unreadBubbleSize,
       width: !hasNotifications && !unread && !room.hasNewMessages
           ? 0
-          : (unreadBubbleSize - 9) * count.toString().length +
-                9,
+          : (unreadBubbleSize - 9) * count.toString().length + 9,
       decoration: BoxDecoration(
         color: room.highlightCount > 0
             ? theme.colorScheme.error
@@ -43,8 +48,8 @@ class UnreadBubble extends StatelessWidget {
         borderRadius: BorderRadius.circular(unreadBubbleSize),
       ),
       child: hasNotifications || room.markedUnread
-          ? Text(
-              count.toString(),
+          ? NotionAnimatedCount(
+              count: count,
               style: TextStyle(
                 color: room.highlightCount > 0
                     ? theme.colorScheme.onError
@@ -54,7 +59,6 @@ class UnreadBubble extends StatelessWidget {
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
               ),
-              textAlign: .center,
             )
           : const SizedBox.shrink(),
     );

@@ -8,7 +8,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/merged_chat_page.dart';
 import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/private_avatar.dart';
 import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
+import 'package:fluffychat/personal/ui/notion_settings_load.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -46,7 +48,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
   @override
   void initState() {
     super.initState();
-    personal.load();
+    PersonalPageLoad.request(context, personal);
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -112,7 +114,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
     );
     String? result;
     try {
-      result = await showDialog<String>(
+      result = await showNotionCustomDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Private nickname'),
@@ -164,7 +166,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
   }
 
   Future<void> _theme(ConversationMetadata metadata) async {
-    final result = await showDialog<ChatTheme>(
+    final result = await showNotionCustomDialog<ChatTheme>(
       context: context,
       builder: (_) => _ThemeDialog(initial: metadata.theme),
     );
@@ -185,171 +187,220 @@ class _OrganizationPageState extends State<OrganizationPage> {
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 720),
-            child: ListView(
-              padding: const EdgeInsets.only(bottom: 32),
-              children: [
-                if (_busy) const LinearProgressIndicator(),
-                if (!personal.ready)
-                  const ListTile(
-                    leading: Icon(Icons.lock_outline),
-                    title: Text('Private sync is unavailable'),
-                    subtitle: Text(
-                      'Set it up in Settings → Sync & transcriptions to sync preferences between your devices.',
+            // Rows rise in once; rows that depend on state reveal in place.
+            child: NotionEntranceScope(
+              child: ListView(
+                padding: const EdgeInsets.only(bottom: 32),
+                children: NotionEntrance.stagger([
+                  NotionSizeReveal(
+                    visible: _busy,
+                    child: const NotionDelayedReveal(
+                      child: LinearProgressIndicator(),
                     ),
                   ),
-                if (metadata != null && room != null) ...[
-                  ListTile(
-                    leading: PrivateAvatarPreview(
-                      personal: personal,
-                      entityId: metadata.entityId,
-                    ),
-                    title: Text(projection.displayName(room)),
-                    subtitle: const Text(
-                      'Private preferences for your own devices.',
-                    ),
-                  ),
-                  if (_waiting(key))
+                  if (!personal.ready)
                     const ListTile(
-                      leading: Icon(Icons.sync),
-                      title: Text('Change awaiting sync confirmation'),
-                    ),
-                  ListTile(
-                    leading: const Icon(Icons.tune),
-                    title: const Text('Visibility & notifications'),
-                    subtitle: const Text(
-                      'Ignore, restore or override network rules',
-                    ),
-                    onTap: () => Navigator.of(context).push<void>(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            ChatPreferencesPage(personal: personal, room: room),
+                      leading: Icon(Icons.lock_outline),
+                      title: Text('Private sync is unavailable'),
+                      subtitle: Text(
+                        'Set it up in Settings → Sync & transcriptions to sync preferences between your devices.',
                       ),
                     ),
-                  ),
-                  SwitchListTile(
-                    title: const Text('Pin chat'),
-                    value: metadata.isPinned,
-                    onChanged: editing
-                        ? (v) => _run(
-                            () => _saveMetadata(
-                              metadata.setPin(
-                                v ? _nextPinOrder(personal) : null,
-                              ),
-                            ),
-                          )
-                        : null,
-                  ),
-                  if (metadata.isPinned)
+                  if (metadata != null && room != null) ...[
                     ListTile(
-                      title: const Text('Move pinned conversation to the top'),
-                      leading: const Icon(Icons.vertical_align_top),
-                      onTap: editing
-                          ? () => _run(() => _movePinToTop(personal, metadata))
-                          : null,
-                    ),
-                  SwitchListTile(
-                    title: const Text('Archive'),
-                    subtitle: const Text(
-                      'New activity returns this conversation to the inbox.',
-                    ),
-                    value: metadata.archived,
-                    onChanged: editing
-                        ? (v) =>
-                              _run(() => _saveMetadata(metadata.setArchived(v)))
-                        : null,
-                  ),
-                  SwitchListTile(
-                    title: const Text('Low priority'),
-                    subtitle: const Text(
-                      'Outside the inbox. Mentions and thread replies may still notify.',
-                    ),
-                    value: metadata.lowPriority,
-                    onChanged: editing
-                        ? (v) => _run(
-                            () => _saveMetadata(metadata.setLowPriority(v)),
-                          )
-                        : null,
-                  ),
-                  const Divider(),
-                  ListTile(
-                    leading: const Icon(Icons.edit_outlined),
-                    title: const Text('Private nickname'),
-                    subtitle: Text(metadata.nickname ?? 'Source network name'),
-                    onTap: editing
-                        ? () => _run(() => _nickname(metadata))
-                        : null,
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.add_photo_alternate_outlined),
-                    title: const Text('Private avatar'),
-                    subtitle: const Text(
-                      'Privately encrypted. PNG, JPEG or WebP, up to 2 MB.',
-                    ),
-                    onTap:
-                        personal.ready &&
-                            !_busy &&
-                            !_waiting('avatar:${metadata.entityId}')
-                        ? () => _run(() => _avatar(metadata.entityId))
-                        : null,
-                  ),
-                  if (personal.values.containsKey(
-                    'avatar:${metadata.entityId}',
-                  ))
-                    ListTile(
-                      leading: const Icon(Icons.hide_image_outlined),
-                      title: const Text('Restore source network avatar'),
-                      onTap: personal.ready && !_busy
-                          ? () => _run(
-                              () => personal.delete(
-                                'avatar:${metadata.entityId}',
-                              ),
-                            )
-                          : null,
-                    ),
-                  ListTile(
-                    leading: const Icon(Icons.palette_outlined),
-                    title: const Text('Conversation colors'),
-                    onTap: editing ? () => _run(() => _theme(metadata)) : null,
-                  ),
-                  if (metadata.theme != null)
-                    ListTile(
-                      title: const Text('Restore default appearance'),
-                      onTap: editing
-                          ? () => _run(
-                              () => _saveMetadata(metadata.setTheme(null)),
-                            )
-                          : null,
-                    ),
-                ],
-                if (room == null) ...[
-                  const ListTile(
-                    leading: Icon(Icons.chat_bubble_outline),
-                    title: Text('Choose a conversation'),
-                    subtitle: Text(
-                      'Open Chat details from a conversation to change its private appearance, nickname and visibility.',
-                    ),
-                  ),
-                  for (final source
-                      in projection
-                          .rooms(personal.client.rooms, filter: InboxFilter.all)
-                          .where((r) => r.membership == Membership.join))
-                    ListTile(
-                      leading: const Icon(Icons.chat_bubble_outline),
-                      title: Text(projection.displayName(source)),
+                      leading: PrivateAvatarPreview(
+                        personal: personal,
+                        entityId: metadata.entityId,
+                      ),
+                      title: Text(projection.displayName(room)),
                       subtitle: const Text(
-                        'Private appearance and conversation preferences',
+                        'Private preferences for your own devices.',
                       ),
-                      onTap: () => Navigator.of(context).push<void>(
-                        MaterialPageRoute(
-                          builder: (_) => OrganizationPage(
-                            personal: personal,
-                            room: source,
+                    ),
+                    NotionSizeReveal(
+                      visible: _waiting(key),
+                      child: const ListTile(
+                        leading: Icon(Icons.sync),
+                        title: Text('Change awaiting sync confirmation'),
+                      ),
+                    ),
+                    _pressable(
+                      ListTile(
+                        leading: const Icon(Icons.tune),
+                        title: const Text('Visibility & notifications'),
+                        subtitle: const Text(
+                          'Ignore, restore or override network rules',
+                        ),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute(
+                            builder: (_) => ChatPreferencesPage(
+                              personal: personal,
+                              room: room,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                ],
-              ],
+                    SwitchListTile(
+                      title: const Text('Pin chat'),
+                      value: metadata.isPinned,
+                      onChanged: editing
+                          ? (v) => _run(
+                              () => _saveMetadata(
+                                metadata.setPin(
+                                  v ? _nextPinOrder(personal) : null,
+                                ),
+                              ),
+                            )
+                          : null,
+                    ),
+                    NotionSizeReveal(
+                      visible: metadata.isPinned,
+                      child: _pressable(
+                        ListTile(
+                          title: const Text(
+                            'Move pinned conversation to the top',
+                          ),
+                          leading: const Icon(Icons.vertical_align_top),
+                          onTap: editing
+                              ? () => _run(
+                                  () => _movePinToTop(personal, metadata),
+                                )
+                              : null,
+                        ),
+                      ),
+                    ),
+                    SwitchListTile(
+                      title: const Text('Archive'),
+                      subtitle: const Text(
+                        'New activity returns this conversation to the inbox.',
+                      ),
+                      value: metadata.archived,
+                      onChanged: editing
+                          ? (v) => _run(
+                              () => _saveMetadata(metadata.setArchived(v)),
+                            )
+                          : null,
+                    ),
+                    SwitchListTile(
+                      title: const Text('Low priority'),
+                      subtitle: const Text(
+                        'Outside the inbox. Mentions and thread replies may still notify.',
+                      ),
+                      value: metadata.lowPriority,
+                      onChanged: editing
+                          ? (v) => _run(
+                              () => _saveMetadata(metadata.setLowPriority(v)),
+                            )
+                          : null,
+                    ),
+                    const Divider(),
+                    _pressable(
+                      ListTile(
+                        leading: const Icon(Icons.edit_outlined),
+                        title: const Text('Private nickname'),
+                        subtitle: NotionFadeThrough(
+                          child: Text(
+                            metadata.nickname ?? 'Source network name',
+                            key: ValueKey(metadata.nickname),
+                          ),
+                        ),
+                        onTap: editing
+                            ? () => _run(() => _nickname(metadata))
+                            : null,
+                      ),
+                    ),
+                    _pressable(
+                      ListTile(
+                        leading: const Icon(Icons.add_photo_alternate_outlined),
+                        title: const Text('Private avatar'),
+                        subtitle: const Text(
+                          'Privately encrypted. PNG, JPEG or WebP, up to 2 MB.',
+                        ),
+                        onTap:
+                            personal.ready &&
+                                !_busy &&
+                                !_waiting('avatar:${metadata.entityId}')
+                            ? () => _run(() => _avatar(metadata.entityId))
+                            : null,
+                      ),
+                    ),
+                    NotionSizeReveal(
+                      visible: personal.values.containsKey(
+                        'avatar:${metadata.entityId}',
+                      ),
+                      child: _pressable(
+                        ListTile(
+                          leading: const Icon(Icons.hide_image_outlined),
+                          title: const Text('Restore source network avatar'),
+                          onTap: personal.ready && !_busy
+                              ? () => _run(
+                                  () => personal.delete(
+                                    'avatar:${metadata.entityId}',
+                                  ),
+                                )
+                              : null,
+                        ),
+                      ),
+                    ),
+                    _pressable(
+                      ListTile(
+                        leading: const Icon(Icons.palette_outlined),
+                        title: const Text('Conversation colors'),
+                        onTap: editing
+                            ? () => _run(() => _theme(metadata))
+                            : null,
+                      ),
+                    ),
+                    NotionSizeReveal(
+                      visible: metadata.theme != null,
+                      child: _pressable(
+                        ListTile(
+                          title: const Text('Restore default appearance'),
+                          onTap: editing
+                              ? () => _run(
+                                  () => _saveMetadata(metadata.setTheme(null)),
+                                )
+                              : null,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (room == null) ...[
+                    const ListTile(
+                      leading: Icon(Icons.chat_bubble_outline),
+                      title: Text('Choose a conversation'),
+                      subtitle: Text(
+                        'Open Chat details from a conversation to change its private appearance, nickname and visibility.',
+                      ),
+                    ),
+                    for (final source
+                        in projection
+                            .rooms(
+                              personal.client.rooms,
+                              filter: InboxFilter.all,
+                            )
+                            .where((r) => r.membership == Membership.join))
+                      _pressable(
+                        ListTile(
+                          leading: const Icon(Icons.chat_bubble_outline),
+                          title: Text(projection.displayName(source)),
+                          subtitle: const Text(
+                            'Private appearance and conversation preferences',
+                          ),
+                          onTap: () => Navigator.of(context).push<void>(
+                            MaterialPageRoute(
+                              builder: (_) => OrganizationPage(
+                                personal: personal,
+                                room: source,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ]),
+              ),
             ),
           ),
         ),
@@ -424,15 +475,19 @@ class _ColorChoices extends StatelessWidget {
                 color: Color(colors[i]),
                 shape: BoxShape.circle,
               ),
-              child: value == colors[i]
-                  ? Icon(
-                      Icons.check,
-                      color: Color(colors[i]).computeLuminance() > 0.5
-                          ? Colors.black
-                          : Colors.white,
-                      size: 18,
-                    )
-                  : null,
+              // The check pops in on the picked swatch and out of the old one.
+              child: NotionPop(
+                visible: value == colors[i],
+                playOnMount: false,
+                bounce: false,
+                child: Icon(
+                  Icons.check,
+                  color: Color(colors[i]).computeLuminance() > 0.5
+                      ? Colors.black
+                      : Colors.white,
+                  size: 18,
+                ),
+              ),
             ),
           ),
         ),
@@ -587,7 +642,7 @@ Future<void> uploadPrivateAvatar(
     filename: 'avatar.enc',
     contentType: 'application/octet-stream',
   );
-  await personal.put('avatar:$entity', {
+  await personal.put(privateAvatarKey(entity), {
     'mxc': uri.toString(),
     'iv': encrypted.iv,
     'key': encrypted.k,
@@ -620,7 +675,7 @@ class _PrivateAvatarPreviewState extends State<PrivateAvatarPreview> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.personal,
     builder: (context, _) {
-      final value = widget.personal.values['avatar:${widget.entityId}'];
+      final value = widget.personal.values[privateAvatarKey(widget.entityId)];
       final fingerprint = value == null ? null : jsonEncode(value);
       if (fingerprint != _fingerprint) {
         _fingerprint = fingerprint;
@@ -642,47 +697,32 @@ class _PrivateAvatarPreviewState extends State<PrivateAvatarPreview> {
       if (_loading == null) return fallback;
       return FutureBuilder<Uint8List?>(
         future: _loading,
-        builder: (context, snapshot) => snapshot.data == null
-            ? fallback
-            : ClipRRect(
-                borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
-                child: Image.memory(
-                  snapshot.data!,
-                  width: widget.radius * 2,
-                  height: widget.radius * 2,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => fallback,
+        initialData: cachedPrivateAvatar(value),
+        // A freshly decrypted avatar fades through the placeholder; a cached
+        // one is there on the first frame.
+        builder: (context, snapshot) => NotionFadeThrough(
+          alignment: Alignment.center,
+          child: snapshot.data == null
+              ? KeyedSubtree(key: const ValueKey('fallback'), child: fallback)
+              : ClipRRect(
+                  key: const ValueKey('avatar'),
+                  borderRadius: BorderRadius.circular(
+                    NotionTokens.avatarRadius,
+                  ),
+                  child: Image.memory(
+                    snapshot.data!,
+                    width: widget.radius * 2,
+                    height: widget.radius * 2,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => fallback,
+                  ),
                 ),
-              ),
+        ),
       );
     },
   );
-  Future<Uint8List?> _download(Map<String, dynamic> value) async {
-    try {
-      final uri = Uri.parse(value['mxc'] as String);
-      if (uri.scheme != 'mxc' ||
-          uri.host.isEmpty ||
-          uri.pathSegments.length != 1 ||
-          (value['size'] as int? ?? 0) > 2 * 1024 * 1024) {
-        return null;
-      }
-      final content = await widget.personal.client.getContent(
-        uri.host,
-        uri.pathSegments.single,
-      );
-      if (content.data.length > 2 * 1024 * 1024) return null;
-      return await widget.personal.client.nativeImplementations.decryptFile(
-        EncryptedFile(
-          data: content.data,
-          iv: value['iv'] as String,
-          k: value['key'] as String,
-          sha256: value['sha256'] as String,
-        ),
-      );
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<Uint8List?> _download(Map<String, dynamic> value) =>
+      downloadPrivateAvatarValue(widget.personal.client, value);
 }
 
 class DraftConflictPage extends StatefulWidget {
@@ -718,7 +758,7 @@ Future<void> resolvePersonalMetadataConflict(
   );
   final current = snapshot['existingValue'];
   final proposed = snapshot['proposedValue'];
-  final choice = await showDialog<String>(
+  final choice = await showNotionCustomDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('Choose a settings version'),
@@ -790,7 +830,7 @@ String _metadataConflictSummary(Object? value, PersonalClient personal) {
   }.entries) {
     final field = value[entry.key];
     if (field is String) parts.add('${entry.value}: $field');
-    if (field is bool) parts.add('${entry.value}: ${field ? 'tak' : 'nie'}');
+    if (field is bool) parts.add('${entry.value}: ${field ? 'yes' : 'no'}');
   }
   if (value['theme'] is Map) parts.add('Custom conversation colors');
   return parts.isEmpty ? 'Private conversation settings' : parts.join('\n');
@@ -903,17 +943,24 @@ class _DraftConflictPageState extends State<DraftConflictPage> {
               const Text(
                 'Both versions are kept as copies. The chosen text returns to the composer.',
               ),
-              if (_error != null)
-                Padding(
+              NotionSizeReveal(
+                visible: _error != null,
+                child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Text(
-                    _error!,
+                    _error ?? '',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
                 ),
-              if (_busy) const LinearProgressIndicator(),
+              ),
+              NotionSizeReveal(
+                visible: _busy,
+                child: const NotionDelayedReveal(
+                  child: LinearProgressIndicator(),
+                ),
+              ),
               if (_snapshot == null)
                 const ListTile(
                   title: Text('This draft no longer has a conflict.'),
@@ -1169,22 +1216,37 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
                     ),
                   ),
                 ),
+                // Empty, no-match and each network's list fade through;
+                // the first screenful of bookmarks rises in.
                 Expanded(
-                  child: entries.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'Bookmark a message to find it here later.',
+                  child: NotionFadeThrough(
+                    child: entries.isEmpty
+                        ? const NotionEmptyState(
+                            key: ValueKey('empty'),
+                            icon: Icons.bookmark_outline,
+                            title: 'Bookmark a message to find it here later.',
+                          )
+                        : noMatches || filtered.isEmpty
+                        ? const NotionEmptyState(
+                            key: ValueKey('none'),
+                            icon: Icons.search_off_outlined,
+                            title: 'No bookmarks match this search.',
+                          )
+                        : NotionEntranceScope(
+                            key: ValueKey('list:$_network'),
+                            child: ListView(
+                              children: [
+                                for (final entry in filtered)
+                                  NotionEntrance(
+                                    key: ValueKey(entry.key),
+                                    playKey: entry.key,
+                                    rise: NotionMotion.riseList,
+                                    child: _bookmark(entry),
+                                  ),
+                              ],
+                            ),
                           ),
-                        )
-                      : noMatches || filtered.isEmpty
-                      ? const Center(
-                          child: Text('No bookmarks match this search.'),
-                        )
-                      : ListView(
-                          children: [
-                            for (final entry in filtered) _bookmark(entry),
-                          ],
-                        ),
+                  ),
                 ),
               ],
             ),
@@ -1209,7 +1271,12 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
       future: _events.putIfAbsent(source.key, () => _event(source)),
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
-          return const ListTile(title: Text('Loading saved message…'));
+          return const NotionSkeleton(
+            child: ListTile(
+              title: Text('Loading saved message…'),
+              subtitle: Text('Conversation · Network'),
+            ),
+          );
         }
         final event = snapshot.data;
         final transcript = widget.personal.transcripts.values
@@ -1249,27 +1316,31 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
         final room = widget.personal.client.getRoomById(
           source.conversation.roomId,
         );
-        return ListTile(
-          title: Text(
-            event.text.isEmpty ? transcript ?? 'Saved attachment' : event.text,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: Text(
-            '${room == null ? '' : InboxProjection(widget.personal).displayName(room)} · ${entry.value['network'] as String? ?? ''}',
-          ),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute<void>(
-              builder: (_) => SourceChatPage(source: source),
+        return _pressable(
+          ListTile(
+            title: Text(
+              event.text.isEmpty
+                  ? transcript ?? 'Saved attachment'
+                  : event.text,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
             ),
-          ),
-          trailing: IconButton(
-            tooltip: 'Remove bookmark',
-            icon: const Icon(Icons.bookmark_remove_outlined),
-            onPressed: widget.personal.ready
-                ? () => _removeBookmark(entry.key)
-                : null,
+            subtitle: Text(
+              '${room == null ? '' : InboxProjection(widget.personal).displayName(room)} · ${entry.value['network'] as String? ?? ''}',
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => SourceChatPage(source: source),
+              ),
+            ),
+            trailing: IconButton(
+              tooltip: 'Remove bookmark',
+              icon: const Icon(Icons.bookmark_remove_outlined),
+              onPressed: widget.personal.ready
+                  ? () => _removeBookmark(entry.key)
+                  : null,
+            ),
           ),
         );
       },
@@ -1325,3 +1396,7 @@ class PersonalInboxFilters extends StatelessWidget {
     ),
   );
 }
+
+/// Press feedback for a tappable Material [ListTile] row.
+Widget _pressable(Widget row) =>
+    NotionPressable(scale: NotionMotion.pressRow, child: row);
