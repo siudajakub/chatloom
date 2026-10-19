@@ -9,11 +9,14 @@ import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
 import 'package:fluffychat/personal/ui/notion_network_filter.dart';
 import 'package:fluffychat/personal/organization_page.dart';
 import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/round_video/round_availability.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_content.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_notifications.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
+import 'package:fluffychat/personal/ui/notion_settings_load.dart';
 import 'package:fluffychat/ui/notion/metadata_actions.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/user_dialog.dart';
@@ -68,12 +71,15 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
   String? _status;
   late final StreamSubscription _sync;
   late final StreamSubscription _roomState;
+  Timer? _refreshTimer;
+  Set<String> _observedSourceIds = {};
   PersonalClient get personal => widget.personal;
   InboxProjection get projection => InboxProjection(personal);
   String get entity => widget.group == null
       ? projection.entityFor(widget.room!)
       : 'person:${widget.group!.id}';
-  PersonGroup? get currentGroup {
+  PersonGroup? get currentGroup => _currentGroup(projection);
+  PersonGroup? _currentGroup(InboxProjection projection) {
     final original = widget.group;
     if (original == null) return null;
     for (final member in original.members) {
@@ -95,6 +101,10 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
   @override
   void initState() {
     super.initState();
+    _observedSourceIds = {
+      if (widget.room != null) widget.room!.id,
+      ...?widget.group?.members.map((member) => member.roomId),
+    };
     final room = widget.room;
     if (room != null) {
       _native = NotionNotificationBinding(
@@ -103,18 +113,45 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
       )..addListener(_refresh);
     }
     personal.addListener(_refresh);
-    _sync = personal.client.onSync.stream.listen((_) => _refresh());
-    _roomState = personal.client.onRoomState.stream.listen((_) => _refresh());
-    personal.load();
+    _sync = personal.client.onSync.stream
+        .where(_affectsDetails)
+        .listen((_) => _refresh());
+    _roomState = personal.client.onRoomState.stream
+        .where((update) => _observedSourceIds.contains(update.roomId))
+        .listen((_) => _refresh());
+    // The profile renders from local state; revalidate private sync after
+    // the page slid in, and not again right after another page did.
+    PersonalPageLoad.request(context, personal);
   }
 
   void _refresh() {
     _native?.refresh();
-    if (mounted) setState(() {});
+    if (!mounted || _refreshTimer != null) return;
+    // Matrix emits one room-state event per state key during a sync. Coalesce
+    // that burst, rather than rebuilding the complete profile for each event.
+    _refreshTimer = Timer(const Duration(milliseconds: 16), () {
+      _refreshTimer = null;
+      if (mounted) setState(() {});
+    });
+  }
+
+  bool _affectsDetails(SyncUpdate update) {
+    if (update.accountData?.any(
+          (event) => event.type == 'm.push_rules' || event.type == 'm.direct',
+        ) ==
+        true)
+      return true;
+    final ids = _observedSourceIds;
+    return [
+      update.rooms?.join,
+      update.rooms?.invite,
+      update.rooms?.leave,
+    ].any((rooms) => rooms?.keys.any(ids.contains) == true);
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     personal.removeListener(_refresh);
     _sync.cancel();
     _roomState.cancel();
@@ -140,6 +177,18 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Whether round videos can be recorded here, and why not.
+  Widget _roundVideoRow(Room room) {
+    final availability = RoundAvailability.of(room);
+    final reason = availability.reason;
+    final hint = availability.hint;
+    return NotionListRow(
+      leading: const Icon(Icons.radio_button_checked_outlined),
+      title: 'Round video',
+      subtitle: [reason ?? 'Available', ?hint].join(' · '),
+    );
   }
 
   Future<void> _hub() async {
@@ -248,7 +297,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
   }
 
   Future<void> _notifications(Room room) async {
-    final state = await showDialog<PushRuleState>(
+    final state = await showNotionCustomDialog<PushRuleState>(
       context: context,
       builder: (context) => SimpleDialog(
         title: const Text('Account notifications · Beeper / Matrix'),
@@ -302,6 +351,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
 
   Future<void> _sources({bool contact = false}) => showModalBottomSheet<void>(
     context: context,
+    sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
     isScrollControlled: true,
     builder: (context) => SafeArea(
       child: ConstrainedBox(
@@ -314,7 +364,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+              children: NotionEntrance.stagger(afterRoute: false, [
                 const Text('Choose a source', style: NotionTokens.heading),
                 const SizedBox(height: 8),
                 const Text(
@@ -343,7 +393,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                       }
                     },
                   ),
-              ],
+              ]),
             ),
           ),
         ),
@@ -356,6 +406,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
   Future<void> _overflow() async {
     await showModalBottomSheet<void>(
       context: context,
+      sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
       isScrollControlled: true,
       builder: (context) => SafeArea(
         child: SingleChildScrollView(
@@ -363,7 +414,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             padding: const EdgeInsets.all(20),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: [
+              children: NotionEntrance.stagger(afterRoute: false, [
                 NotionListRow(
                   leading: const Icon(Icons.sync_outlined),
                   title: 'Private tools & sync',
@@ -398,7 +449,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                       },
                     ),
                 ],
-              ],
+              ]),
             ),
           ),
         ),
@@ -426,12 +477,29 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
   @override
   Widget build(BuildContext context) {
     final room = widget.room;
-    final group = currentGroup ?? widget.group;
+    // One synchronous presentation pass; action callbacks retain live getters.
+    final projection = InboxProjection.snapshot(personal);
+    final activeGroup = _currentGroup(projection);
+    final group = activeGroup ?? widget.group;
+    final entity = widget.group == null
+        ? projection.entityFor(room!)
+        : 'person:${widget.group!.id}';
+    final sourceRooms = room != null
+        ? [room]
+        : group!.members
+              .map((member) => personal.client.getRoomById(member.roomId))
+              .whereType<Room>()
+              .where((source) => source.membership == Membership.join)
+              .toList();
+    _observedSourceIds = {
+      if (room != null) room.id,
+      ...?group?.members.map((member) => member.roomId),
+    };
     final metadata = projection.metadataForEntity(entity);
     final waiting = personal.pending.values.any(
       (op) => op.entityId == 'org:$entity' || op.entityId == 'nickname:$entity',
     );
-    final mergedValid = widget.group == null || currentGroup != null;
+    final mergedValid = widget.group == null || activeGroup != null;
     final canEdit =
         mergedValid &&
         !_busy &&
@@ -444,7 +512,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         room!.getLocalizedDisplayname();
     final network = group == null
         ? notionNetworkName(projection.classifier.classify(room!).network)
-        : sources
+        : sourceRooms
               .map(
                 (source) => notionNetworkName(
                   projection.classifier.classify(source).network,
@@ -458,7 +526,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           'Each source has its own notifications, encryption and membership.',
           style: TextStyle(fontSize: 13),
         ),
-        for (final source in sources)
+        for (final source in sourceRooms)
           NotionListRow(
             leading: const Icon(Icons.language_outlined),
             title: notionNetworkName(
@@ -468,7 +536,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                 '${source.getLocalizedDisplayname()} · ${notionNotificationLabel(source.pushRuleState)}',
             onTap: () => _sourceDetails(source),
           ),
-        if (sources.length != group.members.length)
+        if (sourceRooms.length != group.members.length)
           const Text(
             'Some sources are unavailable. Their settings cannot be changed.',
           ),
@@ -484,7 +552,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         NotionListRow(
           leading: const Icon(Icons.info_outline),
           title: 'Conversation capabilities',
-          onTap: () => showDialog<void>(
+          onTap: () => showNotionCustomDialog<void>(
             context: context,
             builder: (context) => AlertDialog(
               title: const Text('Conversation capabilities'),
@@ -512,6 +580,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             ),
           ),
         ),
+        if (PlatformInfos.isAndroid &&
+            PersonalClient.networkOf(room) == 'telegram')
+          _roundVideoRow(room),
         NotionListRow(
           leading: const Icon(Icons.lock_outline),
           title: 'Encryption & recovery',
@@ -583,6 +654,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         ),
       ],
     ];
+    final networkAvatar = room != null
+        ? projection.avatarFor(room)
+        : projection.avatarForGroup(group!);
     return NotionChatDetailsPage(
       leading: widget.controller?.widget.embeddedCloseButton,
       data: NotionConversationDetailsData(
@@ -596,14 +670,14 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           radius: 32,
           fallback: Avatar(
             client: personal.client,
-            mxContent: room?.avatar,
+            mxContent: networkAvatar,
             name: name,
             size: 64,
-            onTap: room?.avatar == null
+            onTap: networkAvatar == null
                 ? null
-                : () => showDialog(
+                : () => showNotionCustomDialog(
                     context: context,
-                    builder: (_) => MxcImageViewer(room!.avatar!),
+                    builder: (_) => MxcImageViewer(networkAvatar),
                   ),
           ),
         ),
@@ -624,7 +698,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                 : !personal.ready
                 ? 'Private sync is not connected. Network settings remain available.'
                 : null),
-        sharedContent: NotionLocalSharedPreview(rooms: sources),
+        sharedContent: NotionLocalSharedPreview(rooms: sourceRooms),
         sourceRows: sourceRows,
       ),
       actions: NotionConversationDetailsActions(
@@ -634,7 +708,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                 NotionConversationContentPage(rooms: sources, name: name),
           ),
         ),
-        preferences: sources.isEmpty ? null : _privatePreferences,
+        preferences: sourceRooms.isEmpty ? null : _privatePreferences,
         mute: room == null ? _sources : _privatePreferences,
         notifications: room == null ? _sources : _privatePreferences,
         pin: canEdit

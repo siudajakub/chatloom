@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/member_actions_popup_menu_button.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -39,74 +40,77 @@ class ParticipantListItem extends StatelessWidget {
         user.powerLevel.role == PowerLevelRole.admin ||
         user.powerLevel.role == PowerLevelRole.owner;
 
-    return ListTile(
-      onTap: () => showMemberActionsPopupMenu(context: context, user: user),
-      title: Row(
-        children: <Widget>[
-          if (user.room.client.userDeviceKeys[user.id]?.masterKey?.verified ==
-              true)
-            Padding(
-              padding: const EdgeInsets.only(right: 2.0),
-              child: Icon(
-                Icons.verified,
-                color: Theme.of(context).colorScheme.primary,
-                size: 16,
-              ),
-            ),
-          Expanded(
-            child: Text(
-              user.calcDisplayname(),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (permissionBatch != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: isAdminOrOwner
-                    ? theme.colorScheme.tertiary
-                    : theme.colorScheme.tertiaryContainer,
-                borderRadius: BorderRadius.circular(AppConfig.borderRadius),
-              ),
-              child: Text(
-                permissionBatch,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: isAdminOrOwner
-                      ? theme.colorScheme.onTertiary
-                      : theme.colorScheme.onTertiaryContainer,
+    return NotionPressable(
+      scale: NotionMotion.pressRow,
+      child: ListTile(
+        onTap: () => showMemberActionsPopupMenu(context: context, user: user),
+        title: Row(
+          children: <Widget>[
+            if (user.room.client.userDeviceKeys[user.id]?.masterKey?.verified ==
+                true)
+              Padding(
+                padding: const EdgeInsets.only(right: 2.0),
+                child: Icon(
+                  Icons.verified,
+                  color: Theme.of(context).colorScheme.primary,
+                  size: 16,
                 ),
               ),
+            Expanded(
+              child: Text(
+                user.calcDisplayname(),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-          membershipBatch == null
-              ? const SizedBox.shrink()
-              : Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 4,
-                    horizontal: 8,
+            if (permissionBatch != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: isAdminOrOwner
+                      ? theme.colorScheme.tertiary
+                      : theme.colorScheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(AppConfig.borderRadius),
+                ),
+                child: Text(
+                  permissionBatch,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: isAdminOrOwner
+                        ? theme.colorScheme.onTertiary
+                        : theme.colorScheme.onTertiaryContainer,
                   ),
-                  margin: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.secondaryContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Center(
-                    child: Text(
-                      membershipBatch,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSecondaryContainer,
+                ),
+              ),
+            membershipBatch == null
+                ? const SizedBox.shrink()
+                : Container(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 4,
+                      horizontal: 8,
+                    ),
+                    margin: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.secondaryContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        membershipBatch,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSecondaryContainer,
+                        ),
                       ),
                     ),
                   ),
-                ),
-        ],
-      ),
-      subtitle: Text(user.id, maxLines: 1, overflow: TextOverflow.ellipsis),
-      leading: Opacity(
-        opacity: user.membership == Membership.join ? 1 : 0.5,
-        child: Avatar(
-          mxContent: user.avatarUrl,
-          name: user.calcDisplayname(),
-          presenceUserId: user.stateKey,
+          ],
+        ),
+        subtitle: Text(user.id, maxLines: 1, overflow: TextOverflow.ellipsis),
+        leading: Opacity(
+          opacity: user.membership == Membership.join ? 1 : 0.5,
+          child: Avatar(
+            mxContent: user.avatarUrl,
+            name: user.calcDisplayname(),
+            presenceUserId: user.stateKey,
+          ),
         ),
       ),
     );

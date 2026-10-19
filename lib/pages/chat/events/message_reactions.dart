@@ -5,13 +5,14 @@
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/pages/chat/conversation_message_actions.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
-class MessageReactions extends StatelessWidget {
+class MessageReactions extends StatefulWidget {
   final Event event;
   final Timeline timeline;
   final bool strict;
@@ -22,6 +23,30 @@ class MessageReactions extends StatelessWidget {
     super.key,
     this.strict = false,
   });
+
+  /// A reaction younger than this when its chip first appears is treated as
+  /// just added (it pops); older ones are history and appear still.
+  static const Duration freshWindow = Duration(seconds: 4);
+
+  @override
+  State<MessageReactions> createState() => _MessageReactionsState();
+}
+
+class _MessageReactionsState extends State<MessageReactions> {
+  /// Chips present when this row was first built. Later chips are new
+  /// reactions and pop in; the first set pops only when it is fresh (the
+  /// first reaction on a visible message), never for scrolled-in history.
+  Set<String>? _initial;
+
+  Event get event => widget.event;
+  Timeline get timeline => widget.timeline;
+  bool get strict => widget.strict;
+
+  @override
+  void didUpdateWidget(MessageReactions oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.event.eventId != widget.event.eventId) _initial = null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,10 +73,22 @@ class MessageReactions extends StatelessWidget {
         reactionMap[key]!.count++;
         reactionMap[key]!.reactors!.add(e.senderFromMemoryOrFallback);
         reactionMap[key]!.reacted |= e.senderId == e.room.client.userID;
+        final sent = e.originServerTs;
+        final latest = reactionMap[key]!.latest;
+        if (latest == null || sent.isAfter(latest)) {
+          reactionMap[key]!.latest = sent;
+        }
       }
     }
 
     final reactionList = reactionMap.values.toList();
+    final now = DateTime.now();
+    final initial = _initial ??= {
+      for (final r in reactionList)
+        if (r.latest == null ||
+            now.difference(r.latest!) > MessageReactions.freshWindow)
+          r.key,
+    };
     reactionList.sort((a, b) => b.count - a.count > 0 ? 1 : -1);
     final ownMessage = event.senderId == event.room.client.userID;
     final manager = ConversationMessageActions.coordinator(event);
@@ -68,6 +105,8 @@ class MessageReactions extends StatelessWidget {
         children: [
           ...reactionList.map(
             (r) => _Reaction(
+              key: ValueKey(r.key),
+              popIn: !initial.contains(r.key),
               reactionKey: r.key,
               count: r.count,
               reacted: r.reacted,
@@ -103,10 +142,13 @@ class _Reaction extends StatelessWidget {
   final int count;
   final bool? reacted;
   final bool pending;
+  final bool popIn;
   final void Function()? onTap;
   final void Function()? onLongPress;
 
   const _Reaction({
+    super.key,
+    this.popIn = false,
     required this.reactionKey,
     required this.count,
     required this.reacted,
@@ -135,35 +177,49 @@ class _Reaction extends StatelessWidget {
       }
       content = Text(renderKey.toString(), style: TextStyle(fontSize: 14));
     }
+    final reduced = NotionMotion.reduced(context);
     return Semantics(
       label:
           '$reactionKey, $count reactions${pending ? ', waiting for source confirmation' : ''}',
-      child: Opacity(
-        opacity: pending ? .55 : 1,
-        child: Badge(
-          isLabelVisible: count > 1,
-          label: Text(count.toString()),
-          textStyle: TextStyle(fontSize: 10),
-          textColor: theme.colorScheme.onPrimary,
-          backgroundColor: theme.colorScheme.primary.withAlpha(200),
-          child: InkWell(
-            onTap: () => onTap != null ? onTap!() : null,
-            onLongPress: () => onLongPress != null ? onLongPress!() : null,
-            borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-            child: Container(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.secondaryContainer,
-                border: Border.all(
-                  color: reacted == true
-                      ? theme.colorScheme.secondary
-                      : theme.colorScheme.secondaryContainer,
-                  width: 1,
-                ),
+      // A new chip springs in; a changed count or own toggle pulses it.
+      child: NotionPop(
+        playOnMount: popIn,
+        trigger: (count, reacted),
+        child: NotionPressable(
+          scale: NotionMotion.pressIcon,
+          bounce: true,
+          child: AnimatedOpacity(
+            opacity: pending ? .55 : 1,
+            duration: reduced ? Duration.zero : NotionMotion.short,
+            curve: NotionMotion.standard,
+            child: Badge(
+              isLabelVisible: count > 1,
+              label: NotionAnimatedCount(count: count),
+              textStyle: TextStyle(fontSize: 10),
+              textColor: theme.colorScheme.onPrimary,
+              backgroundColor: theme.colorScheme.primary.withAlpha(200),
+              child: InkWell(
+                onTap: () => onTap != null ? onTap!() : null,
+                onLongPress: () => onLongPress != null ? onLongPress!() : null,
                 borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.secondaryContainer,
+                    border: Border.all(
+                      color: reacted == true
+                          ? theme.colorScheme.secondary
+                          : theme.colorScheme.secondaryContainer,
+                      width: 1,
+                    ),
+                    borderRadius: BorderRadius.circular(
+                      AppConfig.borderRadius / 2,
+                    ),
+                  ),
+                  height: 24,
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: content,
+                ),
               ),
-              height: 24,
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: content,
             ),
           ),
         ),
@@ -177,6 +233,9 @@ class _ReactionEntry {
   int count;
   bool reacted;
   List<User>? reactors;
+
+  /// Newest reaction with this key, for the "just added" pop.
+  DateTime? latest;
 
   _ReactionEntry({
     required this.key,
@@ -192,7 +251,7 @@ class _AdaptableReactorsDialog extends StatelessWidget {
 
   const _AdaptableReactorsDialog({this.client, this.reactionEntry});
 
-  Future<bool?> show(BuildContext context) => showDialog(
+  Future<bool?> show(BuildContext context) => showNotionCustomDialog(
     context: context,
     builder: (context) => this,
     barrierDismissible: true,

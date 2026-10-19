@@ -45,9 +45,12 @@ extension IsStateExtension on Event {
 
   bool get isState => !{EventTypes.Message, EventTypes.Sticker}.contains(type);
 
+  /// Runs of these fold into one "more events" line. Encrypted events are
+  /// messages waiting for a key, never folded state.
   bool get isCollapsedState => !{
     EventTypes.Message,
     EventTypes.Sticker,
+    EventTypes.Encrypted,
     EventTypes.RoomCreate,
     EventTypes.RoomTombstone,
   }.contains(type);

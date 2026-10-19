@@ -2,6 +2,7 @@
 import 'dart:math' as math;
 import 'dart:ui' show FontFeature;
 
+import 'package:fluffychat/pages/chat/conversation_motion.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -155,32 +156,67 @@ class NotionComposer extends StatelessWidget {
 class NotionSendButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool busy;
-  const NotionSendButton({super.key, this.onPressed, this.busy = false});
+  final String tooltip;
+  const NotionSendButton({
+    super.key,
+    this.onPressed,
+    this.busy = false,
+    this.tooltip = 'Send message',
+  });
+
+  /// Presses with a spring (the send button is a reward element), pulses
+  /// when it becomes enabled, sends with a light haptic tick and morphs
+  /// between the arrow and the busy spinner.
   @override
-  Widget build(BuildContext context) => IconButton(
-    key: const Key('send_button'),
-    tooltip: 'Send message',
-    onPressed: busy ? null : onPressed,
-    style: IconButton.styleFrom(
-      minimumSize: const Size.square(48),
-      backgroundColor: Theme.of(context).colorScheme.onSurface,
-      foregroundColor: Theme.of(context).colorScheme.surface,
-      disabledBackgroundColor: Theme.of(
-        context,
-      ).colorScheme.onSurface.withAlpha(90),
-      disabledForegroundColor: Theme.of(context).colorScheme.surface,
-      shape: const CircleBorder(),
-    ),
-    icon: busy
-        ? SizedBox.square(
-            dimension: 20,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: Theme.of(context).colorScheme.surface,
-            ),
-          )
-        : const Icon(Icons.arrow_upward, size: 24),
-  );
+  Widget build(BuildContext context) {
+    final send = busy ? null : onPressed;
+    // Springs when it turns enabled (first character typed) or back.
+    return NotionPop(
+      playOnMount: false,
+      trigger: onPressed != null,
+      child: NotionPressable(
+        scale: NotionMotion.pressIcon,
+        bounce: true,
+        enabled: send != null,
+        child: IconButton(
+          key: const Key('send_button'),
+          tooltip: tooltip,
+          onPressed: send == null
+              ? null
+              : () {
+                  NotionHaptics.send();
+                  send();
+                },
+          style: IconButton.styleFrom(
+            minimumSize: const Size.square(48),
+            backgroundColor: Theme.of(context).colorScheme.onSurface,
+            foregroundColor: Theme.of(context).colorScheme.surface,
+            disabledBackgroundColor: Theme.of(
+              context,
+            ).colorScheme.onSurface.withAlpha(90),
+            disabledForegroundColor: Theme.of(context).colorScheme.surface,
+            shape: const CircleBorder(),
+          ),
+          icon: NotionMorphSwitcher(
+            child: busy
+                ? SizedBox.square(
+                    key: const ValueKey('busy'),
+                    dimension: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Theme.of(context).colorScheme.surface,
+                    ),
+                  )
+                : const Icon(
+                    Icons.arrow_upward,
+                    key: ValueKey('send'),
+                    size: 24,
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Validates bounded Matrix MSC1767 amplitudes, keeping missing data honest.
@@ -260,7 +296,6 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
   Widget build(BuildContext context) {
     final foreground =
         widget.foregroundColor ?? Theme.of(context).colorScheme.onSurface;
-    final pl = Localizations.localeOf(context).languageCode == 'pl';
     final enabledSeek = !widget.downloading ? widget.onSeek : null;
     final progress = (_preview ?? widget.progress).clamp(0.0, 1.0).toDouble();
     final total = widget.seekDuration;
@@ -291,39 +326,47 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
             children: [
               SizedBox.square(
                 dimension: 48,
-                child: widget.downloading
-                    ? Semantics(
-                        label: pl ? 'Wczytywanie nagrania' : 'Loading audio',
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: foreground,
-                            value: widget.downloadProgress?.clamp(0.0, 1.0),
+                // Loading ↔ play pops in place (the old state leaves at once).
+                child: ConversationSlotMorph(
+                  child: widget.downloading
+                      ? Semantics(
+                          key: const ValueKey('audio-loading'),
+                          label: 'Loading audio',
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: foreground,
+                              value: widget.downloadProgress?.clamp(0.0, 1.0),
+                            ),
+                          ),
+                        )
+                      : IconButton(
+                          key: const ValueKey('audio-play'),
+                          tooltip: widget.playing
+                              ? 'Pause audio'
+                              : 'Play audio',
+                          style: buttonStyle.copyWith(
+                            backgroundColor: WidgetStatePropertyAll(foreground),
+                            foregroundColor: WidgetStatePropertyAll(
+                              foreground.computeLuminance() > .179
+                                  ? const Color(0xFF242424)
+                                  : Colors.white,
+                            ),
+                            shape: const WidgetStatePropertyAll(CircleBorder()),
+                          ),
+                          onPressed: widget.onPlay,
+                          icon: NotionMorphSwitcher(
+                            child: Icon(
+                              widget.playing
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded,
+                              key: ValueKey(widget.playing),
+                              size: 28,
+                            ),
                           ),
                         ),
-                      )
-                    : IconButton(
-                        tooltip: widget.playing
-                            ? (pl ? 'Wstrzymaj nagranie' : 'Pause audio')
-                            : (pl ? 'Odtwórz nagranie' : 'Play audio'),
-                        style: buttonStyle.copyWith(
-                          backgroundColor: WidgetStatePropertyAll(foreground),
-                          foregroundColor: WidgetStatePropertyAll(
-                            foreground.computeLuminance() > .179
-                                ? const Color(0xFF242424)
-                                : Colors.white,
-                          ),
-                          shape: const WidgetStatePropertyAll(CircleBorder()),
-                        ),
-                        onPressed: widget.onPlay,
-                        icon: Icon(
-                          widget.playing
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          size: 28,
-                        ),
-                      ),
+                ),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -360,7 +403,7 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
                       ),
                       child: MergeSemantics(
                         child: Semantics(
-                          label: pl ? 'Pozycja nagrania' : 'Audio position',
+                          label: 'Audio position',
                           child: Slider(
                             key: const ValueKey('voice-waveform'),
                             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -403,13 +446,13 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               IconButton(
-                tooltip: pl ? 'Cofnij o 10 sekund' : 'Rewind 10 seconds',
+                tooltip: 'Rewind 10 seconds',
                 style: buttonStyle,
                 onPressed: widget.downloading ? null : widget.onSeekBack,
                 icon: const Icon(Icons.replay_10_rounded, size: 22),
               ),
               IconButton(
-                tooltip: pl ? 'Przewiń o 10 sekund' : 'Forward 10 seconds',
+                tooltip: 'Forward 10 seconds',
                 style: buttonStyle,
                 onPressed: widget.downloading ? null : widget.onSeekForward,
                 icon: const Icon(Icons.forward_10_rounded, size: 22),
@@ -425,18 +468,17 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
                       minimumSize: const Size(48, 48),
                     ),
                     child: Tooltip(
-                      message: pl ? 'Prędkość odtwarzania' : 'Playback speed',
+                      message: 'Playback speed',
                       child: Text(
                         speedLabel,
                         textDirection: TextDirection.ltr,
-                        semanticsLabel:
-                            '${pl ? 'Prędkość odtwarzania' : 'Playback speed'} $speedLabel',
+                        semanticsLabel: 'Playback speed $speedLabel',
                       ),
                     ),
                   ),
               if (widget.onDownload != null)
                 IconButton(
-                  tooltip: pl ? 'Zapisz nagranie' : 'Download audio',
+                  tooltip: 'Download audio',
                   style: buttonStyle,
                   onPressed: widget.onDownload,
                   icon: const Icon(Icons.download_rounded, size: 20),
@@ -542,47 +584,3 @@ double notionRestoredScrollOffset(
   double afterY, {
   required bool reverse,
 }) => current + (reverse ? beforeY - afterY : afterY - beforeY);
-
-/// Manual request affordance. Rendering this action never starts a job.
-class NotionTranscribeAction extends StatelessWidget {
-  final VoidCallback? onPressed;
-  final String label;
-  final bool busy;
-  const NotionTranscribeAction({
-    super.key,
-    this.onPressed,
-    this.label = 'Transcribe',
-    this.busy = false,
-  });
-  @override
-  Widget build(BuildContext context) => TextButton(
-    onPressed: onPressed,
-    style: TextButton.styleFrom(
-      padding: EdgeInsets.zero,
-      minimumSize: const Size(48, 44),
-      alignment: Alignment.centerLeft,
-      foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (busy) ...[
-          const SizedBox.square(
-            dimension: 14,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          const SizedBox(width: 8),
-        ],
-        Flexible(
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 13,
-              decoration: TextDecoration.underline,
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-}

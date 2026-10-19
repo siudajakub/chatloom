@@ -6,6 +6,8 @@ import 'package:fluffychat/personal/ui/notion_network_selector.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
 
+import 'conversation_motion.dart';
+
 /// A real source, including the account and room identity used by the caller.
 /// Titles/subtitles are display names; raw source identifiers are never shown.
 class ConversationSourceOption {
@@ -33,28 +35,44 @@ Future<ConversationRef?> showConversationSourcePicker(
 }) {
   final options = List<ConversationSourceOption>.unmodifiable(sources);
   final media = MediaQuery.of(context);
-  final maxHeight = math.max(
-    120.0,
-    media.size.height - media.viewInsets.bottom - media.padding.vertical - 48,
-  );
-  Widget contents(BuildContext context) => TextFieldTapRegion(
-    child: ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: maxHeight),
-      child: _ConversationSourceList(sources: options, selected: selected),
-    ),
-  );
+  Widget contents(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final maxHeight = math.max(
+      120.0,
+      media.size.height - media.viewInsets.bottom - media.padding.vertical - 48,
+    );
+    return TextFieldTapRegion(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: _ConversationSourceList(sources: options, selected: selected),
+      ),
+    );
+  }
+
   if (media.size.width < 600) {
     return showModalBottomSheet<ConversationRef>(
       context: context,
+      useRootNavigator: true,
       requestFocus: false,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (context) => SafeArea(top: false, child: contents(context)),
+      sheetAnimationStyle: ConversationMotion.reduced(context)
+          ? AnimationStyle.noAnimation
+          : null,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: SafeArea(top: false, child: contents(context)),
+      ),
     );
   }
   return showDialog<ConversationRef>(
     context: context,
     requestFocus: false,
+    animationStyle: ConversationMotion.reduced(context)
+        ? AnimationStyle.noAnimation
+        : null,
     builder: (context) =>
         Dialog(child: SizedBox(width: 420, child: contents(context))),
   );
@@ -79,9 +97,12 @@ class _ConversationSourceList extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                'Send via',
-                style: Theme.of(context).textTheme.titleMedium,
+              child: Semantics(
+                header: true,
+                child: Text(
+                  'Send via',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
               ),
             ),
             IconButton(

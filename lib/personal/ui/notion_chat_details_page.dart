@@ -56,205 +56,233 @@ class NotionChatDetailsPage extends StatelessWidget {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 640),
-          child: ListView(
-            key: const PageStorageKey('notion-chat-details'),
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
-            children: [
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final stacked =
-                      constraints.maxWidth < 440 &&
-                      MediaQuery.textScalerOf(context).scale(16) > 24;
-                  final avatar = ClipRRect(
-                    borderRadius: BorderRadius.circular(
-                      NotionTokens.avatarRadius,
-                    ),
-                    child: SizedBox.square(dimension: 64, child: data.avatar),
-                  );
-                  final identity = Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        data.name,
-                        style: stacked
-                            ? NotionTokens.title.copyWith(fontSize: 22)
-                            : NotionTokens.title,
+          // The header settles in first (avatar grows, name rises), then the
+          // first screenful of sections follows; rows built later by
+          // scrolling never animate.
+          child: NotionEntranceScope(
+            child: ListView(
+              key: const PageStorageKey('notion-chat-details'),
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
+              children: _entering([
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final stacked =
+                        constraints.maxWidth < 440 &&
+                        MediaQuery.textScalerOf(context).scale(16) > 24;
+                    final avatar = NotionEntrance(
+                      index: 0,
+                      rise: 0,
+                      scale: NotionMotion.dialogFrom,
+                      alignment: AlignmentDirectional.topStart.resolve(
+                        Directionality.maybeOf(context),
                       ),
-                      const SizedBox(height: 8),
-                      NotionValueTag(
-                        data.network,
-                        icon: Icons.language_outlined,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(
+                          NotionTokens.avatarRadius,
+                        ),
+                        child: SizedBox.square(
+                          dimension: 64,
+                          child: data.avatar,
+                        ),
                       ),
-                    ],
-                  );
-                  return stacked
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            avatar,
-                            const SizedBox(height: 16),
-                            identity,
-                          ],
-                        )
-                      : Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            avatar,
-                            const SizedBox(width: 18),
-                            Expanded(child: identity),
-                          ],
-                        );
-                },
-              ),
-              const SizedBox(height: 18),
-              Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 12,
-                children: [
-                  TextButton.icon(
-                    onPressed: actions.search,
-                    icon: const Icon(Icons.search_outlined, size: 22),
-                    label: const Text('Search'),
-                  ),
-                  Container(
-                    height: 22,
-                    width: 1,
-                    color: Theme.of(context).dividerColor,
-                  ),
-                  TextButton.icon(
-                    onPressed: actions.media,
-                    icon: const Icon(Icons.photo_library_outlined, size: 22),
-                    label: const Text('Shared content'),
-                  ),
-                  TextButton.icon(
-                    onPressed: actions.mute,
-                    icon: const Icon(
-                      Icons.notifications_none_outlined,
-                      size: 22,
-                    ),
-                    label: Text(
-                      data.notifications == 'Choose a source'
-                          ? 'Choose a source'
-                          : 'Notifications',
-                    ),
-                  ),
-                ],
-              ),
-              if (data.status != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Semantics(
-                    liveRegion: true,
-                    child: Text(
-                      data.status!,
-                      style: TextStyle(fontSize: 13, color: secondary),
-                    ),
-                  ),
+                    );
+                    final identity = NotionEntrance(
+                      index: 1,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            data.name,
+                            style: stacked
+                                ? NotionTokens.title.copyWith(fontSize: 22)
+                                : NotionTokens.title,
+                          ),
+                          const SizedBox(height: 8),
+                          NotionValueTag(
+                            data.network,
+                            icon: Icons.language_outlined,
+                          ),
+                        ],
+                      ),
+                    );
+                    return stacked
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              avatar,
+                              const SizedBox(height: 16),
+                              identity,
+                            ],
+                          )
+                        : Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              avatar,
+                              const SizedBox(width: 18),
+                              Expanded(child: identity),
+                            ],
+                          );
+                  },
                 ),
-              const NotionDetailsSection(title: 'Shared content'),
-              NotionListRow(
-                leading: const Icon(Icons.image_outlined),
-                title: 'Media, files & links',
-                onTap: actions.media,
-                trailing: actions.media == null
-                    ? Text(
-                        'Choose a source',
-                        style: TextStyle(fontSize: 12, color: secondary),
-                      )
-                    : null,
-              ),
-              if (data.sharedContent != null) data.sharedContent!,
-              const NotionDetailsSection(title: 'Conversation'),
-              NotionPropertyRow(
-                label: 'Nickname',
-                value: Text(
-                  data.nickname ?? 'Source network name',
-                  style: NotionTokens.body,
-                ),
-                onTap: pending ? null : actions.nickname,
-              ),
-              Text(
-                'Your nickname is private.',
-                style: TextStyle(fontSize: 12, color: secondary),
-              ),
-              if (actions.preferences != null)
-                NotionListRow(
-                  leading: const Icon(Icons.tune),
-                  title: 'Visibility & notifications',
-                  subtitle: 'Ignore, restore or override network rules',
-                  onTap: actions.preferences,
-                ),
-              NotionListRow(
-                leading: const Icon(Icons.notifications_none_outlined),
-                title: 'Notifications',
-                subtitle: data.notifications == 'Choose a source'
-                    ? 'Managed separately for each source'
-                    : null,
-                trailing: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 130),
-                  child: NotionValueTag(data.notifications),
-                ),
-                onTap: actions.notifications,
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.push_pin_outlined),
-                title: 'Pin chat',
-                subtitle: pending
-                    ? 'Awaiting private sync'
-                    : actions.pin == null
-                    ? 'Connect private sync to edit'
-                    : null,
-                trailing: Switch(
-                  value: data.pinned,
-                  onChanged: pending ? null : actions.pin,
-                ),
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.visibility_off_outlined),
-                title: 'Incognito mode',
-                subtitle: 'Applies to this device',
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
+                const SizedBox(height: 18),
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 12,
                   children: [
-                    NotionValueTag(data.incognito ? 'On' : 'Off'),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.chevron_right, size: 22),
+                    NotionPressable(
+                      enabled: actions.search != null,
+                      child: TextButton.icon(
+                        onPressed: actions.search,
+                        icon: const Icon(Icons.search_outlined, size: 22),
+                        label: const Text('Search messages'),
+                      ),
+                    ),
                   ],
                 ),
-                onTap: actions.privacy,
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.palette_outlined),
-                title: 'Chat appearance',
-                subtitle: actions.appearance == null
-                    ? 'Connect private sync to edit'
-                    : null,
-                onTap: pending ? null : actions.appearance,
-              ),
-              const NotionDetailsSection(),
-              NotionListRow(
-                leading: const Icon(Icons.archive_outlined),
-                title: 'Archive chat',
-                subtitle: actions.archive == null
-                    ? 'Connect private sync to edit'
-                    : 'Private archive · keeps your history',
-                onTap: pending ? null : actions.archive,
-              ),
-              NotionListRow(
-                leading: const Icon(Icons.person_outline),
-                title: 'View contact',
-                onTap: actions.contact,
-              ),
-              if (data.sourceRows.isNotEmpty) ...[
-                const NotionDetailsSection(title: 'Network & security'),
-                ...data.sourceRows,
-              ],
-            ],
+                NotionSizeReveal(
+                  visible: data.status != null,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Semantics(
+                      liveRegion: true,
+                      child: NotionFadeThrough(
+                        child: Text(
+                          data.status ?? '',
+                          key: ValueKey(data.status),
+                          style: TextStyle(fontSize: 13, color: secondary),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const NotionDetailsSection(title: 'Shared content'),
+                NotionListRow(
+                  leading: const Icon(Icons.image_outlined),
+                  title: 'Media, files & links',
+                  onTap: actions.media,
+                  trailing: actions.media == null
+                      ? Text(
+                          'Choose a source',
+                          style: TextStyle(fontSize: 12, color: secondary),
+                        )
+                      : null,
+                ),
+                if (data.sharedContent != null) data.sharedContent!,
+                const NotionDetailsSection(title: 'Conversation'),
+                NotionPropertyRow(
+                  label: 'Nickname',
+                  value: Text(
+                    data.nickname ?? 'Source network name',
+                    style: NotionTokens.body,
+                  ),
+                  onTap: pending ? null : actions.nickname,
+                ),
+                Text(
+                  'Your nickname is private.',
+                  style: TextStyle(fontSize: 12, color: secondary),
+                ),
+                if (actions.preferences != null)
+                  NotionListRow(
+                    leading: const Icon(Icons.tune),
+                    title: 'Chat rules',
+                    subtitle: 'Ignore, restore or override network rules',
+                    onTap: actions.preferences,
+                  ),
+                NotionListRow(
+                  leading: const Icon(Icons.notifications_none_outlined),
+                  title: 'Notifications',
+                  subtitle: data.notifications == 'Choose a source'
+                      ? 'Managed separately for each source'
+                      : null,
+                  trailing: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 130),
+                    child: NotionFadeThrough(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: NotionValueTag(
+                        data.notifications,
+                        key: ValueKey(data.notifications),
+                      ),
+                    ),
+                  ),
+                  onTap: actions.notifications,
+                ),
+                NotionListRow(
+                  leading: const Icon(Icons.push_pin_outlined),
+                  title: 'Pin chat',
+                  subtitle: pending
+                      ? 'Awaiting private sync'
+                      : actions.pin == null
+                      ? 'Connect private sync to edit'
+                      : null,
+                  trailing: Switch(
+                    value: data.pinned,
+                    onChanged: pending ? null : actions.pin,
+                  ),
+                ),
+                NotionListRow(
+                  leading: const Icon(Icons.visibility_off_outlined),
+                  title: 'Incognito mode',
+                  subtitle: 'Applies to this device',
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      NotionFadeThrough(
+                        alignment: AlignmentDirectional.centerEnd,
+                        child: NotionValueTag(
+                          data.incognito ? 'On' : 'Off',
+                          key: ValueKey(data.incognito),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Icon(Icons.chevron_right, size: 22),
+                    ],
+                  ),
+                  onTap: actions.privacy,
+                ),
+                NotionListRow(
+                  leading: const Icon(Icons.palette_outlined),
+                  title: 'Chat appearance',
+                  subtitle: actions.appearance == null
+                      ? 'Connect private sync to edit'
+                      : null,
+                  onTap: pending ? null : actions.appearance,
+                ),
+                const NotionDetailsSection(),
+                NotionListRow(
+                  leading: const Icon(Icons.archive_outlined),
+                  title: 'Archive chat',
+                  subtitle: actions.archive == null
+                      ? 'Connect private sync to edit'
+                      : 'Private archive · keeps your history',
+                  onTap: pending ? null : actions.archive,
+                ),
+                NotionListRow(
+                  leading: const Icon(Icons.person_outline),
+                  title: 'View contact',
+                  onTap: actions.contact,
+                ),
+                if (data.sourceRows.isNotEmpty) ...[
+                  const NotionDetailsSection(title: 'Network & security'),
+                  ...data.sourceRows,
+                ],
+              ]),
+            ),
           ),
         ),
       ),
     );
   }
+
+  /// Section entrances after the two header slots (avatar 0, name 1).
+  static List<Widget> _entering(List<Widget> children) => [
+    children.first,
+    for (var i = 1; i < children.length; i++)
+      NotionEntrance(
+        index: i + 1,
+        rise: NotionMotion.riseList,
+        child: children[i],
+      ),
+  ];
 }
 
 class NotionDetailsSection extends StatelessWidget {
@@ -309,43 +337,46 @@ class NotionSharedContentBlock extends StatelessWidget {
             : video
             ? 'video'
             : 'file'}, $label',
-    child: InkWell(
-      onTap: onTap,
-      child: Container(
-        width: thumbnail != null ? 144 : 88,
-        height: 92,
-        decoration: BoxDecoration(
-          border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child:
-            thumbnail ??
-            Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    audio
-                        ? Icons.audio_file_outlined
-                        : video
-                        ? Icons.videocam_outlined
-                        : Icons.description_outlined,
-                    size: 25,
-                  ),
-                  const SizedBox(height: 6),
-                  Flexible(
-                    child: Text(
-                      label,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
+    child: NotionPressable(
+      enabled: onTap != null,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          width: thumbnail != null ? 144 : 88,
+          height: 92,
+          decoration: BoxDecoration(
+            border: Border.all(color: Theme.of(context).dividerColor),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child:
+              thumbnail ??
+              Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      audio
+                          ? Icons.audio_file_outlined
+                          : video
+                          ? Icons.videocam_outlined
+                          : Icons.description_outlined,
+                      size: 25,
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 6),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
+        ),
       ),
     ),
   );

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/semantics.dart';
@@ -64,8 +65,8 @@ class _ConversationMessageGesturesState
         ..addStatusListener(_springStatus);
   late final AnimationController _badge = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 180),
-    reverseDuration: const Duration(milliseconds: 140),
+    duration: NotionMotion.short,
+    reverseDuration: NotionMotion.quick,
   );
   final Set<int> _pointers = {};
   Offset? _downPosition;

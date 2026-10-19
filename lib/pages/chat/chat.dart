@@ -14,20 +14,26 @@ import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/chat_view.dart';
+import 'package:fluffychat/pages/chat/compact_composer.dart'
+    show ConversationSourceChip;
+import 'package:fluffychat/pages/chat/conversation_source.dart';
 import 'package:fluffychat/pages/chat/event_info_dialog.dart';
+import 'package:fluffychat/pages/chat/events/message.dart';
 import 'package:fluffychat/pages/chat/start_poll_bottom_sheet.dart';
 import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
 import 'package:fluffychat/pages/chat/utils/web_file_to_x_file.dart';
+import 'package:fluffychat/pages/chat/voice_message_sender.dart';
 import 'package:fluffychat/pages/chat_details/chat_details.dart';
 import 'package:fluffychat/personal/capabilities.dart';
 import 'package:fluffychat/personal/immediate_outbox.dart';
 import 'package:fluffychat/personal/media/immediate_media_outbox.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/round_video/round_availability.dart';
 import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
 import 'package:fluffychat/personal/round_video/telegram_media_protocol.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 import 'package:fluffychat/personal/round_video/telegram_room_binding.dart';
+import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/file_selector.dart';
@@ -41,24 +47,24 @@ import 'package:fluffychat/utils/show_scaffold_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:fluffychat/widgets/app_lock.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:mime/mime.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:personal_core/personal_core.dart'
-    show RoundVideoDescriptor, RoundMediaPolicy;
+    show ChatTheme, RoundMediaPolicy, RoundVideoDescriptor;
 import 'package:scroll_to_index/scroll_to_index.dart';
 import 'package:universal_html/universal_html.dart' as web;
 
 import '../../utils/account_bundles.dart';
-import '../../utils/localized_exception_extension.dart';
 import 'send_file_dialog.dart';
 import 'send_location_dialog.dart';
 
@@ -126,23 +132,40 @@ class ChatPageWithRoom extends StatefulWidget {
 }
 
 class ChatController extends State<ChatPageWithRoom>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver
+    implements ConversationTimelineSource, ConversationComposerHost {
+  @override
   Room get room => sendingClient.getRoomById(roomId) ?? widget.room;
 
+  @override
   late Client sendingClient;
 
   Timeline? timeline;
 
+  @override
   String? activeThreadId;
 
-  late final Set<String> bigEmojis;
+  /// Every default emoji, built once per process instead of on every open.
+  static final Set<String> _defaultBigEmojis = {
+    for (final category in defaultEmojiSet)
+      for (final emoji in category.emoji) emoji.emoji,
+  };
 
+  /// Emoji rendered large when sent alone; shared with the merged chat.
+  static Set<String> get defaultBigEmojis => _defaultBigEmojis;
+
+  @override
+  final Set<String> bigEmojis = _defaultBigEmojis;
+
+  @override
   late final String readMarkerEventId;
 
   String get roomId => widget.room.id;
 
+  @override
   final AutoScrollController scrollController = AutoScrollController();
 
+  @override
   late final FocusNode inputFocus;
 
   Timer? typingCoolDown;
@@ -159,17 +182,7 @@ class ChatController extends State<ChatPageWithRoom>
   Future<void> onDragDone(DropDoneDetails details) async {
     setState(() => dragging = false);
     if (details.files.isEmpty) return;
-
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: details.files,
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
+    await _pickAttachments(() async => details.files);
   }
 
   bool get canSaveSelectedEvent =>
@@ -185,12 +198,17 @@ class ChatController extends State<ChatPageWithRoom>
   void saveSelectedEvent(BuildContext context) =>
       selectedEvents.single.saveFile(context);
 
+  @override
   List<Event> selectedEvents = [];
 
   final Set<String> unfolded = {};
 
+  @override
   Event? replyEvent;
 
+  final VoiceMessageSender _voiceSender = VoiceMessageSender();
+
+  @override
   Event? editEvent;
 
   bool _scrolledUp = false;
@@ -198,14 +216,17 @@ class ChatController extends State<ChatPageWithRoom>
   bool get showScrollDownButton =>
       _scrolledUp || timeline?.allowNewEvent == false;
 
+  @override
   bool get selectMode => selectedEvents.isNotEmpty;
 
   final int _loadHistoryCount = 100;
 
   String pendingText = '';
 
+  @override
   bool showEmojiPicker = false;
 
+  @override
   String? get threadLastEventId {
     final threadId = activeThreadId;
     if (threadId == null) return null;
@@ -214,6 +235,86 @@ class ChatController extends State<ChatPageWithRoom>
         .firstOrNull
         ?.eventId;
   }
+
+  // ConversationTimelineSource: one room, one timeline.
+
+  @override
+  List<Event>? get conversationEvents =>
+      timeline?.events.filterByVisibleInGui(threadId: activeThreadId);
+
+  @override
+  Timeline? timelineFor(Event event) => timeline;
+
+  @override
+  Set<String> get conversationRoomIds => {room.id};
+
+  @override
+  List<Room> get typingRooms => [room];
+
+  @override
+  ({ChatTheme? theme}) get conversationPalette =>
+      Message.resolveRoomPalette(room);
+
+  @override
+  bool get canLoadHistory =>
+      activeThreadId == null && (timeline?.canRequestHistory ?? false);
+
+  @override
+  bool get isLoadingHistory => timeline?.isRequestingHistory ?? false;
+
+  /// Loads further back by itself unless most of the loaded events are
+  /// hidden (state/collapsed), which would keep requesting empty pages.
+  @override
+  bool get autoLoadHistory {
+    final timeline = this.timeline;
+    if (timeline == null || historyError != null || historyLoading) {
+      return false;
+    }
+    final visibleIndex = timeline.events.lastIndexWhere(
+      (event) => !event.isCollapsedState && event.isVisibleInGui,
+    );
+    return visibleIndex > timeline.events.length - 50;
+  }
+
+  @override
+  bool get canLoadFuture => timeline?.canRequestFuture ?? false;
+
+  @override
+  bool get isLoadingFuture => timeline?.isRequestingFuture ?? false;
+
+  @override
+  void mentionSender(Event event) =>
+      sendController.text += '${event.senderFromMemoryOrFallback.mention} ';
+
+  @override
+  void Function(String eventId)? get threadOpener =>
+      activeThreadId == null ? enterThread : null;
+
+  @override
+  String? sourceLabelFor(Event event) => null;
+
+  @override
+  bool seriesBoundary(Event event) => false;
+
+  @override
+  bool get strictCapabilities => false;
+
+  // ConversationComposerHost: the room is the send target.
+
+  @override
+  bool get composerEnabled => !_personalSending && !_attachmentPending;
+
+  @override
+  bool get composerBusy => _personalSending || _attachmentPending;
+
+  @override
+  Widget buildComposerSource(BuildContext context) => ConversationSourceChip(
+    network: PersonalClient.networkOf(room),
+    locked: replyEvent != null,
+  );
+
+  @override
+  bool get allowsAccountSwitch => true;
 
   void enterThread(String eventId) => setState(() {
     activeThreadId = eventId;
@@ -249,9 +350,12 @@ class ChatController extends State<ChatPageWithRoom>
     context.go('/rooms');
   }
 
+  @override
   String? historyError;
+  @override
   bool historyLoading = false;
   final _historyPositions = <(Timeline, int, String?, String?)>{};
+  @override
   Future<void> requestHistory([_]) async {
     final current = timeline;
     if (historyLoading || current == null || current.isRequestingHistory)
@@ -295,6 +399,7 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
+  @override
   Future<void> requestFuture() async {
     final timeline = this.timeline;
     if (timeline == null) return;
@@ -366,6 +471,7 @@ class ChatController extends State<ChatPageWithRoom>
   Future<void> _shareItems() async {
     final shareItems = widget.shareItems;
     if (shareItems == null || shareItems.isEmpty) return;
+    final frozen = _captureAttachmentContext();
     if (!room.otherPartyCanReceiveMessages) {
       final theme = Theme.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -381,28 +487,24 @@ class ChatController extends State<ChatPageWithRoom>
       );
       return;
     }
-    final proceed = await showTrustUserInRoomDialog(context, room);
+    final proceed = await showTrustUserInRoomDialog(context, frozen.room);
     if (!mounted || !proceed) return;
+    try {
+      frozen.validate();
+    } catch (_) {
+      return;
+    }
     for (final item in shareItems) {
       if (item is FileShareItem) continue;
-      if (item is TextShareItem) room.sendTextEvent(item.value);
-      if (item is ContentShareItem) room.sendEvent(item.value.copy());
+      if (item is TextShareItem) frozen.room.sendTextEvent(item.value);
+      if (item is ContentShareItem) frozen.room.sendEvent(item.value.copy());
     }
     final files = shareItems
         .whereType<FileShareItem>()
         .map((item) => item.value)
         .toList();
     if (files.isEmpty) return;
-    showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: files,
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
+    await _pickAttachments(() async => files);
   }
 
   KeyEventResult _customEnterKeyHandling(FocusNode node, KeyEvent evt) {
@@ -493,14 +595,6 @@ class ChatController extends State<ChatPageWithRoom>
       AppSettings.displayChatDetailsColumn.value,
     );
 
-    bigEmojis = defaultEmojiSet.fold(
-      <String>{},
-      (emojis, category) => {
-        ...emojis,
-        ...(category.emoji.map((emoji) => emoji.emoji)),
-      },
-    );
-
     final lastEventThreadId =
         room.lastEvent?.relationshipType == RelationshipTypes.thread
         ? room.lastEvent?.relationshipEventId
@@ -512,20 +606,67 @@ class ChatController extends State<ChatPageWithRoom>
     _tryLoadTimeline();
   }
 
+  /// One LiveKit discovery per client and process; failures are retried.
+  static final _liveKitSupport = Expando<Future<bool>>();
+
   Future<void> _checkMatrixRtcCallSupport() async {
+    // Bridged rooms never offer the call button, so they never need the
+    // network round trip.
+    final checkedRoom = room;
+    if (checkedRoom.states['m.bridge'] != null ||
+        checkedRoom.states['uk.half-shot.bridge'] != null) {
+      return;
+    }
+    // Keep the request and its rebuild off the chat-open transition.
+    await _awaitRouteSettled();
+    if (!mounted) return;
+    final client = checkedRoom.client;
+    final support = _liveKitSupport[client] ??= client
+        .getLiveKitServiceUrls()
+        .then((urls) => urls.isNotEmpty);
     try {
-      final urls = await room.client.getLiveKitServiceUrls();
-      if (!mounted || urls.isEmpty) return;
+      if (!await support || !mounted || supportLiveKitCalls) return;
       setState(() {
         supportLiveKitCalls = true;
       });
     } catch (e) {
+      if (identical(_liveKitSupport[client], support)) {
+        _liveKitSupport[client] = null;
+      }
       Logs().d('Unable to check MatrixRTC call support', e);
     }
   }
 
+  /// Completes when this page's push transition has finished (or at once if
+  /// it is not animating). Bounded so a stalled animation never blocks.
+  Future<void> _awaitRouteSettled() async {
+    if (!mounted) return;
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.status != AnimationStatus.forward) {
+      return;
+    }
+    final settled = Completer<void>();
+    void listener(AnimationStatus status) {
+      if (status != AnimationStatus.forward && !settled.isCompleted) {
+        settled.complete();
+      }
+    }
+
+    animation.addStatusListener(listener);
+    try {
+      await settled.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {},
+      );
+    } finally {
+      animation.removeStatusListener(listener);
+    }
+  }
+
+  @override
   final Set<String> expandedEventIds = {};
 
+  @override
   void expandEventsFrom(Event event, bool expand) {
     final events = timeline!.events.filterByVisibleInGui(
       threadId: activeThreadId,
@@ -605,6 +746,7 @@ class ChatController extends State<ChatPageWithRoom>
     scrollUpBannerEventId = eventId;
   });
 
+  @override
   String? animateInEventId;
 
   Future<void> _insert(int index) async {
@@ -616,10 +758,20 @@ class ChatController extends State<ChatPageWithRoom>
     if (animateInEventId == eventId) animateInEventId = null;
   }
 
+  bool _viewUpdateScheduled = false;
+
+  /// Timeline `onUpdate` can fire many times per frame (sync batches, history
+  /// pages, decryption). Coalesce into one read-marker pass and one rebuild
+  /// per frame.
   void updateView() {
-    if (!mounted) return;
-    setReadMarker();
-    setState(() {});
+    if (!mounted || _viewUpdateScheduled) return;
+    _viewUpdateScheduled = true;
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      _viewUpdateScheduled = false;
+      if (!mounted) return;
+      setReadMarker();
+      setState(() {});
+    });
   }
 
   Future<void>? loadTimelineFuture;
@@ -666,6 +818,11 @@ class ChatController extends State<ChatPageWithRoom>
         _showScrollUpMaterialBanner(eventContextId);
       }
     }
+    if (timeline == null && mounted && generation == _timelineLoadGeneration) {
+      // Swapping the placeholder for a full timeline mid-transition costs a
+      // heavy frame while the page slides in; show it once the route settles.
+      await _awaitRouteSettled();
+    }
     if (!mounted || generation != _timelineLoadGeneration) {
       if (loadedTimeline != widget.timeline) {
         loadedTimeline.cancelSubscriptions();
@@ -683,6 +840,7 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
+  @override
   String? scrollToEventIdMarker;
 
   @override
@@ -829,8 +987,10 @@ class ChatController extends State<ChatPageWithRoom>
     super.dispose();
   }
 
+  @override
   TextEditingController sendController = TextEditingController();
 
+  @override
   void setSendingClient(Client c) {
     // first cancel typing with the old sending client
     if (currentlyTyping) {
@@ -858,13 +1018,28 @@ class ChatController extends State<ChatPageWithRoom>
   });
 
   bool _personalSending = false;
+  bool get personalSending => _personalSending;
+  bool _attachmentPending = false;
+  bool get attachmentPending => _attachmentPending;
+  @override
   Future<void> send() async {
-    if (_personalSending) return;
-    _personalSending = true;
+    if (_personalSending || _attachmentPending) return;
+    if (!mounted) return;
+    setState(() => _personalSending = true);
     try {
       await _sendPersonal();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'The message could not be prepared. Your draft is preserved.',
+            ),
+          ),
+        );
+      }
     } finally {
-      _personalSending = false;
+      if (mounted) setState(() => _personalSending = false);
     }
   }
 
@@ -874,6 +1049,21 @@ class ChatController extends State<ChatPageWithRoom>
     final frozenReply = replyEvent;
     final frozenEdit = editEvent;
     final frozenThread = activeThreadId;
+    final frozenThreadLast = threadLastEventId;
+    final frozenPendingText = pendingText;
+    final frozenValue = sendController.value;
+    final privacyGeneration = PersonalPrivacy.surfaceGeneration;
+    bool sameContext() =>
+        mounted &&
+        identical(room, frozenRoom) &&
+        identical(Matrix.of(context).client, frozenRoom.client) &&
+        identical(replyEvent, frozenReply) &&
+        identical(editEvent, frozenEdit) &&
+        activeThreadId == frozenThread &&
+        threadLastEventId == frozenThreadLast &&
+        PersonalPrivacy.surfaceUnlocked &&
+        PersonalPrivacy.surfaceGeneration == privacyGeneration;
+    if (frozenText.trim().isEmpty) return;
     for (final feature in [
       if (frozenReply != null) BridgeFeature.reply,
       if (frozenEdit != null) BridgeFeature.edit,
@@ -891,14 +1081,23 @@ class ChatController extends State<ChatPageWithRoom>
       }
     }
 
-    final proceed = await showTrustUserInRoomDialog(context, room);
+    final proceed = await showTrustUserInRoomDialog(context, frozenRoom);
     if (!mounted || !proceed) return;
-    if (sendController.text.trim().isEmpty) return;
+    if (!sameContext() || sendController.value != frozenValue) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'The message changed. Review your draft before sending.',
+          ),
+        ),
+      );
+      return;
+    }
     _storeInputTimeoutTimer?.cancel();
 
     var parseCommands = true;
 
-    final commandMatch = RegExp(r'^\/(\w+)').firstMatch(sendController.text);
+    final commandMatch = RegExp(r'^\/(\w+)').firstMatch(frozenText);
     if (commandMatch != null &&
         !sendingClient.commands.keys.contains(commandMatch[1]!.toLowerCase())) {
       final l10n = L10n.of(context);
@@ -909,7 +1108,8 @@ class ChatController extends State<ChatPageWithRoom>
         okLabel: l10n.sendAsText,
         cancelLabel: l10n.cancel,
       );
-      if (dialogResult == OkCancelResult.cancel) return;
+      if (dialogResult != OkCancelResult.ok) return;
+      if (!sameContext() || sendController.value != frozenValue) return;
       parseCommands = false;
     }
 
@@ -919,7 +1119,6 @@ class ChatController extends State<ChatPageWithRoom>
       PersonalPrivacy.setTyping(room, false);
     }
 
-    _personalSending = true;
     try {
       final personal = PersonalClient.of(frozenRoom.client);
       ImmediateSendResult? result;
@@ -952,12 +1151,23 @@ class ChatController extends State<ChatPageWithRoom>
         }
       }
       // Transport acceptance is final even if local draft/receipt handling fails.
-      final nextText = mounted && sendController.text != frozenText
+      String remainingDraft() =>
+          mounted &&
+              identical(room, frozenRoom) &&
+              (!sameContext() || sendController.value != frozenValue)
           ? sendController.text
-          : pendingText;
+          : frozenPendingText;
+      var nextText = remainingDraft();
       var draftStored = false;
       try {
-        await personal.saveDraft(frozenRoom, nextText);
+        // A save can overlap typing or a reply/edit change. Keep persisting the
+        // latest editor value before retiring the accepted outbox attempt.
+        do {
+          nextText = remainingDraft();
+          await personal.saveDraft(frozenRoom, nextText);
+        } while (mounted &&
+            identical(room, frozenRoom) &&
+            remainingDraft() != nextText);
         draftStored = true;
       } catch (_) {
         if (mounted) {
@@ -971,256 +1181,294 @@ class ChatController extends State<ChatPageWithRoom>
         }
       }
       if (result != null && draftStored) {
-        await personal.completeImmediate(result.actionId);
+        try {
+          await personal.completeImmediate(result.actionId);
+        } catch (_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Message accepted. Its send state is retained until local storage is ready.',
+                ),
+              ),
+            );
+          }
+        }
       }
       if (!mounted || room != frozenRoom) return;
       setState(() {
-        sendController.text = nextText;
-        _inputTextIsEmpty = nextText.isEmpty;
-        replyEvent = null;
-        editEvent = null;
-        pendingText = '';
+        // A new draft, selection or IME range belongs to the editor.
+        if (draftStored &&
+            sameContext() &&
+            sendController.value == frozenValue) {
+          sendController.value = TextEditingValue(
+            text: nextText,
+            selection: TextSelection.collapsed(offset: nextText.length),
+          );
+          replyEvent = null;
+          editEvent = null;
+          pendingText = '';
+        }
+        _inputTextIsEmpty = sendController.text.isEmpty;
       });
-    } finally {
-      _personalSending = false;
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Sending was not confirmed. Your draft is preserved. Check the conversation before retrying.',
+            ),
+          ),
+        );
+      }
     }
   }
 
-  Future<void> sendFileAction({FileType type = FileType.any}) async {
-    final files = await selectFiles(context, allowMultiple: true, type: type);
-    if (files.isEmpty) return;
-    if (!mounted) return;
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: files,
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
+  FrozenAttachmentContext _captureAttachmentContext() {
+    final frozenRoom = room;
+    final frozenReply = replyEvent;
+    final frozenEdit = editEvent;
+    final frozenThread = activeThreadId;
+    final frozenThreadLast = threadLastEventId;
+    final privacyGeneration = PersonalPrivacy.surfaceLockGeneration;
+    return FrozenAttachmentContext(
+      room: frozenRoom,
+      replyTo: frozenReply,
+      threadRootEventId: frozenThread,
+      threadLastEventId: frozenThreadLast,
+      isCurrent: () =>
+          mounted &&
+          identical(room, frozenRoom) &&
+          identical(Matrix.of(context).client, frozenRoom.client) &&
+          identical(replyEvent, frozenReply) &&
+          identical(editEvent, frozenEdit) &&
+          frozenEdit == null &&
+          activeThreadId == frozenThread &&
+          threadLastEventId == frozenThreadLast &&
+          PersonalPrivacy.surfaceUnlocked &&
+          PersonalPrivacy.surfaceLockGeneration == privacyGeneration,
     );
   }
+
+  /// One picker/preview at a time. All routes keep their original source and
+  /// reply, and a cancelled picker never consumes the editor's draft.
+  Future<void> _pickAttachments(Future<List<XFile>> Function() pick) async {
+    if (!mounted || _attachmentPending || _personalSending) return;
+    final frozen = _captureAttachmentContext();
+    final originalValue = sendController.value;
+    final restoreFocus = inputFocus.hasFocus;
+    var accepted = false;
+    setState(() => _attachmentPending = true);
+    try {
+      frozen.validate();
+      inputFocus.unfocus();
+      final files = await pick();
+      if (!mounted || files.isEmpty) return;
+      frozen.validate();
+      final result = await showAdaptiveDialog<AttachmentSendResult>(
+        context: context,
+        builder: (_) => SendFileDialog(
+          files: files,
+          room: frozen.room,
+          outerContext: context,
+          replyTo: frozen.replyTo,
+          initialCaption: originalValue.text,
+          composeContext: frozen,
+          threadRootEventId: frozen.threadRootEventId,
+          threadLastEventId: frozen.threadLastEventId,
+        ),
+      );
+      if (!mounted || result == null) return;
+      accepted = true;
+      if (!frozen.isCurrent()) return;
+      if (sendController.value == originalValue &&
+          result.caption == originalValue.text.trim()) {
+        // Persist before clearing. A storage error keeps the user's text.
+        if (!kIsWeb) {
+          _storeInputTimeoutTimer?.cancel();
+          await PersonalClient.of(
+            frozen.room.client,
+          ).saveDraft(frozen.room, '');
+        }
+        if (!mounted) return;
+        frozen.validate();
+        if (sendController.value == originalValue) {
+          setState(() {
+            sendController.clear();
+            _inputTextIsEmpty = true;
+          });
+        } else if (!kIsWeb) {
+          await PersonalClient.of(
+            frozen.room.client,
+          ).saveDraft(frozen.room, sendController.text);
+        }
+      }
+      if (mounted && identical(replyEvent, frozen.replyTo)) {
+        setState(() => replyEvent = null);
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              accepted
+                  ? 'Attachments accepted. Your draft is kept until saving is confirmed.'
+                  : 'Attachments could not be completed in the original conversation. Your draft is preserved.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _attachmentPending = false);
+        if (restoreFocus) inputFocus.requestFocus();
+      }
+    }
+  }
+
+  Future<void> sendFileAction({FileType type = FileType.any}) =>
+      _pickAttachments(
+        () => selectFiles(context, allowMultiple: true, type: type),
+      );
 
   Future<void> sendImageFromClipBoard(Uint8List? image) async {
     if (image == null) return;
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: [XFile.fromData(image)],
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
+    await _pickAttachments(
+      () async => [
+        XFile.fromData(
+          image,
+          name: 'pasted-image.png',
+          path: 'pasted-image.png',
+          mimeType: 'image/png',
+        ),
+      ],
     );
   }
 
-  Future<void> openGalleryAction() async {
-    inputFocus.unfocus();
-    final files = await ImagePicker().pickMultipleMedia(
-      requestFullMetadata: false,
-    );
-    if (files.isEmpty) return;
-    if (!mounted) return;
+  Future<void> openGalleryAction() => _pickAttachments(
+    () => AppLock.of(
+      context,
+    ).pauseWhile(ImagePicker().pickMultipleMedia(requestFullMetadata: false)),
+  );
 
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: files,
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
-  }
-
-  Future<void> openCameraAction() async {
-    inputFocus.unfocus();
-    final file = await ImagePicker().pickImage(source: ImageSource.camera);
-    if (file == null) return;
-    if (!mounted) return;
-
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: [file],
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
-  }
+  Future<void> openCameraAction() => _pickAttachments(() async {
+    final file = await AppLock.of(
+      context,
+    ).pauseWhile(ImagePicker().pickImage(source: ImageSource.camera));
+    return [?file];
+  });
 
   Future<void> _handleClipboardFilePasteWeb(web.Event event) async {
     if (event is! web.ClipboardEvent) return;
-
     final clipboardFiles = event.clipboardData?.files;
-    final length = clipboardFiles?.length ?? 0;
-    if (clipboardFiles == null || length < 1) return;
-
-    // Browser will clear clipboardData when we await!
-    // We MUST extract the files synchronously first.
+    if (clipboardFiles == null || clipboardFiles.length < 1) return;
+    // The browser clears clipboardData when this event handler awaits.
     final localFiles = clipboardFiles.toList();
-
-    if (localFiles.isEmpty) return;
-
     event.preventDefault();
     event.stopPropagation();
-
-    final xFilesResult = await showFutureLoadingDialog(
-      context: context,
-      future: () async {
-        // Convert one after another seems to be more stable
-        final xFiles = <XFile>[];
-        for (final file in localFiles) {
-          xFiles.add(await webToXFile(file));
-        }
-        return xFiles;
-      },
-    );
-    final xFiles = xFilesResult.result;
-    if (xFiles == null || xFiles.isEmpty) return;
-
-    if (!mounted) return;
-    showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: xFiles,
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
+    await _pickAttachments(() async {
+      final files = <XFile>[];
+      for (final file in localFiles) {
+        files.add(await webToXFile(file));
+      }
+      return files;
+    });
   }
 
   Future<void> _handleClipboardImagePaste() async {
-    final files = await Pasteboard.files();
-    if (files.isNotEmpty) {
-      if (!mounted) return;
-      await showAdaptiveDialog(
-        context: context,
-        builder: (c) => SendFileDialog(
-          files: files.map(XFile.new).toList(),
-          room: room,
-          outerContext: context,
-          threadRootEventId: activeThreadId,
-          threadLastEventId: threadLastEventId,
-        ),
-      );
-      return;
-    }
-    final image = await Pasteboard.image;
-    if (image != null) {
-      await sendImageFromClipBoard(image);
-      return;
-    }
-    // No image in clipboard — fall back to pasting text
-    final textData = await Clipboard.getData('text/plain');
-    if (textData?.text != null) {
-      final selection = sendController.selection;
-      final text = sendController.text;
-      final newText = text.replaceRange(
-        selection.start,
-        selection.end,
-        textData!.text!,
-      );
-      sendController.value = TextEditingValue(
-        text: newText,
-        selection: TextSelection.collapsed(
-          offset: selection.start + textData.text!.length,
-        ),
-      );
-      onInputBarChanged(sendController.text);
-    }
+    final frozen = _captureAttachmentContext();
+    final editorValue = sendController.value;
+    await _pickAttachments(() async {
+      final files = await Pasteboard.files();
+      frozen.validate();
+      if (files.isNotEmpty) return files.map(XFile.new).toList();
+      final image = await Pasteboard.image;
+      frozen.validate();
+      if (image != null)
+        return [
+          XFile.fromData(
+            image,
+            name: 'pasted-image.png',
+            path: 'pasted-image.png',
+            mimeType: 'image/png',
+          ),
+        ];
+      final textData = await Clipboard.getData('text/plain');
+      frozen.validate();
+      if (textData?.text != null && sendController.value == editorValue) {
+        final selection = editorValue.selection.isValid
+            ? editorValue.selection
+            : TextSelection.collapsed(offset: editorValue.text.length);
+        final text = editorValue.text.replaceRange(
+          selection.start,
+          selection.end,
+          textData!.text!,
+        );
+        sendController.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(
+            offset: selection.start + textData.text!.length,
+          ),
+        );
+        onInputBarChanged(text);
+      }
+      return [];
+    });
   }
 
-  Future<void> openVideoCameraAction() async {
-    inputFocus.unfocus();
-    final file = await ImagePicker().pickVideo(
-      source: ImageSource.camera,
-      maxDuration: const Duration(minutes: 1),
-    );
-    if (file == null) return;
-    if (!mounted) return;
-
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: [file],
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
+  Future<void> openVideoCameraAction() => _pickAttachments(() async {
+    final file = await AppLock.of(context).pauseWhile(
+      ImagePicker().pickVideo(
+        source: ImageSource.camera,
+        maxDuration: const Duration(minutes: 1),
       ),
     );
-  }
+    return [?file];
+  });
 
-  Future<void> onVoiceMessageSend(
+  @override
+  Future<bool> onVoiceMessageSend(
     String path,
     int duration,
     List<int> waveform,
-    String fileName,
-  ) async {
-    final proceed = await showTrustUserInRoomDialog(context, room);
-    if (!mounted || !proceed) return;
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    final audioFile = XFile(path);
-
-    final bytesResult = await showFutureLoadingDialog(
+    String fileName, {
+    Future<bool> Function(Room)? confirmTrust,
+    Future<Uint8List?> Function(String)? readRecording,
+  }) {
+    final target = room;
+    final client = target.client;
+    final reply = replyEvent;
+    final thread = activeThreadId;
+    return _voiceSender.send(
       context: context,
-      future: audioFile.readAsBytes,
+      target: target,
+      reply: reply,
+      thread: thread,
+      lastThreadEvent: threadLastEventId,
+      composerUnchanged: () =>
+          mounted &&
+          identical(sendingClient, client) &&
+          identical(room.client, client) &&
+          room.id == target.id &&
+          identical(replyEvent, reply) &&
+          activeThreadId == thread &&
+          editEvent == null,
+      path: path,
+      duration: duration,
+      waveform: waveform,
+      fileName: fileName,
+      confirmTrust: confirmTrust,
+      readRecording: readRecording,
+      onAccepted: () => setState(() => replyEvent = null),
     );
-    final bytes = bytesResult.result;
-    if (bytes == null) return;
-
-    final mimeType = lookupMimeType(fileName, headerBytes: bytes);
-    final extension = mimeType == null ? null : extensionFromMime(mimeType);
-    if (extension != null) {
-      fileName =
-          'voice_message_${DateTime.now().millisecondsSinceEpoch}.$extension';
-    }
-
-    final file = MatrixAudioFile(
-      bytes: bytes,
-      name: fileName,
-      mimeType: mimeType,
-    );
-
-    try {
-      await room.sendFileEvent(
-        file,
-        inReplyTo: replyEvent,
-        threadRootEventId: activeThreadId,
-        extraContent: {
-          'info': {...file.info, 'duration': duration},
-          'org.matrix.msc3245.voice': {},
-          'org.matrix.msc1767.audio': {
-            'duration': duration,
-            'waveform': waveform,
-          },
-        },
-      );
-    } catch (e) {
-      if (!mounted) return;
-      scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text(e.toLocalizedString(context))),
-      );
-      return;
-    }
-    setState(() {
-      replyEvent = null;
-    });
-    return;
   }
 
+  @override
   void hideEmojiPicker() {
     setState(() => showEmojiPicker = false);
   }
 
+  @override
   void emojiPickerAction() {
     if (showEmojiPicker) {
       inputFocus.requestFocus();
@@ -1294,6 +1542,7 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
+  @override
   Future<void> deleteErrorEventsAction() async {
     try {
       if (selectedEvents.any((event) => event.status != EventStatus.error)) {
@@ -1367,6 +1616,7 @@ class ChatController extends State<ChatPageWithRoom>
     });
   }
 
+  @override
   List<Client?> get currentRoomBundle {
     final clients = Matrix.of(context).currentBundle!;
     clients.removeWhere((c) => c!.getRoomById(roomId) == null);
@@ -1397,11 +1647,20 @@ class ChatController extends State<ChatPageWithRoom>
     return true;
   }
 
+  /// Effective mode: the round button only replaces the voice mic when the
+  /// room is not known to refuse rounds, so voice notes stay reachable.
+  @override
   bool get roundRecordingMode =>
       PlatformInfos.isAndroid &&
       PersonalClient.networkOf(room) == 'telegram' &&
-      AppSettings.personalRoundRecordingMode.value;
+      AppSettings.personalRoundRecordingMode.value &&
+      roundAvailability.canRecord;
 
+  /// Cached per room/sync/trust change; display only, never authorizes.
+  @override
+  RoundAvailability get roundAvailability => RoundAvailability.of(room);
+
+  @override
   Future<void> toggleRoundRecordingMode() async {
     await AppSettings.personalRoundRecordingMode.setItem(
       !AppSettings.personalRoundRecordingMode.value,
@@ -1409,13 +1668,16 @@ class ChatController extends State<ChatPageWithRoom>
     if (mounted) setState(() {});
   }
 
+  @override
   bool get canRecordRoundSilently =>
       PlatformInfos.isAndroid &&
+      roundAvailability.canRecord &&
       TelegramRoomBinding.of(
             room,
           )?.capabilities(room).extension.operation('silent_send').allowed ==
           true;
 
+  @override
   Future<void> recordRound(
     RoundCaptureGestureController gesture, {
     bool silent = false,
@@ -1456,15 +1718,11 @@ class ChatController extends State<ChatPageWithRoom>
           }),
         ),
       );
-    } catch (_) {
+    } catch (error) {
       if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Round videos require trusted support from the new Telegram bridge, encryption and available storage.',
-            ),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(roundFailureMessage(error))));
     }
   }
 
@@ -1481,6 +1739,7 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
+  @override
   Future<void> forwardEventsAction() async {
     if (selectedEvents.isEmpty) return;
     final timeline = this.timeline;
@@ -1521,6 +1780,7 @@ class ChatController extends State<ChatPageWithRoom>
     setState(() => selectedEvents.clear());
   }
 
+  @override
   void sendAgainAction() {
     final event = selectedEvents.first;
     if (RoundVideoDescriptor.fromContent(event.content) != null) {
@@ -1554,6 +1814,7 @@ class ChatController extends State<ChatPageWithRoom>
     setState(() => selectedEvents.clear());
   }
 
+  @override
   void replyAction({Event? replyTo}) {
     setState(() {
       replyEvent = replyTo ?? selectedEvents.first;
@@ -1562,6 +1823,7 @@ class ChatController extends State<ChatPageWithRoom>
     inputFocus.requestFocus();
   }
 
+  @override
   Future<void> scrollToEventId(
     String eventId, {
     bool highlightEvent = true,
@@ -1641,6 +1903,7 @@ class ChatController extends State<ChatPageWithRoom>
     scrollController.jumpTo(0);
   }
 
+  @override
   void onEmojiSelected(_, Emoji? emoji) {
     typeEmoji(emoji);
     onInputBarChanged(sendController.text);
@@ -1663,6 +1926,7 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
+  @override
   void emojiPickerBackspace() {
     sendController
       ..text = sendController.text.characters.skipLast(1).toString()
@@ -1708,6 +1972,7 @@ class ChatController extends State<ChatPageWithRoom>
     inputFocus.requestFocus();
   }
 
+  @override
   void editSelectedEventAction() {
     _startEditingEvent(selectedEvents.first, clearSelection: true);
   }
@@ -1766,6 +2031,7 @@ class ChatController extends State<ChatPageWithRoom>
     await showFutureLoadingDialog(context: context, future: room.leave);
   }
 
+  @override
   void onSelectMessage(Event event) {
     if (!event.redacted) {
       if (selectedEvents.contains(event)) {
@@ -1779,6 +2045,7 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
+  @override
   int? findChildIndexCallback(Key key, Map<String, int> thisEventsKeyMap) {
     // this method is called very often. As such, it has to be optimized for speed.
     if (key is! ValueKey) {
@@ -1797,6 +2064,7 @@ class ChatController extends State<ChatPageWithRoom>
     return index + 1;
   }
 
+  @override
   void onInputBarSubmitted(String _) {
     if (sendController.value.composing.isValid &&
         !sendController.value.composing.isCollapsed)
@@ -1805,6 +2073,7 @@ class ChatController extends State<ChatPageWithRoom>
     FocusScope.of(context).requestFocus(inputFocus);
   }
 
+  @override
   void onAddPopupMenuButtonSelected(AddPopupMenuActions choice) {
     room.client.getConfig();
 
@@ -1879,6 +2148,7 @@ class ChatController extends State<ChatPageWithRoom>
   Timer? _storeInputTimeoutTimer;
   static const Duration _storeInputTimeout = Duration(milliseconds: 500);
 
+  @override
   double? inputBarHeight;
 
   void updateInputBarHeight() {
@@ -1896,6 +2166,7 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
+  @override
   void onInputBarChanged(String text) {
     if (_inputTextIsEmpty != text.isEmpty) {
       setState(() {
@@ -1963,9 +2234,11 @@ class ChatController extends State<ChatPageWithRoom>
   bool get isArchived =>
       {Membership.leave, Membership.ban}.contains(room.membership);
 
+  @override
   void showEventInfo([Event? event]) =>
       (event ?? selectedEvents.single).showInfoDialog(context);
 
+  @override
   void cancelReplyEventAction() => setState(() {
     if (editEvent != null) {
       sendController.text = pendingText;
@@ -2027,7 +2300,8 @@ class ChatController extends State<ChatPageWithRoom>
             },
       child: Row(
         children: [
-          Expanded(child: ChatView(this)),
+          // Header and composer glass share one backdrop read.
+          Expanded(child: BackdropGroup(child: ChatView(this))),
           ValueListenableBuilder(
             valueListenable: _displayChatDetailsColumn,
             builder: (context, displayChatDetailsColumn, _) =>

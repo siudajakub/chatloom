@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/avatar.dart';
@@ -62,44 +62,47 @@ class NewPrivateChatView extends StatelessWidget {
                     color: theme.colorScheme.onPrimaryContainer,
                     fontWeight: FontWeight.normal,
                   ),
-                  prefixIcon: searchResponse == null
-                      ? const Icon(Icons.search_outlined)
-                      : FutureBuilder(
-                          future: searchResponse,
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState !=
-                                ConnectionState.done) {
-                              return const Padding(
-                                padding: EdgeInsets.all(10.0),
-                                child: SizedBox.square(
-                                  dimension: 24,
-                                  child: CircularProgressIndicator.adaptive(
-                                    strokeWidth: 1,
-                                  ),
-                                ),
-                              );
-                            }
-                            return const Icon(Icons.search_outlined);
-                          },
-                        ),
-                  suffixIcon: controller.controller.text.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.clear_outlined),
-                          onPressed: () {
-                            controller.controller.clear();
-                            controller.searchUsers();
-                          },
-                        ),
+                  // Search glyph ↔ spinner morph while a lookup runs.
+                  prefixIcon: FutureBuilder(
+                    future: searchResponse,
+                    builder: (context, snapshot) => NotionMorphSwitcher(
+                      rotate: false,
+                      child:
+                          searchResponse != null &&
+                              snapshot.connectionState != ConnectionState.done
+                          ? const SizedBox.square(
+                              key: ValueKey('busy'),
+                              dimension: NotionSize.touchTarget,
+                              child: Center(child: NotionDelayedSpinner()),
+                            )
+                          : const Icon(
+                              Icons.search_outlined,
+                              key: ValueKey('search'),
+                            ),
+                    ),
+                  ),
+                  suffixIcon: NotionPop(
+                    visible: controller.controller.text.isNotEmpty,
+                    playOnMount: false,
+                    bounce: false,
+                    child: IconButton(
+                      icon: const Icon(Icons.clear_outlined),
+                      onPressed: () {
+                        controller.controller.clear();
+                        controller.searchUsers();
+                      },
+                    ),
+                  ),
                 ),
               ),
             ),
             Expanded(
-              child: AnimatedSwitcher(
-                duration: FluffyThemes.animationDuration,
+              // Start page ↔ results fade through; each result set too.
+              child: NotionFadeThrough(
                 child: searchResponse == null
                     ? ListView(
-                        children: [
+                        key: const ValueKey('start'),
+                        children: NotionEntrance.stagger([
                           Padding(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 18.0,
@@ -206,15 +209,17 @@ class NewPrivateChatView extends StatelessWidget {
                               ),
                             ),
                           ),
-                        ],
+                        ]),
                       )
                     : FutureBuilder(
+                        key: ValueKey(searchResponse),
                         future: searchResponse,
                         builder: (context, snapshot) {
                           final result = snapshot.data;
                           final error = snapshot.error;
                           if (error != null) {
                             return Column(
+                              key: const ValueKey('error'),
                               mainAxisAlignment: .center,
                               children: [
                                 Text(
@@ -234,15 +239,27 @@ class NewPrivateChatView extends StatelessWidget {
                             );
                           }
                           if (result == null) {
-                            return const Center(
-                              child: CircularProgressIndicator.adaptive(),
+                            return NotionSkeleton(
+                              child: ListView(
+                                physics: const NeverScrollableScrollPhysics(),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: NotionSpace.md,
+                                ),
+                                children: [
+                                  for (var i = 0; i < 6; i++)
+                                    const NotionSkeletonRow(),
+                                ],
+                              ),
                             );
                           }
                           if (result.isEmpty) {
                             return Column(
                               mainAxisAlignment: .center,
                               children: [
-                                const Icon(Icons.search_outlined, size: 86),
+                                const NotionPop(
+                                  bounce: true,
+                                  child: Icon(Icons.search_outlined, size: 86),
+                                ),
                                 Padding(
                                   padding: const EdgeInsets.all(16.0),
                                   child: Text(
@@ -258,25 +275,35 @@ class NewPrivateChatView extends StatelessWidget {
                               ],
                             );
                           }
-                          return ListView.builder(
-                            itemCount: result.length,
-                            itemBuilder: (context, i) {
-                              final contact = result[i];
-                              final displayname =
-                                  contact.displayName ??
-                                  contact.userId.localpart ??
-                                  contact.userId;
-                              return ListTile(
-                                leading: Avatar(
-                                  name: displayname,
-                                  mxContent: contact.avatarUrl,
-                                  presenceUserId: contact.userId,
-                                ),
-                                title: Text(displayname),
-                                subtitle: Text(contact.userId),
-                                onTap: () => controller.openUserModal(contact),
-                              );
-                            },
+                          return NotionEntranceScope(
+                            child: ListView.builder(
+                              itemCount: result.length,
+                              itemBuilder: (context, i) {
+                                final contact = result[i];
+                                final displayname =
+                                    contact.displayName ??
+                                    contact.userId.localpart ??
+                                    contact.userId;
+                                return NotionEntrance(
+                                  playKey: contact.userId,
+                                  rise: NotionMotion.riseList,
+                                  child: NotionPressable(
+                                    scale: NotionMotion.pressRow,
+                                    child: ListTile(
+                                      leading: Avatar(
+                                        name: displayname,
+                                        mxContent: contact.avatarUrl,
+                                        presenceUserId: contact.userId,
+                                      ),
+                                      title: Text(displayname),
+                                      subtitle: Text(contact.userId),
+                                      onTap: () =>
+                                          controller.openUserModal(contact),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
                           );
                         },
                       ),

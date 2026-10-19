@@ -10,8 +10,10 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/events/poll.dart';
 import 'package:fluffychat/pages/chat/events/round_video_bridge_message.dart';
 import 'package:fluffychat/pages/chat/events/round_video_message.dart';
+import 'package:fluffychat/pages/chat/events/undecryptable_message.dart';
 import 'package:fluffychat/pages/chat/events/video_player.dart';
 import 'package:fluffychat/pages/image_viewer/image_viewer.dart';
+import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
 import 'package:fluffychat/personal/round_video/round_playback_queue.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -38,6 +40,12 @@ class MessageContent extends StatelessWidget {
   final bool selected;
   final Set<String> bigEmojis;
 
+  /// Time/edited/sending state drawn on a round video's circle.
+  final Widget? roundStatus;
+
+  /// Conversation side; defaults to the event sender being this account.
+  final bool? outgoing;
+
   const MessageContent(
     this.event, {
     this.onInfoTab,
@@ -48,7 +56,20 @@ class MessageContent extends StatelessWidget {
     required this.borderRadius,
     required this.selected,
     required this.bigEmojis,
+    this.roundStatus,
+    this.outgoing,
   });
+
+  /// True when [event] renders as a round (circle) rather than a bubble:
+  /// Telegram round videos and limited-media placeholders. Callers use it to
+  /// render a chromeless bubble and move the status onto the circle.
+  static bool rendersRound(Event event) {
+    if (event.redacted) return false;
+    if (!RoundMediaPolicy.fromContent(event.content).canPlay) return true;
+    return {EventTypes.Message, EventTypes.Encrypted}.contains(event.type) &&
+        event.messageType == MessageTypes.Video &&
+        RoundVideoDescriptor.fromContent(event.content) != null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -65,12 +86,20 @@ class MessageContent extends StatelessWidget {
     final mediaPolicy = RoundMediaPolicy.fromContent(event.content);
     // This precedes every media branch, including protected bridge notices.
     // Never construct an ordinary thumbnail/player for limited media.
+    final own = outgoing ?? event.senderId == event.room.client.userID;
     if (!event.redacted && !mediaPolicy.canPlay) {
       return RoundVideoMessage(
         event,
         textColor: textColor,
         showThumbnail: false,
+        outgoing: own,
+        statusOverlay: roundStatus,
       );
+    }
+    // Ordinary and merged chats both land here, so a message this device
+    // cannot decrypt looks and recovers the same way in each.
+    if (isUndecryptable(event)) {
+      return UndecryptableMessage(event, textColor: textColor);
     }
     switch (event.type) {
       case EventTypes.Message:
@@ -112,14 +141,7 @@ class MessageContent extends StatelessWidget {
               borderRadius: borderRadius,
               timeline: timeline,
               textColor: textColor,
-              onTap: () => showDialog(
-                context: context,
-                builder: (_) => ImageViewer(
-                  event,
-                  timeline: timeline,
-                  outerContext: context,
-                ),
-              ),
+              onTap: () => showImageViewer(context, event, timeline: timeline),
             );
           case CuteEventContent.eventType:
             return CuteContent(event);
@@ -149,10 +171,11 @@ class MessageContent extends StatelessWidget {
               return RoundVideoBridgeMessage(
                 event,
                 textColor: textColor,
-                continuationQueue: RoundPlaybackQueue.after(
-                  event,
-                  timeline.events,
-                ),
+                outgoing: own,
+                statusOverlay: roundStatus,
+                // Built only on an explicit play, not on every row build.
+                continuationQueue: () =>
+                    RoundPlaybackQueue.after(event, timeline.events),
               );
             }
             return EventVideoPlayer(

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
+
 import 'package:fluffychat/pages/image_viewer/image_viewer.dart';
 import 'package:fluffychat/personal/merged_chat_page.dart' show SourceChatPage;
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
-import 'package:personal_core/personal_core.dart' show RoundMediaPolicy;
-import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
 import 'package:fluffychat/personal/ui/conversation_content_controller.dart';
+import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
@@ -14,6 +14,7 @@ import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart' show RoundMediaPolicy;
 
 bool _thumbnailAllowed(Event event) =>
     event.showThumbnail &&
@@ -40,16 +41,31 @@ class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
   String _scope(List<Room> rooms) => rooms
       .map((r) => (identityHashCode(r.client), r.client.userID, r.id))
       .join('|');
-  void _create() {
+  void _create({bool afterTransition = false}) {
     _scopeKey = _scope(widget.rooms);
-    _history = ConversationContentController(
+    final history = _history = ConversationContentController(
       widget.rooms.map(MatrixContentSource.new).toList(),
       unlocked: () => PersonalPrivacy.surfaceUnlocked,
       privacyGeneration: () => PersonalPrivacy.surfaceGeneration,
     );
-    _history.addListener(_updated);
-    _history.load();
+    history.addListener(_updated);
+    if (!afterTransition) {
+      history.load();
+      return;
+    }
+    // Reading local history pages decrypts and filters events; start it once
+    // the details page finished sliding in.
+    _waiting = true;
+    NotionMotion.afterRouteSettled(context, () {
+      if (!identical(history, _history)) return;
+      _waiting = false;
+      history.load();
+      _updated();
+    });
   }
+
+  /// True until the deferred first load starts; shows the loading line.
+  bool _waiting = false;
 
   void _updated() {
     if (mounted) setState(() {});
@@ -58,7 +74,7 @@ class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
   @override
   void initState() {
     super.initState();
-    _create();
+    _create(afterTransition: true);
   }
 
   @override
@@ -66,6 +82,7 @@ class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
     super.didUpdateWidget(oldWidget);
     if (_scopeKey != _scope(widget.rooms)) {
       _history.dispose();
+      _waiting = false;
       _create();
     }
   }
@@ -82,33 +99,48 @@ class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_history.busy) const LinearProgressIndicator(minHeight: 1),
-        if (_history.sources.any((s) => s.error != null))
-          TextButton(
-            onPressed: _history.busy
-                ? null
-                : () => _history.load(refresh: true),
-            child: const Text('Some shared content could not load. Retry'),
+        _ProgressLine(visible: _history.busy || _waiting),
+        NotionSizeReveal(
+          visible: _history.sources.any((s) => s.error != null),
+          child: SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: _history.busy
+                  ? null
+                  : () => _history.load(refresh: true),
+              child: const Text('Some shared content could not load. Retry'),
+            ),
           ),
-        if (events.isEmpty && !_history.busy)
-          const Padding(
+        ),
+        NotionSizeReveal(
+          visible: events.isEmpty && !_history.busy && !_waiting,
+          child: const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Text(
               'No photos or videos in the loaded local history.',
               style: TextStyle(fontSize: 13),
             ),
           ),
-        if (events.isNotEmpty)
-          SizedBox(
+        ),
+        // The strip opens once the first page decoded; each tile grows in.
+        NotionSizeReveal(
+          visible: events.isNotEmpty,
+          child: SizedBox(
             height: 92,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: events.length,
               separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) =>
-                  _SharedPreviewBlock(events[index]),
+              itemBuilder: (context, index) => NotionEntrance(
+                index: index,
+                afterRoute: false,
+                rise: 0,
+                scale: NotionMotion.dialogFrom,
+                child: _SharedPreviewBlock(events[index]),
+              ),
             ),
           ),
+        ),
       ],
     );
   }
@@ -160,7 +192,7 @@ void _openEvent(BuildContext context, Event event) {
     return;
   }
   if (event.messageType == MessageTypes.Image && event.showThumbnail) {
-    showDialog(
+    showNotionCustomDialog(
       context: context,
       builder: (_) => ImageViewer(event, outerContext: context),
     );
@@ -238,8 +270,9 @@ class _NotionConversationContentPageState
         if (!mounted ||
             !identical(history, _history) ||
             history.localEnd ||
-            history.sources.any((s) => s.error != null))
+            history.sources.any((s) => s.error != null)) {
           return;
+        }
       }
     }();
   }
@@ -414,11 +447,24 @@ class _NotionConversationContentPageState
                                   ),
                                 ),
                                 const SizedBox(height: 8),
-                                Container(
-                                  height: 2,
-                                  color: index == _tab
-                                      ? Theme.of(context).colorScheme.primary
-                                      : Colors.transparent,
+                                // The underline grows from the centre into
+                                // the selected tab and shrinks out of the
+                                // previous one.
+                                AnimatedScale(
+                                  duration: NotionMotion.of(
+                                    context,
+                                    NotionMotion.medium,
+                                  ),
+                                  curve: index == _tab
+                                      ? NotionMotion.emphasized
+                                      : NotionMotion.exitFast,
+                                  scale: index == _tab ? 1 : 0,
+                                  child: Container(
+                                    height: 2,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                  ),
                                 ),
                               ],
                             ),
@@ -427,40 +473,51 @@ class _NotionConversationContentPageState
                       ),
                   ],
                 ),
-              if (_history.busy) const LinearProgressIndicator(minHeight: 1),
+              _ProgressLine(visible: _history.busy),
               Expanded(
                 child: NotificationListener<ScrollNotification>(
                   onNotification: _scroll,
-                  child: IndexedStack(
-                    index: widget.initialMedia ? _tab : 1,
-                    children: [
-                      _mediaGrid(events),
-                      _list(
-                        widget.initialMedia
-                            ? events.where(sharedFile).toList()
-                            : events,
-                      ),
-                      ListView.builder(
-                        key: const PageStorageKey('content-links'),
-                        padding: const EdgeInsets.all(20),
-                        itemCount: links.length + 1,
-                        itemBuilder: (context, index) {
-                          if (index == links.length) return _end(links.isEmpty);
-                          final (event, url) = links[index];
-                          return NotionListRow(
-                            leading: const Icon(Icons.link_outlined),
-                            title: Uri.parse(url).host,
-                            subtitle:
-                                '$url\n${_linkContext(event)} · ${_date(event)}',
-                            onTap: () {
-                              if (PersonalPrivacy.surfaceUnlocked &&
-                                  !event.redacted)
-                                UrlLauncher(context, url).launchUrl();
+                  child: _FadeOnChange(
+                    value: widget.initialMedia ? _tab : 1,
+                    child: NotionEntranceScope(
+                      child: IndexedStack(
+                        index: widget.initialMedia ? _tab : 1,
+                        children: [
+                          _mediaGrid(events),
+                          _list(
+                            widget.initialMedia
+                                ? events.where(sharedFile).toList()
+                                : events,
+                          ),
+                          ListView.builder(
+                            key: const PageStorageKey('content-links'),
+                            padding: const EdgeInsets.all(20),
+                            itemCount: links.length + 1,
+                            itemBuilder: (context, index) {
+                              if (index == links.length) {
+                                return _end(links.isEmpty);
+                              }
+                              final (event, url) = links[index];
+                              return _entering(
+                                '${event.eventId}|$url',
+                                NotionListRow(
+                                  leading: const Icon(Icons.link_outlined),
+                                  title: Uri.parse(url).host,
+                                  subtitle:
+                                      '$url\n${_linkContext(event)} · ${_date(event)}',
+                                  onTap: () {
+                                    if (PersonalPrivacy.surfaceUnlocked &&
+                                        !event.redacted) {
+                                      UrlLauncher(context, url).launchUrl();
+                                    }
+                                  },
+                                ),
+                              );
                             },
-                          );
-                        },
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -482,8 +539,9 @@ class _NotionConversationContentPageState
   bool _scroll(ScrollNotification notification) {
     if (notification is! ScrollUpdateNotification ||
         notification.metrics.extentAfter > 200 ||
-        _history.busy)
+        _history.busy) {
       return false;
+    }
     if (_history.sources.any((s) => s.error != null)) return false;
     final signature = _history.sources
         .map((s) => (s.localLimit, s.cursor, s.remoteEnd))
@@ -518,23 +576,36 @@ class _NotionConversationContentPageState
       final size = info is Map && info['size'] is num
           ? ' · ${((info['size'] as num) / 1024).ceil()} KB'
           : '';
-      return NotionListRow(
-        leading: Icon(
-          event.messageType == MessageTypes.Audio
-              ? Icons.audio_file_outlined
-              : Icons.description_outlined,
+      return _entering(
+        event.eventId,
+        NotionListRow(
+          leading: Icon(
+            event.messageType == MessageTypes.Audio
+                ? Icons.audio_file_outlined
+                : Icons.description_outlined,
+          ),
+          title: event.content['filename'] is String
+              ? event.content['filename'] as String
+              : event.body.isEmpty
+              ? 'Shared file'
+              : event.body,
+          subtitle:
+              '${event.messageType == MessageTypes.Audio ? 'Audio · ' : ''}${info is Map && info['mimetype'] is String ? '${info['mimetype']} · ' : ''}${info is Map && info['duration'] is num ? '${Duration(milliseconds: (info['duration'] as num).toInt()).inMinutes}:${(Duration(milliseconds: (info['duration'] as num).toInt()).inSeconds % 60).toString().padLeft(2, '0')} · ' : ''}${_date(event)}$size',
+          onTap: () => _openEvent(context, event),
         ),
-        title: event.content['filename'] is String
-            ? event.content['filename'] as String
-            : event.body.isEmpty
-            ? 'Shared file'
-            : event.body,
-        subtitle:
-            '${event.messageType == MessageTypes.Audio ? 'Audio · ' : ''}${info is Map && info['mimetype'] is String ? '${info['mimetype']} · ' : ''}${info is Map && info['duration'] is num ? '${Duration(milliseconds: (info['duration'] as num).toInt()).inMinutes}:${(Duration(milliseconds: (info['duration'] as num).toInt()).inSeconds % 60).toString().padLeft(2, '0')} · ' : ''}${_date(event)}$size',
-        onTap: () => _openEvent(context, event),
       );
     },
   );
+
+  /// First-screenful entrance of a list row (the enclosing scope stops it
+  /// for rows built later by scrolling or filtering).
+  Widget _entering(Object key, Widget child) => NotionEntrance(
+    playKey: key,
+    afterRoute: false,
+    rise: NotionMotion.riseList,
+    child: child,
+  );
+
   Widget _mediaGrid(List<Event> events) => LayoutBuilder(
     builder: (context, constraints) {
       final columns =
@@ -566,67 +637,78 @@ class _NotionConversationContentPageState
                 delegate: SliverChildBuilderDelegate((context, index) {
                   final event = month.value[index];
                   final video = event.messageType == MessageTypes.Video;
-                  return Semantics(
-                    label: '${video ? 'Video' : 'Photo'}, ${_date(event)}',
-                    button: true,
-                    child: InkWell(
-                      onTap: () => _openEvent(context, event),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          if (_thumbnailAllowed(event))
-                            MxcImage(
-                              event: event,
-                              width: 240,
-                              height: 240,
-                              fit: BoxFit.cover,
-                              isThumbnail: true,
-                              animated: false,
-                              placeholder: _thumbnailPlaceholder,
-                            )
-                          else
-                            ColoredBox(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerHigh,
-                              child: Icon(
-                                video
-                                    ? Icons.videocam_outlined
-                                    : Icons.image_outlined,
-                              ),
-                            ),
-                          if (video)
-                            Align(
-                              alignment: Alignment.bottomRight,
-                              child: Padding(
-                                padding: const EdgeInsets.all(6),
-                                child: Container(
-                                  color: Colors.black54,
-                                  padding: const EdgeInsets.all(3),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(
-                                        Icons.play_circle_outline,
-                                        color: Colors.white,
-                                        size: 18,
-                                      ),
-                                      if (event.infoMap['duration'] is num) ...[
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          '${Duration(milliseconds: (event.infoMap['duration'] as num).toInt()).inSeconds}s',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ],
+                  // Tiles of the first screenful grow in; later ones do not.
+                  return NotionEntrance(
+                    playKey: event.eventId,
+                    afterRoute: false,
+                    rise: 0,
+                    scale: NotionMotion.dialogFrom,
+                    child: Semantics(
+                      label: '${video ? 'Video' : 'Photo'}, ${_date(event)}',
+                      button: true,
+                      child: NotionPressable(
+                        scale: NotionMotion.pressRow,
+                        child: InkWell(
+                          onTap: () => _openEvent(context, event),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (_thumbnailAllowed(event))
+                                MxcImage(
+                                  event: event,
+                                  width: 240,
+                                  height: 240,
+                                  fit: BoxFit.cover,
+                                  isThumbnail: true,
+                                  animated: false,
+                                  placeholder: _thumbnailPlaceholder,
+                                )
+                              else
+                                ColoredBox(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.surfaceContainerHigh,
+                                  child: Icon(
+                                    video
+                                        ? Icons.videocam_outlined
+                                        : Icons.image_outlined,
                                   ),
                                 ),
-                              ),
-                            ),
-                        ],
+                              if (video)
+                                Align(
+                                  alignment: Alignment.bottomRight,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(6),
+                                    child: Container(
+                                      color: Colors.black54,
+                                      padding: const EdgeInsets.all(3),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(
+                                            Icons.play_circle_outline,
+                                            color: Colors.white,
+                                            size: 18,
+                                          ),
+                                          if (event.infoMap['duration']
+                                              is num) ...[
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              '${Duration(milliseconds: (event.infoMap['duration'] as num).toInt()).inSeconds}s',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   );
@@ -641,5 +723,69 @@ class _NotionConversationContentPageState
         ],
       );
     },
+  );
+}
+
+/// A 1 px progress line that only shows up for waits long enough to notice
+/// and opens/closes smoothly instead of shifting the content below.
+class _ProgressLine extends StatelessWidget {
+  final bool visible;
+  const _ProgressLine({required this.visible});
+  @override
+  Widget build(BuildContext context) => NotionSizeReveal(
+    visible: visible,
+    duration: NotionMotion.short,
+    child: const NotionDelayedReveal(
+      placeholder: SizedBox(height: 1),
+      child: LinearProgressIndicator(minHeight: 1),
+    ),
+  );
+}
+
+/// Restarts a short fade-and-rise of [child] whenever [value] changes (tab
+/// switches). One child, one controller: subtrees keep their state.
+class _FadeOnChange extends StatefulWidget {
+  final Object value;
+  final Widget child;
+  const _FadeOnChange({required this.value, required this.child});
+  @override
+  State<_FadeOnChange> createState() => _FadeOnChangeState();
+}
+
+class _FadeOnChangeState extends State<_FadeOnChange>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: NotionMotion.medium,
+    value: 1,
+  );
+  late final CurvedAnimation _fade = CurvedAnimation(
+    parent: _controller,
+    curve: const Interval(0, .6, curve: NotionMotion.standard),
+  );
+  late final Animation<Offset> _rise =
+      Tween(begin: const Offset(0, .015), end: Offset.zero).animate(
+        CurvedAnimation(parent: _controller, curve: NotionMotion.emphasized),
+      );
+
+  @override
+  void didUpdateWidget(_FadeOnChange oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value && !NotionMotion.reduced(context)) {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _fade.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+    opacity: _fade,
+    child: SlideTransition(position: _rise, child: widget.child),
   );
 }

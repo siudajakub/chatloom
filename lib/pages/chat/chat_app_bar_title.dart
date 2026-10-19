@@ -1,36 +1,60 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/pages/chat/chat.dart';
+import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:fluffychat/personal/person_location.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/avatar.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
 
 class ChatAppBarTitle extends StatelessWidget {
   final ChatController controller;
   const ChatAppBarTitle(this.controller, {super.key});
   @override
   Widget build(BuildContext context) {
+    // Selection count and chat header cross-fade; the count rolls.
+    return NotionFadeThrough(
+      duration: NotionMotion.short,
+      alignment: AlignmentDirectional.centerStart,
+      child: controller.selectedEvents.isNotEmpty
+          ? NotionAnimatedCount(
+              key: const ValueKey('selection'),
+              count: controller.selectedEvents.length,
+            )
+          : KeyedSubtree(
+              key: const ValueKey('header'),
+              child: _header(context),
+            ),
+    );
+  }
+
+  Widget _header(BuildContext context) {
     final room = controller.room;
-    if (controller.selectedEvents.isNotEmpty) {
-      return Text(controller.selectedEvents.length.toString());
-    }
-    final name = InboxProjection(
-      PersonalClient.of(room.client),
-    ).displayName(room);
+    final personal = PersonalClient.of(room.client);
+    final projection = InboxProjection(personal);
+    final name = projection.displayName(room);
     return NotionCompactChatHeader(
-      avatar: Avatar(
-        client: room.client,
-        mxContent: room.avatar,
-        name: name,
-        size: 32,
+      // The partner's member event may load after the page is built.
+      avatar: StreamBuilder(
+        stream: room.client.onRoomState.stream.where(
+          (u) =>
+              u.roomId == room.id &&
+              (u.state.type == EventTypes.RoomMember ||
+                  u.state.type == EventTypes.RoomAvatar),
+        ),
+        builder: (context, _) => ListenableBuilder(
+          listenable: personal,
+          builder: (context, _) =>
+              notionInboxAvatar(personal, projection, room, size: 32),
+        ),
       ),
       name: name,
       onDetails: () => FluffyThemes.isThreeColumnMode(context)
           ? controller.toggleDisplayChatDetailsColumn()
-          : context.go('/rooms/${room.id}/details'),
+          : context.go('${chatLocation(context, room.id)}/details'),
     );
   }
 }

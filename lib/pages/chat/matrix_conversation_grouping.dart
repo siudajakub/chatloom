@@ -18,22 +18,31 @@ ConversationGroupingItem conversationGroupingItem(
         : null,
     deliveryState: event.status.isSent ? 'sent' : event.status.name,
     boundary:
-        boundary ||
-        event.redacted ||
-        !{
-          EventTypes.Message,
-          EventTypes.Sticker,
-          PollEventContent.startType,
-        }.contains(event.type),
+        boundary || event.redacted || !_groupedEventTypes.contains(event.type),
+    startsSeries: event.inReplyToEventId(includingFallback: false) != null,
   );
 }
 
+const _plainMessageTypes = {
+  MessageTypes.Text,
+  MessageTypes.Notice,
+  MessageTypes.Emote,
+};
+
+// Undecryptable messages (still m.room.encrypted) group with the sender's
+// other messages; a redacted one is a boundary like any redaction.
+const _groupedEventTypes = {
+  EventTypes.Message,
+  EventTypes.Sticker,
+  EventTypes.Encrypted,
+  PollEventContent.startType,
+};
+
+// Compiled once: this runs for every visible row on every timeline build.
+final _interactiveLinkPattern = RegExp(r'(https?://|matrix:|www\.)');
+
 bool conversationHasInteractiveContent(Event event) =>
-    !{
-      MessageTypes.Text,
-      MessageTypes.Notice,
-      MessageTypes.Emote,
-    }.contains(event.messageType) ||
+    !_plainMessageTypes.contains(event.messageType) ||
     event.isRichMessage ||
-    RegExp(r'(https?://|matrix:|www\.)').hasMatch(event.body) ||
+    _interactiveLinkPattern.hasMatch(event.body) ||
     event.inReplyToEventId(includingFallback: false) != null;

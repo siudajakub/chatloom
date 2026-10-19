@@ -15,6 +15,10 @@ class ConversationGroupingItem {
   final String deliveryState;
   final bool boundary;
 
+  /// A reply opens a new group: its quote sits between it and the message
+  /// before it, so the two never join.
+  final bool startsSeries;
+
   const ConversationGroupingItem({
     required this.accountId,
     required this.sourceId,
@@ -24,6 +28,7 @@ class ConversationGroupingItem {
     this.threadId,
     this.deliveryState = 'sent',
     this.boundary = false,
+    this.startsSeries = false,
   });
 }
 
@@ -44,7 +49,7 @@ ConversationGroupPosition conversationGroupPosition({
 }
 
 bool _canJoin(ConversationGroupingItem older, ConversationGroupingItem newer) {
-  if (older.boundary || newer.boundary) return false;
+  if (older.boundary || newer.boundary || newer.startsSeries) return false;
   if (older.accountId != newer.accountId ||
       older.sourceId != newer.sourceId ||
       older.senderId != newer.senderId ||

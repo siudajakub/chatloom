@@ -8,6 +8,8 @@ import 'dart:async';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/chat.dart';
 import 'package:fluffychat/pages/chat/chat_app_bar_list_tile.dart';
+import 'package:fluffychat/personal/message_preview.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -45,14 +47,12 @@ class PinnedEvents extends StatelessWidget {
                     value: event?.eventId ?? '',
                     icon: const Icon(Icons.push_pin_outlined),
                     label:
-                        event
-                            ?.calcLocalizedBodyFallback(
-                              MatrixLocals(l10n),
-                              withSenderNamePrefix: true,
-                              hideReply: true,
-                            )
-                            .trim()
-                            .replaceAll('\n', ' ') ??
+                        (event == null
+                            ? null
+                            : personalEventPreview(
+                                event,
+                                i18n: MatrixLocals(l10n),
+                              )) ??
                         'UNKNOWN',
                   ),
                 )
@@ -76,27 +76,34 @@ class PinnedEvents extends StatelessWidget {
       future: controller.room.getEventById(pinnedEventIds.last),
       builder: (context, snapshot) {
         final event = snapshot.data;
-        return ChatAppBarListTile(
-          title:
-              event
-                  ?.calcLocalizedBodyFallback(
-                    MatrixLocals(L10n.of(context)),
-                    withSenderNamePrefix: true,
-                    hideReply: true,
-                  )
-                  .replaceAll('\n', ' ') ??
-              L10n.of(context).loadingPleaseWait,
-          leading: IconButton(
-            splashRadius: 18,
-            iconSize: 18,
-            color: theme.colorScheme.onSurfaceVariant,
-            icon: const Icon(Icons.push_pin),
-            tooltip: L10n.of(context).unpin,
-            onPressed: controller.room.canSendEvent(EventTypes.RoomPinnedEvents)
-                ? () => controller.unpinEvent(event!.eventId)
-                : null,
+        // A newly pinned message (or the loaded preview) fades through.
+        return NotionFadeThrough(
+          duration: NotionMotion.short,
+          child: KeyedSubtree(
+            key: ValueKey(event?.eventId),
+            child: ChatAppBarListTile(
+              title:
+                  (event == null
+                      ? null
+                      : personalEventPreview(
+                          event,
+                          i18n: MatrixLocals(L10n.of(context)),
+                        )) ??
+                  L10n.of(context).loadingPleaseWait,
+              leading: IconButton(
+                splashRadius: 18,
+                iconSize: 18,
+                color: theme.colorScheme.onSurfaceVariant,
+                icon: const Icon(Icons.push_pin),
+                tooltip: L10n.of(context).unpin,
+                onPressed:
+                    controller.room.canSendEvent(EventTypes.RoomPinnedEvents)
+                    ? () => controller.unpinEvent(event!.eventId)
+                    : null,
+              ),
+              onTap: () => _displayPinnedEventsDialog(context),
+            ),
           ),
-          onTap: () => _displayPinnedEventsDialog(context),
         );
       },
     );

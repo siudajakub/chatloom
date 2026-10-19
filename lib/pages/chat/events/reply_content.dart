@@ -4,101 +4,74 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat/conversation_bubble.dart';
+import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
+import 'package:fluffychat/personal/message_preview.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
-import '../../../config/app_config.dart';
-
+/// The quoted original of a reply, as a muted pill above the reply bubble
+/// (see [ConversationReplyQuote]). Photos and videos show a thumbnail.
 class ReplyContent extends StatelessWidget {
   final Event replyEvent;
-  final bool ownMessage;
   final Timeline? timeline;
-  final Color? foregroundColor;
+  final Color fill;
+  final Color textColor;
+
+  /// Side of the reply that quotes [replyEvent], for alignment.
+  final bool outgoing;
+  final Widget? caption;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
 
   const ReplyContent(
     this.replyEvent, {
-    this.ownMessage = false,
     super.key,
+    required this.fill,
+    required this.textColor,
+    this.outgoing = false,
     this.timeline,
-    this.foregroundColor,
+    this.caption,
+    this.onTap,
+    this.onLongPress,
   });
 
-  static const BorderRadius borderRadius = BorderRadius.only(
-    topRight: Radius.circular(AppConfig.borderRadius / 2),
-    bottomRight: Radius.circular(AppConfig.borderRadius / 2),
-  );
+  static const _thumbnailTypes = {MessageTypes.Image, MessageTypes.Video};
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     final timeline = this.timeline;
-    final displayEvent = timeline != null
+    final display = timeline != null
         ? replyEvent.getDisplayEvent(timeline)
         : replyEvent;
-    const fontSize = AppConfig.messageFontSize;
-    final color = foregroundColor ?? theme.colorScheme.onSurfaceVariant;
-
-    return Material(
-      color: Colors.transparent,
-      borderRadius: borderRadius,
-      child: Row(
-        mainAxisSize: .min,
-        children: <Widget>[
-          Container(
-            width: 5,
-            height: fontSize * 2 + 16,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(AppConfig.borderRadius),
-              color: color,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: .start,
-              mainAxisAlignment: .center,
-              children: <Widget>[
-                FutureBuilder<User?>(
-                  initialData: displayEvent.senderFromMemoryOrFallback,
-                  future: displayEvent.fetchSenderUser(),
-                  builder: (context, snapshot) {
-                    return Text(
-                      '${snapshot.data?.calcDisplayname() ?? displayEvent.senderFromMemoryOrFallback.calcDisplayname()}:',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: color,
-                        fontSize: fontSize,
-                      ),
-                    );
-                  },
-                ),
-                Text(
-                  displayEvent
-                      .calcLocalizedBodyFallback(
-                        MatrixLocals(L10n.of(context)),
-                        withSenderNamePrefix: false,
-                        hideReply: true,
-                        plaintextBody: true,
-                      )
-                      .trim()
-                      .replaceAll('\n', ' '),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                  style: TextStyle(
-                    color: foregroundColor ?? theme.colorScheme.onSurface,
-                    fontSize: fontSize,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 6),
-        ],
+    final thumbnail =
+        !display.redacted &&
+        !isUndecryptable(display) &&
+        _thumbnailTypes.contains(display.messageType);
+    return ConversationReplyQuote(
+      text: personalPreviewLabel(
+        display,
+        i18n: MatrixLocals(L10n.of(context)),
       ),
+      fill: fill,
+      textColor: textColor,
+      outgoing: outgoing,
+      caption: caption,
+      leading: thumbnail
+          ? MxcImage(
+              event: display,
+              isThumbnail: true,
+              fit: BoxFit.cover,
+              width: NotionBubble.quoteThumbnail,
+              height: NotionBubble.quoteThumbnail,
+            )
+          : null,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      semanticLabel: L10n.of(context).showOriginalMessage,
     );
   }
 }
