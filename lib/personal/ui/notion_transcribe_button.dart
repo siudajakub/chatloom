@@ -1,0 +1,268 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:math' as math;
+
+import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:personal_core/personal_core.dart';
+
+/// Native names shown under the English language name, in this button's
+/// menu and in the Settings → Transcriptions default-language picker.
+const notionTranscriptionNativeNames = <String, String>{
+  'pl': 'Polski',
+  'hy': 'Հայերեն',
+};
+
+/// Short code shown in the language segment: "Auto", "PL", "EN", "HY".
+String notionTranscriptionLanguageCode(String? language) =>
+    language == null ? 'Auto' : language.toUpperCase();
+
+/// Full English name of a transcription language; null is automatic.
+String notionTranscriptionLanguageName(String? language) => language == null
+    ? 'Automatic'
+    : transcriptionLanguages[language] ?? language.toUpperCase();
+
+/// Menu entries for every supported transcription language, with a check
+/// mark on [selected]. Shared by the split button and the transcript menu.
+List<Widget> notionTranscriptionLanguageItems({
+  required String? selected,
+  required ValueChanged<String?> onSelected,
+}) => [
+  for (final language in <String?>[null, ...transcriptionLanguages.keys])
+    MenuItemButton(
+      key: ValueKey('transcription-language-${language ?? 'auto'}'),
+      leadingIcon: SizedBox.square(
+        dimension: 18,
+        child: language == selected
+            ? const Icon(Icons.check_rounded, size: 18)
+            : null,
+      ),
+      style: MenuItemButton.styleFrom(minimumSize: const Size(184, 48)),
+      onPressed: () => onSelected(language),
+      child: Semantics(
+        selected: language == selected,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(notionTranscriptionLanguageName(language)),
+            if (notionTranscriptionNativeNames[language] case final native?)
+              Builder(
+                builder: (context) => Text(
+                  native,
+                  style: NotionType.caption.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+];
+
+/// Outlined split pill: the left segment starts (or retries) a manual
+/// transcription, the right segment picks its language. While a job runs the
+/// left segment shows a spinner and the right segment cancels it.
+///
+/// Visual height 36 (grows with the text scale), hit height at least 48. [foregroundColor] adapts the pill to the
+/// bubble it sits on (incoming/outgoing); it defaults to `onSurface`.
+class NotionTranscribeSplitButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool busy;
+  final String? language;
+  final VoidCallback? onTranscribe;
+  final ValueChanged<String?>? onLanguageSelected;
+  final VoidCallback? onCancel;
+  final bool cancelling;
+  final Color? foregroundColor;
+
+  const NotionTranscribeSplitButton({
+    super.key,
+    this.label = 'Transcribe',
+    this.icon = Icons.notes_rounded,
+    this.busy = false,
+    this.language,
+    this.onTranscribe,
+    this.onLanguageSelected,
+    this.onCancel,
+    this.cancelling = false,
+    this.foregroundColor,
+  });
+
+  /// Pill height at the default text scale.
+  static const double visualHeight = 36;
+
+  /// Pill height for [scaler]: the label line plus 8 dp above and below.
+  static double scaledHeight(TextScaler scaler) =>
+      math.max(visualHeight, scaler.scale(20) + 2 * NotionSpace.xs);
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground =
+        foregroundColor ?? Theme.of(context).colorScheme.onSurface;
+    final line = foreground.withValues(alpha: .24);
+    final height = scaledHeight(MediaQuery.textScalerOf(context));
+    const radius = Radius.circular(NotionRadius.md);
+    final directional = Directionality.of(context) == TextDirection.ltr;
+    final startShape = RoundedRectangleBorder(
+      borderRadius: directional
+          ? const BorderRadius.horizontal(left: radius)
+          : const BorderRadius.horizontal(right: radius),
+    );
+    final endShape = RoundedRectangleBorder(
+      borderRadius: directional
+          ? const BorderRadius.horizontal(right: radius)
+          : const BorderRadius.horizontal(left: radius),
+    );
+    ButtonStyle segment(OutlinedBorder shape) => TextButton.styleFrom(
+      foregroundColor: foreground,
+      // A running job stays readable; only an unavailable action fades.
+      disabledForegroundColor: foreground.withValues(alpha: busy ? .82 : .38),
+      overlayColor: foreground,
+      minimumSize: Size(visualHeight, height),
+      tapTargetSize: MaterialTapTargetSize.padded,
+      padding: const EdgeInsets.symmetric(horizontal: NotionSpace.sm),
+      shape: shape,
+      textStyle: NotionType.footnote.copyWith(fontWeight: FontWeight.w500),
+    );
+
+    final primary = TextButton(
+      key: const ValueKey('transcribe-primary'),
+      style: segment(startShape),
+      onPressed: busy ? null : onTranscribe,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Glyph ↔ spinner morph when a job starts or ends.
+          NotionMorphSwitcher(
+            rotate: false,
+            child: busy
+                ? SizedBox.square(
+                    key: const ValueKey('busy'),
+                    dimension: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: foreground,
+                    ),
+                  )
+                : Icon(icon, key: ValueKey(icon), size: 18),
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              cancelling ? 'Cancelling…' : label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    final Widget? trailing = busy
+        ? onCancel == null
+              ? null
+              : Tooltip(
+                  message: 'Cancel transcription',
+                  excludeFromSemantics: true,
+                  child: TextButton(
+                    key: const ValueKey('transcribe-cancel'),
+                    style: segment(endShape).copyWith(
+                      padding: const WidgetStatePropertyAll(
+                        EdgeInsets.symmetric(horizontal: NotionSpace.xs),
+                      ),
+                    ),
+                    onPressed: cancelling ? null : onCancel,
+                    child: Semantics(
+                      label: 'Cancel transcription',
+                      excludeSemantics: true,
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: NotionSize.iconSm,
+                      ),
+                    ),
+                  ),
+                )
+        : MenuAnchor(
+            alignmentOffset: const Offset(0, 4),
+            menuChildren: notionTranscriptionLanguageItems(
+              selected: language,
+              onSelected: (value) => onLanguageSelected?.call(value),
+            ),
+            builder: (context, controller, _) => TextButton(
+              key: const ValueKey('transcribe-language'),
+              style: segment(endShape).copyWith(
+                padding: const WidgetStatePropertyAll(
+                  EdgeInsetsDirectional.only(
+                    start: NotionSpace.xs,
+                    end: NotionSpace.xxs,
+                  ),
+                ),
+              ),
+              onPressed: onLanguageSelected == null
+                  ? null
+                  : () => controller.isOpen
+                        ? controller.close()
+                        : controller.open(),
+              child: Semantics(
+                label:
+                    'Transcription language: ${notionTranscriptionLanguageName(language)}',
+                excludeSemantics: true,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      notionTranscriptionLanguageCode(language),
+                      textDirection: TextDirection.ltr,
+                    ),
+                    const SizedBox(width: 2),
+                    const Icon(
+                      Icons.expand_more_rounded,
+                      size: NotionSize.iconSm,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        alignment: AlignmentDirectional.centerStart,
+        children: [
+          Positioned.fill(
+            child: Center(
+              child: SizedBox(
+                key: const ValueKey('transcribe-pill'),
+                height: height,
+                width: double.infinity,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: foreground.withValues(alpha: .06),
+                    border: Border.all(color: line),
+                    borderRadius: const BorderRadius.all(radius),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(child: primary),
+              if (trailing != null) ...[
+                SizedBox(
+                  height: 20,
+                  child: VerticalDivider(width: 1, thickness: 1, color: line),
+                ),
+                trailing,
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
