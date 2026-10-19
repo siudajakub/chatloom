@@ -7,5 +7,6 @@
   "trustedDeviceIds": [],
   "reminderRelayUrl": null,
   "requireCodecSandbox": false,
-  "allowConversationSends": false
+  "allowConversationSends": false,
+  "autoTranscription": false
 }

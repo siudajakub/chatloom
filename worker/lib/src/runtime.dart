@@ -8,6 +8,7 @@ import 'package:vodozemac/vodozemac.dart' as vod;
 import 'package:http/http.dart' as http;
 import 'config.dart';
 import 'ports.dart';
+import 'session_client.dart';
 
 Future<void> privateDirectory(String directory) async {
   await Directory(directory).create(recursive: true);
@@ -29,7 +30,7 @@ void sanitizeLogs() {
   Logs().nativeColors = false;
 }
 
-Future<Client> openSession(
+Future<WorkerSessionClient> openSession(
   WorkerConfig config, {
   http.Client? httpClient,
 }) async {
@@ -85,10 +86,10 @@ Future<Client> openSession(
     sqfliteFactory: databaseFactoryFfi,
     maxFileSize: 0,
   );
-  final client = Client(
+  final client = WorkerSessionClient(
     'personal-feature-worker',
     database: sdkDatabase,
-    httpClient: httpClient,
+    sessionHttpClient: httpClient ?? http.Client(),
     logLevel: Level.error,
     receiptsPublicByDefault: false,
     shareKeysWith: ShareKeysWith.crossVerified,

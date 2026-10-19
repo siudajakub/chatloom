@@ -1,16 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:personal_core/personal_core.dart';
 import 'ports.dart';
 
+/// Upper bound for a Telegram round video exported by the local adapter.
+const localRoundMaxBytes = 64 * 1024 * 1024;
+const localAudioMaxBytes = 250000000;
+const _metadataMaxBytes = 65536;
+const _recentMaxBytes = 262144;
+const _recentMaxLimit = 200;
+
 /// Explicit local-source adapter. Journal/crypto, identity and all conversation
 /// writes remain with Matrix; this socket never receives a provider/API key.
-class LocalSourceTransport implements FeatureTransport {
+///
+/// The adapter serves one request at a time and refuses the rest immediately.
+/// Requests from this process are therefore serialized here: a background
+/// source scan or deletion audit must never make a paid job's media export
+/// fail with `local_source_unavailable`.
+class LocalSourceTransport implements FeatureTransport, RecentSourceScanner {
   final FeatureTransport matrix;
   final String socketPath;
+  final _clients = <HttpClient>{};
+  bool _closed = false;
+  Future<void>? _active;
   LocalSourceTransport(this.matrix, this.socketPath);
+
+  void close() {
+    _closed = true;
+    for (final client in _clients) {
+      client.close(force: true);
+    }
+  }
+
   bool local(SourceEventRef source) =>
       source.conversation.roomId.endsWith(':beeper.local');
   @override
@@ -20,17 +44,45 @@ class LocalSourceTransport implements FeatureTransport {
   @override
   bool get verified => matrix.verified;
 
-  Future<Uint8List> request(
-    SourceEventRef source,
-    String mode,
+  /// Waits for the previous request unless [wait] elapses first.
+  Future<T> _exclusive<T>(Future<T> Function() action, {Duration? wait}) async {
+    final deadline = wait == null ? null : DateTime.now().add(wait);
+    while (_active != null) {
+      final active = _active!;
+      if (deadline == null) {
+        await active;
+        continue;
+      }
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) {
+        throw const WorkerFailure('local_source_busy');
+      }
+      try {
+        await active.timeout(remaining);
+      } on TimeoutException {
+        throw const WorkerFailure('local_source_busy');
+      }
+    }
+    final done = Completer<void>();
+    _active = done.future;
+    try {
+      return await action();
+    } finally {
+      _active = null;
+      done.complete();
+    }
+  }
+
+  Future<Uint8List> _post(
+    String path,
+    Map<String, Object?> payload,
+    int limit,
     Cancellation cancel,
   ) async {
-    if (!verified ||
-        source.conversation.accountId != accountId ||
-        !local(source)) {
-      throw const WorkerFailure('invalid_local_source_account');
-    }
+    cancel.check();
+    if (_closed) throw const WorkerFailure('cancelled');
     final client = HttpClient();
+    _clients.add(client);
     client.connectionFactory = (_, _, _) => Socket.startConnect(
       InternetAddress(socketPath, type: InternetAddressType.unix),
       0,
@@ -38,19 +90,16 @@ class LocalSourceTransport implements FeatureTransport {
     cancel.listen(() => client.close(force: true));
     try {
       final req = await client
-          .postUrl(Uri.parse('http://localhost/source'))
+          .postUrl(Uri.parse('http://localhost$path'))
           .timeout(const Duration(seconds: 10));
       req.headers.contentType = ContentType.json;
-      final body = utf8.encode(
-        jsonEncode({'source': source.toJson(), 'mode': mode}),
-      );
+      final body = utf8.encode(jsonEncode(payload));
       req.contentLength = body.length;
       req.add(body);
       final response = await req.close().timeout(const Duration(minutes: 3));
       if (response.statusCode != 200) {
         throw const WorkerFailure('local_source_unavailable');
       }
-      final limit = mode == 'metadata' ? 65536 : 250000000;
       if (response.contentLength < 0 || response.contentLength > limit) {
         throw const WorkerFailure('source_too_large');
       }
@@ -65,16 +114,45 @@ class LocalSourceTransport implements FeatureTransport {
       cancel.check();
       return bytes.takeBytes();
     } finally {
+      _clients.remove(client);
       client.close(force: true);
     }
   }
 
+  Future<Uint8List> request(
+    SourceEventRef source,
+    String mode,
+    Cancellation cancel, {
+    int? limit,
+    Duration? wait,
+  }) async {
+    if (!verified ||
+        source.conversation.accountId != accountId ||
+        !local(source)) {
+      throw const WorkerFailure('invalid_local_source_account');
+    }
+    return _exclusive(
+      () => _post(
+        '/source',
+        {'source': source.toJson(), 'mode': mode},
+        limit ?? (mode == 'metadata' ? _metadataMaxBytes : localAudioMaxBytes),
+        cancel,
+      ),
+      wait: wait,
+    );
+  }
+
   Future<Map<String, dynamic>> metadata(
     SourceEventRef source,
-    Cancellation cancel,
-  ) async {
+    Cancellation cancel, {
+    Duration? wait,
+  }) async {
     final data =
-        jsonDecode(utf8.decode(await request(source, 'metadata', cancel)))
+        jsonDecode(
+              utf8.decode(
+                await request(source, 'metadata', cancel, wait: wait),
+              ),
+            )
             as Map<String, dynamic>;
     if (data['sourceKey'] != source.key || data['redacted'] is! bool) {
       throw const WorkerFailure('local_source_binding_mismatch');
@@ -86,10 +164,30 @@ class LocalSourceTransport implements FeatureTransport {
   Future<bool?> sourceRedacted(SourceEventRef source) async {
     if (!local(source)) return matrix.sourceRedacted(source);
     try {
-      return (await metadata(source, Cancellation()))['redacted'] as bool;
+      // Status probes are advisory: never queue behind a long media export.
+      return (await metadata(
+            source,
+            Cancellation(),
+            wait: const Duration(seconds: 4),
+          ))['redacted']
+          as bool;
     } catch (_) {
       return null;
     }
+  }
+
+  /// Media kind and byte bound approved by fresh adapter metadata. Voice notes
+  /// must be audio; round videos must be exactly video/mp4.
+  static int _exportLimit(Map<String, dynamic> metadata) {
+    final mime = metadata['mimeType'];
+    final kind = metadata['kind'] ?? 'voice';
+    if (mime is! String) throw const WorkerFailure('protected_media');
+    if (kind == 'voice' && mime.startsWith('audio/')) return localAudioMaxBytes;
+    if (kind == 'round' && mime == 'video/mp4') return localRoundMaxBytes;
+    if (mime.startsWith('video/')) {
+      throw const WorkerFailure('invalid_round_format');
+    }
+    throw const WorkerFailure('protected_media');
   }
 
   @override
@@ -105,13 +203,113 @@ class LocalSourceTransport implements FeatureTransport {
     if (before['transcriptionAllowed'] != true) {
       throw const WorkerFailure('protected_media');
     }
-    final bytes = await request(source, 'audio', cancel);
+    final limit = _exportLimit(before);
+    // Wire mode stays 'audio' for compatibility; it means "approved media
+    // bytes". The transcriber keeps only the first audio stream.
+    final bytes = await request(source, 'audio', cancel, limit: limit);
     final after = await metadata(source, cancel);
     if (after['redacted'] == true) throw const WorkerFailure('source_redacted');
-    if (after['transcriptionAllowed'] != true) {
+    if (after['transcriptionAllowed'] != true ||
+        after['mimeType'] != before['mimeType'] ||
+        (after['kind'] ?? 'voice') != (before['kind'] ?? 'voice')) {
       throw const WorkerFailure('protected_media');
     }
     return AudioSource(bytes, before['mimeType'] as String);
+  }
+
+  static final _network = RegExp(r'^[a-z0-9_.-]{1,64}$');
+
+  @override
+  Future<RecentSourcePage?> recent({
+    required int? cursor,
+    DateTime? since,
+    int limit = 100,
+  }) async {
+    if (!verified) throw const WorkerFailure('device_verification_required');
+    if (limit < 1 ||
+        limit > _recentMaxLimit ||
+        (cursor != null && cursor < 0)) {
+      throw ArgumentError('Invalid recent source page');
+    }
+    // A scan is optional work: skip this interval instead of waiting.
+    if (_active != null) return null;
+    final Uint8List bytes;
+    try {
+      bytes = await _exclusive(
+        () => _post(
+          '/recent',
+          {
+            'accountId': accountId,
+            'cursor': cursor,
+            'sinceMs': since?.toUtc().millisecondsSinceEpoch,
+            'limit': limit,
+          },
+          _recentMaxBytes,
+          Cancellation(),
+        ),
+        wait: Duration.zero,
+      );
+    } on WorkerFailure catch (e) {
+      if (e.code == 'local_source_busy') return null;
+      rethrow;
+    }
+    final Object? data;
+    try {
+      data = jsonDecode(utf8.decode(bytes));
+    } on FormatException {
+      throw const WorkerFailure('invalid_recent_response');
+    }
+    if (data is! Map ||
+        data['cursor'] is! int ||
+        (data['cursor'] as int) < (cursor ?? 0) ||
+        data['items'] is! List ||
+        (data['items'] as List).length > limit) {
+      throw const WorkerFailure('invalid_recent_response');
+    }
+    final items = <RecentSourceItem>[];
+    for (final raw in data['items'] as List) {
+      if (raw is! Map) throw const WorkerFailure('invalid_recent_response');
+      final room = raw['roomId'], event = raw['eventId'];
+      final kind = switch (raw['kind']) {
+        'voice' => AutoTranscriptionKind.voice,
+        'round' => AutoTranscriptionKind.round,
+        _ => null,
+      };
+      final duration = raw['durationMs'];
+      final timestamp = raw['timestampMs'];
+      final network = raw['network'];
+      if (room is! String ||
+          !room.startsWith('!') ||
+          !room.endsWith(':beeper.local') ||
+          room.length > 255 ||
+          event is! String ||
+          !event.startsWith(r'$') ||
+          event.length > 255 ||
+          kind == null ||
+          (duration != null &&
+              (duration is! int || duration < 0 || duration > 86400000)) ||
+          (timestamp != null && (timestamp is! int || timestamp <= 0))) {
+        throw const WorkerFailure('invalid_recent_response');
+      }
+      items.add(
+        RecentSourceItem(
+          roomId: room,
+          eventId: event,
+          kind: kind,
+          network: network is String && _network.hasMatch(network)
+              ? network
+              : 'unknown',
+          durationMs: duration as int?,
+          timestamp: timestamp == null
+              ? null
+              : DateTime.fromMillisecondsSinceEpoch(
+                  timestamp as int,
+                  isUtc: true,
+                ),
+        ),
+      );
+    }
+    return RecentSourcePage(data['cursor'] as int, items);
   }
 
   @override

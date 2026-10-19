@@ -72,10 +72,54 @@ abstract class FeatureTransport {
 }
 
 abstract class Transcriber {
+  /// [estimate] runs after the duration is measured and before any provider
+  /// upload. Throwing from it (for example an automatic-job limit) aborts the
+  /// job without a paid request; the plaintext work directory is still removed.
   Future<TranscriptionResult> transcribe(
     AudioSource audio,
     String? language,
     Cancellation cancel,
     void Function(double duration, double cost) estimate,
   );
+}
+
+/// A newly indexed incoming voice/round message reported by a read-only
+/// source scan. Identifiers only: no sender, text, media or file paths.
+class RecentSourceItem {
+  final String roomId;
+  final String eventId;
+  final AutoTranscriptionKind kind;
+
+  /// Source network label when the source can tell; otherwise 'unknown'.
+  final String network;
+  final int? durationMs;
+  final DateTime? timestamp;
+  const RecentSourceItem({
+    required this.roomId,
+    required this.eventId,
+    required this.kind,
+    this.network = 'unknown',
+    this.durationMs,
+    this.timestamp,
+  });
+  @override
+  String toString() => 'RecentSourceItem(${kind.name}, redacted)';
+}
+
+class RecentSourcePage {
+  /// Opaque, monotonic position after the examined rows.
+  final int cursor;
+  final List<RecentSourceItem> items;
+  const RecentSourcePage(this.cursor, this.items);
+}
+
+abstract class RecentSourceScanner {
+  /// A null [cursor] returns the current end position and no items, so the
+  /// first scan never sweeps history. Returns null when the source is busy;
+  /// the caller simply retries on its next interval.
+  Future<RecentSourcePage?> recent({
+    required int? cursor,
+    DateTime? since,
+    int limit = 100,
+  });
 }

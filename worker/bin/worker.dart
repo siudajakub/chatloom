@@ -8,7 +8,9 @@ import 'package:path/path.dart' as path;
 import 'package:personal_core/personal_core.dart';
 import 'package:personal_worker/src/config.dart';
 import 'package:personal_worker/src/engine.dart';
+import 'package:personal_worker/src/heartbeat_schedule.dart';
 import 'package:personal_worker/src/journal.dart';
+import 'package:personal_worker/src/journal_session_rotation.dart';
 import 'package:personal_worker/src/matrix_transport.dart';
 import 'package:personal_worker/src/ports.dart';
 import 'package:personal_worker/src/runtime.dart';
@@ -118,6 +120,10 @@ Future<void> main(List<String> arguments) async {
           temporaryRoot: config.temporaryDirectory,
           requireCodecSandbox: config.requireCodecSandbox,
         ),
+        // Automatic transcription scans only explicitly configured local
+        // sources, and only with the private operator switch (default off).
+        recentSources: transport is LocalSourceTransport ? transport : null,
+        autoTranscription: config.autoTranscription,
       );
       final devices = config.trustedDeviceIds.toSet()..add(transport.deviceId);
       final journal = WorkerJournal(
@@ -128,15 +134,13 @@ Future<void> main(List<String> arguments) async {
         engine,
       );
       final relayToken = credentials['reminderRelayToken'] as String? ?? '';
-      final reminderDelivery = ReminderHintDelivery(
-        store,
-        config.reminderRelayUrl == null || relayToken.isEmpty
-            ? null
-            : HttpReminderWakeHintSink(
-                url: config.reminderRelayUrl!,
-                token: relayToken,
-              ),
-      );
+      final relay = config.reminderRelayUrl == null || relayToken.isEmpty
+          ? null
+          : HttpReminderWakeHintSink(
+              url: config.reminderRelayUrl!,
+              token: relayToken,
+            );
+      final reminderDelivery = ReminderHintDelivery(store, relay);
       try {
         await journal.start();
         if (arguments[0] == 'check') {
@@ -153,51 +157,71 @@ Future<void> main(List<String> arguments) async {
             signal.watch().listen((_) {
               stopping = true;
               engine.cancelAll();
+              if (transport is LocalSourceTransport) transport.close();
+              relay?.close();
+              client.stopNetwork();
             }),
           );
         }
-        var heartbeatAt = DateTime.fromMillisecondsSinceEpoch(0);
+        final heartbeats = HeartbeatSchedule();
+        // A fresh journal session at start and daily, so app devices added
+        // since can trust worker results soon (journal_session_rotation).
+        final sessionRotation = JournalSessionRotation(
+          SdkOutboundSession(client, config.journalRoomId),
+        );
         try {
           while (!stopping) {
             try {
               await journal.reconcile();
+              if (stopping) break;
               await engine.auditTranscriptSources();
+              if (stopping) break;
+              await engine.autoScan();
+              if (stopping) break;
               await engine.tick();
-              if (DateTime.now().difference(heartbeatAt) >
-                  const Duration(minutes: 1)) {
-                final at = DateTime.now().toUtc();
+              if (stopping) break;
+              final at = DateTime.now().toUtc();
+              final heartbeatPayload = <String, dynamic>{
+                'healthy': true,
+                'verified': transport.verified,
+                if (config.requireCodecSandbox)
+                  'transcription': 'blocked_codec_sandbox',
+                'autoTranscription': engine.autoScanActive ? 'scan' : 'off',
+                'reminderPush': reminderDelivery.configured
+                    ? 'configured'
+                    : 'not_configured',
+                'pendingReminderHints': store.reminderHints.length,
+                'pending': store
+                    .jobs()
+                    .where(
+                      (j) => !{
+                        'done',
+                        'cancelled',
+                        'failed',
+                      }.contains(j['state']),
+                    )
+                    .length,
+              };
+              if (heartbeats.due(at, heartbeatPayload)) {
                 final heartbeat = PersonalOperation(
                   opId: stableId('heartbeat', at.toIso8601String()),
                   kind: 'worker.heartbeat',
                   entityId: 'worker',
                   createdAt: at,
-                  payload: {
-                    'healthy': true,
-                    'verified': transport.verified,
-                    if (config.requireCodecSandbox)
-                      'transcription': 'blocked_codec_sandbox',
-                    'reminderPush': reminderDelivery.configured
-                        ? 'configured'
-                        : 'not_configured',
-                    'pendingReminderHints': store.reminderHints.length,
-                    'pending': store
-                        .jobs()
-                        .where(
-                          (j) => !{
-                            'done',
-                            'cancelled',
-                            'failed',
-                          }.contains(j['state']),
-                        )
-                        .length,
-                  },
+                  payload: heartbeatPayload,
                 );
                 store.enqueue(heartbeat.opId, heartbeat.toJson());
-                heartbeatAt = at;
+                heartbeats.sent(at, heartbeatPayload);
+              }
+              final rotated = await sessionRotation.rotateIfDue();
+              if (rotated != null) {
+                stderr.writeln('Journal session rotated: ${rotated.name}');
               }
               await journal.flush();
+              if (stopping) break;
               await reminderDelivery.flush();
             } on WorkerFailure catch (e) {
+              if (stopping) break;
               if (e.code == 'journal_membership_changed' ||
                   e.code == 'journal_marker_missing' ||
                   e.code == 'journal_unavailable') {
@@ -205,11 +229,14 @@ Future<void> main(List<String> arguments) async {
               }
               stderr.writeln('Worker cycle deferred: ${e.code}');
             } catch (_) {
+              if (stopping) break;
               stderr.writeln(
                 'Worker cycle deferred: connection_or_storage_error',
               );
             }
-            await Future<void>.delayed(const Duration(seconds: 2));
+            if (!stopping) {
+              await Future<void>.delayed(const Duration(seconds: 2));
+            }
           }
         } finally {
           await engine.shutdown();
@@ -218,6 +245,8 @@ Future<void> main(List<String> arguments) async {
           }
         }
       } finally {
+        if (transport is LocalSourceTransport) transport.close();
+        relay?.close();
         journal.dispose();
         store.close();
       }

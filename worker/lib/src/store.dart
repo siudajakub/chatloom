@@ -86,6 +86,15 @@ class WorkerStore {
     };
   }
 
+  /// Current (not deleted) metadata values whose id starts with [prefix].
+  Map<String, Object?> metadataWithPrefix(String prefix) => {
+    for (final row in db.select(
+      'SELECT id, body FROM metadata WHERE deleted=0 AND substr(id,1,?)=?',
+      [prefix.length, prefix],
+    ))
+      row['id'] as String: jsonDecode(row['body'] as String),
+  };
+
   void saveMetadata(
     String id,
     int revision,

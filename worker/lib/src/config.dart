@@ -17,6 +17,10 @@ class WorkerConfig {
   final bool requireCodecSandbox;
   final bool allowConversationSends;
   final String? localSourceSocket;
+
+  /// Operator opt-in for worker-side automatic transcription. Only effective
+  /// together with [localSourceSocket] and the synced user policy.
+  final bool autoTranscription;
   WorkerConfig({
     required this.stateDirectory,
     required this.temporaryDirectory,
@@ -28,6 +32,7 @@ class WorkerConfig {
     this.requireCodecSandbox = false,
     this.allowConversationSends = true,
     this.localSourceSocket,
+    this.autoTranscription = false,
   });
   factory WorkerConfig.read(String filename) {
     final value =
@@ -61,6 +66,7 @@ class WorkerConfig {
       requireCodecSandbox: value['requireCodecSandbox'] as bool? ?? false,
       allowConversationSends: value['allowConversationSends'] as bool? ?? true,
       localSourceSocket: sourceSocket,
+      autoTranscription: value['autoTranscription'] as bool? ?? false,
       journalRoomId: value['journalRoomId'] as String? ?? '',
       trustedDeviceIds: (value['trustedDeviceIds'] as List? ?? [])
           .cast<String>(),

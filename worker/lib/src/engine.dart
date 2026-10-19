@@ -10,22 +10,40 @@ String stableId(String namespace, String id) =>
     '$namespace-${sha256.convert(utf8.encode(id))}';
 
 class WorkerEngine {
+  static const autoScanInterval = Duration(seconds: 10);
+  static const autoScanPageLimit = 100;
+  static const autoScanCheckpoint = 'auto-scan';
+  static const autoBudgetWindow = Duration(hours: 24);
   final WorkerStore store;
   final FeatureTransport transport;
   final Transcriber transcriber;
   final DateTime Function() clock;
+
+  /// Read-only scan of newly indexed local voice/round messages.
+  final RecentSourceScanner? recentSources;
+
+  /// Private operator switch (`autoTranscription` in the worker config).
+  /// Off by default: the synced user policy alone never starts a scan.
+  final bool autoTranscription;
   final Map<String, Cancellation> _cancellations = {};
   bool _running = false;
   bool _transcriptBusy = false;
   bool _sourceAuditBusy = false;
   DateTime? _sourceAuditAt;
+  bool _autoScanBusy = false;
+  DateTime? _autoScanAt;
   Future<void>? _activeTranscript;
   WorkerEngine(
     this.store,
     this.transport,
     this.transcriber, {
     DateTime Function()? clock,
+    this.recentSources,
+    this.autoTranscription = false,
   }) : clock = clock ?? DateTime.now;
+
+  /// True when this worker creates automatic jobs itself.
+  bool get autoScanActive => autoTranscription && recentSources != null;
 
   void recover() {
     store.transaction(() {
@@ -38,6 +56,13 @@ class WorkerEngine {
         }
         store.saveJob(job);
         _result(job, 'recovery');
+      }
+      // Scanning is off for this run: forget the position, so switching it
+      // back on later starts at the end of the index instead of sweeping
+      // up what arrived meanwhile (the next scan stores the new end).
+      if (!autoScanActive &&
+          (store.checkpoint(autoScanCheckpoint)?.isNotEmpty ?? false)) {
+        store.setCheckpoint(autoScanCheckpoint, '');
       }
     });
   }
@@ -110,18 +135,31 @@ class WorkerEngine {
         );
         _validateConversation(ref);
         final due = DateTime.parse(op.payload['dueAt'] as String).toUtc();
-        if (op.payload['id'] != op.entityId) {
+        final untilReply = op.payload['untilReply'];
+        final anchor = op.payload['anchorEventId'];
+        // Only the documented fields are stored and echoed in results;
+        // anything else is dropped. The anchor is an opaque client hint for
+        // the notification; the worker never fetches or resolves it.
+        if (op.payload['id'] != op.entityId ||
+            (untilReply != null && untilReply is! bool) ||
+            (anchor != null &&
+                (anchor is! String ||
+                    !anchor.startsWith(r'$') ||
+                    anchor.length > 255))) {
           throw const WorkerFailure('invalid_reminder');
         }
-        final body = Map<String, dynamic>.from(op.payload)
-          ..addAll({
-            'kind': 'reminder',
-            'revision': 1,
-            'state': 'queued',
-            'acceptedOpId': op.opId,
-            'dueAt': due.toIso8601String(),
-            'createdAt': op.createdAt.toUtc().toIso8601String(),
-          });
+        final body = <String, dynamic>{
+          'id': op.entityId,
+          'conversation': ref.toJson(),
+          'untilReply': ?untilReply,
+          'anchorEventId': ?anchor,
+          'kind': 'reminder',
+          'revision': 1,
+          'state': 'queued',
+          'acceptedOpId': op.opId,
+          'dueAt': due.toIso8601String(),
+          'createdAt': op.createdAt.toUtc().toIso8601String(),
+        };
         store.saveJob(body);
         _result(body, op.opId);
         return;
@@ -155,10 +193,20 @@ class WorkerEngine {
           _reject(op, previous, 'already_exists');
           return;
         }
+        // Only automatic detection or an offered language reaches OpenAI.
+        if (!validTranscriptionLanguage(op.payload['language'])) {
+          throw const WorkerFailure('invalid_language');
+        }
         final job = TranscriptionJob.fromJson(op.payload);
         _validateConversation(job.source.conversation);
         if (job.id != op.entityId || !job.source.eventId.startsWith(r'$')) {
           throw const WorkerFailure('invalid_source');
+        }
+        // Automatic work needs the operator switch as well as the synced
+        // policy, also when a client asks on the policy's behalf.
+        if (job.automatic && !autoTranscription) {
+          _reject(op, previous, 'auto_disabled');
+          return;
         }
         final body =
             Map<String, dynamic>.from(
@@ -167,11 +215,15 @@ class WorkerEngine {
                 source: job.source,
                 state: JobState.queued,
                 language: job.language,
+                // A client may request on the policy's behalf (catch-up for
+                // a message the worker cannot scan). Auto limits then apply.
+                origin: job.origin,
               ).toJson(),
             )..addAll({
               'kind': 'transcript',
               'revision': revision + 1,
               'acceptedOpId': op.opId,
+              if (job.automatic) 'createdAt': clock().toUtc().toIso8601String(),
             });
         store.saveJob(body);
         _result(body, op.opId);
@@ -401,15 +453,23 @@ class WorkerEngine {
         }
       }
       if (!_transcriptBusy) {
-        final candidates = store.jobs().where(
-          (j) =>
-              j['kind'] == 'transcript' &&
-              {'queued', 'waitingKeys'}.contains(j['state']),
-        );
+        final candidates = store
+            .jobs()
+            .where(
+              (j) =>
+                  j['kind'] == 'transcript' &&
+                  {'queued', 'waitingKeys'}.contains(j['state']),
+            )
+            .toList();
         if (candidates.isNotEmpty) {
+          // Explicit requests never wait behind automatic background work.
+          final next = candidates.firstWhere(
+            (j) => j['origin'] != TranscriptionOrigin.auto.name,
+            orElse: () => candidates.first,
+          );
           _transcriptBusy = true;
           _activeTranscript = _transcript(
-            candidates.first,
+            next,
           ).whenComplete(() => _transcriptBusy = false);
           unawaited(_activeTranscript);
         }
@@ -572,6 +632,14 @@ class WorkerEngine {
   Future<void> _transcript(Map<String, dynamic> job) async {
     final id = job['id'] as String;
     final requestId = job['acceptedOpId'];
+    final automatic = job['origin'] == TranscriptionOrigin.auto.name;
+    // The user (policy) or the operator (switch, after a restart) may have
+    // turned automatic transcription off while this job waited. Nothing has
+    // been downloaded or paid for yet.
+    if (automatic && (!autoTranscription || !autoPolicy().auto)) {
+      _setState(job, 'cancelled', 'auto_disabled');
+      return;
+    }
     // A cancelled request may be replaced by an explicitly requested retry
     // while this attempt is still awaiting transport/provider cleanup.
     Map<String, dynamic>? currentAttempt() {
@@ -613,6 +681,26 @@ class WorkerEngine {
         (duration, cost) {
           final current = currentAttempt();
           if (current == null || cancel.cancelled) return;
+          if (automatic) {
+            // Measured locally, before any upload: limits throw here so
+            // nothing reaches the provider and nothing is charged.
+            final policy = autoPolicy();
+            if (!autoTranscription || !policy.auto) {
+              throw const WorkerFailure('auto_disabled');
+            }
+            if (duration > policy.maxSeconds) {
+              throw const WorkerFailure('auto_skipped_duration');
+            }
+            if (autoSpent(excluding: id) + cost > policy.dailyBudgetUsd) {
+              throw const WorkerFailure('auto_skipped_budget');
+            }
+            // Keep the estimate durable for budget accounting, but skip the
+            // separate journal publication; the final result carries it.
+            current['durationSeconds'] = duration;
+            current['estimatedCostUsd'] = cost;
+            store.saveJob(current);
+            return;
+          }
           current['durationSeconds'] = duration;
           current['estimatedCostUsd'] = cost;
           _setState(current, 'processing', null);
@@ -653,7 +741,7 @@ class WorkerEngine {
             ? 'unknown'
             : e.code == 'waiting_keys'
             ? 'waitingKeys'
-            : e.code == 'cancelled'
+            : e.code == 'cancelled' || e.code.startsWith('auto_')
             ? 'cancelled'
             : 'failed',
         e.code,
@@ -666,6 +754,185 @@ class WorkerEngine {
     } finally {
       if (identical(_cancellations[id], cancel)) _cancellations.remove(id);
     }
+  }
+
+  /// Current synced policy. Absent or deleted = defaults (automatic on);
+  /// unreadable = disabled.
+  TranscriptionPolicy autoPolicy() {
+    final stored = store.metadata(transcriptionPolicyEntity);
+    if (stored == null || stored['deleted'] == true) {
+      return TranscriptionPolicy.defaults;
+    }
+    return TranscriptionPolicy.fromValue(stored['value']);
+  }
+
+  /// Estimated cost of automatic jobs created within the rolling window,
+  /// including uncertain paid attempts.
+  double autoSpent({String? excluding}) {
+    final from = clock().subtract(autoBudgetWindow);
+    var total = 0.0;
+    for (final job in store.jobs()) {
+      if (job['kind'] != 'transcript' ||
+          job['origin'] != TranscriptionOrigin.auto.name ||
+          job['id'] == excluding) {
+        continue;
+      }
+      final created = DateTime.tryParse(job['createdAt'] as String? ?? '');
+      if (created == null || created.isBefore(from)) continue;
+      final pending = job['pendingResult'];
+      final cost =
+          job['estimatedCostUsd'] ??
+          (pending is Map ? pending['estimatedCostUsd'] : null);
+      if (cost is num && cost.isFinite && cost > 0) total += cost;
+    }
+    return total;
+  }
+
+  Map<String, dynamic>? _metadataValue(String id) {
+    final stored = store.metadata(id);
+    final value = stored == null || stored['deleted'] == true
+        ? null
+        : stored['value'];
+    return value is Map ? Map<String, dynamic>.from(value) : null;
+  }
+
+  /// Creates automatic jobs for newly indexed incoming voice/round messages.
+  /// Called from the daemon loop; a no-op unless the operator switch is on
+  /// and a local source is configured. The first scan (or the first after
+  /// the policy was off) only records the current position: no history.
+  Future<int> autoScan({bool force = false}) async {
+    final scanner = recentSources;
+    if (!autoTranscription || scanner == null || _autoScanBusy) return 0;
+    final now = clock();
+    if (!force &&
+        _autoScanAt != null &&
+        now.difference(_autoScanAt!) < autoScanInterval) {
+      return 0;
+    }
+    _autoScanBusy = true;
+    _autoScanAt = now;
+    try {
+      final policy = autoPolicy();
+      final stored = store.checkpoint(autoScanCheckpoint);
+      final cursor = stored == null || stored.isEmpty
+          ? null
+          : int.tryParse(stored);
+      if (!policy.auto) {
+        if (stored != null && stored.isNotEmpty) {
+          store.setCheckpoint(autoScanCheckpoint, '');
+        }
+        return 0;
+      }
+      final windowStart = now.subtract(autoTranscriptionMaxAge);
+      final enabledAt = policy.enabledAt;
+      final RecentSourcePage? page;
+      try {
+        page = await scanner.recent(
+          cursor: cursor,
+          since: enabledAt != null && enabledAt.isAfter(windowStart)
+              ? enabledAt
+              : windowStart,
+          limit: autoScanPageLimit,
+        );
+      } catch (_) {
+        // Source unavailable or malformed: keep the cursor, retry later, and
+        // never let an optional scan defer journal flush or paid jobs.
+        return 0;
+      }
+      if (page == null) return 0;
+      final scanned = page;
+      // The journal may have changed the policy while the scan was running.
+      final current = autoPolicy();
+      if (!current.auto) return 0;
+      var created = 0;
+      store.transaction(() {
+        final groups = _personGroupsByRoom();
+        final spent = autoSpent();
+        for (final item in scanned.items) {
+          final source = SourceEventRef(
+            conversation: ConversationRef(
+              accountId: transport.accountId,
+              roomId: item.roomId,
+              network: item.network,
+            ),
+            eventId: item.eventId,
+          );
+          final id = transcriptEntityId(source);
+          // Any existing job wins: manual, earlier automatic or cancelled.
+          if (store.job(id) != null) continue;
+          final group = groups[item.roomId];
+          final block = autoTranscriptionBlock(
+            current,
+            AutoTranscriptionCandidate(
+              kind: item.kind,
+              network: item.network,
+              roomId: item.roomId,
+              outgoing: false,
+              timestamp: item.timestamp,
+              durationMs: item.durationMs,
+              chatMetadata: _metadataValue('org:${item.roomId}'),
+              personMetadata: group == null
+                  ? null
+                  : _metadataValue('org:person:$group'),
+              networkMetadata: _metadataValue('network-policy:${item.network}'),
+            ),
+            now: now,
+          );
+          var skipped = switch (block) {
+            null => null,
+            'duration_limit' => 'auto_skipped_duration',
+            'budget' => 'auto_skipped_budget',
+            _ => '',
+          };
+          if (skipped == '') continue;
+          if (skipped == null && spent >= current.dailyBudgetUsd) {
+            skipped = 'auto_skipped_budget';
+          }
+          final body =
+              Map<String, dynamic>.from(
+                TranscriptionJob(
+                  id: id,
+                  source: source,
+                  state: skipped == null ? JobState.queued : JobState.cancelled,
+                  language: current.defaultLanguage,
+                  errorCode: skipped,
+                  origin: TranscriptionOrigin.auto,
+                ).toJson(),
+              )..addAll({
+                'kind': 'transcript',
+                'revision': 1,
+                'acceptedOpId': stableId('auto', id),
+                'createdAt': now.toUtc().toIso8601String(),
+              });
+          store.saveJob(body);
+          // Published like any job so every device shows the state; a
+          // skipped job explains why no transcript appeared.
+          _result(body, 'auto');
+          created++;
+        }
+        store.setCheckpoint(autoScanCheckpoint, '${scanned.cursor}');
+      });
+      return created;
+    } finally {
+      _autoScanBusy = false;
+    }
+  }
+
+  /// Room → merged person group, from synced `person:<id>` metadata.
+  Map<String, String> _personGroupsByRoom() {
+    final result = <String, String>{};
+    for (final entry in store.metadataWithPrefix('person:').entries) {
+      final value = entry.value;
+      final members = value is Map ? value['members'] : null;
+      if (members is! List) continue;
+      for (final member in members) {
+        final room = member is Map ? member['roomId'] : null;
+        if (room is String) {
+          result[room] = entry.key.substring('person:'.length);
+        }
+      }
+    }
+    return result;
   }
 
   void cancelAll() {

@@ -7,6 +7,7 @@ import 'package:personal_core/personal_core.dart';
 import 'package:personal_worker/src/config.dart';
 import 'package:personal_worker/src/engine.dart';
 import 'package:personal_worker/src/journal.dart';
+import 'package:personal_worker/src/journal_trust.dart';
 import 'package:personal_worker/src/matrix_transport.dart';
 import 'package:personal_worker/src/ports.dart';
 import 'package:personal_worker/src/runtime.dart';
@@ -15,6 +16,7 @@ import 'package:personal_worker/src/transcriber.dart';
 import 'package:personal_worker/src/admin_guard.dart';
 import 'package:personal_worker/src/local_sources.dart';
 import 'package:personal_worker/src/journal_ready.dart';
+import 'package:personal_worker/src/transcript_publication.dart';
 
 final requestGuard = JournalAdminHttpClient();
 
@@ -78,17 +80,10 @@ Future<Event> authenticatedReadBack(
   final event = await client.encryption?.decryptRoomEvent(
     Event.fromMatrixEvent(raw, room),
   );
-  final key = raw.content['sender_key'];
+  // Proven by the megolm session that decrypted it, not the envelope key.
   final authenticated =
-      client.userDeviceKeys[client.userID]?.deviceKeys.values.any(
-        (d) =>
-            d.verified &&
-            !d.blocked &&
-            pins.contains(d.deviceId) &&
-            d.curve25519Key == key,
-      ) ??
-      false;
-  if (!authenticated || event?.type != personalEventType || event!.redacted) {
+      event != null && await WorkerJournalTrust.verify(client, event, pins);
+  if (!authenticated || event.type != personalEventType || event.redacted) {
     throw const WorkerFailure('journal_authenticated_decryption_unproven');
   }
   return event;
@@ -348,23 +343,30 @@ Future<void> main(List<String> args) async {
               (job['text'] as String).trim().isEmpty) {
             throw const WorkerFailure('transcript_not_done');
           }
-          final rows = store.db.select(
-            "SELECT event_id FROM transcript_publications WHERE entity_id=? AND text_bearing=1 AND event_id!='' ORDER BY rowid DESC LIMIT 1",
-            [id],
-          );
-          if (rows.isEmpty) {
+          final publishedEvent = doneTranscriptEvent(store, job);
+          if (publishedEvent == null) {
             throw const WorkerFailure('transcript_publication_unproven');
           }
           final event = await authenticatedReadBack(
             client,
             room,
-            rows.single['event_id'] as String,
+            publishedEvent,
             pins,
           );
           final payload = event.content['payload'] as Map?;
           if (event.content['entityId'] != id ||
+              event.content['kind'] != 'transcript.result' ||
               payload?['state'] != 'done' ||
+              payload?['revision'] != job['revision'] ||
               payload?['text'] != job['text']) {
+            stderr.writeln(
+              jsonEncode({
+                'entityMatches': event.content['entityId'] == id,
+                'doneStateMatches': payload?['state'] == 'done',
+                'revisionMatches': payload?['revision'] == job['revision'],
+                'textMatches': payload?['text'] == job['text'],
+              }),
+            );
             throw const WorkerFailure('transcript_readback_mismatch');
           }
           results.add({

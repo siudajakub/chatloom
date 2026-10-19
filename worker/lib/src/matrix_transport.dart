@@ -100,6 +100,13 @@ class MatrixFeatureTransport implements FeatureTransport {
     }
     final policy = RoundMediaPolicy.fromContent(event.content);
     if (!policy.canTranscribe) return 'protected_media';
+    // The chat's disappearing-message setting (mautrix bridgev2 room state);
+    // fail closed on anything but an explicit "off".
+    if (disappearingTimerLimits(
+      event.room.getState(beeperDisappearingTimerKey)?.content,
+    )) {
+      return 'protected_media';
+    }
     if (round != null &&
         round.mimeType.isNotEmpty &&
         round.mimeType != 'video/mp4') {
@@ -169,13 +176,82 @@ class MatrixFeatureTransport implements FeatureTransport {
     final selected = await room(conversation);
     final timeline = await selected.getTimeline();
     try {
+      final identity = ownRemoteIdentity(client);
       return await receivedReplySince(
         SdkReminderReplyHistory(timeline),
         client.userID!,
         since,
+        // Weak (DM-structure) evidence is scoped to this room.
+        isOwnSender: (senderId) =>
+            identity.isOwn(senderId, roomId: selected.id),
       );
     } finally {
       timeline.cancelSubscriptions();
     }
   }
+}
+
+/// Owner identity incl. own bridge ghosts, from already-loaded room state
+/// (same snapshot rules as the app's `lib/personal/own_sender.dart`): only
+/// joined rooms, each declaration with its sender and the declared bot's
+/// membership, so personal_core ignores declarations not sent by a joined
+/// bridge bot.
+OwnRemoteIdentity ownRemoteIdentity(Client client) {
+  final rooms = <BridgeRoomSnapshot>[];
+  for (final room in client.rooms) {
+    if (room.isSpace || room.membership != Membership.join) continue;
+    bool joined(String userId) =>
+        room.getState(EventTypes.RoomMember, userId)?.content['membership'] ==
+        'join';
+    final bridges = <BridgeInfoSnapshot>[
+      for (final type in ownIdentityBridgeStateTypes)
+        for (final state in room.states[type]?.values ?? <StrippedStateEvent>[])
+          ?BridgeInfoSnapshot.fromContent(
+            state.content,
+            senderId: state.senderId,
+            isJoined: joined,
+          ),
+    ];
+    if (bridges.isEmpty) continue;
+    final shape = BridgeRoomSnapshot(
+      roomId: room.id,
+      bridges: bridges,
+      ownerJoined: true,
+      directPartnerId: room.directChatMatrixID,
+    );
+    final memberStates = room.states[EventTypes.RoomMember];
+    if (!shape.dmShaped || memberStates == null || memberStates.length > 12) {
+      rooms.add(shape);
+      continue;
+    }
+    rooms.add(
+      BridgeRoomSnapshot(
+        roomId: room.id,
+        bridges: bridges,
+        ownerJoined: true,
+        directPartnerId: shape.directPartnerId,
+        joinedMembers: {
+          for (final entry in memberStates.entries)
+            if (entry.value.content['membership'] == 'join')
+              entry.key: entry.value.content['displayname'] is String
+                  ? entry.value.content['displayname'] as String
+                  : null,
+        },
+      ),
+    );
+  }
+  return OwnRemoteIdentity.resolve(
+    accountUserId: client.userID,
+    rooms: rooms,
+    displaynameOf: (id) {
+      for (final room in client.rooms) {
+        if (room.membership != Membership.join) continue;
+        final content = room.getState(EventTypes.RoomMember, id)?.content;
+        if (content?['membership'] != 'join') continue;
+        final name = content?['displayname'];
+        if (name is String && name.trim().isNotEmpty) return name;
+      }
+      return null;
+    },
+  );
 }
