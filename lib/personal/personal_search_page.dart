@@ -4,6 +4,8 @@ import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/merged_chat_page.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/ui/notion_settings_load.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
@@ -34,11 +36,14 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
   bool bookmarksOnly = false, busy = false, searched = false;
   int generation = 0, pages = 0;
   String? problem;
+
+  /// Last problem shown, kept while its row collapses.
+  String? _shownProblem;
   PersonalClient get personal => widget.personal;
   @override
   void initState() {
     super.initState();
-    unawaited(personal.load());
+    PersonalPageLoad.request(context, personal);
   }
 
   @override
@@ -292,6 +297,19 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
         (sum, t) => sum + t.events.length,
       );
       final more = timelines.values.any((t) => t.canRequestHistory);
+      final emptyTitle = searched && loadedScope == selectedScope
+          ? 'No matches in loaded history.'
+          : 'Select Search to search the loaded history.';
+      // Typing filters in place; a new search or filter swaps the list.
+      final resultsKey = (
+        loadedScope,
+        network,
+        outgoing,
+        mediaType,
+        bookmarksOnly,
+        afterDay,
+        beforeDay,
+      );
       return Scaffold(
         appBar: AppBar(title: const Text('Search conversations')),
         body: Align(
@@ -393,9 +411,9 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
                                 child: Text('All types'),
                               ),
                               for (final entry in const {
-                                'text': 'Tekst',
+                                'text': 'Text',
                                 'image': 'Photos',
-                                'video': 'Wideo',
+                                'video': 'Videos',
                                 'audio': 'Audio',
                                 'file': 'Files',
                               }.entries)
@@ -443,16 +461,25 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
                     ],
                   ),
                 ),
-                if (busy) const LinearProgressIndicator(),
-                if (_query() == null)
-                  const ListTile(
+                // Quick searches never flash a bar; the slot is reserved.
+                if (busy)
+                  const NotionDelayedReveal(
+                    placeholder: SizedBox(height: 4),
+                    child: LinearProgressIndicator(),
+                  ),
+                NotionSizeReveal(
+                  visible: _query() == null,
+                  child: const ListTile(
                     title: Text('The start date must be before the end date.'),
                   ),
-                if (problem != null)
-                  ListTile(
+                ),
+                NotionSizeReveal(
+                  visible: problem != null,
+                  child: ListTile(
                     leading: const Icon(Icons.info_outline),
-                    title: Text(problem!),
+                    title: Text(_shownProblem = problem ?? _shownProblem ?? ''),
                   ),
+                ),
                 ListTile(
                   title: Text(
                     loadedScope == selectedScope && loadedScope != null
@@ -463,59 +490,72 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
                     'Results cover loaded history only. No results does not mean the source network has no matching messages.',
                   ),
                 ),
+                // Results fade through when the query or filters change; the
+                // first screenful of a new result set rises in once.
                 Expanded(
-                  child: results.isEmpty
-                      ? Center(
-                          child: Text(
-                            searched && loadedScope == selectedScope
-                                ? 'No matches in loaded history.'
-                                : 'Select Search to search the loaded history.',
+                  child: NotionFadeThrough(
+                    alignment: Alignment.topCenter,
+                    child: results.isEmpty
+                        ? NotionEmptyState(
+                            key: ValueKey(('empty', emptyTitle)),
+                            icon: searched && loadedScope == selectedScope
+                                ? Icons.search_off
+                                : Icons.manage_search,
+                            title: emptyTitle,
+                          )
+                        : NotionEntranceScope(
+                            key: ValueKey(('results', resultsKey)),
+                            child: ListView.builder(
+                              itemCount: results.length,
+                              itemBuilder: (context, index) {
+                                final original = results[index];
+                                final display = original.getDisplayEvent(
+                                  timelines[original.room.id]!,
+                                );
+                                final ref = personal.source(original);
+                                final transcript = personal.transcripts.values
+                                    .where(
+                                      (j) =>
+                                          j.source.key == ref.key &&
+                                          j.state == JobState.done,
+                                    )
+                                    .firstOrNull
+                                    ?.text;
+                                return NotionEntrance(
+                                  playKey: original.eventId,
+                                  rise: NotionMotion.riseList,
+                                  child: ListTile(
+                                    title: Text(
+                                      RoundVideoDescriptor.fromContent(
+                                                display.content,
+                                                redacted: display.redacted,
+                                              ) !=
+                                              null
+                                          ? transcript == null
+                                                ? 'Video message'
+                                                : 'Video message · $transcript'
+                                          : display.text.isEmpty
+                                          ? transcript ?? 'Attachment'
+                                          : display.text,
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text(
+                                      '${InboxProjection(personal).displayName(original.room)} · ${PersonalClient.networkOf(original.room)} · ${MaterialLocalizations.of(context).formatShortDate(original.originServerTs.toLocal())}',
+                                    ),
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute<void>(
+                                        builder: (_) =>
+                                            SourceChatPage(source: ref),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
                           ),
-                        )
-                      : ListView.builder(
-                          itemCount: results.length,
-                          itemBuilder: (context, index) {
-                            final original = results[index];
-                            final display = original.getDisplayEvent(
-                              timelines[original.room.id]!,
-                            );
-                            final ref = personal.source(original);
-                            final transcript = personal.transcripts.values
-                                .where(
-                                  (j) =>
-                                      j.source.key == ref.key &&
-                                      j.state == JobState.done,
-                                )
-                                .firstOrNull
-                                ?.text;
-                            return ListTile(
-                              title: Text(
-                                RoundVideoDescriptor.fromContent(
-                                          display.content,
-                                          redacted: display.redacted,
-                                        ) !=
-                                        null
-                                    ? transcript == null
-                                          ? 'Video message'
-                                          : 'Video message · $transcript'
-                                    : display.text.isEmpty
-                                    ? transcript ?? 'Attachment'
-                                    : display.text,
-                                maxLines: 3,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Text(
-                                '${InboxProjection(personal).displayName(original.room)} · ${PersonalClient.networkOf(original.room)} · ${MaterialLocalizations.of(context).formatShortDate(original.originServerTs.toLocal())}',
-                              ),
-                              onTap: () => Navigator.push(
-                                context,
-                                MaterialPageRoute<void>(
-                                  builder: (_) => SourceChatPage(source: ref),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+                  ),
                 ),
                 if (loadedScope == selectedScope && more)
                   Padding(

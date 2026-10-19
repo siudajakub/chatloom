@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -54,14 +55,19 @@ class SearchFooter extends StatelessWidget {
                 foregroundColor: theme.colorScheme.onSecondaryContainer,
               ),
               onPressed: isLoading ? null : onStartSearch,
-              icon: isLoading
-                  ? SizedBox.square(
-                      dimension: 18,
-                      child: const CircularProgressIndicator.adaptive(
-                        strokeWidth: 2,
+              icon: NotionMorphSwitcher(
+                rotate: false,
+                child: isLoading
+                    ? const SizedBox.square(
+                        key: ValueKey('busy'),
+                        dimension: NotionSize.iconSm,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(
+                        Icons.arrow_downward_outlined,
+                        key: ValueKey('more'),
                       ),
-                    )
-                  : const Icon(Icons.arrow_downward_outlined),
+              ),
               label: Text(L10n.of(context).searchMore),
             ),
           ],

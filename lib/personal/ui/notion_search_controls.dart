@@ -100,12 +100,19 @@ class NotionInboxSearch extends StatelessWidget {
             ),
             TextButton.icon(
               onPressed: searchingPublic ? null : onPublicDiscovery,
-              icon: searchingPublic
-                  ? const SizedBox.square(
-                      dimension: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.public, size: 18),
+              icon: NotionMorphSwitcher(
+                rotate: false,
+                child: searchingPublic
+                    ? const NotionDelayedSpinner(
+                        key: ValueKey('searching'),
+                        size: 16,
+                      )
+                    : const Icon(
+                        Icons.public,
+                        key: ValueKey('public'),
+                        size: 18,
+                      ),
+              ),
               label: const Text('Discover publicly'),
             ),
             ?options,
