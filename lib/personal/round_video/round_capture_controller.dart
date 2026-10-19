@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
+import 'dart:ui' show Rect;
 
 import 'package:flutter/foundation.dart';
 
@@ -22,12 +23,64 @@ enum RoundCaptureGesturePhase { idle, holding, locked, released, canceled }
 
 /// Carries the original composer's pointer across preflight, permission dialogs
 /// and the recorder route. The destination is frozen separately by the caller.
+///
+/// Thresholds follow Telegram Android's record button (ChatActivityEnterView):
+/// slide toward the start edge by [cancelDistance] to cancel, release with
+/// less than [releaseCancelProgress] slide progress left to cancel, swipe up
+/// [lockDistance] to lock (ignored once slid past [lockMinSlideProgress]).
 class RoundCaptureGestureController extends ChangeNotifier {
+  /// A press held this long records; a quicker release is a tap that
+  /// switches between voice and video mode.
+  static const holdDelay = Duration(milliseconds: 150);
+
+  /// Upward travel that locks the recording (hands-free).
+  static const double lockDistance = 57;
+
+  /// Slide-to-cancel travel: 35 % of the layout width, at most 140 dp.
+  static const double maxCancelDistance = 140;
+  static const double cancelWidthFraction = 0.35;
+
+  /// Releasing with less slide progress left than this cancels.
+  static const double releaseCancelProgress = 0.45;
+
+  /// Locking is ignored while the slide progress is below this.
+  static const double lockMinSlideProgress = 0.7;
+
+  static double cancelDistanceFor(double width) {
+    final fraction = width * cancelWidthFraction;
+    return fraction > 0 && fraction < maxCancelDistance
+        ? fraction
+        : maxCancelDistance;
+  }
+
   RoundCaptureGesturePhase phase;
-  RoundCaptureGestureController({bool held = false})
-    : phase = held
-          ? RoundCaptureGesturePhase.holding
-          : RoundCaptureGesturePhase.idle;
+
+  /// Travel toward the start edge that cancels (see [cancelDistanceFor]).
+  final double cancelDistance;
+
+  /// Global rect of the composer button that owns the pointer; the recorder
+  /// draws the held record circle and the lock pill over it.
+  final Rect? anchor;
+  double _dx = 0;
+  double _dy = 0;
+
+  RoundCaptureGestureController({
+    bool held = false,
+    this.cancelDistance = maxCancelDistance,
+    this.anchor,
+  }) : phase = held
+           ? RoundCaptureGesturePhase.holding
+           : RoundCaptureGesturePhase.idle;
+
+  /// Reading-direction offset of the finger (negative toward the start edge).
+  double get dx => _dx;
+  double get dy => _dy;
+
+  /// 1 at rest, 0 at the cancel distance (Telegram's slideToCancelProgress).
+  double get slideProgress => (1 + _dx / cancelDistance).clamp(0.0, 1.0);
+
+  /// 0 at rest, 1 at the lock distance.
+  double get lockProgress => (-_dy / lockDistance).clamp(0.0, 1.0);
 
   void begin() {
     if (phase != RoundCaptureGesturePhase.idle) return;
@@ -35,24 +88,43 @@ class RoundCaptureGestureController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// [dx] is in reading direction: negative moves toward the start edge.
   void move({required double dx, required double dy}) {
     if (phase != RoundCaptureGesturePhase.holding) return;
-    if (dx < -80) {
+    _dx = dx > 0 ? 0 : dx;
+    _dy = dy > 0 ? 0 : dy;
+    if (-dx >= cancelDistance) {
       cancel();
-    } else if (dy < -80) {
+    } else if (-dy >= lockDistance && slideProgress >= lockMinSlideProgress) {
       lock();
+    } else {
+      notifyListeners();
     }
   }
 
+  /// The finger left the screen: send, unless it was slid most of the way to
+  /// cancel.
   void release() {
     if (phase != RoundCaptureGesturePhase.holding) return;
+    if (slideProgress < releaseCancelProgress) {
+      cancel();
+      return;
+    }
     phase = RoundCaptureGesturePhase.released;
     notifyListeners();
+  }
+
+  /// The system took the pointer (call, notification shade): keep the
+  /// recording hands-free unless it was being slid away.
+  void interrupt() {
+    if (phase != RoundCaptureGesturePhase.holding) return;
+    slideProgress >= lockMinSlideProgress ? lock() : cancel();
   }
 
   void lock() {
     if (phase != RoundCaptureGesturePhase.holding) return;
     phase = RoundCaptureGesturePhase.locked;
+    _dx = _dy = 0;
     notifyListeners();
   }
 
@@ -66,6 +138,11 @@ class RoundCaptureGestureController extends ChangeNotifier {
 class RoundCaptureController extends ChangeNotifier {
   /// Android reference rejects video-note clips below 800ms (local UX limit).
   static const minimumDurationMs = 800;
+
+  /// Telegram stops into review half a second before the limit (59.5 s of
+  /// 60 s) and hides pause from one second before it.
+  static const limitMarginMs = 500;
+  static const pauseCutoffMs = 1000;
   static final Set<RoundCaptureController> _open = {};
   final RoundCaptureBackend backend;
   final RoundCaptureProfile profile;
@@ -76,6 +153,14 @@ class RoundCaptureController extends ChangeNotifier {
   String? controlErrorCode;
   bool locked = false;
   bool wasInterrupted = false;
+
+  /// The recording reached the duration limit and stopped into review.
+  bool stoppedAtLimit = false;
+
+  /// Lens facing. Native opens the front camera first; a camera switch flips
+  /// it and native `controls` events carrying `isFrontCamera` correct it.
+  bool frontCamera = true;
+  int _facingRevision = 0;
   final Stopwatch _clock = Stopwatch();
   Timer? _ticker;
   StreamSubscription<RoundCaptureNativeEvent>? _subscription;
@@ -131,6 +216,19 @@ class RoundCaptureController extends ChangeNotifier {
       preview?.canZoom == true;
   bool get canSetTorch =>
       _interactive && !controlsBusy && preview?.torchAvailable == true;
+
+  /// Recording time at which capture stops into review.
+  int get autoStopMs =>
+      profile.maxDurationMs - limitMarginMs > minimumDurationMs
+      ? profile.maxDurationMs - limitMarginMs
+      : profile.maxDurationMs;
+
+  /// Pause is offered while recording, except in the last second.
+  bool get canPause =>
+      !_closed &&
+      !_transitionPending &&
+      state == RoundCaptureState.recording &&
+      duration.inMilliseconds < profile.maxDurationMs - pauseCutoffMs;
 
   Future<void> interrupt() async {
     if (_closed) return;
@@ -190,6 +288,7 @@ class RoundCaptureController extends ChangeNotifier {
         return;
       }
       preview = result;
+      _facingRevision = result.cameraRevision;
       state = RoundCaptureState.ready;
     } catch (error) {
       if (_closed || generation != _generation) return;
@@ -243,8 +342,10 @@ class RoundCaptureController extends ChangeNotifier {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (_closed || state != RoundCaptureState.recording) return;
-      if (_clock.elapsedMilliseconds >= profile.maxDurationMs) {
+      if (_clock.elapsedMilliseconds >= autoStopMs) {
+        // A held release can never send after the limit stopped capture.
         wasInterrupted = true;
+        stoppedAtLimit = true;
         locked = true;
         unawaited(finish());
       }
@@ -412,7 +513,7 @@ class RoundCaptureController extends ChangeNotifier {
         if (!_current(generation) || !_interactive) return;
         final result = await operation();
         if (!_current(generation) || !_interactive) return;
-        _applyPreview(result);
+        _applyPreview(result, switched: kind == 'switch');
       } catch (error) {
         if (_current(generation) && _interactive) _controlFailed(error);
       } finally {
@@ -460,8 +561,12 @@ class RoundCaptureController extends ChangeNotifier {
     return future;
   }
 
-  void _applyPreview(RoundCapturePreview value) {
+  void _applyPreview(RoundCapturePreview value, {bool switched = false}) {
     if (value.cameraRevision < (preview?.cameraRevision ?? 0)) return;
+    if (switched && value.cameraRevision > _facingRevision) {
+      frontCamera = !frontCamera;
+      _facingRevision = value.cameraRevision;
+    }
     preview = value;
   }
 
@@ -497,7 +602,13 @@ class RoundCaptureController extends ChangeNotifier {
     if (event.type == 'controls') {
       if (!_interactive) return;
       try {
-        _applyPreview(RoundCapturePreview.fromNative(event.data));
+        final value = RoundCapturePreview.fromNative(event.data);
+        final front = event.data['isFrontCamera'];
+        if (front is bool && value.cameraRevision >= _facingRevision) {
+          frontCamera = front;
+          _facingRevision = value.cameraRevision;
+        }
+        _applyPreview(value);
       } catch (error) {
         _controlFailed(error);
       }

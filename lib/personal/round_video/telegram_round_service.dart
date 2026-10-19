@@ -4,14 +4,17 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/pages/chat/round_video_recorder.dart';
 import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
 import 'package:fluffychat/personal/capabilities.dart';
+import 'package:fluffychat/personal/journal_trust.dart';
 import 'package:fluffychat/personal/media/immediate_media_outbox.dart';
 import 'package:fluffychat/personal/media/pending_media_store.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/privacy_transport.dart';
 import 'package:fluffychat/personal/storage/personal_store.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
@@ -57,17 +60,32 @@ class TelegramRoundService extends ChangeNotifier
   String _stateKey(Event event) => '${event.room.id}:${event.eventId}';
   Map<String, dynamic>? verifiedMediaStateSnapshot(Event event) =>
       _states[_stateKey(event)];
+
+  /// True once the verified reverse state for [event] was loaded, including a
+  /// known absence (no row). Distinguishes "known null" from "not loaded".
+  bool isMediaStateKnown(Event event) => _states.containsKey(_stateKey(event));
   final _unstaged =
       <String, (RoundSendTarget, RoundEncodingProfile, PreparedRoundMedia)>{};
 
   Future<void> initialize() async {
     if (_closed) throw const ImmediateMediaRejected('sessionClosed');
+    if (_opened) return;
     try {
       await (_opening ??= _open());
+      _opened = !_closed;
     } catch (_) {
       _opening = null;
       rethrow;
     }
+  }
+
+  bool _opened = false;
+
+  /// Fire-and-forget open when a Telegram chat appears, so the first visible
+  /// round does not pay for the SQLCipher open. Failures surface on next use.
+  void initializeEagerly() {
+    if (_closed || _opened) return;
+    unawaited(initialize().catchError((Object _) {}));
   }
 
   Future<void> _open() async {
@@ -284,6 +302,24 @@ class TelegramRoundService extends ChangeNotifier
     }
   }
 
+  /// Precise, content-free reason (`round:<RoundGateCode>`) for a refused gate.
+  static ImmediateMediaRejected _gateRejection(
+    Room room, {
+    required bool silent,
+    bool requireUploadLimit = false,
+  }) {
+    final gate = TelegramRoomBinding.diagnose(
+      room,
+      silent: silent,
+      requireUploadLimit: requireUploadLimit,
+    );
+    return ImmediateMediaRejected(
+      gate.terminal || gate.code == RoundGateCode.uploadLimitUnknown
+          ? 'round:${gate.code.name}'
+          : 'round:unconfirmed',
+    );
+  }
+
   Future<ImmediateMediaResult?> captureAndSend(
     BuildContext context,
     Room room, {
@@ -310,8 +346,7 @@ class TelegramRoundService extends ChangeNotifier
       readUpToEventId:
           readUpToEventId ?? PersonalPrivacy.frozenReadCutoff(room),
     );
-    if (initialBinding == null)
-      throw const ImmediateMediaRejected('trustedRoundBridgeRequired');
+    if (initialBinding == null) throw _gateRejection(room, silent: silent);
     if (capturing) return null;
     if (hasUnstaged(room.id))
       throw const ImmediateMediaRejected('saveExistingDraftFirst');
@@ -331,7 +366,7 @@ class TelegramRoundService extends ChangeNotifier
           !room.encrypted ||
           !client.encryptionEnabled ||
           !client.fileEncryptionEnabled) {
-        throw const ImmediateMediaRejected('trustedRoundBridgeRequired');
+        throw _gateRejection(room, silent: silent, requireUploadLimit: true);
       }
       if (!context.mounted || !stillCurrent()) return null;
       if (gesture != null &&
@@ -365,13 +400,17 @@ class TelegramRoundService extends ChangeNotifier
         gesture: gesture,
         mediaAccess: access,
         targetLabel:
-            'Telegram · ${room.getLocalizedDisplayname()}${silent ? ' · bez powiadomienia' : ''}',
-        profile: RoundCaptureProfile(
+            'Telegram · ${room.getLocalizedDisplayname()}${silent ? ' · silent' : ''}',
+        profile: RoundCaptureProfile.fromBridge(
           maxBytes: maxBytes,
-          side: profile.recommendedSide - profile.recommendedSide % 2,
+          maxSide: profile.maxSide,
+          recommendedSide: profile.recommendedSide,
           maxDurationMs: profile.maxDurationMs,
           videoBitrate: profile.videoBitrate,
           audioBitrate: profile.audioBitrate,
+          highQuality: AppSettings.personalRoundHighQuality.value,
+          stabilize: AppSettings.personalRoundStabilization.value,
+          noiseReduction: AppSettings.personalRoundNoiseReduction.value,
         ),
       );
       if (prepared == null) return null;
@@ -429,12 +468,12 @@ class TelegramRoundService extends ChangeNotifier
     final candidate = TelegramRoomBinding.unverifiedCandidate(room);
     if (candidate == null) return false;
     final identity = candidate.identity;
-    final accepted = await showDialog<bool>(
+    final accepted = await showNotionCustomDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Trust your Telegram bridge'),
         content: Text(
-          'Confirm this is your configured bridge and Telegram login.\n\nBot: ${identity.senderId}\nLogin: ${identity.accountId}\nNamespace: ${identity.stateKey.isEmpty ? '(pusty)' : identity.stateKey}',
+          'Confirm this is your configured bridge and Telegram login.\n\nBot: ${identity.senderId}\nLogin: ${identity.accountId}\nNamespace: ${identity.stateKey.isEmpty ? '(empty)' : identity.stateKey}',
         ),
         actions: [
           TextButton(
@@ -443,7 +482,7 @@ class TelegramRoundService extends ChangeNotifier
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Zaufaj temu mostowi'),
+            child: const Text('Trust this bridge'),
           ),
         ],
       ),
@@ -809,7 +848,9 @@ class TelegramRoundService extends ChangeNotifier
                 onTap: () => Navigator.pop(context, room),
               ),
             if (rooms.isEmpty)
-              const ListTile(title: Text('No destination conversations available.')),
+              const ListTile(
+                title: Text('No destination conversations available.'),
+              ),
           ],
         ),
       ),
@@ -871,12 +912,9 @@ class TelegramRoundService extends ChangeNotifier
         data['expired'] is! bool) {
       return;
     }
-    await client.userDeviceKeysLoading;
-    final senderKey = event.originalSource?.content['sender_key'];
-    if (client.userDeviceKeys[event.senderId]?.deviceKeys.values.any(
-          (device) => device.verified && device.curve25519Key == senderKey,
-        ) !=
-        true) {
+    // A verified bridge device must have encrypted it: checked through the
+    // megolm session that decrypted it, not the envelope sender_key.
+    if (!await MegolmTrustSnapshot.verify(event, userId: event.senderId)) {
       return;
     }
     final source = await event.room.getEventById(sourceId);
@@ -903,14 +941,36 @@ class TelegramRoundService extends ChangeNotifier
   }
 
   Future<Map<String, dynamic>?> mediaState(Event event) async {
-    await initialize();
     final key = _stateKey(event);
+    if (_states.containsKey(key)) return _states[key];
+    await initialize();
     if (_states.containsKey(key)) return _states[key];
     return _states[key] = await _store!.getMediaState(
       client.userID!,
       event.room.id,
       event.eventId,
     );
+  }
+
+  /// Loads reverse media states for many events with one batched query, so
+  /// visible rounds and the prefetcher do not issue one query per row. Does not
+  /// notify: rows read the cached state through [mediaState].
+  Future<void> preloadMediaStates(Room room, Iterable<String> eventIds) async {
+    final missing = {
+      for (final id in eventIds)
+        if (id.startsWith(r'$') && !_states.containsKey('${room.id}:$id')) id,
+    };
+    if (missing.isEmpty) return;
+    await initialize();
+    final found = await _store!.getMediaStates(
+      client.userID!,
+      room.id,
+      missing,
+    );
+    for (final id in missing) {
+      // A newer verified state may have arrived while the query ran.
+      _states.putIfAbsent('${room.id}:$id', () => found[id]);
+    }
   }
 
   static Future<void> closeFor(Client client) async {

@@ -5,6 +5,7 @@ import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/round_video/round_media_loader.dart';
 import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
 import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';
@@ -12,6 +13,8 @@ import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:video_player/video_player.dart';
 
+import '../conversation_motion.dart';
+import 'round_video_stage.dart';
 import 'round_video_view.dart';
 
 /// Ownership transfer, not a second player or a copied plaintext file.
@@ -149,11 +152,32 @@ class RoundMiniPlayerController extends ChangeNotifier
     return session;
   }
 
+  RoundStageActions _stageActions(RoundDetachedPlayback session) =>
+      RoundStageActions(
+        toggle: toggle,
+        seek: seek,
+        setSpeed: setSpeed,
+        stop: () => _stopSession(session),
+        reportPlayed: reportPlayed,
+        canReportPlayed: () {
+          if (!identical(_current, session) || session.reporting) return false;
+          final service = TelegramRoundService.of(session.event.room.client);
+          return session.locallyPlayed &&
+              service.incognito &&
+              service.canExplicitlyReport(session.event);
+        },
+      );
+
   void _bind(RoundDetachedPlayback session) {
     session.handle?.rebind(
       pause: () => _stopSession(session),
       stop: () => _stopSession(session),
     );
+    final video = session.video;
+    // A row recycled while enlarged hands its stage to this owner.
+    if (video != null) {
+      RoundStageController.shared.rebind(video, _stageActions(session));
+    }
     session.video?.addListener(_onProgress);
     session.positionSubscription = session.audio?.positionStream.listen(
       (_) => _onProgress(),
@@ -378,7 +402,7 @@ class RoundMiniPlayerController extends ChangeNotifier
                 ? VideoPlayerController.file(media.lease!.file)
                 : VideoPlayerController.networkUrl(media.dataUri!);
             video.addListener(_onProgress);
-            await video.initialize();
+            await video.initialize().timeout(const Duration(seconds: 20));
             await video.setPlaybackSpeed(session.speed);
           } else {
             final audio = session.audio = AudioPlayer();
@@ -434,20 +458,23 @@ class RoundMiniPlayerController extends ChangeNotifier
     session.request?.cancel();
     session.intent.pause();
     session.handle?.releaseAudible();
-    session.video?.removeListener(_onProgress);
+    final video = session.video, audio = session.audio, media = session.media;
+    // Detach before awaiting: a row remounting meanwhile must not take
+    // ([takeFor]) and render a controller whose native player is going away.
+    session.video = null;
+    session.audio = null;
+    session.media = null;
+    if (video != null) RoundStageController.shared.release(video);
+    video?.removeListener(_onProgress);
     await session.cancelPlaybackSubscriptions();
     try {
-      await session.video?.dispose();
-      await session.audio?.dispose();
+      await video?.dispose();
+      await audio?.dispose();
     } finally {
-      await session.media?.close();
-      session.video = null;
-      session.audio = null;
-      session.media = null;
+      await media?.close();
     }
     session.loading = false;
-    session.error =
-        'Playback failed. Open the message and try again.';
+    session.error = 'Playback failed. Open the message and try again.';
     _notify();
   }
 
@@ -462,6 +489,8 @@ class RoundMiniPlayerController extends ChangeNotifier
     session.disposed = true;
     session.request?.cancel();
     session.intent.pause();
+    final video = session.video;
+    if (video != null) RoundStageController.shared.release(video);
     _unbind(session);
     session.handle?.dispose();
     try {
@@ -498,153 +527,165 @@ class RoundMiniPlayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final control = controller ?? RoundMiniPlayerController.shared;
+    final stage = RoundStageController.shared;
     return ListenableBuilder(
-      listenable: control,
-      builder: (context, _) {
-        final session = control.current;
-        if (session == null) return const SizedBox.shrink();
-        final duration = session.duration;
-        final maxMs = duration.inMilliseconds > 0
-            ? duration.inMilliseconds.toDouble()
-            : 1.0;
-        return SafeArea(
-          top: false,
-          child: Material(
-            color: Theme.of(context).colorScheme.surfaceContainerHigh,
-            elevation: 4,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+      listenable: Listenable.merge([control, stage]),
+      // Grows in when playback detaches from its row and collapses (keeping
+      // its last frame, without input) when it stops or is staged.
+      builder: (context, _) =>
+          ConversationReveal(child: _bar(context, control, stage)),
+    );
+  }
+
+  Widget? _bar(
+    BuildContext context,
+    RoundMiniPlayerController control,
+    RoundStageController stage,
+  ) {
+    final session = control.current;
+    // The enlarged stage already shows this playback.
+    if (session == null || stage.isStaged(session.video)) {
+      return null;
+    }
+    final duration = session.duration;
+    final maxMs = duration.inMilliseconds > 0
+        ? duration.inMilliseconds.toDouble()
+        : 1.0;
+    return SafeArea(
+      top: false,
+      child: Material(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        elevation: 4,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: () => onOpenSource(session.event),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                RoundVideoDescriptor.fromContent(
-                                          session.event.content,
-                                        ) !=
-                                        null
-                                    ? 'Round video'
-                                    : session.loading
-                                    ? 'Loading message…'
-                                    : 'Voice message',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                '${RoundVideoView.formatTime(session.position)} / ${RoundVideoView.formatTime(duration)}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => onOpenSource(session.event),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            RoundVideoDescriptor.fromContent(
+                                      session.event.content,
+                                    ) !=
+                                    null
+                                ? 'Round video'
+                                : session.loading
+                                ? 'Loading message…'
+                                : 'Voice message',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      IconButton(
-                        tooltip: session.playing ? 'Pause' : 'Play',
-                        onPressed:
-                            session.loading ||
-                                (session.video == null && session.audio == null)
-                            ? null
-                            : control.toggle,
-                        icon: Icon(
-                          session.playing ? Icons.pause : Icons.play_arrow,
-                        ),
-                      ),
-                      PopupMenuButton<double>(
-                        tooltip: 'Playback speed',
-                        initialValue: session.speed,
-                        onSelected: control.setSpeed,
-                        itemBuilder: (_) => [
-                          for (final speed in const [
-                            .2,
-                            .5,
-                            1.0,
-                            1.2,
-                            1.5,
-                            1.7,
-                            2.0,
-                            2.5,
-                            3.0,
-                          ])
-                            PopupMenuItem(value: speed, child: Text('$speed×')),
+                          Text(
+                            '${RoundVideoView.formatTime(session.position)} / ${RoundVideoView.formatTime(duration)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ],
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(
-                              minWidth: 24,
-                              minHeight: 24,
-                            ),
-                            child: Center(
-                              widthFactor: 1,
-                              heightFactor: 1,
-                              child: Text('${session.speed}×'),
-                            ),
-                          ),
-                        ),
                       ),
-                      IconButton(
-                        tooltip: 'Stop playback',
-                        onPressed: control.stop,
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
+                    ),
                   ),
-                  if (session.loading)
-                    const LinearProgressIndicator()
-                  else
-                    Slider(
-                      value: session.position.inMilliseconds.toDouble().clamp(
-                        0.0,
-                        maxMs,
-                      ),
-                      max: maxMs,
-                      semanticFormatterCallback: (value) =>
-                          RoundVideoView.formatTime(
-                            Duration(milliseconds: value.round()),
-                          ),
-                      onChanged: (value) =>
-                          control.seek(Duration(milliseconds: value.round())),
-                    ),
-                  if (session.locallyPlayed &&
-                      TelegramRoundService.of(
-                        session.event.room.client,
-                      ).incognito &&
-                      TelegramRoundService.of(
-                        session.event.room.client,
-                      ).canExplicitlyReport(session.event))
-                    TextButton(
-                      onPressed: session.reporting
-                          ? null
-                          : control.reportPlayed,
-                      child: const Text('Send playback receipt'),
-                    ),
-                  if (session.error != null)
-                    Text(
-                      session.error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
                 ],
               ),
-            ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(
+                    tooltip: session.playing ? 'Pause' : 'Play',
+                    onPressed:
+                        session.loading ||
+                            (session.video == null && session.audio == null)
+                        ? null
+                        : control.toggle,
+                    icon: NotionMorphSwitcher(
+                      child: Icon(
+                        session.playing ? Icons.pause : Icons.play_arrow,
+                        key: ValueKey(session.playing),
+                      ),
+                    ),
+                  ),
+                  PopupMenuButton<double>(
+                    tooltip: 'Playback speed',
+                    initialValue: session.speed,
+                    onSelected: control.setSpeed,
+                    itemBuilder: (_) => [
+                      for (final speed in const [
+                        .2,
+                        .5,
+                        1.0,
+                        1.2,
+                        1.5,
+                        1.7,
+                        2.0,
+                        2.5,
+                        3.0,
+                      ])
+                        PopupMenuItem(value: speed, child: Text('$speed×')),
+                    ],
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          minWidth: 24,
+                          minHeight: 24,
+                        ),
+                        child: Center(
+                          widthFactor: 1,
+                          heightFactor: 1,
+                          child: Text('${session.speed}×'),
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Stop playback',
+                    onPressed: control.stop,
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              if (session.loading)
+                const LinearProgressIndicator()
+              else
+                Slider(
+                  value: session.position.inMilliseconds.toDouble().clamp(
+                    0.0,
+                    maxMs,
+                  ),
+                  max: maxMs,
+                  semanticFormatterCallback: (value) =>
+                      RoundVideoView.formatTime(
+                        Duration(milliseconds: value.round()),
+                      ),
+                  onChanged: (value) =>
+                      control.seek(Duration(milliseconds: value.round())),
+                ),
+              if (session.locallyPlayed &&
+                  TelegramRoundService.of(
+                    session.event.room.client,
+                  ).incognito &&
+                  TelegramRoundService.of(
+                    session.event.room.client,
+                  ).canExplicitlyReport(session.event))
+                TextButton(
+                  onPressed: session.reporting ? null : control.reportPlayed,
+                  child: const Text('Send playback receipt'),
+                ),
+              if (session.error != null)
+                Text(
+                  session.error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

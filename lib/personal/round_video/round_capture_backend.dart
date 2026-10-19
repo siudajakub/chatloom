@@ -9,18 +9,84 @@ import '../media/media_access.dart';
 import 'round_media_preparer.dart';
 
 class RoundCaptureProfile {
+  /// Native RoundProfile.validate() limits; keep both sides identical.
+  static const maxVideoBitrate = 8000000;
+  static const maxAudioBitrate = 256000;
+
+  /// High-quality rounds: larger square and bitrate, still bridge-bounded.
+  static const highQualitySide = 480;
+  static const highQualityVideoBitrate = 2000000;
+  static const highQualityAudioBitrate = 96000;
+
   final int side;
   final int maxBytes;
   final int maxDurationMs;
   final int videoBitrate;
   final int audioBitrate;
+
+  /// Camera2 video/optical stabilization when the lens advertises it.
+  final bool stabilize;
+
+  /// Voice-communication microphone path (platform noise suppression/AGC).
+  final bool noiseReduction;
+  final bool highQuality;
+
+  /// Defaults keep the previous native behaviour for callers that predate the
+  /// quality settings: no stabilization request, plain camcorder microphone.
   const RoundCaptureProfile({
     required this.maxBytes,
     this.side = 384,
     this.maxDurationMs = 60000,
     this.videoBitrate = 1000000,
     this.audioBitrate = 64000,
+    this.stabilize = false,
+    this.noiseReduction = false,
+    this.highQuality = false,
   });
+
+  /// Builds the capture profile from the bridge-declared encoding limits and
+  /// the user's round quality settings. The side never exceeds [maxSide], and
+  /// the exporter still fits the final file into [maxBytes].
+  factory RoundCaptureProfile.fromBridge({
+    required int maxBytes,
+    required int maxSide,
+    required int recommendedSide,
+    required int maxDurationMs,
+    required int videoBitrate,
+    required int audioBitrate,
+    bool highQuality = false,
+    bool stabilize = true,
+    bool noiseReduction = true,
+  }) {
+    int even(int value) => value - value % 2;
+    final standardSide = even(
+      recommendedSide < maxSide ? recommendedSide : maxSide,
+    );
+    final hqLimit = even(maxSide < highQualitySide ? maxSide : highQualitySide);
+    final hq = highQuality && hqLimit >= standardSide;
+    int clamp(int value, int lower, int upper) =>
+        value < lower ? lower : (value > upper ? upper : value);
+    return RoundCaptureProfile(
+      maxBytes: maxBytes,
+      side: hq ? hqLimit : standardSide,
+      maxDurationMs: maxDurationMs,
+      videoBitrate: hq
+          ? highQualityVideoBitrate
+          : clamp(videoBitrate, 100000, maxVideoBitrate),
+      audioBitrate: hq
+          ? clamp(
+              audioBitrate > highQualityAudioBitrate
+                  ? audioBitrate
+                  : highQualityAudioBitrate,
+              16000,
+              maxAudioBitrate,
+            )
+          : clamp(audioBitrate, 16000, maxAudioBitrate),
+      stabilize: stabilize,
+      noiseReduction: noiseReduction,
+      highQuality: hq,
+    );
+  }
 
   bool get isValid =>
       side >= 128 &&
@@ -30,7 +96,9 @@ class RoundCaptureProfile {
       maxDurationMs <= 60000 &&
       maxBytes > 0 &&
       videoBitrate >= 100000 &&
-      audioBitrate >= 16000;
+      videoBitrate <= maxVideoBitrate &&
+      audioBitrate >= 16000 &&
+      audioBitrate <= maxAudioBitrate;
 }
 
 class RoundCapturePreview {
@@ -232,6 +300,9 @@ class AndroidRoundCaptureBackend implements RoundCaptureBackend {
         'maxDurationMs': profile.maxDurationMs,
         'videoBitrate': profile.videoBitrate,
         'audioBitrate': profile.audioBitrate,
+        'stabilize': profile.stabilize,
+        'noiseReduction': profile.noiseReduction,
+        'highQuality': profile.highQuality,
         'captureId': _captureId,
       });
       if (_disposed || generation != _generation) {

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -17,8 +18,13 @@ class RoundOutboxPanel extends StatelessWidget {
       builder: (context, _) => FutureBuilder<List<PendingMediaSummary>>(
         future: service.pendingFor(room.id),
         builder: (context, snapshot) {
-          if(snapshot.hasError) return const Padding(padding:EdgeInsets.all(8),child:Text(
-            'The protected queue is unavailable. Saved recordings remain on this device.'));
+          if (snapshot.hasError)
+            return const Padding(
+              padding: EdgeInsets.all(8),
+              child: Text(
+                'The protected queue is unavailable. Saved recordings remain on this device.',
+              ),
+            );
           final records = snapshot.data ?? const <PendingMediaSummary>[];
           if (records.isEmpty && !service.hasUnstaged(room.id)) {
             return const SizedBox.shrink();
@@ -61,8 +67,7 @@ class RoundOutboxPanel extends StatelessWidget {
                       leading: const Icon(Icons.video_file_outlined),
                       title: Text(switch (record.metadata['state']) {
                         'matrixAccepted' => 'Matrix accepted the round video',
-                        'inFlight' ||
-                        'unknown' => 'Send outcome unknown',
+                        'inFlight' || 'unknown' => 'Send outcome unknown',
                         'failed' => 'Round video awaiting retry',
                         _ => 'Round video saved locally',
                       }),
@@ -104,7 +109,8 @@ class RoundOutboxPanel extends StatelessWidget {
                             ),
                           if (record.metadata['state'] == 'matrixAccepted')
                             IconButton(
-                              tooltip: 'Delete local copy of accepted recording',
+                              tooltip:
+                                  'Delete local copy of accepted recording',
                               icon: const Icon(Icons.delete_outline),
                               onPressed: () => _discard(
                                 context,
@@ -146,7 +152,7 @@ class RoundOutboxPanel extends StatelessWidget {
     BuildContext context,
     Future<void> Function() action,
   ) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showNotionCustomDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete the local recording copy?'),

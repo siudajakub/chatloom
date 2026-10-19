@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:personal_core/personal_core.dart';
 
 import '../media/media_access.dart';
+import '../media/media_inflight.dart';
 
 typedef RoundAttachmentDownload =
     Future<MatrixFile> Function(
@@ -68,7 +69,10 @@ class RoundMediaLoader {
     void Function(int)? onDownloadProgress,
   }) => event.downloadAndDecryptAttachment(
     getThumbnail: true,
-    cacheAttachment: false,
+    // Thumbnails are ciphertext-cached like the clip itself (and filled by
+    // the prefetcher), so scrolling does not re-download them. Limited or
+    // protected media never reaches this adapter (see [thumbnail]).
+    cacheAttachment: policyFor(event).canPersist,
     onDownloadProgress: onDownloadProgress,
   );
 
@@ -142,6 +146,17 @@ class RoundMediaLoader {
     _guard(event, cancellation);
     if (!policyFor(event).canPersist || !event.hasThumbnail) return null;
     _declaredSize(event.thumbnailInfoMap['size'], maxThumbnailBytes);
+    // Background work: worth waiting for the prefetch, but not once the row
+    // is gone.
+    final prefetch = MediaInflight.settle(
+      event.thumbnailMxcUrl,
+      wait: MediaInflight.maxWait,
+      cancelled: cancellation == null ? null : () => !cancellation.valid,
+    );
+    if (prefetch != null) {
+      await prefetch;
+      _guard(event, cancellation);
+    }
     RoundMediaUnavailable? failedProgress;
     final file = await _thumbnail(
       event,
@@ -190,6 +205,16 @@ class RoundMediaLoader {
     final policy = policyFor(event);
     final rawSize = event.infoMap['size'];
     final size = _declaredSize(rawSize, maxMediaBytes);
+    // Reuse a background prefetch of the same ciphertext (then cache hit).
+    // Loads are user-started: wait briefly, and stop waiting on cancel.
+    final prefetch = MediaInflight.settle(
+      event.attachmentMxcUrl,
+      cancelled: cancellation == null ? null : () => !cancellation.valid,
+    );
+    if (prefetch != null) {
+      await prefetch;
+      _guard(event, cancellation, voice: voice);
+    }
     RoundMediaUnavailable? failedProgress;
     final file = await _download(
       event,
