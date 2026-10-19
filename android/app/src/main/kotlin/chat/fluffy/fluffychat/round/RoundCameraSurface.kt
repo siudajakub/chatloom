@@ -9,6 +9,7 @@ import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Log
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -26,8 +27,15 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
                                   private val previewGate: RoundPreviewGate,
                                   private val onFailure: () -> Unit) {
     class Input internal constructor(val surface: Surface, internal val source: SurfaceTexture,
-                                     internal val texture: Int, internal val coordinates: FloatArray,
-                                     internal val mirroredPreview: Boolean)
+                                     internal val texture: Int, internal val bufferWidth: Int,
+                                     internal val bufferHeight: Int, internal val expectedSwap: Boolean,
+                                     internal val displayDegrees: Int, geometry: RoundFrameGeometry) {
+        internal var geometry = geometry
+            set(value) { field = value; coordinates = buffer(value.coordinates) }
+        internal var coordinates = buffer(geometry.coordinates)
+            private set
+        internal var verified = false
+    }
     private val thread = HandlerThread("PersonalRoundGL").apply { start() }
     private val handler = Handler(thread.looper)
     private var display = EGL14.EGL_NO_DISPLAY
@@ -42,7 +50,6 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
     private var current: Input? = null
     private val inputs = mutableSetOf<Input>()
     private var hasImage = false
-    private var mirroredPreview = false
     private var encoding = false
     @Volatile private var closed = false
     private var failed = false
@@ -52,7 +59,12 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
     private val corners = buffer(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
     private val ordinary = buffer(floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f))
 
-    fun newInput(width: Int, height: Int, rotation: Int, mirrored: Boolean): Input = run {
+    /**
+     * [width]x[height] is the Camera2 stream (sensor buffer) size. The SurfaceTexture
+     * transform already rotates by [sensorOrientation] and mirrors the front camera, so
+     * the cache pass only crops in the upright frame and undoes [displayDegrees].
+     */
+    fun newInput(width: Int, height: Int, sensorOrientation: Int, displayDegrees: Int): Input = run {
         check(!closed)
         makePreviewCurrent()
         val texture = IntArray(1)
@@ -61,8 +73,9 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
         parameters(GLES11Ext.GL_TEXTURE_EXTERNAL_OES)
         val source = SurfaceTexture(texture[0])
         source.setDefaultBufferSize(width, height)
-        val input = Input(Surface(source), source, texture[0],
-            RoundFrameTransform.coordinates(width, height, rotation, false), mirrored)
+        val swapped = RoundFrameTransform.sensorSwapsAxes(sensorOrientation)
+        val input = Input(Surface(source), source, texture[0], width, height, swapped, displayDegrees,
+            RoundFrameTransform.forCamera(width, height, swapped, displayDegrees, side))
         inputs += input
         current = input
         source.setOnFrameAvailableListener({
@@ -70,10 +83,26 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
                 makePreviewCurrent()
                 source.updateTexImage()
                 source.getTransformMatrix(matrix)
+                verify(input)
                 cache(input)
             } catch (_: Exception) { fail() }
         }, handler)
         input
+    }
+
+    /**
+     * The crop must be measured in the frame the transform actually outputs. A device
+     * whose transform disagrees with SENSOR_ORIENTATION keeps an undistorted square
+     * (its orientation is then the vendor's); the mismatch is logged once per input.
+     */
+    private fun verify(input: Input) {
+        if (input.verified) return
+        input.verified = true
+        val swapped = RoundFrameTransform.matrixSwapsAxes(matrix)
+        if (swapped == input.expectedSwap) return
+        Log.w(TAG, "Camera transform rotation differs from sensor orientation; cropping in the transform's frame")
+        input.geometry = RoundFrameTransform.forCamera(input.bufferWidth, input.bufferHeight, swapped,
+            input.displayDegrees, side)
     }
 
     /** Retired inputs are released only after their CameraDevice.onClosed callback. */
@@ -179,11 +208,12 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, input.texture)
         GLES20.glUniform1i(GLES20.glGetUniformLocation(cameraProgram, "uTexture"), 0)
         GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(cameraProgram, "uMatrix"), 1, false, matrix, 0)
-        draw(cameraProgram, buffer(input.coordinates))
+        val step = input.geometry.step
+        GLES20.glUniform2f(GLES20.glGetUniformLocation(cameraProgram, "uStep"), step[0], step[1])
+        draw(cameraProgram, input.coordinates)
         check(GLES20.glGetError() == GLES20.GL_NO_ERROR)
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         hasImage = true
-        mirroredPreview = input.mirroredPreview
     }
 
     private fun copy(window: android.opengl.EGLSurface, timestamp: Long? = null) {
@@ -196,10 +226,9 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, cacheTexture)
             GLES20.glUniform1i(GLES20.glGetUniformLocation(copyProgram, "uTexture"), 0)
-            // Preserve the usual selfie preview while saved pixels stay unmirrored.
-            val coordinates = if (window == previewWindow && mirroredPreview)
-                buffer(RoundFrameTransform.coordinates(side, side, 0, true)) else ordinary
-            draw(copyProgram, coordinates)
+            // Preview and recorder get the identical cached square: a front-camera round
+            // is saved mirrored, exactly as previewed (Telegram parity).
+            draw(copyProgram, ordinary)
         }
         check(GLES20.glGetError() == GLES20.GL_NO_ERROR)
         if (timestamp != null) check(EGLExt.eglPresentationTimeANDROID(display, window, timestamp))
@@ -256,6 +285,7 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
     }
 
     companion object {
+        private const val TAG = "PersonalRound"
         private fun buffer(values: FloatArray) = ByteBuffer.allocateDirect(values.size * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer().apply { put(values); position(0) }
         private fun parameters(target: Int) {
@@ -278,6 +308,8 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
             check(ok[0] == GLES20.GL_TRUE)
             return program
         }
+        // Camera streams are up to 1920 px: mediump (fp16) texture coordinates would
+        // quantise sampling to blocks, so coordinates use highp where available.
         private const val VERTEX = """
             attribute vec2 aPosition; attribute vec2 aCoordinate;
             varying vec2 vCoordinate; varying vec2 vOutput;
@@ -286,11 +318,20 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
         """
         private const val CAMERA_FRAGMENT = """
             #extension GL_OES_EGL_image_external : require
-            precision mediump float; uniform samplerExternalOES uTexture; uniform mat4 uMatrix;
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
+            precision mediump float;
+            #endif
+            uniform samplerExternalOES uTexture; uniform mat4 uMatrix; uniform vec2 uStep;
             varying vec2 vCoordinate; varying vec2 vOutput;
+            vec4 tap(vec2 offset) { return texture2D(uTexture, (uMatrix * vec4(vCoordinate + offset, 0.0, 1.0)).xy); }
             void main() {
                 if (dot(vOutput, vOutput) > 0.25) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-                gl_FragColor = texture2D(uTexture, (uMatrix * vec4(vCoordinate, 0.0, 1.0)).xy);
+                // Four bilinear taps cover the output pixel: an area filter for the
+                // oversampled camera stream instead of aliasing single-tap minification.
+                gl_FragColor = 0.25 * (tap(vec2(-uStep.x, -uStep.y)) + tap(vec2(uStep.x, -uStep.y)) +
+                    tap(vec2(-uStep.x, uStep.y)) + tap(uStep));
             }
         """
         private const val COPY_FRAGMENT = """

@@ -55,6 +55,8 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     private var permissionGrantedWaiting = false
     @Volatile private var activityVisible = false
     @Volatile private var attached = false
+    /** Main thread only. */
+    private val orientationLock = RoundOrientationLock<Activity>()
 
     /** All asynchronous cancel/failure/callback paths may complete a call only once. */
     private inner class OnceResult(private val delegate: MethodChannel.Result) : MethodChannel.Result {
@@ -71,8 +73,9 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     private data class Controls(val zoom: RoundZoomRange, val ratio: Boolean, val activeArray: Rect?,
                                 val torch: Boolean)
 
-    private class Capture(val id: String, val directory: File, val output: File, val profile: RoundProfile,
-                          val displayDegrees: Int) {
+    private class Capture(val id: String, val directory: File, val output: File, val profile: RoundProfile) {
+        /** Display rotation frozen when the round opens; the activity orientation is locked with it. */
+        var displayDegrees = 0
         val canceled = AtomicBoolean(false)
         var texture: TextureRegistry.SurfaceTextureEntry? = null
         var previewSurface: Surface? = null
@@ -85,7 +88,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         var recorderSurface: Surface? = null
         var front = true
         var size = Size(640, 480)
-        var rotation = 0
+        var sensorOrientation = 0
         val epoch = RoundCameraEpoch()
         var cameraRevision = 0L
         var cameraId: String? = null
@@ -99,6 +102,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         var torch = false
         var zoomDisabled = false
         var torchDisabled = false
+        var enhancementsDisabled = false
         var pendingResult: MethodChannel.Result? = null
         var openingFailure: (() -> Unit)? = null
         var openingTimeout: Runnable? = null
@@ -346,13 +350,17 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
             call.argument<Number>("maxDurationMs")!!.toInt(),
             call.argument<Number>("videoBitrate")!!.toInt(),
             call.argument<Number>("audioBitrate")!!.toInt(),
+            // Absent/unknown quality flags keep the previous capture behaviour.
+            stabilize = call.argument<Any>("stabilize") == true,
+            noiseReduction = call.argument<Any>("noiseReduction") == true,
+            highQuality = call.argument<Any>("highQuality") == true,
         )
         profile.validate()
-        @Suppress("DEPRECATION")
-        val display = activity?.windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
-        val degrees = when (display) { Surface.ROTATION_90 -> 90; Surface.ROTATION_180 -> 180; Surface.ROTATION_270 -> 270; else -> 0 }
-        val capture = Capture(id, directory, output, profile, degrees)
+        val capture = Capture(id, directory, output, profile)
         session = capture
+        // Like Telegram, freeze the screen orientation for the round and keep the
+        // display rotation read under that lock for every camera of this capture.
+        capture.displayDegrees = onMain { lockOrientation(capture) }
         main.post { if (session === capture && !capture.canceled.get())
             activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         capture.texture = onMain { textures.createSurfaceTexture().also { entry ->
@@ -442,22 +450,22 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
                 throw CaptureFailure("permission_denied")
             val manager = cameraManager()
             val info = manager.getCameraCharacteristics(cameraId)
-            val sizes = info.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
-                .getOutputSizes(SurfaceTexture::class.java)
-            capture.size = sizes.filter { it.width <= 1280 && it.height <= 1280 &&
-                it.width >= capture.profile.side && it.height >= capture.profile.side }
-                .minByOrNull { it.width * it.height } ?: sizes.minBy { it.width * it.height }
+            val map = info.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
+            val sizes = map.getOutputSizes(SurfaceTexture::class.java)
+            capture.size = sizes[RoundStreamSize.select(sizes.map { it.width to it.height }, capture.profile.side) { index ->
+                try { map.getOutputMinFrameDuration(SurfaceTexture::class.java, sizes[index]) } catch (_: Exception) { 0L }
+            }]
             capture.front = info.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-            val sensor = info.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-            capture.rotation = if (capture.front) (sensor + capture.displayDegrees) % 360
-                else (sensor - capture.displayDegrees + 360) % 360
+            // The SurfaceTexture transform applies the sensor rotation (and the front
+            // mirror); the compositor must not rotate by it again. See RoundFrameTransform.
+            capture.sensorOrientation = info.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
             capture.cameraId = cameraId
-            capture.zoomDisabled = false; capture.torchDisabled = false
+            capture.zoomDisabled = false; capture.torchDisabled = false; capture.enhancementsDisabled = false
             val available = controls(capture)
             capture.zoom = capture.zoom.coerceIn(available.zoom.minimum, available.zoom.maximum)
             capture.torch = capture.torch && available.torch
             val input = capture.compositor!!.newInput(capture.size.width, capture.size.height,
-                capture.rotation, capture.front)
+                capture.sensorOrientation, capture.displayDegrees)
             capture.input = input
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
@@ -541,6 +549,19 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     }
 
     private fun repeating(capture: Capture) {
+        if (!capture.enhancementsDisabled) {
+            try { repeating(capture, true); return } catch (_: Exception) { }
+            // A device may reject an advertised fps/stabilization/scene combination.
+            // Only when the plain request works is the camera marked as such; other
+            // failures (zoom/torch/closed camera) still propagate to their callers.
+            repeating(capture, false)
+            capture.enhancementsDisabled = true
+            return
+        }
+        repeating(capture, false)
+    }
+
+    private fun repeating(capture: Capture, enhanced: Boolean) {
         val camera = capture.camera ?: throw CaptureFailure("camera_unavailable")
         val configured = capture.cameraSession ?: throw CaptureFailure("camera_unavailable")
         val available = controls(capture) // Fresh hardware capabilities before EVERY operation.
@@ -570,7 +591,42 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         if (Build.VERSION.SDK_INT >= 31 && info.get(CameraCharacteristics.SCALER_AVAILABLE_ROTATE_AND_CROP_MODES)
             ?.contains(CaptureRequest.SCALER_ROTATE_AND_CROP_NONE) == true)
             request.set(CaptureRequest.SCALER_ROTATE_AND_CROP, CaptureRequest.SCALER_ROTATE_AND_CROP_NONE)
+        if (enhanced) enhance(capture, info, request)
         configured.setRepeatingRequest(request.build(), null, cameraHandler)
+    }
+
+    /** Quality-only request keys, each applied only when the hardware advertises it. */
+    private fun enhance(capture: Capture, info: CameraCharacteristics, request: CaptureRequest.Builder) {
+        val keys = info.availableCaptureRequestKeys ?: emptyList()
+        info.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.let { ranges ->
+            RoundFpsRange.select(ranges.map { it.lower to it.upper })?.let { (lower, upper) ->
+                request.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, android.util.Range(lower, upper))
+            }
+        }
+        if (capture.profile.stabilize) {
+            val electronic = keys.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE) &&
+                info.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+                    ?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true
+            val optical = keys.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE) &&
+                info.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                    ?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
+            // Camera2 advises against enabling EIS and OIS together. The back lens
+            // prefers OIS (no extra crop, sharper in low light), selfie lenses use EIS.
+            if (optical && (!capture.front || !electronic)) {
+                request.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
+                if (electronic) request.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+            } else if (electronic) {
+                request.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)
+            }
+        }
+        // Face priority keeps the requested AE/AF/AWB modes and only biases metering to faces.
+        if (capture.front && keys.contains(CaptureRequest.CONTROL_SCENE_MODE) &&
+            info.get(CameraCharacteristics.CONTROL_AVAILABLE_SCENE_MODES)
+                ?.contains(CaptureRequest.CONTROL_SCENE_MODE_FACE_PRIORITY) == true) {
+            request.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_USE_SCENE_MODE)
+            request.set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_FACE_PRIORITY)
+        }
     }
 
     /** Camera-only close: never releases recorder/audio/encoder ownership. */
@@ -705,22 +761,25 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         require(audio.requestAudioFocus(focus, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
         val recorder = MediaRecorder()
         capture.recorder = recorder
-        recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+        // VOICE_COMMUNICATION engages the platform noise suppressor/AGC/AEC chain;
+        // CAMCORDER is tuned for video and keeps the ambient sound otherwise.
+        recorder.setAudioSource(if (capture.profile.noiseReduction) MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            else MediaRecorder.AudioSource.CAMCORDER)
         recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
         recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
         recorder.setOutputFile(capture.raw.path)
         recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
         recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
         recorder.setVideoSize(capture.profile.side, capture.profile.side)
-        recorder.setVideoFrameRate(30)
-        recorder.setVideoEncodingBitRate(maxOf(capture.profile.videoBitrate, 1500000))
-        recorder.setAudioChannels(1)
-        recorder.setAudioSamplingRate(44100)
-        recorder.setAudioEncodingBitRate(capture.profile.audioBitrate)
-        recorder.setOrientationHint(0) // Per-frame camera orientation was already written by GL.
+        recorder.setVideoFrameRate(RoundProfile.FRAME_RATE)
+        recorder.setVideoEncodingBitRate(capture.profile.recorderVideoBitrate)
+        recorder.setAudioChannels(RoundProfile.AUDIO_CHANNELS)
+        recorder.setAudioSamplingRate(RoundProfile.AUDIO_SAMPLE_RATE)
+        recorder.setAudioEncodingBitRate(capture.profile.recorderAudioBitrate)
+        recorder.setOrientationHint(0) // GL writes upright, display-compensated pixels; no MP4 rotation.
         recorder.setMaxDuration(capture.profile.maxDurationMs)
         // Raw is temporary and cannot exceed a bounded capture budget either.
-        recorder.setMaxFileSize(maxOf(capture.profile.maxBytes * 3, 4L * 1024 * 1024))
+        recorder.setMaxFileSize(capture.profile.rawCapBytes)
         recorder.setOnInfoListener { _, what, _ ->
             if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED || what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED) {
                 cameraHandler.post { if (session === capture && !capture.preparing && (capture.recording || capture.paused)) {
@@ -874,8 +933,31 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
             capture.hardwareCloseTimeout = timeout
             cameraHandler.postDelayed(timeout, 5000)
         }
-        main.post { if (session == null || session === capture)
-            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+        main.post {
+            if (session == null || session === capture)
+                activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            unlockOrientation(capture)
+        }
+    }
+
+    /** Main thread. Returns the display rotation (0/90/180/270) after locking it. */
+    private fun lockOrientation(capture: Capture): Int {
+        val target = activity ?: return 0
+        if (session === capture && !capture.canceled.get()) try {
+            target.requestedOrientation = orientationLock.acquire(capture, target, target.requestedOrientation)
+        } catch (_: Exception) { }
+        @Suppress("DEPRECATION")
+        val rotation = try { target.windowManager.defaultDisplay.rotation } catch (_: Exception) { Surface.ROTATION_0 }
+        return when (rotation) { Surface.ROTATION_90 -> 90; Surface.ROTATION_180 -> 180; Surface.ROTATION_270 -> 270; else -> 0 }
+    }
+
+    /** Main thread. Restores the request saved by the last capture that locked it. */
+    private fun unlockOrientation(capture: Capture) {
+        try {
+            orientationLock.release(capture) { it.requestedOrientation }?.let { (target, previous) ->
+                target.requestedOrientation = previous
+            }
+        } catch (_: Exception) { }
     }
 
     private fun releasePreview(capture: Capture) {

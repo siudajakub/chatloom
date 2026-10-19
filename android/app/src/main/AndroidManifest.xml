@@ -34,6 +34,7 @@
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:localeConfig="@xml/locale_config"
+        android:enableOnBackInvokedCallback="true"
     >
         <activity
             android:name=".MainActivity"

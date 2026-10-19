@@ -19,11 +19,48 @@ import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
-data class RoundProfile(val side: Int, val maxBytes: Long, val maxDurationMs: Int, val videoBitrate: Int, val audioBitrate: Int) {
+/** Missing quality flags keep the previous behaviour: no stabilization, plain camcorder audio. */
+data class RoundProfile(val side: Int, val maxBytes: Long, val maxDurationMs: Int, val videoBitrate: Int, val audioBitrate: Int,
+                        val stabilize: Boolean = false, val noiseReduction: Boolean = false,
+                        val highQuality: Boolean = false) {
     fun validate() {
         require(side in 128..640 && side % 2 == 0)
-        require(maxDurationMs in 800..60000 && maxBytes > 0)
-        require(videoBitrate >= 100000 && audioBitrate >= 16000)
+        require(maxDurationMs in TELEGRAM_MIN_DURATION_MS..TELEGRAM_MAX_DURATION_MS && maxBytes > 0)
+        require(videoBitrate in 100000..MAX_VIDEO_BITRATE && audioBitrate in 16000..MAX_AUDIO_BITRATE)
+    }
+
+    /** Raw recording is temporary and bounded, exactly as before. */
+    val rawCapBytes: Long get() = maxOf(maxBytes * 3, 4L * 1024 * 1024)
+
+    /**
+     * The raw MediaRecorder file is decoded and re-encoded once more, so it must be
+     * nearly transparent: about 4x the final bitrate (at least 4 Mbps for <= 480 px),
+     * but never so high that a full-length take would hit the raw size cap.
+     */
+    val recorderVideoBitrate: Int get() {
+        val legacy = maxOf(videoBitrate.toLong(), 1_500_000L)
+        val desired = minOf(maxOf(videoBitrate * 4L, if (side <= 480) 4_000_000L else 6_000_000L), 12_000_000L)
+        val fit = rawCapBytes * 8L * 1000L / maxDurationMs * 90L / 100L - recorderAudioBitrate
+        return maxOf(minOf(desired, fit), legacy).toInt()
+    }
+
+    val recorderAudioBitrate: Int get() = audioBitrate
+
+    companion object {
+        const val MAX_VIDEO_BITRATE = 8_000_000
+        const val MAX_AUDIO_BITRATE = 256_000
+        /** Telegram round audio: AAC-LC (MediaRecorder AAC), mono, 48 kHz. */
+        const val AUDIO_SAMPLE_RATE = 48_000
+        const val AUDIO_CHANNELS = 1
+        /** Telegram round video: H.264 at a 30 fps hint with a 1 s keyframe interval. */
+        const val FRAME_RATE = 30
+        const val I_FRAME_INTERVAL_SECONDS = 1
+        /** Telegram defaults (roundVideoSize, 1000 * 1024, 64 * 1024); Dart/bridge supply the actual profile. */
+        const val TELEGRAM_SIDE = 384
+        const val TELEGRAM_VIDEO_BITRATE = 1_024_000
+        const val TELEGRAM_AUDIO_BITRATE = 65_536
+        const val TELEGRAM_MAX_DURATION_MS = 60_000
+        const val TELEGRAM_MIN_DURATION_MS = 800
     }
 }
 
@@ -34,7 +71,7 @@ object RoundVideoExporter {
 
     fun export(source: File, output: File, profile: RoundProfile, canceled: AtomicBoolean, startMs: Int, endMs: Int): Map<String, Any> {
         profile.validate()
-        require(startMs >= 0 && endMs - startMs >= 800)
+        require(startMs >= 0 && endMs - startMs >= RoundProfile.TELEGRAM_MIN_DURATION_MS)
         val intermediate = File(output.parentFile, "export.muxed.mp4")
         val rangeUs = min((endMs - startMs) * 1000L, min(profile.maxDurationMs * 1000L, MAX_DURATION_US))
         // AAC passthrough is bounded by the negotiated recorder bitrate. Account
@@ -43,9 +80,11 @@ object RoundVideoExporter {
         require(budgetBitrate >= 100000)
         var bitrate = min(profile.videoBitrate, budgetBitrate)
         try {
-            repeat(2) {
+            repeat(2) { attempt ->
                 if (canceled.get()) error("Canceled")
-                transcode(source, intermediate, profile.side, bitrate, canceled, startMs * 1000L, startMs * 1000L + rangeUs, profile.maxDurationMs * 1000L)
+                // First pass uses VBR where available; the budget retry asks for CBR.
+                transcode(source, intermediate, profile.side, bitrate, canceled, startMs * 1000L, startMs * 1000L + rangeUs, profile.maxDurationMs * 1000L,
+                    strict = attempt > 0)
                 RoundMp4FastStart.relocate(intermediate, output)
                 intermediate.delete()
                 if (output.length() <= profile.maxBytes) {
@@ -73,7 +112,8 @@ object RoundVideoExporter {
         }
     }
 
-    private fun transcode(source: File, output: File, side: Int, bitrate: Int, canceled: AtomicBoolean, startUs: Long, endUs: Long, maxOutputDurationUs: Long) {
+    private fun transcode(source: File, output: File, side: Int, bitrate: Int, canceled: AtomicBoolean, startUs: Long, endUs: Long, maxOutputDurationUs: Long,
+                          strict: Boolean) {
         val video = MediaExtractor()
         val audio = MediaExtractor()
         var decoder: MediaCodec? = null
@@ -97,14 +137,7 @@ object RoundVideoExporter {
             video.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             audio.selectTrack(audioTrack)
             audio.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-            val outputFormat = MediaFormat.createVideoFormat("video/avc", side, side).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-            }
-            encoder = MediaCodec.createEncoderByType("video/avc")
-            encoder.configure(outputFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            encoder = configureEncoder(side, bitrate, strict)
             val encoderInput = encoder.createInputSurface()
             gl = RoundEncoderSurface(encoderInput, side, sourceWidth, sourceHeight, rotation)
             encoder.start()
@@ -234,6 +267,49 @@ object RoundVideoExporter {
         }
     }
 
+    /** H.264 stays the bridge format (mp4/avc/yuv420p). Codec-specific extras are
+     * requested only when advertised, and any rejection falls back to the plain format. */
+    private fun configureEncoder(side: Int, bitrate: Int, strict: Boolean): MediaCodec {
+        // Telegram parity: 30 fps hint and a 1 s keyframe interval for every encoder path.
+        fun format() = MediaFormat.createVideoFormat("video/avc", side, side).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, RoundProfile.FRAME_RATE)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, RoundProfile.I_FRAME_INTERVAL_SECONDS)
+        }
+        val encoder = MediaCodec.createEncoderByType("video/avc")
+        try {
+            val enhanced = format()
+            val capabilities = encoder.codecInfo.getCapabilitiesForType("video/avc")
+            val levels = capabilities.profileLevels ?: emptyArray()
+            fun supports(profile: Int) = levels.any { it.profile == profile && it.level >= MediaCodecInfo.CodecProfileLevel.AVCLevel31 }
+            val avcProfile = when {
+                supports(MediaCodecInfo.CodecProfileLevel.AVCProfileHigh) -> MediaCodecInfo.CodecProfileLevel.AVCProfileHigh
+                supports(MediaCodecInfo.CodecProfileLevel.AVCProfileMain) -> MediaCodecInfo.CodecProfileLevel.AVCProfileMain
+                else -> null
+            }
+            if (avcProfile != null) {
+                enhanced.setInteger(MediaFormat.KEY_PROFILE, avcProfile)
+                enhanced.setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel31)
+            }
+            // Keep decode order == presentation order for the muxer and old players.
+            if (android.os.Build.VERSION.SDK_INT >= 29) enhanced.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            val modes = capabilities.encoderCapabilities
+            val mode = if (strict) MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                else MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+            if (modes?.isBitrateModeSupported(mode) == true) enhanced.setInteger(MediaFormat.KEY_BITRATE_MODE, mode)
+            encoder.configure(enhanced, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            return encoder
+        } catch (_: Exception) {
+            encoder.release()
+        }
+        val plain = MediaCodec.createEncoderByType("video/avc")
+        try {
+            plain.configure(format(), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        } catch (error: Exception) { plain.release(); throw error }
+        return plain
+    }
+
     private fun probe(file: File, profile: RoundProfile): Map<String, Any> {
         val extractor = MediaExtractor()
         val retriever = MediaMetadataRetriever()
@@ -249,7 +325,7 @@ object RoundVideoExporter {
             val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)!!.toInt()
             val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
             require(width == height && width == profile.side && rotation == 0)
-            require(duration in 800..profile.maxDurationMs)
+            require(duration in RoundProfile.TELEGRAM_MIN_DURATION_MS..profile.maxDurationMs)
             require(file.length() in 1..profile.maxBytes)
             // Decode actual encoded output, including a middle and final frame.
             // Fail closed if a codec/surface implementation bypasses the mask.
