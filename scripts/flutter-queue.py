@@ -35,7 +35,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT.parent
-DEFAULT_FLUTTER = PROJECT / 'spikes/toolchains/flutter-3.47.4/bin/flutter'
+SDK_PROJECT = Path(os.environ.get('PERSONAL_CHAT_ROOT', str(PROJECT)))
+DEFAULT_FLUTTER = SDK_PROJECT / 'spikes/toolchains/flutter-3.47.4/bin/flutter'
 TOOL_ROOT = ROOT / '.dart_tool'
 LOCK = TOOL_ROOT / 'personal-flutter-queue.lock'
 HOLDER = TOOL_ROOT / 'personal-flutter-queue.holder.json'
