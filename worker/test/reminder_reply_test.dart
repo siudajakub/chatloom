@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
+import 'package:personal_worker/src/matrix_transport.dart';
 import 'package:personal_worker/src/ports.dart';
 import 'package:personal_worker/src/reminder_reply.dart';
 import 'package:test/test.dart';
 
 const own = '@self:example.invalid';
+const ownGhost = '@telegram_100:bridge.invalid';
+bool ownGhostOnly(String id) => id == ownGhost;
 final since = DateTime.utc(2026, 10, 4, 12);
 
 class NoDatabase implements DatabaseApi {
@@ -197,4 +200,129 @@ void main() {
       );
     },
   );
+  test('own bridge ghost messages are never the recipient reply', () {
+    final ghostMessage = event(sender: ownGhost);
+    expect(isRecipientReply(ghostMessage, own, since), isTrue);
+    expect(
+      isRecipientReply(ghostMessage, own, since, isOwnSender: ownGhostOnly),
+      isFalse,
+    );
+    expect(
+      isRecipientReply(
+        event(sender: ownGhost, type: EventTypes.Sticker),
+        own,
+        since,
+        isOwnSender: ownGhostOnly,
+      ),
+      isFalse,
+    );
+    expect(
+      isRecipientReply(event(), own, since, isOwnSender: ownGhostOnly),
+      isTrue,
+    );
+  });
+
+  test('a newer own-ghost burst does not hide or fake a reply', () async {
+    final noReply = History([
+      [event(sender: ownGhost), event(sender: ownGhost, at: since)],
+    ]);
+    expect(
+      await receivedReplySince(noReply, own, since, isOwnSender: ownGhostOnly),
+      isFalse,
+    );
+    final reply = History([
+      [event(sender: ownGhost)],
+      [event(at: since.add(const Duration(seconds: 2)))],
+      [event(at: since)],
+    ]);
+    expect(
+      await receivedReplySince(reply, own, since, isOwnSender: ownGhostOnly),
+      isTrue,
+    );
+  });
+
+  test('undecryptable own-ghost events do not wait for keys', () async {
+    final history = History([
+      [event(sender: ownGhost, type: EventTypes.Encrypted), event(at: since)],
+    ]);
+    expect(
+      await receivedReplySince(history, own, since, isOwnSender: ownGhostOnly),
+      isFalse,
+    );
+    expect(history.keyRequests, 0);
+  });
+
+  group('worker identity from room state', () {
+    const bot = '@telegrambot:bridge.invalid';
+    Room portal(
+      Client client, {
+      String sender = bot,
+      bool botJoined = true,
+      Membership membership = Membership.join,
+    }) {
+      final dm = Room(
+        id: '!dm-${client.rooms.length}:example.invalid',
+        client: client,
+        membership: membership,
+      );
+      client.rooms.add(dm);
+      dm.setState(
+        Event(
+          eventId: r'$bridge',
+          room: dm,
+          senderId: sender,
+          originServerTs: since,
+          type: 'm.bridge',
+          stateKey: 'fixture',
+          content: {
+            'bridgebot': bot,
+            'protocol': {'id': 'telegram'},
+            'channel': {'id': '200', 'fi.mau.receiver': '100'},
+            'com.beeper.room_type.v2': 'dm',
+          },
+        ),
+      );
+      if (botJoined) {
+        dm.setState(
+          Event(
+            eventId: r'$bot-member',
+            room: dm,
+            senderId: bot,
+            originServerTs: since,
+            type: EventTypes.RoomMember,
+            stateKey: bot,
+            content: {'membership': 'join'},
+          ),
+        );
+      }
+      return dm;
+    }
+
+    test('recognises the receiver ghost declared by the joined bot', () {
+      final client = Client('fixture-identity', database: NoDatabase());
+      portal(client);
+      final identity = ownRemoteIdentity(client);
+      expect(identity.isOwn(ownGhost), isTrue);
+      expect(identity.isStronglyOwn(ownGhost), isTrue);
+      expect(identity.isOwn('@telegram_200:bridge.invalid'), isFalse);
+    });
+
+    test('ignores a declaration sent by somebody other than the bot', () {
+      final client = Client('fixture-spoof', database: NoDatabase());
+      portal(client, sender: '@mallory:example.invalid');
+      expect(ownRemoteIdentity(client).isOwn(ownGhost), isFalse);
+    });
+
+    test('ignores a declaration whose bot is not joined', () {
+      final client = Client('fixture-stale', database: NoDatabase());
+      portal(client, botJoined: false);
+      expect(ownRemoteIdentity(client).isOwn(ownGhost), isFalse);
+    });
+
+    test('ignores rooms the owner has not joined', () {
+      final client = Client('fixture-invite', database: NoDatabase());
+      portal(client, membership: Membership.invite);
+      expect(ownRemoteIdentity(client).isOwn(ownGhost), isFalse);
+    });
+  });
 }

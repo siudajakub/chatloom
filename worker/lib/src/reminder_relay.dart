@@ -52,6 +52,8 @@ class HttpReminderWakeHintSink implements ReminderWakeHintSink {
   final String token;
   final Duration timeout;
   final http.Client Function() clientFactory;
+  final _clients = <http.Client>{};
+  bool _closed = false;
   HttpReminderWakeHintSink({
     required this.url,
     required this.token,
@@ -67,7 +69,9 @@ class HttpReminderWakeHintSink implements ReminderWakeHintSink {
   }
   @override
   Future<void> publish(ReminderWakeHint hint) async {
+    if (_closed) throw const WorkerFailure('reminder_relay_deferred');
     final client = clientFactory();
+    _clients.add(client);
     try {
       final request = http.Request('POST', url)
         ..followRedirects = false
@@ -87,6 +91,14 @@ class HttpReminderWakeHintSink implements ReminderWakeHintSink {
     } catch (_) {
       throw const WorkerFailure('reminder_relay_deferred');
     } finally {
+      _clients.remove(client);
+      client.close();
+    }
+  }
+
+  void close() {
+    _closed = true;
+    for (final client in _clients) {
       client.close();
     }
   }

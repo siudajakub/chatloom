@@ -11,34 +11,53 @@ abstract class ReminderReplyHistory {
   void requestKeys();
 }
 
-bool isRecipientReply(Event event, String ownUserId, DateTime since) =>
+/// [isOwnSender] additionally recognises the owner's bridge ghosts (messages
+/// sent from the native Telegram/WhatsApp/Signal app without double
+/// puppeting); they are never the recipient's reply. See personal_core
+/// `OwnRemoteIdentity`.
+bool isRecipientReply(
+  Event event,
+  String ownUserId,
+  DateTime since, {
+  bool Function(String senderId)? isOwnSender,
+}) =>
     event.status.isSynced &&
     (event.type == EventTypes.Message || event.type == EventTypes.Sticker) &&
-    event.senderId != ownUserId &&
+    !_own(event.senderId, ownUserId, isOwnSender) &&
     event.originServerTs.isAfter(since) &&
     !event.redacted &&
     event.relationshipType != RelationshipTypes.edit;
 
 /// False is returned only after a continuous history frontier is proved.
 /// Missing pages or recipient keys remain unresolved rather than "no reply".
+bool _own(
+  String senderId,
+  String ownUserId,
+  bool Function(String senderId)? isOwnSender,
+) => senderId == ownUserId || (isOwnSender?.call(senderId) ?? false);
+
 Future<bool> receivedReplySince(
   ReminderReplyHistory history,
   String ownUserId,
   DateTime since, {
   Duration timeout = const Duration(seconds: 10),
+  bool Function(String senderId)? isOwnSender,
 }) async {
   final deadline = DateTime.now().add(timeout);
   var stagnantRequests = 0;
   while (true) {
     final events = List<Event>.from(history.events);
-    if (events.any((event) => isRecipientReply(event, ownUserId, since))) {
+    if (events.any(
+      (event) =>
+          isRecipientReply(event, ownUserId, since, isOwnSender: isOwnSender),
+    )) {
       return true;
     }
     if (events.any(
       (event) =>
           event.status.isSynced &&
           event.type == EventTypes.Encrypted &&
-          event.senderId != ownUserId &&
+          !_own(event.senderId, ownUserId, isOwnSender) &&
           event.originServerTs.isAfter(since) &&
           !event.redacted,
     )) {
