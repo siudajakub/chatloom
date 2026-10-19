@@ -6,6 +6,7 @@
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/person_location.dart';
 import 'package:flutter/gestures.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -86,8 +87,9 @@ class EncryptionInfo extends StatelessWidget {
                               decorationColor: theme.colorScheme.primary,
                             ),
                             recognizer: TapGestureRecognizer()
-                              ..onTap = () =>
-                                  context.go('/rooms/${room.id}/encryption'),
+                              ..onTap = () => context.go(
+                                '${chatLocation(context, room.id)}/encryption',
+                              ),
                             text: 'Check',
                           ),
                         ],

@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/bootstrap/view_model/bootstrap_view_model.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:material_ui/material_ui.dart';
@@ -17,7 +18,7 @@ class StoreRecoveryKeyView extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(16.0),
-      children: [
+      children: NotionEntrance.stagger([
         Text(L10n.of(context).storeRecoveryKeyDescription),
         const SizedBox(height: 16),
         TextField(
@@ -47,7 +48,7 @@ class StoreRecoveryKeyView extends StatelessWidget {
             onChanged: viewModel.toggleRecoveryKeyStoredInSecureStorage,
             title: Text(_getSecureStorageLocalizedName(context)),
           ),
-      ],
+      ]),
     );
   }
 

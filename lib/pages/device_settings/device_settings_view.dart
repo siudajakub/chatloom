@@ -7,6 +7,7 @@ import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/device_settings/device_settings.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'user_device_list_item.dart';
@@ -41,104 +42,124 @@ class DevicesSettingsView extends StatelessWidget {
               );
             }
             if (!snapshot.hasData || controller.devices == null) {
-              return const Center(
-                child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-              );
+              return const Center(child: NotionDelayedSpinner());
             }
-            return ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: controller.notThisDevice.length + 1,
-              itemBuilder: (BuildContext context, int i) {
-                if (i == 0) {
-                  return Column(
-                    mainAxisSize: .min,
-                    children: [
-                      if (controller.chatBackupEnabled == false)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                          child: ListTile(
-                            leading: const CircleAvatar(
-                              child: Icon(Icons.info_outlined),
-                            ),
-                            subtitle: Text(
-                              L10n.of(
-                                context,
-                              ).noticeChatBackupDeviceVerification,
-                            ),
-                          ),
-                        ),
-                      if (controller.thisDevice != null) ...[
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16.0,
-                            vertical: 8.0,
-                          ),
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            L10n.of(context).thisDevice,
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.primary,
-                            ),
-                            textAlign: TextAlign.left,
-                          ),
-                        ),
-                        UserDeviceListItem(
-                          controller.thisDevice!,
-                          rename: controller.renameDeviceAction,
-                          remove: (d) => controller.removeDevicesAction([d]),
-                          verify: controller.verifyDeviceAction,
-                          block: controller.blockDeviceAction,
-                          unblock: controller.unblockDeviceAction,
-                        ),
-                      ],
-                      if (controller.notThisDevice.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16.0,
-                            vertical: 8.0,
-                          ),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: TextButton.icon(
-                              label: Text(
-                                L10n.of(context).removeAllOtherDevices,
+            // Devices rise in once when they arrive; later rebuilds do not
+            // animate.
+            return NotionEntranceScope(
+              child: ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: controller.notThisDevice.length + 1,
+                itemBuilder: (BuildContext context, int i) {
+                  if (i == 0) {
+                    return NotionEntrance(
+                      playKey: 'this-device',
+                      afterRoute: false,
+                      rise: NotionMotion.riseList,
+                      child: Column(
+                        mainAxisSize: .min,
+                        children: [
+                          if (controller.chatBackupEnabled == false)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8.0,
                               ),
-                              style: TextButton.styleFrom(
-                                iconColor: theme.colorScheme.onErrorContainer,
-                                foregroundColor:
-                                    theme.colorScheme.onErrorContainer,
-                                backgroundColor:
-                                    theme.colorScheme.errorContainer,
-                              ),
-                              icon: const Icon(Icons.delete_outline),
-                              onPressed: () => controller.removeDevicesAction(
-                                controller.notThisDevice,
+                              child: ListTile(
+                                leading: const CircleAvatar(
+                                  child: Icon(Icons.info_outlined),
+                                ),
+                                subtitle: Text(
+                                  L10n.of(
+                                    context,
+                                  ).noticeChatBackupDeviceVerification,
+                                ),
                               ),
                             ),
-                          ),
-                        )
-                      else
-                        Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Text(L10n.of(context).noOtherDevicesFound),
-                          ),
-                        ),
-                    ],
+                          if (controller.thisDevice != null) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16.0,
+                                vertical: 8.0,
+                              ),
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                L10n.of(context).thisDevice,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.primary,
+                                ),
+                                textAlign: TextAlign.left,
+                              ),
+                            ),
+                            UserDeviceListItem(
+                              controller.thisDevice!,
+                              rename: controller.renameDeviceAction,
+                              remove: (d) =>
+                                  controller.removeDevicesAction([d]),
+                              verify: controller.verifyDeviceAction,
+                              block: controller.blockDeviceAction,
+                              unblock: controller.unblockDeviceAction,
+                            ),
+                          ],
+                          if (controller.notThisDevice.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16.0,
+                                vertical: 8.0,
+                              ),
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: TextButton.icon(
+                                  label: Text(
+                                    L10n.of(context).removeAllOtherDevices,
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    iconColor:
+                                        theme.colorScheme.onErrorContainer,
+                                    foregroundColor:
+                                        theme.colorScheme.onErrorContainer,
+                                    backgroundColor:
+                                        theme.colorScheme.errorContainer,
+                                  ),
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: () =>
+                                      controller.removeDevicesAction(
+                                        controller.notThisDevice,
+                                      ),
+                                ),
+                              ),
+                            )
+                          else
+                            Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Text(
+                                  L10n.of(context).noOtherDevicesFound,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  }
+                  i--;
+                  final device = controller.notThisDevice[i];
+                  return NotionEntrance(
+                    playKey: device.deviceId,
+                    afterRoute: false,
+                    rise: NotionMotion.riseList,
+                    child: UserDeviceListItem(
+                      device,
+                      rename: controller.renameDeviceAction,
+                      remove: (d) => controller.removeDevicesAction([d]),
+                      verify: controller.verifyDeviceAction,
+                      block: controller.blockDeviceAction,
+                      unblock: controller.unblockDeviceAction,
+                    ),
                   );
-                }
-                i--;
-                return UserDeviceListItem(
-                  controller.notThisDevice[i],
-                  rename: controller.renameDeviceAction,
-                  remove: (d) => controller.removeDevicesAction([d]),
-                  verify: controller.verifyDeviceAction,
-                  block: controller.blockDeviceAction,
-                  unblock: controller.unblockDeviceAction,
-                );
-              },
+                },
+              ),
             );
           },
         ),

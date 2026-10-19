@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:convert';
-import 'dart:ui';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
@@ -17,7 +17,7 @@ import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 class KeyVerificationDialog extends StatefulWidget {
-  Future<bool?> show(BuildContext context) => showAdaptiveDialog<bool>(
+  Future<bool?> show(BuildContext context) => showNotionCustomDialog<bool>(
     context: context,
     builder: (context) => this,
     barrierDismissible: false,
@@ -89,6 +89,7 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
     );
     if (valid.error != null) {
       if (!mounted) return;
+      setState(() => _rejections++);
       await showOkAlertDialog(
         useRootNavigator: false,
         context: context,
@@ -98,6 +99,9 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
   }
 
   TextEditingController? textEditingController;
+
+  /// Bumped when a passphrase or key is rejected: shakes the field.
+  int _rejections = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -124,7 +128,9 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
         throw 'Not implemented';
       case KeyVerificationState.askSSSS:
         // prompt the user for their ssss passphrase / key
-        textEditingController = TextEditingController();
+        // Kept across rebuilds, so a profile update does not wipe the input.
+        final textEditingController = this.textEditingController ??=
+            TextEditingController();
         String input;
         body = Container(
           margin: const EdgeInsets.symmetric(horizontal: 8.0),
@@ -136,22 +142,25 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
                 style: const TextStyle(fontSize: 20),
               ),
               Container(height: 10),
-              TextField(
-                controller: textEditingController,
-                autofocus: false,
-                autocorrect: false,
-                onSubmitted: (s) {
-                  input = s;
-                  checkInput(input);
-                },
-                minLines: 1,
-                maxLines: 1,
-                obscureText: true,
-                decoration: InputDecoration(
-                  hintText: L10n.of(context).passphraseOrKey,
-                  prefixStyle: TextStyle(color: theme.colorScheme.primary),
-                  suffixStyle: TextStyle(color: theme.colorScheme.primary),
-                  border: const OutlineInputBorder(),
+              NotionShake(
+                trigger: _rejections,
+                child: TextField(
+                  controller: textEditingController,
+                  autofocus: false,
+                  autocorrect: false,
+                  onSubmitted: (s) {
+                    input = s;
+                    checkInput(input);
+                  },
+                  minLines: 1,
+                  maxLines: 1,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    hintText: L10n.of(context).passphraseOrKey,
+                    prefixStyle: TextStyle(color: theme.colorScheme.primary),
+                    suffixStyle: TextStyle(color: theme.colorScheme.primary),
+                    border: const OutlineInputBorder(),
+                  ),
                 ),
               ),
             ],
@@ -160,7 +169,7 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
         buttons.add(
           AdaptiveDialogAction(
             child: Text(L10n.of(context).submit),
-            onPressed: () => checkInput(textEditingController!.text),
+            onPressed: () => checkInput(textEditingController.text),
           ),
         );
         buttons.add(
@@ -176,10 +185,14 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
           mainAxisSize: .min,
           children: [
             const SizedBox(height: 16),
-            Avatar(
-              mxContent: user?.avatarUrl,
-              name: displayName,
-              size: Avatar.defaultSize * 2,
+            NotionPop(
+              bounce: false,
+              from: NotionMotion.dialogFrom,
+              child: Avatar(
+                mxContent: user?.avatarUrl,
+                name: displayName,
+                size: Avatar.defaultSize * 2,
+              ),
             ),
             const SizedBox(height: 16),
             Text(L10n.of(context).askVerificationRequest(displayName)),
@@ -210,16 +223,11 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
           child: Column(
             children: <Widget>[
               const SizedBox(height: 16),
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  Avatar(mxContent: user?.avatarUrl, name: displayName),
-                  const SizedBox(
-                    width: Avatar.defaultSize + 2,
-                    height: Avatar.defaultSize + 2,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ],
+              // Waiting for the other side: the avatar breathes a ring.
+              NotionPulse(
+                color: theme.colorScheme.primary,
+                borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+                child: Avatar(mxContent: user?.avatarUrl, name: displayName),
               ),
               const SizedBox(height: 16),
               Text(
@@ -248,10 +256,21 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
             maxLines: 1,
             style: const TextStyle(fontSize: 16),
           );
+          final emojis = widget.request.sasEmojis;
+          // The seven emoji deal in one after another.
           compareWidget = TextSpan(
-            children: widget.request.sasEmojis
-                .map((e) => WidgetSpan(child: _Emoji(e, sasEmoji)))
-                .toList(),
+            children: [
+              for (var i = 0; i < emojis.length; i++)
+                WidgetSpan(
+                  child: NotionEntrance(
+                    index: i,
+                    afterRoute: false,
+                    rise: NotionMotion.riseList,
+                    scale: NotionMotion.dialogFrom,
+                    child: _Emoji(emojis[i], sasEmoji),
+                  ),
+                ),
+            ],
           );
         } else {
           title = Text(L10n.of(context).compareNumbersMatch);
@@ -292,7 +311,7 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
           mainAxisSize: .min,
           children: <Widget>[
             const SizedBox(height: 16),
-            const CircularProgressIndicator.adaptive(strokeWidth: 2),
+            const NotionDelayedSpinner(size: NotionSize.touchTarget),
             const SizedBox(height: 16),
             Text(acceptText, textAlign: TextAlign.center),
           ],
@@ -300,12 +319,15 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
         break;
       case KeyVerificationState.done:
         title = Text(L10n.of(context).verifySuccess);
-        body = const Padding(
-          padding: EdgeInsets.all(16.0),
-          child: Icon(
-            Icons.verified_outlined,
-            color: Colors.green,
-            size: 128.0,
+        // Success is a reward: the badge springs in.
+        body = Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: NotionPop(
+            child: Icon(
+              Icons.verified_outlined,
+              color: context.notion.colors.success,
+              size: 128.0,
+            ),
           ),
         );
         buttons.add(
@@ -322,7 +344,14 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
           mainAxisSize: .min,
           children: <Widget>[
             const SizedBox(height: 16),
-            Icon(Icons.cancel, color: theme.colorScheme.error, size: 64.0),
+            NotionPop(
+              bounce: false,
+              child: Icon(
+                Icons.cancel,
+                color: theme.colorScheme.error,
+                size: 64.0,
+              ),
+            ),
             const SizedBox(height: 16),
             // TODO: Add better error UI to user
             Text(
@@ -341,12 +370,19 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
         break;
     }
 
+    final step = widget.request.state;
     return AlertDialog.adaptive(
-      title: title,
+      // Every verification step fades through to the next one.
+      title: NotionFadeThrough(
+        alignment: Alignment.center,
+        child: KeyedSubtree(key: ValueKey(step), child: title),
+      ),
       content: SizedBox(
         height: 256,
         width: 256,
-        child: ListView(children: [body]),
+        child: NotionFadeThrough(
+          child: ListView(key: ValueKey(step), children: [body]),
+        ),
       ),
       actions: buttons,
     );
@@ -359,31 +395,8 @@ class _Emoji extends StatelessWidget {
 
   const _Emoji(this.emoji, this.sasEmoji);
 
-  String getLocalizedName() {
-    final sasEmoji = this.sasEmoji;
-    if (sasEmoji == null) {
-      // asset is still being loaded
-      return emoji.name;
-    }
-    final translations = Map<String, String?>.from(
-      sasEmoji[emoji.number]['translated_descriptions'],
-    );
-    translations['en'] = emoji.name;
-    for (final locale in PlatformDispatcher.instance.locales) {
-      final wantLocaleParts = locale.toString().split('_');
-      final wantLanguage = wantLocaleParts.removeAt(0);
-      for (final haveLocale in translations.keys) {
-        final haveLocaleParts = haveLocale.split('_');
-        final haveLanguage = haveLocaleParts.removeAt(0);
-        if (haveLanguage == wantLanguage &&
-            (Set.from(haveLocaleParts)..removeAll(wantLocaleParts)).isEmpty &&
-            (translations[haveLocale]?.isNotEmpty ?? false)) {
-          return translations[haveLocale]!;
-        }
-      }
-    }
-    return emoji.name;
-  }
+  // The app is English-only; SAS descriptions follow the app language.
+  String getLocalizedName() => emoji.name;
 
   @override
   Widget build(BuildContext context) {

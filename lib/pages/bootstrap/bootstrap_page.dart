@@ -8,6 +8,7 @@ import 'package:fluffychat/pages/bootstrap/view_model/bootstrap_view_model.dart'
 import 'package:fluffychat/pages/bootstrap/widgets/new_passphrase_view.dart';
 import 'package:fluffychat/pages/bootstrap/widgets/restore_bootstrap_view.dart';
 import 'package:fluffychat/pages/bootstrap/widgets/store_recovery_key_view.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -21,7 +22,6 @@ class BootstrapPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return ViewModelBuilder(
       create: () =>
           BootstrapViewModel(client: Matrix.of(context).client, reset: reset),
@@ -64,31 +64,48 @@ class BootstrapPage extends StatelessWidget {
                       context.go('/rooms');
                     },
                   ),
-            title: Text(title),
+            title: NotionFadeThrough(
+              alignment: AlignmentDirectional.centerStart,
+              child: Text(title, key: ValueKey(title)),
+            ),
             actions: [
               if (viewModel.value.recoveryKey != null)
                 Padding(
-                  padding: EdgeInsets.all(8),
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: theme.colorScheme.primary,
-                      foregroundColor: theme.colorScheme.onPrimary,
-                      padding: EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.all(NotionSpace.xs),
+                  child: NotionPop(
+                    bounce: false,
+                    child: NotionButton.primary(
+                      label: L10n.of(context).continueText,
+                      onPressed: () => context.go('/rooms'),
                     ),
-                    onPressed: () => context.go('/rooms'),
-                    child: Text(L10n.of(context).continueText),
                   ),
                 ),
             ],
           ),
 
-          body: cryptoIdentityState == null
-              ? Center(child: CircularProgressIndicator.adaptive())
-              : !cryptoIdentityState.initialized || viewModel.value.reset
-              ? viewModel.value.recoveryKey == null
-                    ? NewPassphraseView(viewModel)
-                    : StoreRecoveryKeyView(viewModel)
-              : RestoreBootstrapView(viewModel),
+          // Each step (loading, new passphrase, recovery key, restore)
+          // fades through to the next.
+          body: NotionFadeThrough(
+            child: cryptoIdentityState == null
+                ? const Center(
+                    key: ValueKey('loading'),
+                    child: NotionDelayedSpinner(size: NotionSize.touchTarget),
+                  )
+                : !cryptoIdentityState.initialized || viewModel.value.reset
+                ? viewModel.value.recoveryKey == null
+                      ? NewPassphraseView(
+                          viewModel,
+                          key: const ValueKey('passphrase'),
+                        )
+                      : StoreRecoveryKeyView(
+                          viewModel,
+                          key: const ValueKey('store'),
+                        )
+                : RestoreBootstrapView(
+                    viewModel,
+                    key: const ValueKey('restore'),
+                  ),
+          ),
         );
       },
     );

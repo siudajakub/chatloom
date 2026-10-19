@@ -1,12 +1,14 @@
-import 'package:fluffychat/personal/privacy.dart';
-import 'dart:async';
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
 // SPDX-FileCopyrightText: 2019-Present Christian Kußowski
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
+
+import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
+import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/lock_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
@@ -49,7 +51,8 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
     _pincode = widget.pincode;
     _isLocked = isActive;
     PersonalPrivacy.surfaceUnlocked = !_isLocked;
-    if(!_isLocked && WidgetsBinding.instance.lifecycleState==AppLifecycleState.resumed) {
+    if (!_isLocked &&
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
       RoundPlaybackCoordinator.shared.resume();
     }
     super.initState();
@@ -176,7 +179,80 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
     create: (_) => this,
     child: Stack(
       fit: StackFit.expand,
-      children: [widget.child, if (isLocked) const LockScreen()],
+      children: [
+        widget.child,
+        _LockLayer(locked: isLocked),
+      ],
     ),
   );
+}
+
+/// Hosts the [LockScreen]. Locking covers the app on the same frame (never a
+/// fade-in, so content is not exposed); only a successful unlock dissolves
+/// the lock away, without input, focus or semantics while it fades.
+class _LockLayer extends StatefulWidget {
+  final bool locked;
+  const _LockLayer({required this.locked});
+
+  @override
+  State<_LockLayer> createState() => _LockLayerState();
+}
+
+class _LockLayerState extends State<_LockLayer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _visible = AnimationController(
+    vsync: this,
+    duration: NotionMotion.medium,
+    value: widget.locked ? 1 : 0,
+  )..addStatusListener(_status);
+  late final CurvedAnimation _opacity = CurvedAnimation(
+    parent: _visible,
+    curve: NotionMotion.standard,
+  );
+  late final Animation<double> _scale = Tween<double>(
+    begin: 1.04,
+    end: 1,
+  ).animate(CurvedAnimation(parent: _visible, curve: NotionMotion.emphasized));
+
+  void _status(AnimationStatus status) {
+    if (status == AnimationStatus.dismissed && mounted) setState(() {});
+  }
+
+  @override
+  void didUpdateWidget(_LockLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.locked == widget.locked) return;
+    if (widget.locked || NotionMotion.reduced(context)) {
+      _visible.value = widget.locked ? 1 : 0;
+    } else {
+      _visible.reverse(from: 1);
+    }
+  }
+
+  @override
+  void dispose() {
+    _opacity.dispose();
+    _visible.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locked = widget.locked;
+    if (!locked && _visible.isDismissed) return const SizedBox.shrink();
+    // One stable tree, so the lock screen keeps its state while it fades.
+    return IgnorePointer(
+      ignoring: !locked,
+      child: ExcludeFocus(
+        excluding: !locked,
+        child: ExcludeSemantics(
+          excluding: !locked,
+          child: FadeTransition(
+            opacity: _opacity,
+            child: ScaleTransition(scale: _scale, child: const LockScreen()),
+          ),
+        ),
+      ),
+    );
+  }
 }
