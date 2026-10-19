@@ -7,15 +7,21 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 
 root = pathlib.Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--dart', default='dart')
+parser.add_argument('--design-strict', action='store_true',
+                    help='fail when raw design values grow above scripts/design-baseline.json')
 args = parser.parse_args()
 
 def run(argv, cwd):
     subprocess.run(argv, cwd=cwd, check=True)
+
+# Design-system ratchet (DESIGN.md). Report mode until the baseline is paid down.
+run([sys.executable, str(root / 'scripts/check-design-tokens.py'), *(['--strict'] if args.design_strict else [])], root)
 
 run([args.dart, 'test'], root / 'packages/personal_core')
 with tempfile.TemporaryDirectory(prefix='personal_checks_') as temporary:

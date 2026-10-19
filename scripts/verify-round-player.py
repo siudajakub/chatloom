@@ -34,17 +34,44 @@ SOURCES = (
     'lib/personal/media/private_directories_native.dart',
     'lib/personal/media/private_directories_stub.dart',
     'lib/personal/storage/storage_failure.dart',
+    'lib/personal/media/media_inflight.dart',
     'lib/personal/round_video/round_media_loader.dart',
     'lib/personal/round_video/round_playback_coordinator.dart',
     'lib/personal/round_video/round_playback_queue.dart',
     'lib/personal/round_video/round_playback_receipts.dart',
     'lib/pages/chat/events/round_video_view.dart',
+    'lib/pages/chat/events/round_video_stage.dart',
     'lib/pages/chat/events/round_video_message.dart',
     'lib/pages/chat/events/round_video_bridge_message.dart',
     'lib/pages/chat/events/round_mini_player.dart',
     'lib/pages/chat/events/message_content.dart',
     'lib/utils/matrix_sdk_extensions/event_extension.dart',
     'lib/utils/size_string.dart',
+    'lib/utils/bounded_byte_cache.dart',
+    'lib/pages/chat/conversation_motion.dart',
+)
+def relative_closure(*entries):
+    """Entry files plus their relative (non-package) imports/exports, so
+    presentation helpers they pull in (Notion tokens, glass, motion) stay
+    copied even when the design system grows a file."""
+    seen, queue = [], list(entries)
+    while queue:
+        relative = queue.pop(0)
+        if relative in seen:
+            continue
+        seen.append(relative)
+        path = ROOT / relative
+        for target in re.findall(r"^(?:import|export)\s+'([^':]+\.dart)'", path.read_text(), re.M):
+            resolved = (path.parent / target).resolve().relative_to(ROOT.resolve()).as_posix()
+            queue.append(resolved)
+    return tuple(seen)
+
+
+# Presentation dependencies of the round view/stage (copied byte-for-byte).
+SOURCES += tuple(
+    path for path in relative_closure(
+        'lib/pages/chat/conversation_bubble.dart', 'lib/ui/notion/notion.dart',
+    ) if path not in SOURCES
 )
 TESTS = (
     'test/personal/round_video/round_playback_coordinator_test.dart',
@@ -52,9 +79,10 @@ TESTS = (
     'test/personal/round_video/round_video_view_test.dart',
     'test/personal/round_video/round_rendering_guard_test.dart',
     'test/personal/round_video/round_mini_player_lifecycle_test.dart',
+    'test/personal/round_video/round_video_stage_test.dart',
 )
 DIRECT = (
-    'material_ui', 'video_player', 'just_audio', 'path_provider', 'http',
+    'material_ui', 'cupertino_ui', 'video_player', 'just_audio', 'path_provider', 'http',
     'path_provider_platform_interface', 'shared_preferences', 'async',
 )
 FORBIDDEN = {
@@ -75,6 +103,9 @@ class TelegramRoundService extends ChangeNotifier implements RoundPlaybackReceip
   static final _instances = <Client, TelegramRoundService>{};
   static TelegramRoundService of(Client client) => _instances.putIfAbsent(client, TelegramRoundService.new);
   Map<String, dynamic>? verifiedMediaStateSnapshot(Event event) => null;
+  bool isMediaStateKnown(Event event) => false;
+  Future<void> preloadMediaStates(Room room, Iterable<String> ids) async {}
+  void initializeEagerly() {}
   Future<Map<String, dynamic>?> mediaState(Event event) async => null;
   @override bool get incognito => true;
   @override bool canExplicitlyReport(Event event) => false;
@@ -99,7 +130,8 @@ abstract final class AppSettings {
 import 'package:matrix/matrix.dart';
 class TranscriptPanel extends StatelessWidget {
   final Event event;
-  const TranscriptPanel({super.key, required this.event});
+  final Color? foregroundColor;
+  const TranscriptPanel({super.key, required this.event, this.foregroundColor});
   @override Widget build(BuildContext context) => throw StateError('Transcription UI is excluded');
 }
 ''',
@@ -346,6 +378,9 @@ All files in production_sources/SOURCE-MANIFEST.json are copied byte-for-byte.
 Matrix/personal_core use their real vendored files, also SHA-snapshotted.
 material_ui, video_player, just_audio, path_provider and transitive hosted
 dependencies use the app's exact lock versions. Native SDK hooks remain enabled.
+
+Notion tokens/primitives, conversation bubble/grouping/motion and the round
+stage are copied production sources (presentation only).
 
 Stubbed app ports: PersonalPrivacy supplies an unlocked fixture surface;
 TelegramRoundService supplies no reverse state and denies all receipts/forward;

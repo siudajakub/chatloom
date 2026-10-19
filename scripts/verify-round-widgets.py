@@ -45,8 +45,33 @@ SOURCES = (
     'lib/personal/round_video/round_media_preparer.dart',
     'lib/personal/round_video/round_playback_coordinator.dart',
     'lib/personal/round_video/round_record_button.dart',
+    'lib/pages/chat/conversation_motion.dart',
     'lib/pages/chat/round_video_recorder.dart',
     'lib/pages/chat/events/round_video_view.dart',
+)
+def relative_closure(*entries):
+    """Entry files plus their relative (non-package) imports/exports, so
+    presentation helpers they pull in (Notion tokens, glass, motion) stay
+    copied even when the design system grows a file."""
+    seen, queue = [], list(entries)
+    while queue:
+        relative = queue.pop(0)
+        if relative in seen:
+            continue
+        seen.append(relative)
+        path = ROOT / relative
+        for target in re.findall(r"^(?:import|export)\s+'([^':]+\.dart)'", path.read_text(), re.M):
+            resolved = (path.parent / target).resolve().relative_to(ROOT.resolve()).as_posix()
+            queue.append(resolved)
+    return tuple(seen)
+
+
+# Notion files/conversation bubble reached through relative imports.
+SOURCES += tuple(
+    path for path in relative_closure(
+        'lib/ui/notion/notion.dart', 'lib/ui/notion/notion_theme.dart',
+        'lib/pages/chat/events/round_video_view.dart',
+    ) if path not in SOURCES
 )
 TESTS = (
     'test/personal/round_video/round_capture_controller_test.dart',
@@ -95,7 +120,7 @@ def dependencies(pubspec):
 def dependency_closure(roots, versions):
     selected = set()
     visited = set()
-    queue = ['material_ui', 'video_player', 'flutter_lints', 'flutter', 'flutter_test']
+    queue = ['material_ui', 'cupertino_ui', 'video_player', 'flutter_lints', 'flutter', 'flutter_test']
     while queue:
         name = queue.pop()
         if name in visited:
@@ -136,7 +161,7 @@ def prepare(flutter):
     versions = hosted_versions()
     roots = package_roots()
     pinned = dependency_closure(roots, versions)
-    for name in ['material_ui', 'video_player', 'flutter_lints']:
+    for name in ['material_ui', 'cupertino_ui', 'video_player', 'flutter_lints']:
         if name not in pinned:
             raise RuntimeError(f'Missing locked hosted version for {name}')
     if HARNESS.is_symlink():
@@ -175,6 +200,7 @@ dependencies:
   flutter:
     sdk: flutter
   material_ui: "{pinned['material_ui']}"
+  cupertino_ui: "{pinned['cupertino_ui']}"
   video_player: "{pinned['video_player']}"
 dev_dependencies:
   flutter_test:

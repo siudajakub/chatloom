@@ -25,9 +25,14 @@ def project_root(checkout):
 PROJECT = project_root(ROOT)
 HARNESS = ROOT / 'build/notion_widget_harness'
 MARKER = HARNESS / '.notion-ui-harness'
+# Every lib/ui/notion/*.dart file is added in prepare(); new primitives need no
+# edit here. Motion packages (flutter_animate, skeletonizer) are pinned below.
 SOURCES = (
- 'lib/ui/notion/notion.dart', 'lib/ui/notion/notion_theme.dart',
- 'lib/ui/notion/details_contract.dart', 'lib/ui/notion/initial_avatar.dart',
+ 'lib/widgets/pulsating_widget.dart', 'lib/widgets/typing_animation.dart',
+ 'lib/personal/encryption/key_recovery_stage.dart',
+ 'lib/pages/chat/events/waiting_message_view.dart', 'lib/pages/chat/undecryptable_chat_hint.dart',
+ 'lib/personal/ui/inbox_health_notice.dart',
+ 'lib/personal/ui/notion_transcribe_button.dart',
  'lib/personal/ui/notion_inbox_page.dart', 'lib/personal/ui/notion_inbox_row.dart',
  'lib/personal/ui/notion_inbox_pins.dart', 'lib/personal/ui/notion_inbox_dock.dart',
  'lib/personal/ui/notion_network_filter.dart', 'lib/personal/ui/notion_network_selector.dart',
@@ -39,8 +44,12 @@ SOURCES = (
  'lib/pages/chat/conversation_grouping.dart', 'lib/pages/chat/conversation_bubble.dart',
  'lib/pages/chat/conversation_motion.dart', 'lib/pages/chat/conversation_message_gestures.dart',
  'lib/pages/chat/compact_composer.dart', 'lib/pages/chat/conversation_source_picker.dart',
+ 'lib/pages/chat/composer_action_tray.dart', 'lib/pages/chat/voice_record_button.dart',
  'lib/config/themes.dart', 'lib/widgets/layouts/two_column_layout.dart',
 )
+
+# UI motion packages; only lib/ui/notion imports them (design lint).
+MOTION_PACKAGES = ('flutter_animate', 'skeletonizer')
 
 def write(relative, data):
  target = HARNESS / relative
@@ -58,7 +67,7 @@ def prepare(flutter):
  helper = importlib.util.module_from_spec(spec)
  spec.loader.exec_module(helper)
  versions, roots = helper.hosted_versions(), helper.package_roots()
- queue = ['material_ui', 'flutter_svg', 'flutter_lints', 'flutter', 'flutter_test']
+ queue = ['material_ui', 'cupertino_ui', 'flutter_svg', *MOTION_PACKAGES, 'flutter_lints', 'flutter', 'flutter_test']
  visited, pinned = set(), {}
  while queue:
   name = queue.pop()
@@ -76,14 +85,25 @@ def prepare(flutter):
  if visited.intersection({'matrix', 'webcrypto', 'sqlite3', 'native_imaging', 'flutter_vodozemac'}):
   raise RuntimeError('Unexpected native app graph in presentation harness')
  manifest = {}
- sources = list(SOURCES)
+ # metadata_actions.dart reaches into the app graph (PersonalClient).
+ sources = [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'lib/ui/notion').glob('*.dart')) if path.name != 'metadata_actions.dart']
+ sources += list(SOURCES)
  # SDK/controller suites run with native hooks through run-personal-app-tests.py.
  full_graph_only = {'two_column_accessibility_test.dart',
+                    'dialog_motion_test.dart',
+                    'inbox_motion_test.dart',
                     'conversation_message_actions_test.dart',
                     'conversation_timeline_integration_test.dart',
-                    'conversation_ux_capture_test.dart'}
+                    'conversation_ux_capture_test.dart',
+                    'content_interactions_test.dart',
+                    'content_transport_test.dart',
+                    'inbox_resource_lifecycle_test.dart',
+                    'inbox_startup_lifecycle_test.dart',
+                    'profile_content_capture_test.dart',
+                    'page_transitions_test.dart'}
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion').glob('*_test.dart')) if not path.name.endswith(('_controller_test.dart', '_adapter_test.dart')) and path.name not in full_graph_only]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'assets/notion').rglob('*')) if path.is_file()]
+ sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion/goldens').rglob('*.png'))]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'packages/personal_core/lib').rglob('*.dart'))]
  sources += ['packages/personal_core/pubspec.yaml']
  for name in sources:
@@ -102,6 +122,7 @@ def prepare(flutter):
  reference = PROJECT / 'artifacts/ui-mockups-2026-10-12/notion-dark-v2/chat.png'
  write('assets/reference/chat.png', reference.read_bytes())
  overrides = ''.join(f'  {name}: "{version}"\n' for name, version in sorted(pinned.items()))
+ motion = ''.join(f'  {name}: "{pinned[name]}"\n' for name in MOTION_PACKAGES)
  write('pubspec.yaml', f'''name: fluffychat
 publish_to: none
 environment:
@@ -110,8 +131,9 @@ dependencies:
   flutter:
     sdk: flutter
   material_ui: "{pinned['material_ui']}"
+  cupertino_ui: "{pinned['cupertino_ui']}"
   flutter_svg: "{pinned['flutter_svg']}"
-  personal_core:
+{motion}  personal_core:
     path: packages/personal_core
 dev_dependencies:
   flutter_test:
@@ -145,6 +167,7 @@ def main():
  parser.add_argument('--prepare-only', action='store_true')
  parser.add_argument('--skip-analyze', action='store_true')
  parser.add_argument('--capture-dir', type=Path, help='Separate directory for synthetic screenshots')
+ parser.add_argument('--update-goldens', action='store_true', help='Rewrite test/notion/goldens from this run')
  args = parser.parse_args()
  manifest = prepare(args.flutter)
  print(f'Prepared {len(manifest)} hashed production inputs at {HARNESS}', flush=True)
@@ -156,13 +179,20 @@ def main():
  def run(arguments):
   subprocess.run(['rtk', args.flutter, *arguments], cwd=HARNESS, env=environment, check=True)
  run(['pub', 'get', '--offline'])
- test_sources = [name for name in manifest if name.startswith('test/notion/')]
- run(['test', '--no-pub', '--concurrency=1', '--reporter', 'expanded', *test_sources])
+ test_sources = [name for name in manifest if name.startswith('test/notion/') and name.endswith('_test.dart')]
+ run(['test', '--no-pub', '--concurrency=1', '--reporter', 'expanded', *(['--update-goldens'] if args.update_goldens else []), *test_sources])
  if not args.skip_analyze:
   run(['analyze', '--no-pub', '--no-fatal-infos', 'lib', *test_sources])
  drift = [name for name, digest in manifest.items() if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != digest]
  if drift:
   raise RuntimeError('Production sources changed during verification; rerun: ' + ', '.join(drift))
+ if args.update_goldens:
+  goldens = sorted((HARNESS / 'test/notion/goldens').rglob('*.png'))
+  for golden in goldens:
+   target = ROOT / golden.relative_to(HARNESS)
+   target.parent.mkdir(parents=True, exist_ok=True)
+   target.write_bytes(golden.read_bytes())
+  print(f'Updated {len(goldens)} goldens under test/notion/goldens', flush=True)
  print('PASS production presentation fixtures; native/real-account acceptance NOT RUN', flush=True)
 
 if __name__ == '__main__':
