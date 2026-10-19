@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'notion_settings_body.dart';
 
@@ -29,14 +30,18 @@ class NotionPrivacyPreferences extends StatelessWidget {
         value: incognito,
         onChanged: pending ? null : onIncognito,
       ),
-      if (error != null)
-        Semantics(
+      NotionSizeReveal(
+        visible: error != null,
+        child: Semantics(
           liveRegion: true,
           child: Padding(
             padding: const EdgeInsets.all(12),
-            child: Text(error!),
+            child: NotionFadeThrough(
+              child: Text(error ?? '', key: ValueKey(error)),
+            ),
           ),
         ),
+      ),
       NotionSettingsToggle(
         title: 'Send typing notifications',
         subtitle: incognito

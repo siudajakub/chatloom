@@ -2,10 +2,12 @@
 import 'dart:async';
 
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/personal/media/media_prefetcher.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
 import 'capabilities.dart';
+import 'journal_trust.dart';
 import 'privacy_transport.dart';
 import 'round_video/telegram_media_protocol.dart';
 import 'round_video/telegram_room_binding.dart';
@@ -17,9 +19,15 @@ abstract final class PersonalPrivacy {
   static bool _surfaceUnlocked = true;
   static bool _surfaceForeground = true;
   static int surfaceGeneration = 0;
+  // External pickers intentionally background the app. A lock still invalidates
+  // their captured composer even when the user unlocks before returning.
+  static int surfaceLockGeneration = 0;
   static bool get surfaceUnlocked => _surfaceUnlocked;
   static set surfaceUnlocked(bool value) {
-    if (_surfaceUnlocked != value) surfaceGeneration++;
+    if (_surfaceUnlocked != value) {
+      surfaceGeneration++;
+      surfaceLockGeneration++;
+    }
     _surfaceUnlocked = value;
   }
 
@@ -87,6 +95,7 @@ abstract final class PersonalPrivacy {
   }
 
   static void forget(Client client) {
+    MediaPrefetcher.closeFor(client);
     unawaited(TelegramRoundService.closeFor(client));
     TelegramRoomBinding.forget(client);
     _observed.removeWhere((room, _) => identical(room.client, client));
@@ -368,14 +377,9 @@ abstract final class PersonalPrivacy {
       return null;
     }
     final client = event.room.client;
-    await client.userDeviceKeysLoading;
-    final senderKey = event.originalSource?.content['sender_key'];
-    if (client.userDeviceKeys[client.userID]?.deviceKeys.values.any(
-          (d) => d.verified && d.curve25519Key == senderKey,
-        ) !=
-        true) {
-      return null;
-    }
+    // Authenticated by the megolm session that decrypted it, not by the
+    // unauthenticated envelope sender_key.
+    if (!await MegolmTrustSnapshot.verify(event)) return null;
     final members = await event.room.requestParticipants([
       Membership.join,
       Membership.invite,
