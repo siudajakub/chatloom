@@ -68,6 +68,8 @@ def stable_env(flutter):
     TOOLS_BIN.mkdir(parents=True, exist_ok=True)
     STABLE_TMP.mkdir(parents=True, exist_ok=True)
     path = [str(TOOLS_BIN), str(flutter.parent)]
+    if os.environ.get('CARGO_HOME'):
+        path.append(str(Path(os.environ['CARGO_HOME']) / 'bin'))
     if sys.platform == 'darwin':
         cmake = resolve_cmake()
         if cmake is None:
@@ -104,7 +106,11 @@ def stable_env(flutter):
     }
     # Capture directories only tell tests where to write screenshots; native
     # hooks do not key on them.
-    for key in ('ANDROID_HOME', 'ANDROID_SDK_ROOT', 'JAVA_HOME', 'FFMPEG_PATH', 'FFPROBE_PATH',
+    for key in ('ANDROID_HOME', 'ANDROID_SDK_ROOT', 'ANDROID_USER_HOME',
+                'JAVA_HOME', 'GRADLE_USER_HOME', 'CARGO_HOME', 'RUSTUP_HOME',
+                'CARGO_TARGET_DIR', 'XDG_CACHE_HOME', 'CMAKE_BUILD_PARALLEL_LEVEL',
+                'FFMPEG_PATH', 'FFPROBE_PATH', 'CHROME_EXECUTABLE',
+                'PLAYWRIGHT_BROWSERS_PATH',
                 'CONVERSATION_CAPTURE_DIR', 'NOTION_CAPTURE_DIR'):
         if os.environ.get(key):
             env[key] = os.environ[key]
