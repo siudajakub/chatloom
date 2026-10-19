@@ -2,6 +2,7 @@
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_adapter.dart';
+import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -49,6 +50,80 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     await AppSettings.init(loadWebConfigFile: false);
   });
+  testWidgets(
+    'profile ignores unrelated sync and coalesces source state bursts',
+    (tester) async {
+      final client = Client(
+        'fictional profile refresh',
+        database: _LocalDatabase(),
+      );
+      final room = _Room(id: '!profile:example.invalid', client: client);
+      client.rooms.add(room);
+      final personal = PersonalClient.of(client);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NotionLiveChatDetails(personal: personal, room: room),
+        ),
+      );
+      await tester.pumpAndSettle();
+      NotionChatDetailsPage page() =>
+          tester.widget(find.byType(NotionChatDetailsPage));
+      final before = page();
+      client.onSync.add(
+        SyncUpdate(
+          nextBatch: 'unrelated',
+          rooms: RoomsUpdate(
+            join: {'!other:example.invalid': JoinedRoomUpdate()},
+          ),
+        ),
+      );
+      client.onRoomState.add((
+        roomId: '!other:example.invalid',
+        state: StrippedStateEvent(
+          senderId: '@fixture:example.invalid',
+          type: EventTypes.RoomName,
+          content: {'name': 'Other fictional room'},
+        ),
+      ));
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(page(), same(before));
+      for (var i = 0; i < 30; i++) {
+        client.onRoomState.add((
+          roomId: room.id,
+          state: StrippedStateEvent(
+            senderId: '@fixture:example.invalid',
+            type: EventTypes.RoomName,
+            content: {'name': 'Fictional source'},
+          ),
+        ));
+      }
+      await tester.pump();
+      expect(
+        page(),
+        same(before),
+        reason: 'A source burst waits for one coalesced refresh',
+      );
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(page(), isNot(same(before)));
+      final refreshed = page();
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(page(), same(refreshed));
+      // Disposal cancels a pending refresh rather than calling setState later.
+      client.onRoomState.add((
+        roomId: room.id,
+        state: StrippedStateEvent(
+          senderId: '@fixture:example.invalid',
+          type: EventTypes.RoomName,
+          content: {},
+        ),
+      ));
+      await tester.pump();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(tester.takeException(), isNull);
+      personal.dispose();
+    },
+  );
   testWidgets(
     'explicit account notifications target the source and report native failure',
     (tester) async {

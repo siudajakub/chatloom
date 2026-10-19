@@ -1,36 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:material_ui/material_ui.dart';
 
+import 'notion_motion.dart';
+import 'notion_pressable.dart';
+import 'notion_tokens.dart';
+
 export 'details_contract.dart';
 export 'initial_avatar.dart';
-
-/// Shared presentation values for the approved Notion dark v2 interface.
-abstract final class NotionTokens {
-  static const background = Color(0xFF191919);
-  static const surface = Color(0xFF252525);
-  static const selected = Color(0xFF2F2F2F);
-  static const border = Color(0xFF383838);
-  static const text = Color(0xFFE8E7E5);
-  static const secondary = Color(0xFFAAAAA5);
-  static const cover = Color(0xFF33312B);
-  static const double inset = 20;
-  static const double avatarRadius = 5;
-  static const double radius = 7;
-  static const double headerHeight = 56;
-  static const double touchTarget = 48;
-  static const title = TextStyle(
-    fontSize: 30,
-    fontWeight: FontWeight.w700,
-    height: 1.15,
-  );
-  static const heading = TextStyle(
-    fontSize: 20,
-    fontWeight: FontWeight.w600,
-    height: 1.3,
-  );
-  static const body = TextStyle(fontSize: 16, height: 1.4);
-  static const caption = TextStyle(fontSize: 12, height: 1.4);
-}
+export 'notion_callout.dart';
+export 'notion_contrast.dart';
+export 'notion_entrance.dart';
+export 'notion_glass.dart';
+export 'notion_loops.dart';
+export 'notion_modal_routes.dart';
+export 'notion_motion.dart';
+export 'notion_pressable.dart';
+export 'notion_primitives.dart';
+export 'notion_skeleton.dart';
+export 'notion_switchers.dart';
+export 'notion_tokens.dart';
 
 /// Uses the active theme so the existing light/system preference remains usable.
 class NotionIconButton extends StatelessWidget {
@@ -46,19 +34,35 @@ class NotionIconButton extends StatelessWidget {
     this.selected = false,
   });
   @override
-  Widget build(BuildContext context) => IconButton(
-    tooltip: label,
-    onPressed: onPressed,
-    icon: Icon(icon, size: 22),
-    style: IconButton.styleFrom(
-      minimumSize: const Size.square(NotionTokens.touchTarget),
-      foregroundColor: Theme.of(context).colorScheme.onSurface,
-      backgroundColor: selected
-          ? Theme.of(context).colorScheme.surfaceContainerHighest
-          : Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return NotionPressable(
+      enabled: onPressed != null,
+      scale: NotionMotion.pressIcon,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(end: selected ? 1 : 0),
+        duration: NotionMotion.of(context, NotionMotion.quick),
+        curve: NotionMotion.standard,
+        builder: (context, t, _) => IconButton(
+          tooltip: label,
+          onPressed: onPressed,
+          icon: Icon(icon, size: NotionSize.iconMd),
+          style: IconButton.styleFrom(
+            minimumSize: const Size.square(NotionTokens.touchTarget),
+            foregroundColor: scheme.onSurface,
+            backgroundColor: t == 0
+                ? Colors.transparent
+                : scheme.surfaceContainerHighest.withValues(
+                    alpha: scheme.surfaceContainerHighest.a * t,
+                  ),
+            shape: const RoundedRectangleBorder(
+              borderRadius: NotionRadius.smAll,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class NotionPropertyRow extends StatelessWidget {
@@ -72,7 +76,13 @@ class NotionPropertyRow extends StatelessWidget {
     this.onTap,
   });
   @override
-  Widget build(BuildContext context) => InkWell(
+  Widget build(BuildContext context) => NotionPressable(
+    enabled: onTap != null,
+    scale: NotionMotion.pressRow,
+    child: _propertyRow(context),
+  );
+
+  Widget _propertyRow(BuildContext context) => InkWell(
     onTap: onTap,
     child: Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -134,65 +144,71 @@ class NotionListRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Semantics(
     button: onTap != null,
-    child: InkWell(
-      onTap: onTap,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 52),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final detail =
-                  trailing ??
-                  (onTap == null
-                      ? null
-                      : const Icon(Icons.chevron_right, size: 22));
-              final large =
-                  MediaQuery.textScalerOf(context).scale(16) > 22 &&
-                  constraints.maxWidth < 480;
-              final text = Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: NotionTokens.body),
-                  if (subtitle != null)
-                    Text(
-                      subtitle!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 13,
-                        height: 1.4,
-                      ),
+    child: NotionPressable(
+      enabled: onTap != null,
+      scale: NotionMotion.pressRow,
+      child: _row(context),
+    ),
+  );
+
+  Widget _row(BuildContext context) => InkWell(
+    onTap: onTap,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 52),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final detail =
+                trailing ??
+                (onTap == null
+                    ? null
+                    : const Icon(Icons.chevron_right, size: 22));
+            final large =
+                MediaQuery.textScalerOf(context).scale(16) > 22 &&
+                constraints.maxWidth < 480;
+            final text = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: NotionTokens.body),
+                if (subtitle != null)
+                  Text(
+                    subtitle!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 13,
+                      height: 1.4,
                     ),
-                  if (large && detail != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: detail,
-                    ),
+                  ),
+                if (large && detail != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: detail,
+                  ),
+              ],
+            );
+            return Row(
+              crossAxisAlignment: large
+                  ? CrossAxisAlignment.start
+                  : CrossAxisAlignment.center,
+              children: [
+                if (leading != null) ...[
+                  SizedBox(width: 24, child: leading),
+                  const SizedBox(width: 14),
                 ],
-              );
-              return Row(
-                crossAxisAlignment: large
-                    ? CrossAxisAlignment.start
-                    : CrossAxisAlignment.center,
-                children: [
-                  if (leading != null) ...[
-                    SizedBox(width: 24, child: leading),
-                    const SizedBox(width: 14),
-                  ],
-                  Expanded(child: text),
-                  if (!large && detail != null) ...[
-                    const SizedBox(width: 10),
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: constraints.maxWidth * .44,
-                      ),
-                      child: detail,
+                Expanded(child: text),
+                if (!large && detail != null) ...[
+                  const SizedBox(width: 10),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: constraints.maxWidth * .44,
                     ),
-                  ],
+                    child: detail,
+                  ),
                 ],
-              );
-            },
-          ),
+              ],
+            );
+          },
         ),
       ),
     ),
@@ -219,7 +235,7 @@ class NotionCompactChatHeader extends StatelessWidget {
     onTap: onDetails,
     child: InkWell(
       onTap: onDetails,
-      borderRadius: BorderRadius.circular(5),
+      borderRadius: NotionRadius.smAll,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 48),
         child: Row(

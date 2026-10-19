@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/person_location.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:go_router/go_router.dart';
@@ -14,11 +15,11 @@ Future<void> performNotionRoomAction(
 ) async {
   switch (action) {
     case 'details':
-      context.go('/rooms/${Uri.encodeComponent(room.id)}/details');
+      context.go('${chatLocation(context, room.id)}/details');
     case 'search':
-      context.go('/rooms/${Uri.encodeComponent(room.id)}/search');
+      context.go('${chatLocation(context, room.id)}/search');
     case 'encryption':
-      context.go('/rooms/${Uri.encodeComponent(room.id)}/encryption');
+      context.go('${chatLocation(context, room.id)}/encryption');
     case 'leave':
       final l10n = L10n.of(context);
       final router = GoRouter.of(context);

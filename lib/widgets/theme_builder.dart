@@ -20,10 +20,15 @@ class ThemeBuilder extends StatefulWidget {
   final String themeModeSettingsKey;
   final String primaryColorSettingsKey;
 
+  /// Already loaded preferences: the stored theme applies to the first frame
+  /// instead of after an asynchronous load (no dark/light flash at startup).
+  final SharedPreferences? preferences;
+
   const ThemeBuilder({
     required this.builder,
     this.themeModeSettingsKey = 'theme_mode',
     this.primaryColorSettingsKey = 'primary_color',
+    this.preferences,
     super.key,
   });
 
@@ -46,16 +51,17 @@ class ThemeController extends State<ThemeBuilder> {
   Future<void> _loadData(_) async {
     final preferences = _sharedPreferences ??=
         await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() => _read(preferences));
+  }
 
+  void _read(SharedPreferences preferences) {
     final rawThemeMode = preferences.getString(widget.themeModeSettingsKey);
     final rawColor = preferences.getInt(widget.primaryColorSettingsKey);
-
-    setState(() {
-      _themeMode = ThemeMode.values.singleWhereOrNull(
-        (value) => value.name == rawThemeMode,
-      );
-      _primaryColor = rawColor == null ? null : Color(rawColor);
-    });
+    _themeMode = ThemeMode.values.singleWhereOrNull(
+      (value) => value.name == rawThemeMode,
+    );
+    _primaryColor = rawColor == null ? null : Color(rawColor);
   }
 
   Future<void> setThemeMode(ThemeMode newThemeMode) async {
@@ -85,8 +91,13 @@ class ThemeController extends State<ThemeBuilder> {
 
   @override
   void initState() {
-    WidgetsBinding.instance.addPostFrameCallback(_loadData);
     super.initState();
+    final preferences = widget.preferences;
+    if (preferences == null) {
+      WidgetsBinding.instance.addPostFrameCallback(_loadData);
+    } else {
+      _read(_sharedPreferences = preferences);
+    }
   }
 
   @override

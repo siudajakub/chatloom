@@ -3,12 +3,16 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:fluffychat/pages/chat/compact_composer.dart';
+import 'package:fluffychat/pages/chat/conversation_bubble.dart';
 import 'package:fluffychat/pages/chat/notion_conversation.dart';
+import 'package:fluffychat/pages/chat/voice_record_button.dart';
 import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
 import 'package:fluffychat/personal/ui/notion_inbox_row.dart';
 import 'package:fluffychat/personal/ui/notion_settings_page.dart';
+import 'package:fluffychat/personal/ui/notion_transcribe_button.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/ui/notion/notion_theme.dart';
 import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
@@ -18,6 +22,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 const _capture = Key('production-capture');
+const _screenGoldens = {
+  'inbox-390',
+  'inbox-390-scrolled',
+  'conversation-390',
+  'conversation-390-scrolled',
+  'merged-430-keyboard-error',
+  'chat-details-390',
+  'settings-390',
+};
 void _noop() {}
 // Only the isolated visual test package contains the already-approved fictional
 // portrait/photo reference. These pixels never seed the application or an account.
@@ -72,7 +85,8 @@ Widget _host(Widget child, {double scale = 1, double keyboard = 0}) =>
           ),
           child: child!,
         ),
-        home: child,
+        // Captures show the Impeller look; flutter_tester has no Impeller.
+        home: NotionGlassScope(mode: NotionGlassMode.on, child: child),
       ),
     );
 
@@ -148,8 +162,14 @@ Widget _inbox({bool empty = false, int extraPins = 0}) {
   );
 }
 
+// Mirrors ChatView/MergedChatPage chrome: glass header and composer drawn
+// over the timeline (DESIGN.md "Glass").
 Widget _conversation({bool merged = false, bool error = false}) => Scaffold(
+  extendBodyBehindAppBar: true,
   appBar: AppBar(
+    backgroundColor: Colors.transparent,
+    flexibleSpace: const NotionGlassBar(),
+    shape: const Border(bottom: BorderSide(color: NotionTokens.border)),
     leading: NotionIconButton(
       icon: Icons.chevron_left,
       label: 'Back',
@@ -169,132 +189,158 @@ Widget _conversation({bool merged = false, bool error = false}) => Scaffold(
       ),
     ],
   ),
-  body: Column(
-    children: [
-      Divider(height: 1, color: NotionTokens.border),
-      if (error)
-        const Padding(
-          padding: EdgeInsets.all(12),
-          child: Text(
-            'History could not be loaded. Your loaded messages remain. Retry',
-          ),
-        ),
-      Expanded(
-        child: ListView(
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 12, 20, 4),
-              child: Text(
-                'Today',
-                style: TextStyle(fontSize: 13, color: NotionTokens.secondary),
-              ),
+  body: Builder(
+    builder: (context) => Stack(
+      children: [
+        Positioned.fill(
+          child: ListView(
+            padding: EdgeInsets.only(
+              top: MediaQuery.paddingOf(context).top,
+              bottom: 160,
             ),
-            for (final item in const [
-              ('Anna', '16:40', 'Are you free tomorrow?'),
-              ('You', '16:41', 'Yes, after work.'),
-              ('Anna', '16:42', 'Hey, coffee tomorrow at 5?'),
-              ('You', '16:43', 'Sure. At the same café?'),
-              ('Anna', '16:43', 'Yes, I’ll send you the location.'),
-            ])
-              NotionAuthoredMessageRow(
-                avatar: _avatar(item.$1, 36),
-                author: item.$1,
-                time: item.$2,
+            children: [
+              if (error)
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text(
+                    'History could not be loaded. Your loaded messages remain. Retry',
+                  ),
+                ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 12, 20, 4),
+                child: Text(
+                  'Today',
+                  style: TextStyle(fontSize: 13, color: NotionTokens.secondary),
+                ),
+              ),
+              for (final item in const [
+                ('Anna', '16:40', 'Are you free tomorrow?'),
+                ('You', '16:41', 'Yes, after work.'),
+                ('Anna', '16:42', 'Hey, coffee tomorrow at 5?'),
+                ('You', '16:43', 'Sure. At the same café?'),
+                ('Anna', '16:43', 'Yes, I’ll send you the location.'),
+              ])
+                _bubble(
+                  context,
+                  outgoing: item.$1 == 'You',
+                  time: item.$2,
+                  source: merged ? 'WhatsApp' : null,
+                  quote: item.$2 == '16:43' && item.$1 == 'You'
+                      ? 'Hey, coffee tomorrow at 5?'
+                      : null,
+                  body: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(item.$3),
+                      if (item.$2 == '16:43' &&
+                          item.$1 == 'Anna' &&
+                          Platform.environment['NOTION_APPROVED_PHOTOS'] ==
+                              '1') ...[
+                        const SizedBox(height: 8),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final width = math.min(constraints.maxWidth, 240.0);
+                            return ClipRRect(
+                              borderRadius: NotionRadius.lgAll,
+                              child: _referencePhoto(
+                                const Rect.fromLTWH(203, 834, 448, 260),
+                                Size(width, width * 260 / 448),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              _bubble(
+                context,
+                outgoing: false,
+                time: '16:44',
                 body: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item.$3),
-                    if (item.$2 == '16:43' &&
-                        item.$1 == 'Anna' &&
-                        Platform.environment['NOTION_APPROVED_PHOTOS'] ==
-                            '1') ...[
-                      const SizedBox(height: 8),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final width = math.min(constraints.maxWidth, 240.0);
-                          return _referencePhoto(
-                            const Rect.fromLTWH(203, 834, 448, 260),
-                            Size(width, width * 260 / 448),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Photo',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: NotionTokens.secondary,
-                        ),
-                      ),
-                    ],
+                    NotionAudioFileBlock(
+                      duration: '0:18',
+                      progress: .05,
+                      onPlay: _noop,
+                      onSeek: (_) {},
+                      onDownload: _noop,
+                    ),
+                    const NotionTranscribeSplitButton(onTranscribe: _noop),
                   ],
                 ),
-                source: merged ? 'WhatsApp' : null,
               ),
-            NotionAuthoredMessageRow(
-              avatar: _avatar('Anna', 36),
-              author: 'Anna',
-              time: '16:44',
-              body: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  NotionAudioFileBlock(
-                    duration: '0:18',
-                    progress: .05,
-                    onPlay: _noop,
-                    onSeek: (_) {},
-                    onDownload: _noop,
-                  ),
-                  const NotionTranscribeAction(onPressed: _noop),
-                ],
-              ),
-            ),
-            NotionAuthoredMessageRow(
-              avatar: _avatar('You', 36),
-              author: 'You',
-              time: '16:45',
-              body: const Text('Great, see you there!'),
-            ),
-          ],
-        ),
-      ),
-      SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: NotionComposer(
-            input: const TextField(
-              maxLines: 3,
-              minLines: 1,
-              decoration: InputDecoration(
-                hintText: 'Write a message…',
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                isDense: true,
-              ),
-            ),
-            actions: [
-              NotionIconButton(
-                icon: Icons.attach_file,
-                label: 'Attach a file',
-                onPressed: _noop,
-              ),
-              NotionIconButton(
-                icon: Icons.mic_none_outlined,
-                label: 'Record voice message',
-                onPressed: _noop,
+              _bubble(
+                context,
+                outgoing: true,
+                time: '16:45',
+                body: const Text('Great, see you there!'),
               ),
             ],
-            source: const Text(
-              'WhatsApp',
-              style: TextStyle(fontSize: 12, color: NotionTokens.secondary),
-            ),
-            sendAction: const NotionSendButton(),
           ),
         ),
-      ),
-    ],
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: NotionGlassBar(
+            child: SafeArea(
+              top: false,
+              // The shipped composer, configured like ChatInputRow (ordinary)
+              // and the merged chat composer.
+              child: CompactComposer(
+                input: const TextField(
+                  maxLines: 4,
+                  minLines: 1,
+                  decoration: InputDecoration(
+                    hintText: 'Message…',
+                    hintMaxLines: 1,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    filled: false,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 6,
+                    ),
+                  ),
+                ),
+                source: ConversationSourceChip(
+                  network: 'whatsapp',
+                  onPressed: merged ? _noop : null,
+                ),
+                actions: [
+                  const ComposerAction(
+                    icon: Icons.attach_file_outlined,
+                    label: 'Attach media or a file',
+                    onPressed: _noop,
+                  ),
+                  if (!merged)
+                    const ComposerAction(
+                      icon: Icons.add_reaction_outlined,
+                      label: 'Emoji picker',
+                      onPressed: _noop,
+                    ),
+                ],
+                primaryAction: merged
+                    ? IconButton(
+                        icon: const Icon(Icons.mic_none_outlined),
+                        tooltip: 'Record in source conversation',
+                        onPressed: _noop,
+                      )
+                    : VoiceRecordButton(
+                        hold: VoiceRecordHold(),
+                        onStart: () async => false,
+                        onSend: () async {},
+                        onCancel: _noop,
+                      ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
   ),
 );
 
@@ -394,6 +440,15 @@ Future<void> _save(
     await tester.pumpAndSettle();
   }
   expect(tester.takeException(), isNull, reason: name);
+  // Screen goldens need the approved reference photos, which only the
+  // isolated harness (scripts/verify-notion-ui.py) provides.
+  if (_screenGoldens.contains(name) &&
+      Platform.environment['NOTION_APPROVED_PHOTOS'] == '1') {
+    await expectLater(
+      find.byKey(_capture),
+      matchesGoldenFile('goldens/screens/$name.png'),
+    );
+  }
   final directory = Platform.environment['NOTION_CAPTURE_DIR'];
   if (directory == null) return;
   final boundary = tester.renderObject<RenderRepaintBoundary>(
@@ -407,6 +462,70 @@ Future<void> _save(
     await file.writeAsBytes(bytes!.buffer.asUint8List());
     image.dispose();
   });
+}
+
+/// Moves content under the glass header so captures show the blur.
+Future<void> _scrollUnderChrome(WidgetTester tester) async {
+  await tester.drag(
+    find
+        .byWidgetPredicate(
+          (widget) =>
+              widget is Scrollable &&
+              widget.axisDirection == AxisDirection.down,
+        )
+        .first,
+    const Offset(0, -220),
+  );
+  await tester.pumpAndSettle();
+}
+
+/// A production message bubble as `Message` builds it, without the SDK.
+Widget _bubble(
+  BuildContext context, {
+  required bool outgoing,
+  required String time,
+  required Widget body,
+  String? source,
+  String? quote,
+}) {
+  final colors = ConversationBubbleColors.of(context);
+  final page = context.notion.colors.background;
+  final quoteColors = ConversationReplyQuote.colorsFor(
+    side: colors.incoming,
+    page: page,
+    muted: colors.metadata,
+  );
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12),
+    child: ConversationBubble(
+      outgoing: outgoing,
+      avatar: _avatar('Anna', 28),
+      heading: source == null
+          ? null
+          : Text(
+              source,
+              style: NotionType.caption.copyWith(color: colors.metadata),
+            ),
+      quote: quote == null
+          ? null
+          : ConversationReplyQuote(
+              text: quote,
+              fill: quoteColors.fill,
+              textColor: quoteColors.text,
+              outgoing: outgoing,
+              caption: ConversationReplyCaption(
+                label: 'Replied to Anna',
+                color: colors.metadata,
+              ),
+              onTap: _noop,
+            ),
+      footer: Text(
+        time,
+        style: NotionType.micro.copyWith(color: colors.metadata),
+      ),
+      body: body,
+    ),
+  );
 }
 
 void main() {
@@ -429,12 +548,16 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(_host(_inbox()));
     await _save(tester, 'inbox-390');
-    await tester.tap(find.text('All chats'));
+    await _scrollUnderChrome(tester);
+    await _save(tester, 'inbox-390-scrolled', scrollToTop: false);
+    await tester.tap(find.text('All networks'));
     await _save(tester, 'network-filter-390');
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     await tester.pumpWidget(_host(_conversation()));
     await _save(tester, 'conversation-390');
+    await _scrollUnderChrome(tester);
+    await _save(tester, 'conversation-390-scrolled', scrollToTop: false);
     await tester.pumpWidget(_host(_details()));
     await _save(tester, 'chat-details-390');
     await tester.scrollUntilVisible(

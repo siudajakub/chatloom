@@ -7,6 +7,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:particles_network/particles_network.dart';
@@ -55,7 +56,7 @@ class LoginScaffold extends StatelessWidget {
           ),
           child: Stack(
             children: [
-              if (!MediaQuery.disableAnimationsOf(context))
+              if (!NotionMotion.reduced(context))
                 ParticleNetwork(
                   maxSpeed: 0.25,
                   particleColor: theme.colorScheme.primary,
@@ -68,26 +69,33 @@ class LoginScaffold extends StatelessWidget {
                     child: Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                        child: Material(
-                          borderRadius: BorderRadius.circular(
-                            AppConfig.borderRadius,
-                          ),
-                          clipBehavior: Clip.hardEdge,
-                          elevation:
-                              theme.appBarTheme.scrolledUnderElevation ?? 4,
-                          shadowColor: theme.appBarTheme.shadowColor,
-                          child: ConstrainedBox(
-                            constraints: isMobileMode
-                                ? const BoxConstraints()
-                                : const BoxConstraints(
-                                    maxWidth: 480,
-                                    maxHeight: 640,
-                                  ),
-                            child: Scaffold(
-                              key: const Key('LoginScaffold'),
-                              appBar: appBar,
-                              body: SafeArea(child: body),
-                              bottomNavigationBar: bottomNavigationBar,
+                        // The card settles in once; its pages animate inside.
+                        child: NotionEntrance(
+                          afterRoute: false,
+                          rise: NotionMotion.riseSheet,
+                          scale: NotionMotion.dialogFrom,
+                          duration: NotionMotion.long,
+                          child: Material(
+                            borderRadius: BorderRadius.circular(
+                              AppConfig.borderRadius,
+                            ),
+                            clipBehavior: Clip.hardEdge,
+                            elevation:
+                                theme.appBarTheme.scrolledUnderElevation ?? 4,
+                            shadowColor: theme.appBarTheme.shadowColor,
+                            child: ConstrainedBox(
+                              constraints: isMobileMode
+                                  ? const BoxConstraints()
+                                  : const BoxConstraints(
+                                      maxWidth: 480,
+                                      maxHeight: 640,
+                                    ),
+                              child: Scaffold(
+                                key: const Key('LoginScaffold'),
+                                appBar: appBar,
+                                body: SafeArea(child: body),
+                                bottomNavigationBar: bottomNavigationBar,
+                              ),
                             ),
                           ),
                         ),
@@ -141,4 +149,29 @@ class _PrivacyButtons extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Shakes [child] each time a new, non-null [error] arrives (a rejected
+/// password, a wrong recovery key); clearing the error does not shake.
+class ErrorShake extends StatefulWidget {
+  final Object? error;
+  final Widget child;
+  const ErrorShake({super.key, required this.error, required this.child});
+
+  @override
+  State<ErrorShake> createState() => _ErrorShakeState();
+}
+
+class _ErrorShakeState extends State<ErrorShake> {
+  int _errors = 0;
+
+  @override
+  void didUpdateWidget(ErrorShake oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.error != null && widget.error != oldWidget.error) _errors++;
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      NotionShake(trigger: _errors, child: widget.child);
 }

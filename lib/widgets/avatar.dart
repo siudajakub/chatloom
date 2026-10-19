@@ -101,23 +101,32 @@ class Avatar extends StatelessWidget {
               return Positioned(
                 bottom: -3,
                 right: -3,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: presenceBackgroundColor ?? theme.colorScheme.surface,
-                    borderRadius: BorderRadius.circular(32),
-                  ),
-                  alignment: Alignment.center,
+                // A status change pulses the dot and blends its colour; the
+                // first appearance stays still (avatars rebuild on scroll).
+                child: NotionPop(
+                  trigger: presence.presence,
+                  playOnMount: false,
                   child: Container(
-                    width: 10,
-                    height: 10,
+                    width: 16,
+                    height: 16,
                     decoration: BoxDecoration(
-                      color: dotColor,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        width: 1,
-                        color: theme.colorScheme.surface,
+                      color:
+                          presenceBackgroundColor ?? theme.colorScheme.surface,
+                      borderRadius: BorderRadius.circular(32),
+                    ),
+                    alignment: Alignment.center,
+                    child: AnimatedContainer(
+                      duration: NotionMotion.of(context, NotionMotion.short),
+                      curve: NotionMotion.standard,
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: dotColor,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          width: 1,
+                          color: theme.colorScheme.surface,
+                        ),
                       ),
                     ),
                   ),

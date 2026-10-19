@@ -5,6 +5,7 @@
 
 import 'dart:math';
 
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 class EmptyPage extends StatelessWidget {
@@ -24,12 +25,17 @@ class EmptyPage extends StatelessWidget {
       extendBodyBehindAppBar: true,
       body: Container(
         alignment: Alignment.center,
-        child: Image.asset(
-          'assets/logo/mini/logo_mono_mini.png',
-          color: theme.colorScheme.surfaceContainerHigh,
-          width: width,
-          height: width,
-          filterQuality: FilterQuality.medium,
+        // The resting logo settles in softly when the pane opens.
+        child: NotionEntrance(
+          rise: 0,
+          scale: NotionMotion.dialogFrom,
+          child: Image.asset(
+            'assets/logo/mini/logo_mono_mini.png',
+            color: theme.colorScheme.surfaceContainerHigh,
+            width: width,
+            height: width,
+            filterQuality: FilterQuality.medium,
+          ),
         ),
       ),
     );
