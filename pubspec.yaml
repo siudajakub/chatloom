@@ -36,6 +36,7 @@ dependencies:
   file_selector: ^1.1.0
   flutter:
     sdk: flutter
+  flutter_animate: 4.5.2
   flutter_callkit_incoming: ^3.1.6
   flutter_foreground_task: ^11.0.3
   flutter_linkify: ^6.0.0
@@ -90,6 +91,7 @@ dependencies:
   scroll_to_index: ^3.0.1
   share_plus: ^13.3.0
   shared_preferences: ^2.5.5
+  skeletonizer: 3.0.0
   slugify: ^2.0.0
   sqflite_common_ffi: ^2.4.3
   swipe_to_action:
