@@ -1,11 +1,13 @@
 import 'dart:ui' as ui;
 
 import 'package:cross_file/cross_file.dart';
+import 'package:file_picker/file_picker.dart' show FileType;
 import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
 import 'package:fluffychat/personal/capabilities.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:light_compressor_v2/light_compressor_v2.dart';
@@ -44,6 +46,9 @@ Future<MergedMediaResult> showMergedMediaDialog(
   SendTarget frozen, {
   Event? replyTo,
   String caption = '',
+  List<XFile>? pickedFiles,
+  FileType pickerType = FileType.any,
+  bool Function()? isCurrent,
   void Function(String eventId, DateTime acceptedAt)? onAccepted,
 }) async {
   final room = personal.client.getRoomById(frozen.conversation.roomId);
@@ -62,12 +67,17 @@ Future<MergedMediaResult> showMergedMediaDialog(
       'An attachment can only reply to a message in the selected network.',
     );
   }
-  final files = await selectFiles(
-    context,
-    title: 'Attachments for the selected network',
-    allowMultiple: true,
-  );
-  if (files.isEmpty || !context.mounted) {
+  if (isCurrent?.call() == false)
+    return const MergedMediaResult(accepted: false);
+  final files =
+      pickedFiles ??
+      await selectFiles(
+        context,
+        title: 'Attachments for the selected network',
+        allowMultiple: true,
+        type: pickerType,
+      );
+  if (files.isEmpty || !context.mounted || isCurrent?.call() == false) {
     return const MergedMediaResult(accepted: false);
   }
   if (files.length > 5) {
@@ -79,6 +89,8 @@ Future<MergedMediaResult> showMergedMediaDialog(
   var total = 0;
   var actualTotal = 0;
   for (final file in files) {
+    if (!context.mounted || isCurrent?.call() == false)
+      return const MergedMediaResult(accepted: false);
     final length = await file.length();
     total += length;
     if (length <= 0 || length > 25 * 1024 * 1024 || total > 50 * 1024 * 1024) {
@@ -96,7 +108,8 @@ Future<MergedMediaResult> showMergedMediaDialog(
     _validate(room, media, '');
     prepared.add(media);
   }
-  if (!context.mounted) return const MergedMediaResult(accepted: false);
+  if (!context.mounted || isCurrent?.call() == false)
+    return const MergedMediaResult(accepted: false);
   return await showDialog<MergedMediaResult>(
         context: context,
         barrierDismissible: false,
@@ -107,6 +120,7 @@ Future<MergedMediaResult> showMergedMediaDialog(
           replyTo: replyTo,
           initialCaption: caption,
           onAccepted: onAccepted,
+          isCurrent: isCurrent,
         ),
       ) ??
       const MergedMediaResult(accepted: false);
@@ -234,6 +248,7 @@ class _MergedMediaDialog extends StatefulWidget {
   final Event? replyTo;
   final String initialCaption;
   final void Function(String eventId, DateTime acceptedAt)? onAccepted;
+  final bool Function()? isCurrent;
   const _MergedMediaDialog({
     required this.room,
     required this.frozen,
@@ -241,6 +256,7 @@ class _MergedMediaDialog extends StatefulWidget {
     required this.initialCaption,
     this.replyTo,
     this.onAccepted,
+    this.isCurrent,
   });
   @override
   State<_MergedMediaDialog> createState() => _MergedMediaDialogState();
@@ -248,11 +264,13 @@ class _MergedMediaDialog extends StatefulWidget {
 
 class _MergedMediaDialogState extends State<_MergedMediaDialog> {
   late final caption = TextEditingController(text: widget.initialCaption);
+  late final files = [...widget.files];
   bool sending = false, uncertain = false;
   int accepted = 0;
   DateTime? acceptedAt;
   String? acceptedEventId;
   String? problem;
+  String? attemptedCaption;
   @override
   void dispose() {
     caption.dispose();
@@ -260,21 +278,23 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
   }
 
   Future<void> _send() async {
-    if (sending || uncertain) return;
-    final text = caption.text.trim();
+    if (sending || uncertain || files.isEmpty) return;
+    final text = attemptedCaption ?? caption.text.trim();
+    var transportStarted = false;
     setState(() {
       sending = true;
       problem = null;
     });
     try {
-      if (widget.room.id != widget.frozen.conversation.roomId ||
+      if (widget.isCurrent?.call() == false ||
+          widget.room.id != widget.frozen.conversation.roomId ||
           widget.room.client.userID != widget.frozen.conversation.accountId) {
         throw const PersonalCapabilityUnavailable(
           'The source account changed. Open attachments again.',
         );
       }
       final unknown = <String>{};
-      for (final file in widget.files.skip(accepted)) {
+      for (final file in files.skip(accepted)) {
         final result = _validate(widget.room, file, text);
         if (result.status == CapabilityStatus.unverified) {
           unknown.add(result.reason);
@@ -309,7 +329,7 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
       }
       if (!mounted) return;
       if (unknown.isNotEmpty) {
-        final probe = await showDialog<bool>(
+        final probe = await showNotionCustomDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Compatibility is unverified'),
@@ -330,16 +350,40 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
         );
         if (probe != true || !mounted) return;
       }
+      if (widget.isCurrent?.call() == false) {
+        throw const PersonalCapabilityUnavailable(
+          'The conversation changed. Close attachments and select them again.',
+        );
+      }
       final trust = await showTrustUserInRoomDialog(context, widget.room);
       if (!mounted || !trust) return;
       setState(() {
         sending = true;
         problem = null;
       });
-      for (final file in widget.files.skip(accepted)) {
+      for (final file in files.skip(accepted)) {
+        if (widget.isCurrent?.call() == false) {
+          throw const PersonalCapabilityUnavailable(
+            'The conversation changed. Close attachments and select them again.',
+          );
+        }
         _validate(widget.room, file, text);
+        if (reply != null &&
+            (reply.redacted ||
+                RoomCapabilities.forFeature(
+                      BridgeFeature.reply,
+                      widget.room,
+                      event: reply,
+                    ).status ==
+                    CapabilityStatus.unavailable)) {
+          throw const PersonalCapabilityUnavailable(
+            'The message you are replying to is no longer available.',
+          );
+        }
         // No routing is resolved here: the selected Room and original reply
         // were captured before opening the picker, and stay immutable.
+        transportStarted = true;
+        attemptedCaption ??= text;
         final id = await widget.room.sendFileEvent(
           file.file,
           txid: file.transactionId,
@@ -350,6 +394,7 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
           throw StateError('Acceptance unknown');
         }
         accepted++;
+        transportStarted = false;
         acceptedAt = DateTime.now();
         acceptedEventId = id;
         widget.onAccepted?.call(id, acceptedAt!);
@@ -367,12 +412,19 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
       }
     } on PersonalCapabilityUnavailable catch (error) {
       if (mounted) setState(() => problem = error.reason);
-    } catch (_) {
-      uncertain = true;
-      if (mounted) {
+    } on MatrixException catch (_) {
+      if (mounted)
         setState(
           () => problem =
-              'Sending was not confirmed. $accepted of ${widget.files.length} attachments were accepted. Check the source before retrying.',
+              'The server rejected the attachment. Your selection and caption are kept.',
+        );
+    } catch (_) {
+      uncertain = transportStarted;
+      if (mounted) {
+        setState(
+          () => problem = uncertain
+              ? 'Sending was not confirmed. $accepted of ${files.length} attachments were accepted. Check the source before retrying.'
+              : 'The attachments could not be prepared. Your selection and caption are kept. Try again.',
         );
       }
     } finally {
@@ -384,7 +436,13 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
   Widget build(BuildContext context) => PopScope(
     canPop: !sending,
     child: AlertDialog(
-      title: const Text('Send attachments'),
+      insetPadding: const EdgeInsets.all(16),
+      titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+      contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+      title: const Text(
+        'Send attachments',
+        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+      ),
       content: SizedBox(
         width: 480,
         child: SingleChildScrollView(
@@ -399,25 +457,66 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
                 const Text('Replying to a message in this network'),
               if (accepted > 0)
                 Text(
-                  '$accepted of ${widget.files.length} attachments were accepted and will be skipped on retry.',
+                  '$accepted of ${files.length} attachments were accepted and will be skipped on retry.',
                 ),
               const SizedBox(height: 16),
-              for (final file in widget.files)
+              for (final file in files)
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text(file.file.name),
+                  leading: MediaQuery.textScalerOf(context).scale(16) > 24
+                      ? null
+                      : SizedBox.square(
+                          dimension: 56,
+                          child: file.file is MatrixImageFile
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.memory(
+                                    file.file.bytes,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) =>
+                                        const Icon(Icons.broken_image_outlined),
+                                  ),
+                                )
+                              : Icon(
+                                  file.file is MatrixVideoFile
+                                      ? Icons.videocam_outlined
+                                      : file.file is MatrixAudioFile
+                                      ? Icons.audio_file_outlined
+                                      : Icons.insert_drive_file_outlined,
+                                ),
+                        ),
+                  title: Tooltip(
+                    message: file.file.name,
+                    child: Text(
+                      file.file.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                   subtitle: Text(
                     '${(file.file.size / 1024 / 1024).toStringAsFixed(1)} MB',
                   ),
+                  trailing: accepted == 0 && !uncertain
+                      ? IconButton(
+                          tooltip: 'Remove ${file.file.name}',
+                          onPressed: sending
+                              ? null
+                              : () => setState(() => files.remove(file)),
+                          icon: const Icon(Icons.close),
+                        )
+                      : null,
                 ),
               const SizedBox(height: 16),
               TextField(
                 controller: caption,
-                enabled: !sending && !uncertain,
+                enabled: !sending && !uncertain && attemptedCaption == null,
                 minLines: 1,
                 maxLines: 4,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Attachment caption',
+                  helperText: attemptedCaption == null
+                      ? null
+                      : 'Kept for this send attempt',
                 ),
               ),
               if (problem != null)
@@ -454,8 +553,14 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
           child: Text(uncertain ? 'Close without retrying' : 'Cancel'),
         ),
         FilledButton(
-          onPressed: sending || uncertain ? null : _send,
-          child: const Text('Send in selected network'),
+          onPressed: sending || uncertain || files.isEmpty ? null : _send,
+          child: Text(
+            sending
+                ? 'Sending…'
+                : files.length == 1
+                ? 'Send attachment'
+                : 'Send ${files.length} attachments',
+          ),
         ),
       ],
     ),
