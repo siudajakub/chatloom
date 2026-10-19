@@ -6,6 +6,7 @@
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/intro/flows/restore_backup_flow.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -29,7 +30,6 @@ class IntroPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final addMultiAccount = Matrix.of(
       context,
     ).widget.clients.any((client) => client.isLogged());
@@ -88,110 +88,139 @@ class IntroPage extends StatelessWidget {
           ),
         ],
       ),
-      body: isLoading
-          ? Center(
-              child: Column(
-                mainAxisAlignment: .center,
-                children: [
-                  CircularProgressIndicator.adaptive(),
-                  if (loggingInToHomeserver != null)
-                    Text(L10n.of(context).logInTo(loggingInToHomeserver)),
-                ],
-              ),
-            )
-          : LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight,
-                    ),
-                    child: IntrinsicHeight(
-                      child: Column(
-                        children: [
-                          Container(
-                            alignment: Alignment.center,
-                            padding: const EdgeInsets.all(32.0),
-                            child: Hero(
-                              tag: 'info-logo',
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(128),
-                                child: Image.asset(
-                                  './assets/logo/mini/logo_mini.png',
-                                  width: 128,
-                                  height: 128,
+      body: NotionFadeThrough(
+        alignment: Alignment.center,
+        child: isLoading
+            ? Center(
+                key: const ValueKey('loading'),
+                child: Column(
+                  mainAxisAlignment: .center,
+                  spacing: NotionSpace.md,
+                  children: [
+                    const NotionDelayedSpinner(size: NotionSize.touchTarget),
+                    if (loggingInToHomeserver != null)
+                      NotionDelayedReveal(
+                        child: Text(
+                          L10n.of(context).logInTo(loggingInToHomeserver),
+                        ),
+                      ),
+                  ],
+                ),
+              )
+            : LayoutBuilder(
+                key: const ValueKey('intro'),
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight,
+                      ),
+                      child: IntrinsicHeight(
+                        child: Column(
+                          children: [
+                            NotionEntrance(
+                              rise: 0,
+                              scale: NotionMotion.popFrom,
+                              duration: NotionMotion.long,
+                              child: Container(
+                                alignment: Alignment.center,
+                                padding: const EdgeInsets.all(32.0),
+                                child: Hero(
+                                  tag: 'info-logo',
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(128),
+                                    child: Image.asset(
+                                      './assets/logo/mini/logo_mini.png',
+                                      width: 128,
+                                      height: 128,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                          Text(
-                            L10n.of(context).appSubtitle,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 20),
-                          ),
-                          const SizedBox(height: 8),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 24),
-                            child: Text(
-                              welcomeText ?? L10n.of(context).appDescription,
-                              textAlign: TextAlign.center,
+                            NotionEntrance(
+                              index: 2,
+                              child: Text(
+                                L10n.of(context).appSubtitle,
+                                textAlign: TextAlign.center,
+                                style: context.notion.typography.heading,
+                              ),
                             ),
-                          ),
-                          const Spacer(),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 32),
-                            child: Column(
-                              mainAxisSize: .min,
-                              crossAxisAlignment: .stretch,
-                              children: [
-                                if (!hasPresetHomeserver)
-                                  ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor:
-                                          theme.colorScheme.secondary,
-                                      foregroundColor:
-                                          theme.colorScheme.onSecondary,
-                                    ),
-                                    onPressed: () => context.go(
-                                      '${GoRouterState.of(context).uri.path}/sign_up',
-                                    ),
-                                    child: Text(
-                                      L10n.of(context).createNewAccount,
-                                    ),
-                                  ),
-                                SizedBox(height: 16),
-                                ElevatedButton(
-                                  onPressed: login,
-                                  child: Text(L10n.of(context).signIn),
+                            const SizedBox(height: NotionSpace.xs),
+                            NotionEntrance(
+                              index: 3,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: NotionSpace.xl,
                                 ),
-
-                                if (!hasPresetHomeserver)
-                                  TextButton(
-                                    onPressed: () async {
-                                      final client = await Matrix.of(
-                                        context,
-                                      ).getLoginClient();
-                                      if (!context.mounted) return;
-                                      context.go(
-                                        '${GoRouterState.of(context).uri.path}/login',
-                                        extra: client,
-                                      );
-                                    },
-                                    child: Text(
-                                      L10n.of(context).loginWithMatrixId,
-                                    ),
-                                  ),
-                              ],
+                                child: Text(
+                                  welcomeText ??
+                                      L10n.of(context).appDescription,
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 36),
-                        ],
+                            const Spacer(),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: NotionSpace.xxl,
+                              ),
+                              child: Column(
+                                mainAxisSize: .min,
+                                crossAxisAlignment: .stretch,
+                                spacing: NotionSpace.md,
+                                children: _staggerFrom(4, [
+                                  if (!hasPresetHomeserver)
+                                    NotionButton(
+                                      label: L10n.of(context).createNewAccount,
+                                      expand: true,
+                                      onPressed: () => context.go(
+                                        '${GoRouterState.of(context).uri.path}/sign_up',
+                                      ),
+                                    ),
+                                  NotionButton.primary(
+                                    label: L10n.of(context).signIn,
+                                    expand: true,
+                                    onPressed: login,
+                                  ),
+                                  if (!hasPresetHomeserver)
+                                    NotionButton(
+                                      variant: NotionButtonVariant.ghost,
+                                      label: L10n.of(context).loginWithMatrixId,
+                                      expand: true,
+                                      onPressed: () async {
+                                        final client = await Matrix.of(
+                                          context,
+                                        ).getLoginClient();
+                                        if (!context.mounted) return;
+                                        context.go(
+                                          '${GoRouterState.of(context).uri.path}/login',
+                                          extra: client,
+                                        );
+                                      },
+                                    ),
+                                ]),
+                              ),
+                            ),
+                            const SizedBox(height: 36),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                );
-              },
-            ),
+                  );
+                },
+              ),
+      ),
     );
   }
 }
+
+/// Entrances that continue a stagger started above them.
+List<Widget> _staggerFrom(int first, List<Widget> children) => [
+  for (var i = 0; i < children.length; i++)
+    NotionEntrance(
+      index: first + i,
+      rise: NotionMotion.riseList,
+      child: children[i],
+    ),
+];
