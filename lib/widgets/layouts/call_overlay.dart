@@ -4,8 +4,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/pages/call/call_page.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -28,9 +28,11 @@ class CallOverlay extends StatelessWidget {
             return Stack(
               children: [
                 child,
+                // Moving between corner and full screen glides on the
+                // emphasized curve; the window itself springs in once.
                 AnimatedPositioned(
-                  duration: FluffyThemes.animationDuration,
-                  curve: FluffyThemes.animationCurve,
+                  duration: NotionMotion.of(context, NotionMotion.long),
+                  curve: NotionMotion.emphasized,
                   top: callFullScreen
                       ? 0
                       : callPosition == .top
@@ -41,22 +43,28 @@ class CallOverlay extends StatelessWidget {
                   bottom: callFullScreen ? 0 : null,
                   height: callFullScreen ? null : 256,
                   width: callFullScreen ? null : 256,
-                  child: Material(
-                    elevation: callFullScreen ? 0 : 4,
-                    clipBehavior: .hardEdge,
-                    shape: callFullScreen
-                        ? null
-                        : RoundedRectangleBorder(
-                            side: BorderSide(color: Colors.grey),
-                            borderRadius: BorderRadius.circular(
-                              AppConfig.borderRadius,
+                  child: NotionEntrance(
+                    afterRoute: false,
+                    rise: NotionMotion.riseSheet,
+                    scale: NotionMotion.popoverFrom,
+                    alignment: Alignment.topRight,
+                    child: Material(
+                      elevation: callFullScreen ? 0 : 4,
+                      clipBehavior: .hardEdge,
+                      shape: callFullScreen
+                          ? null
+                          : RoundedRectangleBorder(
+                              side: BorderSide(color: Colors.grey),
+                              borderRadius: BorderRadius.circular(
+                                AppConfig.borderRadius,
+                              ),
                             ),
-                          ),
-                    child: Navigator(
-                      onDidRemovePage: (_) {
-                        Matrix.of(context).activeCallRoomId.value = null;
-                      },
-                      pages: [MaterialPage(child: CallPage(roomId: roomId))],
+                      child: Navigator(
+                        onDidRemovePage: (_) {
+                          Matrix.of(context).activeCallRoomId.value = null;
+                        },
+                        pages: [MaterialPage(child: CallPage(roomId: roomId))],
+                      ),
                     ),
                   ),
                 ),

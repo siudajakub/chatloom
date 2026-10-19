@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:material_ui/material_ui.dart';
@@ -46,7 +46,9 @@ class CallTile extends StatelessWidget {
       height: height,
       child: AnimatedContainer(
         margin: margin,
-        duration: FluffyThemes.animationDuration,
+        // The speaking ring tweens in and out.
+        duration: NotionMotion.quick,
+        curve: NotionMotion.standard,
         decoration: BoxDecoration(
           color: theme.colorScheme.surfaceContainer,
           border: BoxBorder.all(

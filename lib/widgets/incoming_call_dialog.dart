@@ -6,9 +6,9 @@
 import 'dart:async';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/pulsating_widget.dart';
 import 'package:go_router/go_router.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';
@@ -72,44 +72,76 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> {
   Widget build(BuildContext context) {
     final displayname = widget.event.room.getLocalizedDisplayname();
     final avatar = widget.event.room.avatar;
-    final theme = Theme.of(context);
+    final colors = context.notion.colors;
+    Widget callButton({
+      required IconData icon,
+      required Color color,
+      required String tooltip,
+      required bool accept,
+    }) => NotionPressable(
+      scale: NotionMotion.pressIcon,
+      child: IconButton(
+        tooltip: tooltip,
+        style: IconButton.styleFrom(
+          fixedSize: const Size.fromRadius(NotionSpace.xl),
+          backgroundColor: color,
+          foregroundColor: NotionMediaColors.onScrim,
+        ),
+        icon: Icon(icon),
+        onPressed: () => context.pop(accept),
+      ),
+    );
     return AlertDialog(
       title: Center(child: Text(L10n.of(context).incomingCall)),
       content: Column(
         mainAxisSize: .min,
-        spacing: 8,
+        spacing: NotionSpace.xs,
         children: [
-          PulsatingWidget(
-            spreadRadius: 10.0,
-            color: theme.colorScheme.primary,
-            child: Avatar(mxContent: avatar, name: displayname),
+          // The caller springs in, then rings for as long as the call does.
+          NotionPop(
+            bounce: false,
+            from: NotionMotion.dialogFrom,
+            child: NotionPulse(
+              color: colors.accent,
+              borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+              child: Avatar(mxContent: avatar, name: displayname),
+            ),
           ),
-          Text(displayname, textAlign: .center),
+          NotionEntrance(
+            index: 1,
+            afterRoute: false,
+            child: Text(displayname, textAlign: .center),
+          ),
         ],
       ),
       actionsAlignment: .spaceEvenly,
       actions: [
-        IconButton(
-          style: IconButton.styleFrom(
-            fixedSize: Size.fromRadius(24),
-            elevation: theme.appBarTheme.elevation ?? 4,
-            shadowColor: theme.appBarTheme.shadowColor,
-            backgroundColor: Colors.red.shade700,
-            foregroundColor: Colors.white,
+        NotionEntrance(
+          index: 2,
+          afterRoute: false,
+          scale: NotionMotion.popFrom,
+          rise: 0,
+          child: callButton(
+            icon: Icons.call_end_outlined,
+            color: colors.danger,
+            tooltip: L10n.of(context).reject,
+            accept: false,
           ),
-          icon: Icon(Icons.call_end_outlined),
-          onPressed: () => context.pop(false),
         ),
-        IconButton(
-          style: IconButton.styleFrom(
-            fixedSize: Size.fromRadius(24),
-            elevation: theme.appBarTheme.elevation ?? 4,
-            shadowColor: theme.appBarTheme.shadowColor,
-            backgroundColor: Colors.green.shade700,
-            foregroundColor: Colors.white,
+        NotionEntrance(
+          index: 3,
+          afterRoute: false,
+          scale: NotionMotion.popFrom,
+          rise: 0,
+          child: NotionPulse(
+            color: colors.success,
+            child: callButton(
+              icon: Icons.call_outlined,
+              color: colors.success,
+              tooltip: L10n.of(context).accept,
+              accept: true,
+            ),
           ),
-          icon: Icon(Icons.call_outlined),
-          onPressed: () => context.pop(true),
         ),
       ],
     );

@@ -13,6 +13,7 @@ import 'package:fluffychat/pages/call/call_tile.dart';
 import 'package:fluffychat/pages/call/call_view_model.dart';
 import 'package:fluffychat/pages/call/start_time.dart';
 import 'package:fluffychat/pages/call/utils/get_call_tiles.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -154,7 +155,9 @@ class CallPage extends StatelessWidget {
                 ),
               ),
               body: liveKitRoom == null
-                  ? Center(child: CircularProgressIndicator())
+                  ? const Center(
+                      child: NotionDelayedSpinner(size: NotionSize.touchTarget),
+                    )
                   : localVideoTrack != null
                   ? Stack(
                       children: [
@@ -469,15 +472,22 @@ class CallPage extends StatelessWidget {
                               backgroundColor:
                                   iconButtonStyleActive.backgroundColor,
                             ),
-                            icon: viewModel.value.isLoading
-                                ? SizedBox.square(
-                                    dimension: 16,
-                                    child: CircularProgressIndicator(
-                                      color: theme.colorScheme.onInverseSurface,
-                                      strokeWidth: 2,
+                            icon: NotionMorphSwitcher(
+                              child: viewModel.value.isLoading
+                                  ? SizedBox.square(
+                                      key: const ValueKey('busy'),
+                                      dimension: NotionSize.iconSm,
+                                      child: CircularProgressIndicator(
+                                        color:
+                                            theme.colorScheme.onInverseSurface,
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.call_outlined,
+                                      key: ValueKey('call'),
                                     ),
-                                  )
-                                : Icon(Icons.call_outlined),
+                            ),
                             label: Text(
                               viewModel.value.isLoading
                                   ? L10n.of(context).loadingPleaseWait
