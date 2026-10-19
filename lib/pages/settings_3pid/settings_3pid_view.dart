@@ -6,6 +6,7 @@
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_3pid/settings_3pid.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -50,9 +51,7 @@ class Settings3PidView extends StatelessWidget {
                   );
                 }
                 if (!snapshot.hasData) {
-                  return const Center(
-                    child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                  );
+                  return const Center(child: NotionDelayedSpinner());
                 }
                 final identifier = snapshot.data!;
                 return Column(

@@ -9,13 +9,17 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat/conversation_bubble.dart';
+import 'package:fluffychat/pages/chat/conversation_grouping.dart';
 import 'package:fluffychat/pages/chat/events/state_message.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/account_config.dart';
 import 'package:fluffychat/utils/color_value.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -45,7 +49,7 @@ class SettingsStyleView extends StatelessWidget {
           crossAxisAlignment: .stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.all(12.0),
+              padding: const EdgeInsets.all(NotionSpace.sm),
               child: SegmentedButton<ThemeMode>(
                 selected: {controller.currentTheme},
                 onSelectionChanged: (selected) =>
@@ -79,63 +83,7 @@ class SettingsStyleView extends StatelessWidget {
                 ),
               ),
             ),
-            DynamicColorBuilder(
-              builder: (light, dark) {
-                final systemColor =
-                    Theme.of(context).brightness == Brightness.light
-                    ? light?.primary
-                    : dark?.primary;
-                final colors = [null, AppConfig.chatColor, ...Colors.primaries];
-                if (systemColor == null) {
-                  colors.remove(null);
-                }
-                return GridView.builder(
-                  shrinkWrap: true,
-                  physics: NeverScrollableScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 64,
-                  ),
-                  itemCount: colors.length,
-                  itemBuilder: (context, i) {
-                    final color = colors[i];
-                    return Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Tooltip(
-                        message: color == null
-                            ? L10n.of(context).systemTheme
-                            : '#${color.hexValue.toRadixString(16).toUpperCase()}',
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(colorPickerSize),
-                          onTap: () => controller.setChatColor(color),
-                          child: Material(
-                            color: color ?? systemColor,
-                            elevation: 6,
-                            borderRadius: BorderRadius.circular(
-                              colorPickerSize,
-                            ),
-                            child: SizedBox(
-                              width: colorPickerSize,
-                              height: colorPickerSize,
-                              child: controller.currentColor == color
-                                  ? Center(
-                                      child: Icon(
-                                        Icons.check,
-                                        size: 16,
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.onPrimary,
-                                      ),
-                                    )
-                                  : null,
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+            _ColorSwatches(controller: controller, size: colorPickerSize),
             Divider(color: theme.dividerColor),
             ListTile(
               title: Text(
@@ -162,124 +110,79 @@ class SettingsStyleView extends StatelessWidget {
                 return Column(
                   mainAxisSize: .min,
                   children: [
-                    MediaQuery(
-                      data: MediaQuery.of(context).copyWith(
-                        textScaler: TextScaler.linear(
-                          AppSettings.fontSizeFactor.value,
+                    // The preview builds a synthetic room event, a blurred
+                    // wallpaper and scaled text; keep it out of the frames
+                    // of the page transition. Same minimum height before and
+                    // after, so nothing below moves when it appears.
+                    AfterRouteTransition(
+                      placeholder: const SizedBox(height: _previewMinHeight),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          minHeight: _previewMinHeight,
                         ),
-                      ),
-                      child: AnimatedContainer(
-                        duration: FluffyThemes.animationDuration,
-                        curve: FluffyThemes.animationCurve,
-                        decoration: const BoxDecoration(),
-                        clipBehavior: Clip.hardEdge,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            if (accountConfig.wallpaperUrl != null)
-                              Opacity(
-                                opacity: controller.wallpaperOpacity,
-                                child: ImageFiltered(
-                                  imageFilter: ImageFilter.blur(
-                                    sigmaX: controller.wallpaperBlur,
-                                    sigmaY: controller.wallpaperBlur,
-                                  ),
-                                  child: MxcImage(
-                                    key: ValueKey(accountConfig.wallpaperUrl),
-                                    uri: accountConfig.wallpaperUrl,
-                                    fit: BoxFit.cover,
-                                    isThumbnail: true,
-                                    width: FluffyThemes.columnWidth * 2,
-                                    height: 212,
-                                  ),
-                                ),
-                              ),
-                            Column(
-                              mainAxisSize: .min,
+                        child: MediaQuery(
+                          data: MediaQuery.of(context).copyWith(
+                            textScaler: TextScaler.linear(
+                              AppSettings.fontSizeFactor.value,
+                            ),
+                          ),
+                          child: AnimatedContainer(
+                            duration: FluffyThemes.animationDuration,
+                            curve: FluffyThemes.animationCurve,
+                            decoration: const BoxDecoration(),
+                            clipBehavior: Clip.hardEdge,
+                            child: Stack(
+                              alignment: Alignment.center,
                               children: [
-                                const SizedBox(height: 16),
-                                StateMessage(
-                                  Event(
-                                    eventId: 'style_dummy',
-                                    room: Room(
-                                      id: '!style_dummy',
-                                      client: client,
-                                    ),
-                                    content: {'membership': 'join'},
-                                    type: EventTypes.RoomMember,
-                                    senderId: client.userID!,
-                                    originServerTs: DateTime.now(),
-                                    stateKey: client.userID,
-                                  ),
-                                ),
-                                Padding(
-                                  padding: EdgeInsets.only(
-                                    left: 12 + 12 + Avatar.defaultSize,
-                                    right: 12,
-                                    top: accountConfig.wallpaperUrl == null
-                                        ? 0
-                                        : 12,
-                                    bottom: 12,
-                                  ),
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      color: theme.bubbleColor,
-                                      borderRadius: BorderRadius.circular(
-                                        AppConfig.borderRadius,
-                                      ),
-                                    ),
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 8,
-                                      ),
-                                      child: Text(
-                                        'Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor',
-                                        style: TextStyle(
-                                          color: theme.onBubbleColor,
-                                          fontSize: AppConfig.messageFontSize,
+                                if (accountConfig.wallpaperUrl != null)
+                                  Positioned.fill(
+                                    child: Opacity(
+                                      opacity: controller.wallpaperOpacity,
+                                      child: ImageFiltered(
+                                        imageFilter: ImageFilter.blur(
+                                          sigmaX: controller.wallpaperBlur,
+                                          sigmaY: controller.wallpaperBlur,
                                         ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Padding(
-                                    padding: EdgeInsets.only(
-                                      right: 12,
-                                      left: 12,
-                                      top: accountConfig.wallpaperUrl == null
-                                          ? 0
-                                          : 12,
-                                      bottom: 12,
-                                    ),
-                                    child: Material(
-                                      color: theme
-                                          .colorScheme
-                                          .surfaceContainerHigh,
-                                      borderRadius: BorderRadius.circular(
-                                        AppConfig.borderRadius,
-                                      ),
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 8,
-                                        ),
-                                        child: Text(
-                                          'Lorem ipsum dolor sit amet',
-                                          style: TextStyle(
-                                            color: theme.colorScheme.onSurface,
-                                            fontSize: AppConfig.messageFontSize,
+                                        child: MxcImage(
+                                          key: ValueKey(
+                                            accountConfig.wallpaperUrl,
                                           ),
+                                          uri: accountConfig.wallpaperUrl,
+                                          fit: BoxFit.cover,
+                                          isThumbnail: true,
+                                          width: FluffyThemes.columnWidth * 2,
+                                          height: _previewMinHeight,
                                         ),
                                       ),
                                     ),
                                   ),
+                                Column(
+                                  mainAxisSize: .min,
+                                  children: [
+                                    const SizedBox(height: NotionSpace.md),
+                                    StateMessage(
+                                      Event(
+                                        eventId: 'style_dummy',
+                                        room: Room(
+                                          id: '!style_dummy',
+                                          client: client,
+                                        ),
+                                        content: {'membership': 'join'},
+                                        type: EventTypes.RoomMember,
+                                        senderId: client.userID!,
+                                        originServerTs: DateTime.now(),
+                                        stateKey: client.userID,
+                                      ),
+                                    ),
+                                    _BubblePreview(
+                                      wallpaper:
+                                          accountConfig.wallpaperUrl != null,
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -344,6 +247,206 @@ class SettingsStyleView extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The sample conversation's height on a phone at text scale 1, so the
+/// placeholder and the built preview take the same room.
+const double _previewMinHeight = 340;
+
+/// Sample conversation drawn with the real [ConversationBubble]s, so the
+/// preview follows the chat: an incoming group, then an outgoing reply
+/// (quote and caption coloured like the timeline) and a follow-up.
+class _BubblePreview extends StatelessWidget {
+  final bool wallpaper;
+  const _BubblePreview({required this.wallpaper});
+
+  static const _name = 'Lorem';
+  static const _quoted = 'Consetetur sadipscing elitr, sed diam nonumy';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bubbleColors = ConversationBubbleColors.of(context);
+    final pageBackground = context.notion.colors.background;
+    final quoteColors = ConversationReplyQuote.colorsFor(
+      side: bubbleColors.incoming,
+      page: pageBackground,
+      muted: bubbleColors.metadata,
+    );
+    Widget text(String value) => Text(value, style: NotionType.body);
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(
+        start: NotionSpace.sm,
+        end: NotionSpace.sm,
+        bottom: NotionSpace.sm,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ConversationBubble(
+            outgoing: false,
+            groupPosition: ConversationGroupPosition.first,
+            body: text('Lorem ipsum dolor sit amet'),
+          ),
+          ConversationBubble(
+            outgoing: false,
+            groupPosition: ConversationGroupPosition.last,
+            avatar: const Avatar(name: _name, size: NotionBubble.avatar),
+            body: text(_quoted),
+          ),
+          ConversationBubble(
+            outgoing: true,
+            groupPosition: ConversationGroupPosition.first,
+            quote: ConversationReplyQuote(
+              text: _quoted,
+              fill: quoteColors.fill,
+              textColor: quoteColors.text,
+              outgoing: true,
+              caption: ConversationReplyCaption(
+                label: L10n.of(context).replyCaptionYouReplied(_name),
+                color: NotionContrast.readable(
+                  pageBackground,
+                  theme.colorScheme.onSurfaceVariant,
+                ),
+                backdrop: wallpaper ? pageBackground : null,
+              ),
+            ),
+            body: text('At vero eos et accusam'),
+          ),
+          ConversationBubble(
+            outgoing: true,
+            groupPosition: ConversationGroupPosition.last,
+            body: text('Stet clita kasd gubergren'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The system accent (Android 12+ dynamic color), read once per process from
+/// the platform and refreshed in the background on later opens. The
+/// Appearance page then draws its swatches complete on the first frame,
+/// without waiting for a platform channel reply.
+abstract final class _SystemAccent {
+  static ({Color? light, Color? dark})? value;
+  static Future<({Color? light, Color? dark})>? _loading;
+
+  static Future<({Color? light, Color? dark})> refresh() => _loading ??= _read()
+      .then((result) {
+        value = result;
+        return result;
+      })
+      .whenComplete(() => _loading = null);
+
+  static Future<({Color? light, Color? dark})> _read() async {
+    try {
+      final palette = await DynamicColorPlugin.getCorePalette();
+      if (palette != null) {
+        return (
+          light: palette.toColorScheme().primary,
+          dark: palette.toColorScheme(brightness: Brightness.dark).primary,
+        );
+      }
+    } on PlatformException {
+      // Not available on this platform; try the accent color.
+    }
+    try {
+      final accent = await DynamicColorPlugin.getAccentColor();
+      if (accent != null) {
+        return (
+          light: ColorScheme.fromSeed(seedColor: accent).primary,
+          dark: ColorScheme.fromSeed(
+            seedColor: accent,
+            brightness: Brightness.dark,
+          ).primary,
+        );
+      }
+    } on PlatformException {
+      // No dynamic color on this device.
+    }
+    return (light: null, dark: null);
+  }
+}
+
+class _ColorSwatches extends StatefulWidget {
+  final SettingsStyleController controller;
+  final double size;
+  const _ColorSwatches({required this.controller, required this.size});
+
+  @override
+  State<_ColorSwatches> createState() => _ColorSwatchesState();
+}
+
+class _ColorSwatchesState extends State<_ColorSwatches> {
+  @override
+  void initState() {
+    super.initState();
+    final before = _SystemAccent.value;
+    // The platform read must not land inside the page transition.
+    NotionMotion.afterRouteSettled(context, () async {
+      final after = await _SystemAccent.refresh();
+      if (mounted && after != before) setState(() {});
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final accent = _SystemAccent.value;
+    final systemColor = theme.brightness == Brightness.light
+        ? accent?.light
+        : accent?.dark;
+    final colors = [
+      if (systemColor != null) null,
+      AppConfig.chatColor,
+      ...Colors.primaries,
+    ];
+    final current = widget.controller.currentColor;
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 64,
+      ),
+      itemCount: colors.length,
+      itemBuilder: (context, i) {
+        final color = colors[i];
+        final selected = current == color;
+        // The whole cell is the touch target (at least 48 dp); the label
+        // replaces the old hover tooltip for screen readers.
+        return Semantics(
+          button: true,
+          selected: selected,
+          label: color == null
+              ? L10n.of(context).systemTheme
+              : '#${color.hexValue.toRadixString(16).toUpperCase()}',
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: () => widget.controller.setChatColor(color),
+            child: Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color ?? systemColor,
+                  shape: BoxShape.circle,
+                ),
+                child: SizedBox.square(
+                  dimension: widget.size,
+                  child: selected
+                      ? Icon(
+                          Icons.check,
+                          size: NotionSize.iconSm,
+                          color: theme.colorScheme.onPrimary,
+                        )
+                      : null,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

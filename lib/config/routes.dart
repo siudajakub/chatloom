@@ -25,6 +25,7 @@ import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
 import 'package:fluffychat/pages/settings/settings.dart';
 import 'package:fluffychat/pages/settings_3pid/settings_3pid.dart';
 import 'package:fluffychat/pages/settings_chat/settings_chat.dart';
+import 'package:fluffychat/pages/settings_chat/settings_media_view.dart';
 import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
 import 'package:fluffychat/pages/settings_homeserver/settings_homeserver.dart';
 import 'package:fluffychat/pages/settings_ignore_list/settings_ignore_list.dart';
@@ -35,14 +36,18 @@ import 'package:fluffychat/pages/settings_style/settings_style.dart';
 import 'package:fluffychat/pages/sign_in/sign_in_page.dart';
 import 'package:fluffychat/personal/organization_page.dart';
 import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
+import 'package:fluffychat/personal/person_route.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/personal_hub.dart';
+import 'package:fluffychat/personal/ui/push_diagnostics_page.dart';
+import 'package:fluffychat/ui/notion/notion_motion.dart';
 import 'package:fluffychat/widgets/config_viewer.dart';
 import 'package:fluffychat/widgets/layouts/empty_page.dart';
 import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
 import 'package:fluffychat/widgets/log_view.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -122,9 +127,9 @@ abstract class AppRoutes {
       ),
     ),
     ShellRoute(
-      // Never use a transition on the shell route. Changing the PageBuilder
-      // here based on a MediaQuery causes the child to briefly be rendered
-      // twice with the same GlobalKey, blowing up the rendering.
+      // Never use a transition on the shell route. The page type is always
+      // [_AppPage]; only its durations follow the layout, so a MediaQuery
+      // change never renders the child twice with the same GlobalKey.
       pageBuilder: (context, state, child) => noTransitionPageBuilder(
         context,
         state,
@@ -133,6 +138,7 @@ abstract class AppRoutes {
             ? TwoColumnLayout(
                 mainView: ChatList(
                   activeChat: state.pathParameters['roomid'],
+                  activeGroup: state.pathParameters['groupId'],
                   activeSpace: state.uri.queryParameters['spaceId'],
                   displayNavigationRail:
                       state.path?.startsWith('/rooms/settings') != true,
@@ -150,10 +156,14 @@ abstract class AppRoutes {
             state,
             FluffyThemes.isColumnMode(context)
                 ? const EmptyPage()
+                // On phones the inbox is hidden under every child page, so it
+                // has no selected row; keep it identical while children
+                // change (see [_PageMemo]).
                 : ChatList(
-                    activeChat: state.pathParameters['roomid'],
+                    activeChat: null,
                     activeSpace: state.uri.queryParameters['spaceId'],
                   ),
+            memo: ('rooms', state.uri.queryParameters['spaceId']),
           ),
           routes: [
             GoRoute(
@@ -172,6 +182,13 @@ abstract class AppRoutes {
                       eventId: state.uri.queryParameters['event'],
                       timeline: state.extra as Timeline?,
                       action: state.uri.queryParameters['action'],
+                    ),
+                    memo: (
+                      'archived-chat',
+                      state.pathParameters['roomid'],
+                      state.uri.queryParameters['event'],
+                      state.uri.queryParameters['action'],
+                      _Identity(state.extra),
                     ),
                   ),
                   redirect: loggedOutRedirect,
@@ -213,7 +230,9 @@ abstract class AppRoutes {
               redirect: loggedOutRedirect,
             ),
             ShellRoute(
-              pageBuilder: (context, state, child) => noTransitionPageBuilder(
+              // The settings shell slides over the inbox on phones and is
+              // instant in two-column mode (see [_AppPageRoute]).
+              pageBuilder: (context, state, child) => _page(
                 context,
                 state,
                 CallbackShortcuts(
@@ -243,6 +262,7 @@ abstract class AppRoutes {
                         : child,
                   ),
                 ),
+                memoise: false,
               ),
               routes: [
                 GoRoute(
@@ -255,6 +275,11 @@ abstract class AppRoutes {
                               ? const Settings(surface: SettingsSurface.account)
                               : const EmptyPage()
                         : const Settings(),
+                    memo: (
+                      'settings',
+                      FluffyThemes.isColumnMode(context) &&
+                          state.uri.path == '/rooms/settings',
+                    ),
                   ),
                   routes: [
                     for (final entry in const {
@@ -352,6 +377,15 @@ abstract class AppRoutes {
                             ),
                           ),
                         ),
+                        GoRoute(
+                          path: 'diagnostics',
+                          redirect: loggedOutRedirect,
+                          pageBuilder: (context, state) => defaultPageBuilder(
+                            context,
+                            state,
+                            const PushDiagnosticsPage(),
+                          ),
+                        ),
                       ],
                       redirect: loggedOutRedirect,
                     ),
@@ -389,6 +423,14 @@ abstract class AppRoutes {
                             EmotesSettings(
                               roomId: state.pathParameters['roomid'],
                             ),
+                          ),
+                        ),
+                        GoRoute(
+                          path: 'media',
+                          pageBuilder: (context, state) => defaultPageBuilder(
+                            context,
+                            state,
+                            const SettingsMediaPage(),
                           ),
                         ),
                       ],
@@ -493,156 +535,360 @@ abstract class AppRoutes {
               ],
             ),
             GoRoute(
-              path: ':roomid',
-              pageBuilder: (context, state) {
-                final body = state.uri.queryParameters['body'];
-                var shareItems = state.extra is List<ShareItem>
-                    ? state.extra as List<ShareItem>
-                    : null;
-                if (body != null && body.isNotEmpty) {
-                  shareItems ??= [];
-                  shareItems.add(TextShareItem(body));
-                }
-                return defaultPageBuilder(
-                  context,
-                  state,
-                  ChatPage(
-                    key: ValueKey(state.uri),
-                    roomId: state.pathParameters['roomid']!,
-                    shareItems: shareItems,
-                    eventId: state.uri.queryParameters['event'],
-                    action: state.uri.queryParameters['action'],
-                  ),
-                );
-              },
+              path: 'person/:groupId',
               redirect: loggedOutRedirect,
-              routes: [
-                GoRoute(
-                  path: 'search',
-                  pageBuilder: (context, state) => defaultPageBuilder(
-                    context,
-                    state,
-                    ChatSearchPage(roomId: state.pathParameters['roomid']!),
-                  ),
-                  redirect: loggedOutRedirect,
+              pageBuilder: (context, state) => defaultPageBuilder(
+                context,
+                state,
+                PersonChatRoutePage(
+                  key: ValueKey(('person', state.pathParameters['groupId'])),
+                  groupId: state.pathParameters['groupId']!,
+                  sourceRoomId: state.uri.queryParameters['source'],
+                  eventId: state.uri.queryParameters['event'],
                 ),
-                GoRoute(
-                  path: 'encryption',
-                  pageBuilder: (context, state) => defaultPageBuilder(
-                    context,
-                    state,
-                    const ChatEncryptionSettings(),
-                  ),
-                  redirect: loggedOutRedirect,
+                // Opening a source chat keeps the identical person page below.
+                memo: (
+                  'person',
+                  state.pathParameters['groupId'],
+                  state.uri.queryParameters['source'],
+                  state.uri.queryParameters['event'],
                 ),
-                GoRoute(
-                  path: 'invite',
-                  pageBuilder: (context, state) => defaultPageBuilder(
-                    context,
-                    state,
-                    InvitationSelection(
-                      roomId: state.pathParameters['roomid']!,
-                    ),
-                  ),
-                  redirect: loggedOutRedirect,
-                ),
-                GoRoute(
-                  path: 'details',
-                  pageBuilder: (context, state) => defaultPageBuilder(
-                    context,
-                    state,
-                    ChatDetails(roomId: state.pathParameters['roomid']!),
-                  ),
-                  routes: [
-                    GoRoute(
-                      path: 'access',
-                      pageBuilder: (context, state) => defaultPageBuilder(
-                        context,
-                        state,
-                        ChatAccessSettings(
-                          roomId: state.pathParameters['roomid']!,
-                        ),
-                      ),
-                      redirect: loggedOutRedirect,
-                    ),
-                    GoRoute(
-                      path: 'members',
-                      pageBuilder: (context, state) => defaultPageBuilder(
-                        context,
-                        state,
-                        ChatMembersPage(
-                          roomId: state.pathParameters['roomid']!,
-                        ),
-                      ),
-                      redirect: loggedOutRedirect,
-                    ),
-                    GoRoute(
-                      path: 'permissions',
-                      pageBuilder: (context, state) => defaultPageBuilder(
-                        context,
-                        state,
-                        const ChatPermissionsSettings(),
-                      ),
-                      redirect: loggedOutRedirect,
-                    ),
-                    GoRoute(
-                      path: 'invite',
-                      pageBuilder: (context, state) => defaultPageBuilder(
-                        context,
-                        state,
-                        InvitationSelection(
-                          roomId: state.pathParameters['roomid']!,
-                        ),
-                      ),
-                      redirect: loggedOutRedirect,
-                    ),
-                    GoRoute(
-                      path: 'emotes',
-                      pageBuilder: (context, state) => defaultPageBuilder(
-                        context,
-                        state,
-                        EmotesSettings(roomId: state.pathParameters['roomid']),
-                      ),
-                      redirect: loggedOutRedirect,
-                    ),
-                  ],
-                  redirect: loggedOutRedirect,
-                ),
-              ],
+              ),
+              // Member source chats with every ordinary chat child route.
+              routes: [_chatRoute()],
             ),
+            _chatRoute(),
           ],
         ),
       ],
     ),
   ];
 
+  /// `:roomid` with its child routes (search, details, …). Mounted under
+  /// `/rooms` and under `/rooms/person/:groupId`, so a source chat opened from
+  /// a person keeps the merged conversation below it.
+  static GoRoute _chatRoute() => GoRoute(
+    path: ':roomid',
+    pageBuilder: (context, state) {
+      final body = state.uri.queryParameters['body'];
+      var shareItems = state.extra is List<ShareItem>
+          ? state.extra as List<ShareItem>
+          : null;
+      if (body != null && body.isNotEmpty) {
+        shareItems ??= [];
+        shareItems.add(TextShareItem(body));
+      }
+      return defaultPageBuilder(
+        context,
+        state,
+        ChatPage(
+          key: ValueKey(state.uri),
+          roomId: state.pathParameters['roomid']!,
+          shareItems: shareItems,
+          eventId: state.uri.queryParameters['event'],
+          action: state.uri.queryParameters['action'],
+        ),
+        // Only the chat's own parameters: opening details, search
+        // or members keeps the identical chat page underneath.
+        memo: (
+          'chat',
+          state.pathParameters['roomid'],
+          state.uri.queryParameters['event'],
+          state.uri.queryParameters['action'],
+          body,
+          _Identity(state.extra),
+        ),
+      );
+    },
+    redirect: loggedOutRedirect,
+    routes: [
+      GoRoute(
+        path: 'search',
+        pageBuilder: (context, state) => defaultPageBuilder(
+          context,
+          state,
+          ChatSearchPage(roomId: state.pathParameters['roomid']!),
+        ),
+        redirect: loggedOutRedirect,
+      ),
+      GoRoute(
+        path: 'encryption',
+        pageBuilder: (context, state) =>
+            defaultPageBuilder(context, state, const ChatEncryptionSettings()),
+        redirect: loggedOutRedirect,
+      ),
+      GoRoute(
+        path: 'invite',
+        pageBuilder: (context, state) => defaultPageBuilder(
+          context,
+          state,
+          InvitationSelection(roomId: state.pathParameters['roomid']!),
+        ),
+        redirect: loggedOutRedirect,
+      ),
+      GoRoute(
+        path: 'details',
+        pageBuilder: (context, state) => defaultPageBuilder(
+          context,
+          state,
+          ChatDetails(roomId: state.pathParameters['roomid']!),
+        ),
+        routes: [
+          GoRoute(
+            path: 'access',
+            pageBuilder: (context, state) => defaultPageBuilder(
+              context,
+              state,
+              ChatAccessSettings(roomId: state.pathParameters['roomid']!),
+            ),
+            redirect: loggedOutRedirect,
+          ),
+          GoRoute(
+            path: 'members',
+            pageBuilder: (context, state) => defaultPageBuilder(
+              context,
+              state,
+              ChatMembersPage(roomId: state.pathParameters['roomid']!),
+            ),
+            redirect: loggedOutRedirect,
+          ),
+          GoRoute(
+            path: 'permissions',
+            pageBuilder: (context, state) => defaultPageBuilder(
+              context,
+              state,
+              const ChatPermissionsSettings(),
+            ),
+            redirect: loggedOutRedirect,
+          ),
+          GoRoute(
+            path: 'invite',
+            pageBuilder: (context, state) => defaultPageBuilder(
+              context,
+              state,
+              InvitationSelection(roomId: state.pathParameters['roomid']!),
+            ),
+            redirect: loggedOutRedirect,
+          ),
+          GoRoute(
+            path: 'emotes',
+            pageBuilder: (context, state) => defaultPageBuilder(
+              context,
+              state,
+              EmotesSettings(roomId: state.pathParameters['roomid']),
+            ),
+            redirect: loggedOutRedirect,
+          ),
+        ],
+        redirect: loggedOutRedirect,
+      ),
+    ],
+  );
+
+  /// A page that never animates (the outer shell). Kept for callers and
+  /// tests; it is the same [_AppPage] type as every other route.
   static Page noTransitionPageBuilder(
     BuildContext context,
     GoRouterState state,
     Widget child,
-  ) => NoTransitionPage(
-    key: state.pageKey,
-    restorationId: state.pageKey.value,
-    child: child,
-  );
+  ) => _page(context, state, child, animated: false, memoise: false);
 
+  /// The page of every route: Notion motion on phones, instant in two-column
+  /// mode and with reduced motion. [memo] replaces the default signature
+  /// (path and query parameters, fragment, extra) used to reuse the identical
+  /// child widget while other routes change; see [_PageMemo].
   static Page defaultPageBuilder(
     BuildContext context,
     GoRouterState state,
-    Widget child,
-  ) {
+    Widget child, {
+    Object? memo,
+  }) {
     final clientName = state.uri.queryParameters['client'];
     if (clientName != null) {
       final matrix = Matrix.of(context);
       final client = matrix.getClientByName(clientName);
       if (client != null) matrix.setActiveClient(client);
     }
-    return FluffyThemes.isColumnMode(context)
-        ? noTransitionPageBuilder(context, state, child)
-        : MaterialPage(
-            key: state.pageKey,
-            restorationId: state.pageKey.value,
-            child: child,
-          );
+    return _page(context, state, child, memo: memo);
   }
+
+  static Page _page(
+    BuildContext context,
+    GoRouterState state,
+    Widget child, {
+    bool animated = true,
+    bool memoise = true,
+    Object? memo,
+  }) => _AppPage(
+    key: state.pageKey,
+    restorationId: state.pageKey.value,
+    animated: animated,
+    child: memoise ? _PageMemo.resolve(context, state, child, memo) : child,
+  );
+}
+
+/// The only page type of the router. Its type never depends on MediaQuery,
+/// so resizing across the two-column breakpoint keeps every route and its
+/// state; only the transition durations follow the layout.
+class _AppPage<T> extends Page<T> {
+  const _AppPage({
+    required this.child,
+    this.animated = true,
+    super.key,
+    super.restorationId,
+  });
+
+  final Widget child;
+
+  /// False for the outer shell, which must never animate.
+  final bool animated;
+
+  @override
+  Route<T> createRoute(BuildContext context) => _AppPageRoute<T>(this);
+}
+
+class _AppPageRoute<T> extends PageRoute<T>
+    with MaterialRouteTransitionMixin<T> {
+  _AppPageRoute(_AppPage<T> page) : super(settings: page) {
+    assert(opaque);
+  }
+
+  _AppPage<T> get _page => settings as _AppPage<T>;
+
+  /// Two-column mode swaps panes in place and reduced motion removes the
+  /// movement; both make the route instant. The theme builder treats a zero
+  /// duration as instant without changing the widget structure.
+  bool get _instant {
+    if (!_page.animated) return true;
+    final navigator = this.navigator;
+    if (navigator == null) return true;
+    final context = navigator.context;
+    return FluffyThemes.isColumnMode(context) || NotionMotion.reduced(context);
+  }
+
+  @override
+  Duration get transitionDuration =>
+      _instant ? Duration.zero : super.transitionDuration;
+
+  @override
+  Duration get reverseTransitionDuration =>
+      _instant ? Duration.zero : super.reverseTransitionDuration;
+
+  @override
+  Widget buildContent(BuildContext context) => _page.child;
+
+  @override
+  bool get maintainState => true;
+
+  @override
+  String get debugLabel => '${super.debugLabel}(${_page.restorationId})';
+}
+
+/// Compares [value] by identity inside a memo signature.
+@immutable
+class _Identity {
+  const _Identity(this.value);
+  final Object? value;
+  @override
+  bool operator ==(Object other) =>
+      other is _Identity && identical(other.value, value);
+  @override
+  int get hashCode => identityHashCode(value);
+}
+
+/// go_router calls every page builder of the stack on each navigation. A
+/// fresh child widget makes Flutter rebuild hidden pages (the inbox under a
+/// chat, the chat under its details). This returns the identical child for
+/// a page key while its signature is unchanged, so hidden pages skip the
+/// rebuild; their own listeners still update them.
+final class _PageMemo {
+  static final _byRouter = Expando<_PageMemo>('page child memo');
+  static const _capacity = 32;
+  final _entries = <ValueKey<String>, (_PageSignature, Widget)>{};
+
+  static Widget resolve(
+    BuildContext context,
+    GoRouterState state,
+    Widget child,
+    Object? memo,
+  ) {
+    final router = GoRouter.maybeOf(context);
+    if (router == null) return child;
+    final store = _byRouter[router] ??= _PageMemo();
+    final uri = state.uri;
+    final signature = _PageSignature(
+      location: state.matchedLocation,
+      parameters:
+          memo ??
+          (
+            state.pathParameters,
+            uri.queryParameters,
+            uri.fragment,
+            _Identity(state.extra),
+          ),
+      columns: FluffyThemes.isColumnMode(context),
+      client: _Identity(_activeClient(context)),
+      type: child.runtimeType,
+    );
+    final key = state.pageKey;
+    final hit = store._entries.remove(key);
+    if (hit != null && hit.$1 == signature) {
+      store._entries[key] = hit;
+      return hit.$2;
+    }
+    store._entries[key] = (signature, child);
+    while (store._entries.length > _capacity) {
+      store._entries.remove(store._entries.keys.first);
+    }
+    return child;
+  }
+
+  static Object? _activeClient(BuildContext context) {
+    try {
+      return Matrix.of(context).client;
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+@immutable
+class _PageSignature {
+  const _PageSignature({
+    required this.location,
+    required this.parameters,
+    required this.columns,
+    required this.client,
+    required this.type,
+  });
+
+  final String location;
+  final Object? parameters;
+  final bool columns;
+  final _Identity client;
+  final Type type;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PageSignature &&
+      other.location == location &&
+      other.columns == columns &&
+      other.client == client &&
+      other.type == type &&
+      _deepEquals(other.parameters, parameters);
+
+  static bool _deepEquals(Object? a, Object? b) {
+    if (a is Map && b is Map) return mapEquals(a, b);
+    if (a is (Map, Map, String, _Identity) &&
+        b is (Map, Map, String, _Identity)) {
+      return mapEquals(a.$1, b.$1) &&
+          mapEquals(a.$2, b.$2) &&
+          a.$3 == b.$3 &&
+          a.$4 == b.$4;
+    }
+    return a == b;
+  }
+
+  @override
+  int get hashCode => Object.hash(location, columns, client, type);
 }

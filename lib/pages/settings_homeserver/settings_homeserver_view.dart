@@ -9,6 +9,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:material_ui/material_ui.dart';
@@ -72,9 +73,7 @@ class SettingsHomeserverView extends StatelessWidget {
                     );
                   }
                   if (data == null) {
-                    return const Center(
-                      child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                    );
+                    return const Center(child: NotionDelayedSpinner());
                   }
                   final supportPage = data.supportPage;
                   final contacts = data.contacts;
@@ -145,9 +144,7 @@ class SettingsHomeserverView extends StatelessWidget {
                   }
                   final data = snapshot.data;
                   if (data == null) {
-                    return const Center(
-                      child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                    );
+                    return const Center(child: NotionDelayedSpinner());
                   }
                   return Column(
                     mainAxisSize: .min,
@@ -204,9 +201,7 @@ class SettingsHomeserverView extends StatelessWidget {
                   }
                   final wellKnown = snapshot.data;
                   if (wellKnown == null) {
-                    return const Center(
-                      child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                    );
+                    return const Center(child: NotionDelayedSpinner());
                   }
                   final identityServer = wellKnown.mIdentityServer;
                   return Column(

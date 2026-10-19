@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/pages/settings/settings.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/personal/ui/notion_settings_load.dart';
 import 'package:fluffychat/personal/ui/notion_settings_page.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
@@ -25,6 +27,7 @@ class NotionSettingsAdapter extends StatefulWidget {
 
 class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
   PersonalClient? _personal;
+  (bool, int)? _personalSummary;
   Future<Uri?>? _accountManage;
   Future<bool>? _passwordAvailable;
   @override
@@ -42,26 +45,47 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
   void _bindClient(Client client) {
     final next = PersonalClient.of(client);
     if (_personal != next) {
-      _personal?.removeListener(_refresh);
-      _personal = next..addListener(_refresh);
+      _personal?.removeListener(_personalChanged);
+      _personal = next..addListener(_personalChanged);
+      _personalSummary = (next.ready, next.pending.length);
       _accountManage = null;
       _passwordAvailable = null;
-      next.load();
+      // Revalidating private sync is not needed to draw this page; do it
+      // after the page slid in, and not again within a few seconds.
+      PersonalPageLoad.request(context, next);
     }
   }
 
-  Future<Uri?> _managementUrl(Client client) async =>
-      (await client.getAuthMetadata().timeout(
-        const Duration(seconds: 10),
-      )).accountManagementUri;
+  Future<Uri?> _managementUrl({bool force = false}) =>
+      widget.controller.accountCache.loadManagement(force: force);
+
+  /// Leaves settings. On phones this pops the settings shell (with the page
+  /// transition and predictive back); in two-column mode, or when settings
+  /// was opened without a page below, it navigates to the chats.
+  void _back() {
+    if (!FluffyThemes.isColumnMode(context) && context.canPop()) {
+      context.pop();
+    } else {
+      context.go('/rooms');
+    }
+  }
 
   void _refresh() {
     if (mounted) setState(() {});
   }
 
+  void _personalChanged() {
+    final personal = _personal;
+    if (personal == null) return;
+    final summary = (personal.ready, personal.pending.length);
+    if (summary == _personalSummary) return;
+    _personalSummary = summary;
+    _refresh();
+  }
+
   @override
   void dispose() {
-    _personal?.removeListener(_refresh);
+    _personal?.removeListener(_personalChanged);
     notionSettingsRevision.removeListener(_refresh);
     super.dispose();
   }
@@ -122,11 +146,13 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                   ? 'Recovery connected'
                   : 'Recovery is not set up',
             ),
-            if (connected == null)
-              NotionListRow(
+            NotionSizeReveal(
+              visible: connected == null,
+              child: NotionListRow(
                 title: 'Check recovery status',
                 onTap: widget.controller.checkBootstrap,
               ),
+            ),
             NotionListRow(
               title: connected == true ? 'Manage recovery' : 'Set up recovery',
               subtitle: 'Uses the existing encrypted key backup flow.',
@@ -139,8 +165,9 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
     return FutureBuilder<Profile>(
       key: ValueKey(client),
       future: widget.controller.profileFuture,
+      initialData: widget.controller.cachedProfile,
       builder: (context, snapshot) {
-        final profile = snapshot.data;
+        final profile = snapshot.data ?? widget.controller.cachedProfile;
         final name =
             profile?.displayName ?? client.userID?.localpart ?? 'Account';
         final avatar = Avatar(
@@ -149,11 +176,9 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
           size: 44,
         );
         if (surface == SettingsSurface.account) {
-          _accountManage ??= _managementUrl(client);
-          _passwordAvailable ??= client
-              .getCapabilities()
-              .timeout(const Duration(seconds: 10))
-              .then((caps) => caps.mChangePassword?.enabled != false);
+          final cache = widget.controller.accountCache;
+          _accountManage ??= _managementUrl();
+          _passwordAvailable ??= cache.loadPasswordChange();
           return NotionSettingsScaffold(
             title: 'Account',
             child: Column(
@@ -170,12 +195,14 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                 const Text(
                   'Your network profile is visible to other people on this account.',
                 ),
-                if (snapshot.hasError)
-                  NotionListRow(
+                NotionSizeReveal(
+                  visible: snapshot.hasError,
+                  child: NotionListRow(
                     title: 'Profile could not load',
                     subtitle: 'Retry without changing your account.',
                     onTap: widget.controller.updateProfile,
                   ),
+                ),
                 const NotionSettingsSection('Profile'),
                 NotionListRow(
                   leading: const Icon(Icons.edit_outlined),
@@ -199,27 +226,35 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                 FutureBuilder<Uri?>(
                   key: ValueKey(client),
                   future: _accountManage,
-                  builder: (context, snapshot) => NotionListRow(
-                    leading: const Icon(Icons.manage_accounts_outlined),
-                    title: 'Manage account',
-                    subtitle: snapshot.hasError
-                        ? 'Could not check account management. Retry.'
-                        : snapshot.connectionState != ConnectionState.done
-                        ? 'Checking account management availability…'
-                        : snapshot.data == null
-                        ? 'This server does not provide an account management page.'
-                        : 'Open the account management page',
-                    onTap: snapshot.hasError
-                        ? () => setState(
-                            () => _accountManage = _managementUrl(client),
-                          )
-                        : snapshot.data == null
-                        ? null
-                        : () => launchUrl(
-                            snapshot.data!,
-                            mode: LaunchMode.inAppBrowserView,
-                          ),
-                  ),
+                  initialData: cache.management?.uri,
+                  builder: (context, snapshot) {
+                    final known =
+                        snapshot.connectionState == ConnectionState.done ||
+                        cache.management != null;
+                    final uri = snapshot.data ?? cache.management?.uri;
+                    return NotionListRow(
+                      leading: const Icon(Icons.manage_accounts_outlined),
+                      title: 'Manage account',
+                      subtitle: snapshot.hasError
+                          ? 'Could not check account management. Retry.'
+                          : !known
+                          ? 'Checking account management availability…'
+                          : uri == null
+                          ? 'This server does not provide an account management page.'
+                          : 'Open the account management page',
+                      onTap: snapshot.hasError
+                          ? () => setState(
+                              () =>
+                                  _accountManage = _managementUrl(force: true),
+                            )
+                          : uri == null
+                          ? null
+                          : () => launchUrl(
+                              uri,
+                              mode: LaunchMode.inAppBrowserView,
+                            ),
+                    );
+                  },
                 ),
                 NotionListRow(
                   leading: const Icon(Icons.person_add_outlined),
@@ -228,6 +263,7 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                 ),
                 FutureBuilder<bool>(
                   future: _passwordAvailable,
+                  initialData: cache.passwordChange,
                   builder: (context, snapshot) => NotionListRow(
                     leading: const Icon(Icons.password_outlined),
                     title: 'Change password',
@@ -296,10 +332,7 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                 ? 'Profile unavailable. Open Account to retry.'
                 : null,
           ),
-          actions: NotionSettingsActions(
-            back: () => context.go('/rooms'),
-            open: _route,
-          ),
+          actions: NotionSettingsActions(back: _back, open: _route),
         );
       },
     );

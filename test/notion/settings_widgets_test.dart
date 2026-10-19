@@ -2,10 +2,11 @@
 import 'package:fluffychat/personal/ui/notion_privacy_preferences.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:fluffychat/personal/ui/notion_settings_page.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/ui/notion/notion_theme.dart';
 import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
-import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 NotionSettingsPage _index({
@@ -108,6 +109,42 @@ void main() {
       );
     }
   }
+
+  testWidgets('settings sections use the shared RTL-safe section header', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: NotionTheme.build(Brightness.dark),
+        home: const Directionality(
+          textDirection: TextDirection.rtl,
+          child: Scaffold(body: NotionSettingsSection('Rules')),
+        ),
+      ),
+    );
+    expect(
+      find.descendant(
+        of: find.byType(NotionSettingsSection),
+        matching: find.byType(NotionSectionHeader),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSemantics(find.text('Rules')),
+      matchesSemantics(label: 'Rules', isHeader: true),
+    );
+    semantics.dispose();
+    // No hard-coded left alignment: the label follows the text direction.
+    expect(
+      find.descendant(
+        of: find.byType(NotionSettingsSection),
+        matching: find.byType(Align),
+      ),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('privacy switch is keyboard operable with one toggle action', (
     tester,

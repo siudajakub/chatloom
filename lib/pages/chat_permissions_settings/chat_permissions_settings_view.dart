@@ -6,6 +6,7 @@
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_permissions_settings/chat_permissions_settings.dart';
 import 'package:fluffychat/pages/chat_permissions_settings/permission_list_tile.dart';
+import 'package:fluffychat/personal/ui/notion_settings_body.dart';
 import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call_member.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -47,25 +48,25 @@ class ChatPermissionsSettingsView extends StatelessWidget {
             )..removeWhere((k, v) => v is! int);
             eventsPowerLevels[MatrixRtcCallMember.eventType] ??=
                 powerLevelsContent['state_default'] as int? ?? 50;
-            return Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.info_outlined),
-                  subtitle: Text(L10n.of(context).chatPermissionsDescription),
-                ),
-                Divider(color: theme.dividerColor),
-                ListTile(
-                  title: Text(
-                    L10n.of(context).chatPermissions,
-                    style: TextStyle(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.bold,
+            // Rows rise in once after the push (first screenful only).
+            return NotionSettingsBody.staggered(
+              Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.info_outlined),
+                    subtitle: Text(L10n.of(context).chatPermissionsDescription),
+                  ),
+                  Divider(color: theme.dividerColor),
+                  ListTile(
+                    title: Text(
+                      L10n.of(context).chatPermissions,
+                      style: TextStyle(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                ),
-                Column(
-                  mainAxisSize: .min,
-                  children: [
+                  ...[
                     for (final entry in powerLevels.entries)
                       PermissionsListTile(
                         permissionKey: entry.key,
@@ -140,8 +141,8 @@ class ChatPermissionsSettingsView extends StatelessWidget {
                         ),
                       ),
                   ],
-                ),
-              ],
+                ],
+              ),
             );
           },
         ),

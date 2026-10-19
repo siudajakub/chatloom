@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:fluffychat/ui/notion/notion_motion.dart';
 import 'package:fluffychat/ui/notion/notion_theme.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -35,8 +36,11 @@ abstract class FluffyThemes {
     );
   }
 
-  static const Duration animationDuration = Duration(milliseconds: 250);
-  static const Curve animationCurve = Curves.easeInOut;
+  /// Legacy timing used by FluffyChat widgets; now the Notion motion tokens
+  /// (`NotionMotion.short`, `NotionMotion.standard`). New code uses
+  /// `NotionMotion` directly.
+  static const Duration animationDuration = NotionMotion.short;
+  static const Curve animationCurve = NotionMotion.standard;
 
   static ThemeData buildTheme(
     BuildContext context,

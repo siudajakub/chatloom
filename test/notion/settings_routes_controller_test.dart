@@ -6,6 +6,9 @@ import 'package:fluffychat/config/routes.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/personal_client.dart';
+import 'package:fluffychat/personal/ui/notion_settings_adapter.dart';
+import 'package:fluffychat/personal/ui/notion_settings_page.dart';
+import 'package:personal_core/personal_core.dart';
 import 'package:fluffychat/ui/notion/notion_theme.dart';
 import 'package:fluffychat/widgets/app_lock.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -181,6 +184,32 @@ void main() {
     addTearDown(() => PathProviderPlatform.instance = original);
   });
 
+  testWidgets(
+    'settings ignores unrelated personal changes but updates pending summary',
+    (tester) async {
+      await _mount(tester, path: '/rooms/settings');
+      final context = tester.element(find.byType(NotionSettingsAdapter));
+      final personal = PersonalClient.of(Matrix.of(context).client);
+      NotionSettingsPage page() =>
+          tester.widget(find.byType(NotionSettingsPage));
+      final before = page();
+      personal.notifyListeners();
+      await tester.pump();
+      expect(page(), same(before));
+      personal.pending['synthetic-command'] = PersonalOperation(
+        opId: 'synthetic-command',
+        kind: 'put',
+        entityId: 'org:synthetic',
+        createdAt: DateTime.utc(2026),
+        payload: {},
+      );
+      personal.notifyListeners();
+      await tester.pump();
+      expect(page(), isNot(same(before)));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   for (final entry in const {
     'account': 'Change display name',
     'security': 'Incognito mode',
@@ -194,7 +223,7 @@ void main() {
     'bookmarks': 'Bookmark a message to find it here later.',
     'reminders': 'No reminders',
     'scheduled': 'No scheduled messages',
-    'push': 'Notification setup',
+    'push': 'Set up notifications automatically',
     'notifications': 'Push setup & registration',
     'notifications/registration': 'Could not load registered devices',
     'recovery': 'Key backup',
@@ -211,7 +240,21 @@ void main() {
         expect(find.text('Labels'), findsNothing);
         expect(find.text('My labels'), findsNothing);
         if (entry.key == 'push') {
-          final row = find.widgetWithText(ListTile, 'Notification setup');
+          final row = find.widgetWithText(
+            ListTile,
+            'Set up notifications automatically',
+          );
+          expect(find.text('Advanced notification settings'), findsOneWidget);
+          expect(find.text('Configure a gateway manually'), findsNothing);
+          await tester.tap(find.text('Advanced notification settings'));
+          await tester.pumpAndSettle();
+          expect(find.text('Configure a gateway manually'), findsOneWidget);
+          expect(
+            find.text('Copy private push registration (secrets)'),
+            findsOneWidget,
+          );
+          await tester.tap(find.text('Advanced notification settings'));
+          await tester.pumpAndSettle();
           final texts = tester.widgetList<RichText>(
             find.descendant(
               of: find.descendant(of: row, matching: find.byType(Text)),
@@ -237,6 +280,16 @@ void main() {
       },
     );
   }
+
+  testWidgets('automatic push setup remains readable at 320 and 200 percent', (
+    tester,
+  ) async {
+    await _mount(tester, path: '/rooms/settings/push', width: 320, scale: 2);
+    expect(find.text('Set up notifications automatically'), findsOneWidget);
+    expect(find.text('Advanced notification settings'), findsOneWidget);
+    expect(find.text('Configure a gateway manually'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('mobile category round trip restores the index scroll offset', (
     tester,

@@ -29,7 +29,7 @@ enum AppSettings<T> {
   unifiedPushEndpoint<String>('chat.fluffy.unifiedpush.endpoint', ''),
   pushNotificationsGatewayUrl<String>(
     'pushNotificationsGatewayUrl',
-    '',
+    'https://push.example.org/_matrix/push/v1/notify',
   ),
   pushNotificationsPusherFormat<String>(
     'pushNotificationsPusherFormat',
@@ -42,6 +42,38 @@ enum AppSettings<T> {
   autoplayImages<bool>('chat.fluffy.autoplay_images', true),
   personalIncognito<bool>('pl.personal.incognito', true),
   personalRoundRecordingMode<bool>('pl.personal.round_recording_mode', false),
+
+  /// Prefetch voice notes and round videos (ciphertext into the encrypted
+  /// media cache) as soon as a chat is open, so playback starts instantly.
+  personalAutoDownloadVoiceRounds<bool>(
+    'pl.personal.media.auto_download_voice_rounds',
+    true,
+  ),
+  personalAutoDownloadWifiOnly<bool>(
+    'pl.personal.media.auto_download_wifi_only',
+    false,
+  ),
+
+  /// Voice note capture: platform voice-communication path (AEC + NS + AGC).
+  personalVoiceIsolation<bool>('pl.personal.voice.isolation', false),
+
+  /// Voice note capture: higher bitrate (Opus 96 kbps / AAC 128 kbps).
+  personalVoiceHighQuality<bool>('pl.personal.voice.high_quality', false),
+  personalRoundHighQuality<bool>('pl.personal.round.high_quality', false),
+  personalRoundStabilization<bool>('pl.personal.round.stabilization', true),
+  personalRoundNoiseReduction<bool>('pl.personal.round.noise_reduction', true),
+
+  /// Show sender and message preview (decrypted on this device only) in
+  /// message notifications. Hidden while the app lock is set; on the lock
+  /// screen Android hides it only with "hide sensitive content".
+  personalNotificationPreviews<bool>(
+    'pl.personal.notifications.previews',
+    true,
+  ),
+
+  /// Inbox encryption notice dismissed until its issues change: an account
+  /// hash and issue signatures (see `E2eeNoticeDismissal`), no ids.
+  personalE2eeNoticeDismissed<String>('pl.personal.e2ee_notice.dismissed', ''),
   sendTypingNotifications<bool>('chat.fluffy.send_typing_notifications', true),
   sendPublicReadReceipts<bool>('chat.fluffy.send_public_read_receipts', true),
   swipeRightToLeftToReply<bool>('chat.fluffy.swipeRightToLeftToReply', true),
@@ -55,7 +87,10 @@ enum AppSettings<T> {
   displayChatDetailsColumn('chat.fluffy.display_chat_details_column', false),
   // AppConfig-mirrored settings
   applicationName<String>('chat.fluffy.application_name', 'Personal Chat'),
-  defaultHomeserver<String>('chat.fluffy.default_homeserver', 'matrix.beeper.com'),
+  defaultHomeserver<String>(
+    'chat.fluffy.default_homeserver',
+    'matrix.beeper.com',
+  ),
   // colorSchemeSeed stored as ARGB int
   colorSchemeSeedInt<int>('chat.fluffy.color_scheme_seed', 0xFF5625BA),
   emojiSuggestionLocale<String>('emoji_suggestion_locale', ''),

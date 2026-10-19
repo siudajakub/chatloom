@@ -5,6 +5,8 @@
 
 import 'dart:ui';
 
+import 'package:fluffychat/ui/notion/notion_tokens.dart';
+
 abstract class AppConfig {
   static const Color primaryColor = Color(0xFF261386);
 
@@ -18,8 +20,16 @@ abstract class AppConfig {
   static const String deepLinkPrefix = 'pl.personal.chat://chat/';
   static const String schemePrefix = 'matrix:';
   static const String pushNotificationsChannelId = 'fluffychat_push';
+
+  /// Dedicated channel so reminder alerts never rename the message channel.
+  static const String personalRemindersChannelId = 'personal_reminders';
+
+  /// The app UI, notifications and background paths are English-only.
+  static const Locale appLocale = Locale('en');
   static const String pushNotificationsAppId = 'pl.personal.chat';
-  static const double borderRadius = 18.0;
+
+  /// Legacy FluffyChat radius, aligned with the Notion card radius.
+  static const double borderRadius = NotionRadius.md;
   static const double spaceBorderRadius = 11.0;
   static const double columnWidth = 360.0;
 

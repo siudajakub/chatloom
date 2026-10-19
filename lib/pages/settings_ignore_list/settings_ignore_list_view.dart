@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -38,7 +39,7 @@ class SettingsIgnoreListView extends StatelessWidget {
           ),
           builder: (context, asyncSnapshot) {
             if (client.prevBatch == null) {
-              return const Center(child: CircularProgressIndicator.adaptive());
+              return const Center(child: NotionDelayedSpinner());
             }
             return Column(
               mainAxisSize: .min,

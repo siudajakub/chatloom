@@ -55,6 +55,13 @@ class SettingsChatView extends StatelessWidget {
                 subtitle: 'Keep one timeline across a person’s networks',
                 onTap: () => context.push('/rooms/settings/people'),
               ),
+              NotionListRow(
+                key: const Key('settings_voice_video_row'),
+                leading: const Icon(Icons.mic_none_outlined),
+                title: 'Voice messages & round videos',
+                subtitle: 'Recording quality, noise reduction, auto-download',
+                onTap: () => context.push('/rooms/settings/chat/media'),
+              ),
               const NotionSettingsSection('Messages & gestures'),
               SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).formattedMessages,

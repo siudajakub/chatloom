@@ -4,6 +4,10 @@ import 'package:material_ui/material_ui.dart';
 
 /// Flat secondary settings surface. It retains each inherited controller and
 /// route while avoiding the older desktop card wrapper.
+///
+/// Motion: once the page push has settled, the sections of a [Column] child
+/// rise in one after another (first appearance only, capped stagger); any
+/// other child fades in as one block. Everything settles to identity.
 class NotionSettingsBody extends StatelessWidget {
   final Widget child;
   final double maxWidth;
@@ -16,6 +20,31 @@ class NotionSettingsBody extends StatelessWidget {
     this.withScrolling = true,
     this.innerPadding,
   });
+
+  /// Wraps the sections of [child] in staggered entrances.
+  static Widget staggered(Widget child) {
+    if (child is! Column) return NotionEntrance(child: child);
+    return NotionEntranceScope(
+      child: Column(
+        key: child.key,
+        mainAxisAlignment: child.mainAxisAlignment,
+        mainAxisSize: child.mainAxisSize,
+        crossAxisAlignment: child.crossAxisAlignment,
+        textDirection: child.textDirection,
+        verticalDirection: child.verticalDirection,
+        textBaseline: child.textBaseline,
+        spacing: child.spacing,
+        children: [
+          for (final section in child.children)
+            // Flex children must stay direct children of the column.
+            section is Flexible
+                ? section
+                : NotionEntrance(rise: NotionMotion.riseList, child: section),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => SafeArea(
     child: ListTileTheme.merge(
@@ -38,12 +67,12 @@ class NotionSettingsBody extends StatelessWidget {
               ? SingleChildScrollView(
                   padding:
                       innerPadding ?? const EdgeInsets.fromLTRB(20, 12, 20, 32),
-                  child: child,
+                  child: staggered(child),
                 )
               : Padding(
                   padding:
                       innerPadding ?? const EdgeInsets.fromLTRB(20, 12, 20, 32),
-                  child: child,
+                  child: staggered(child),
                 ),
         ),
       ),
@@ -74,20 +103,13 @@ class NotionSettingsScaffold extends StatelessWidget {
   );
 }
 
+/// Settings group heading. Delegates to the shared [NotionSectionHeader] so
+/// every settings surface uses one RTL-safe header style.
 class NotionSettingsSection extends StatelessWidget {
   final String title;
   const NotionSettingsSection(this.title, {super.key});
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 24, bottom: 8),
-    child: Align(
-      alignment: Alignment.centerLeft,
-      child: Semantics(
-        header: true,
-        child: Text(title, style: NotionTokens.heading),
-      ),
-    ),
-  );
+  Widget build(BuildContext context) => NotionSectionHeader(title: title);
 }
 
 /// Keeps descriptive toggles readable when text scaling consumes the row width.
@@ -118,11 +140,26 @@ class NotionSettingsToggle extends StatelessWidget {
                 : Theme.of(context).colorScheme.onSurface,
           ),
         ),
-        if (subtitle != null)
-          Text(
-            subtitle!,
-            style: TextStyle(fontSize: 13, height: 1.4, color: secondary),
+        // A changed explanation (e.g. "Suppressed by Incognito") fades
+        // through while the row eases to its new height.
+        AnimatedSize(
+          duration: NotionMotion.of(context, NotionMotion.medium),
+          curve: NotionMotion.emphasized,
+          alignment: AlignmentDirectional.topStart,
+          child: NotionFadeThrough(
+            child: subtitle == null
+                ? const SizedBox(key: ValueKey('no-subtitle'), width: 0)
+                : Text(
+                    subtitle!,
+                    key: ValueKey(subtitle),
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.4,
+                      color: secondary,
+                    ),
+                  ),
           ),
+        ),
       ],
     );
     final toggle = Switch.adaptive(value: value, onChanged: onChanged);
@@ -133,29 +170,36 @@ class NotionSettingsToggle extends StatelessWidget {
       enabled: onChanged != null,
       onTap: activate,
       child: ExcludeSemantics(
-        child: InkWell(
-          canRequestFocus: false,
-          onTap: activate,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: LayoutBuilder(
-              builder: (context, constraints) =>
-                  MediaQuery.textScalerOf(context).scale(16) > 22 &&
-                      constraints.maxWidth < 480
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        copy,
-                        Align(alignment: Alignment.centerRight, child: toggle),
-                      ],
-                    )
-                  : Row(
-                      children: [
-                        Expanded(child: copy),
-                        const SizedBox(width: 12),
-                        toggle,
-                      ],
-                    ),
+        child: NotionPressable(
+          scale: NotionMotion.pressRow,
+          enabled: activate != null,
+          child: InkWell(
+            canRequestFocus: false,
+            onTap: activate,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: LayoutBuilder(
+                builder: (context, constraints) =>
+                    MediaQuery.textScalerOf(context).scale(16) > 22 &&
+                        constraints.maxWidth < 480
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          copy,
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: toggle,
+                          ),
+                        ],
+                      )
+                    : Row(
+                        children: [
+                          Expanded(child: copy),
+                          const SizedBox(width: 12),
+                          toggle,
+                        ],
+                      ),
+              ),
             ),
           ),
         ),

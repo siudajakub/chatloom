@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
-import 'package:flutter/foundation.dart';
-import 'package:material_ui/material_ui.dart';
-import 'package:matrix/matrix.dart';
-import 'package:personal_core/personal_core.dart';
+
 import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/ui/notion_network_filter.dart';
+import 'package:fluffychat/personal/ui/notion_settings_load.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/matrix.dart';
+import 'package:flutter/foundation.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart';
 
 String privateNotificationLabel(PersonalNotificationMode mode) =>
     switch (mode) {
@@ -49,7 +52,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
   @override
   void initState() {
     super.initState();
-    personal.load();
+    PersonalPageLoad.request(context, personal);
     _sync = personal.client.onSync.stream.listen((_) {
       if (mounted) setState(() {});
     });
@@ -70,11 +73,12 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
     try {
       await personal.put(key, {...?personal.values[key], ...value});
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => _error =
               'Could not save this change. Check private sync and try again.',
         );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -133,12 +137,18 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
         const Text(
           'Applies to current and future groups. Individual chat exceptions take priority.',
         ),
-        if (personal.pending.values.any((op) => op.entityId == key))
-          const Text('Saved locally · awaiting private sync confirmation.'),
-        if (personal.conflicts.containsKey(key))
-          const Text(
+        NotionSizeReveal(
+          visible: personal.pending.values.any((op) => op.entityId == key),
+          child: const Text(
+            'Saved locally · awaiting private sync confirmation.',
+          ),
+        ),
+        NotionSizeReveal(
+          visible: personal.conflicts.containsKey(key),
+          child: const Text(
             'Conflicting changes. Review them in Sync & transcriptions.',
           ),
+        ),
       ],
     );
   }
@@ -162,12 +172,16 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
         projection.displayName(room),
         style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
       ),
-      if (personal.pending.values.any(
-        (op) =>
-            op.entityId == key ||
-            sources.any((source) => op.entityId == 'org:${source.id}'),
-      ))
-        const Text('Saved locally · awaiting private sync confirmation.'),
+      NotionSizeReveal(
+        visible: personal.pending.values.any(
+          (op) =>
+              op.entityId == key ||
+              sources.any((source) => op.entityId == 'org:${source.id}'),
+        ),
+        child: const Text(
+          'Saved locally · awaiting private sync confirmation.',
+        ),
+      ),
       if (group != null)
         const Text(
           'Visibility applies to this person across all merged sources.',
@@ -240,8 +254,11 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
                 )
               : null,
         ),
-        Text(
-          'Effective: ${privateNotificationLabel(projection.notificationModeFor(source))}',
+        NotionFadeThrough(
+          child: Text(
+            'Effective: ${privateNotificationLabel(projection.notificationModeFor(source))}',
+            key: ValueKey(projection.notificationModeFor(source)),
+          ),
         ),
         Text(
           'Account rule: ${switch (source.pushRuleState) {
@@ -249,6 +266,33 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
             PushRuleState.mentionsOnly => 'Mentions only',
             PushRuleState.dontNotify => 'Muted',
           }}. Account restrictions still apply.',
+        ),
+        PreferenceChoice(
+          title: 'Automatic transcription',
+          value:
+              switch (personal.transcriptionPolicy.chatOverrides[source.id]) {
+                true => 'always',
+                false => 'never',
+                null => 'inherit',
+              },
+          choices: const {
+            'inherit': 'Default',
+            'always': 'Always',
+            'never': 'Never',
+          },
+          onChanged: _canEdit(transcriptionPolicyEntity)
+              ? (value) => _save(
+                  transcriptionPolicyEntity,
+                  personal.transcriptionPolicy.withChatOverride(
+                    source.id,
+                    switch (value) {
+                      'always' => true,
+                      'never' => false,
+                      _ => null,
+                    },
+                  ).toJson(),
+                )
+              : null,
         ),
       ],
     ];
@@ -284,40 +328,57 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 640),
-            child: ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                const Text(
-                  'Private settings for Personal Chat. Other Beeper and Matrix clients are unchanged.',
-                ),
-                if (kIsWeb)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'Edit these encrypted preferences in the Android or macOS app.',
-                    ),
-                  )
-                else if (!_active)
+            // Sections rise in once after the push; dependent notes and
+            // progress open and close in place.
+            child: NotionEntranceScope(
+              child: ListView(
+                padding: const EdgeInsets.all(20),
+                children: NotionEntrance.stagger([
                   const Text(
-                    'The selected account changed. Go back and reopen these settings.',
-                  )
-                else if (!personal.ready)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'Connect private sync in Settings → Sync & transcriptions to save these preferences.',
+                    'Private settings for Personal Chat. Other Beeper and Matrix clients are unchanged.',
+                  ),
+                  if (kIsWeb)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'Edit these encrypted preferences in the Android or macOS app.',
+                      ),
+                    )
+                  else if (!_active)
+                    const Text(
+                      'The selected account changed. Go back and reopen these settings.',
+                    )
+                  else if (!personal.ready)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'Connect private sync in Settings → Sync & transcriptions to save these preferences.',
+                      ),
+                    ),
+                  NotionSizeReveal(
+                    visible: _busy,
+                    duration: NotionMotion.short,
+                    child: const NotionDelayedReveal(
+                      placeholder: SizedBox(height: 4),
+                      child: LinearProgressIndicator(),
                     ),
                   ),
-                if (_busy) const LinearProgressIndicator(),
-                if (_error != null) Text(_error!),
-                const SizedBox(height: 20),
-                if (widget.room case final room?)
-                  ..._conversation(room, projection)
-                else ...[
-                  if (networks.isEmpty) const Text('No networks loaded yet.'),
-                  for (final network in networks) _network(network, projection),
-                ],
-              ],
+                  NotionSizeReveal(
+                    visible: _error != null,
+                    child: NotionFadeThrough(
+                      child: Text(_error ?? '', key: ValueKey(_error)),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  if (widget.room case final room?)
+                    ..._conversation(room, projection)
+                  else ...[
+                    if (networks.isEmpty) const Text('No networks loaded yet.'),
+                    for (final network in networks)
+                      _network(network, projection),
+                  ],
+                ]),
+              ),
             ),
           ),
         ),
@@ -350,8 +411,7 @@ class PreferenceChoice extends StatelessWidget {
           isExpanded: true,
           style: Theme.of(context).textTheme.bodyLarge,
           itemHeight: (MediaQuery.textScalerOf(context).scale(18) * 1.5 + 16)
-              .clamp(48.0, double.infinity)
-              .toDouble(),
+              .clamp(48.0, double.infinity),
           value: choices.containsKey(value) ? value : 'inherit',
           items: [
             for (final item in choices.entries)

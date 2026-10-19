@@ -73,8 +73,9 @@ enum NotionSettingsCategory {
     final leaf = parts.firstOrNull;
     if (leaf == 'security' &&
         parts.length > 1 &&
-        {'password', '3pid'}.contains(parts[1]))
+        {'password', '3pid'}.contains(parts[1])) {
       return account;
+    }
     return switch (leaf) {
       'devices' || 'recovery' => security,
       'organization' || 'people' || 'networks' => chats,
@@ -127,36 +128,45 @@ class NotionSettingsPage extends StatelessWidget {
       final active = wide && category == selected;
       return Semantics(
         selected: active,
-        child: Material(
-          color: active
-              ? Theme.of(context).colorScheme.surfaceContainerHighest
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(NotionTokens.radius),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: NotionListRow(
-              leading: category == NotionSettingsCategory.account
-                  ? SizedBox.square(
-                      dimension: 24,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: FittedBox(
-                          fit: BoxFit.cover,
-                          child: SizedBox.square(
-                            dimension: 44,
-                            child: data.avatar,
+        // The selected background eases between rows in the sidebar.
+        child: AnimatedContainer(
+          duration: NotionMotion.of(context, NotionMotion.quick),
+          curve: NotionMotion.standard,
+          decoration: BoxDecoration(
+            color: active
+                ? Theme.of(context).colorScheme.surfaceContainerHighest
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(NotionTokens.radius),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            borderRadius: BorderRadius.circular(NotionTokens.radius),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: NotionListRow(
+                leading: category == NotionSettingsCategory.account
+                    ? SizedBox.square(
+                        dimension: 24,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: FittedBox(
+                            fit: BoxFit.cover,
+                            child: SizedBox.square(
+                              dimension: 44,
+                              child: data.avatar,
+                            ),
                           ),
                         ),
-                      ),
-                    )
-                  : Icon(category.icon),
-              title: category == NotionSettingsCategory.account
-                  ? data.name
-                  : category.title,
-              subtitle: data.summaries[category] ?? category.summary,
-              onTap: actions.open == null
-                  ? null
-                  : () => actions.open!(category.route),
+                      )
+                    : Icon(category.icon),
+                title: category == NotionSettingsCategory.account
+                    ? data.name
+                    : category.title,
+                subtitle: data.summaries[category] ?? category.summary,
+                onTap: actions.open == null
+                    ? null
+                    : () => actions.open!(category.route),
+              ),
             ),
           ),
         ),
@@ -177,33 +187,47 @@ class NotionSettingsPage extends StatelessWidget {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 640),
-          child: ListView(
-            key: const PageStorageKey('notion-settings'),
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 32),
-            children: [
-              row(NotionSettingsCategory.account),
-              if (data.status != null)
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Semantics(liveRegion: true, child: Text(data.status!)),
+          // Rows rise in once after the push; rows built later by
+          // scrolling appear without animation.
+          child: NotionEntranceScope(
+            child: ListView(
+              key: const PageStorageKey('notion-settings'),
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 32),
+              children: NotionEntrance.stagger([
+                row(NotionSettingsCategory.account),
+                NotionSizeReveal(
+                  visible: data.status != null,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Semantics(
+                      liveRegion: true,
+                      child: NotionFadeThrough(
+                        child: Text(
+                          data.status ?? '',
+                          key: ValueKey(data.status),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Divider(),
-              ),
-              for (final category in NotionSettingsCategory.values.where(
-                (c) => c != NotionSettingsCategory.account && !c.isTool,
-              ))
-                row(category),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(12, 24, 12, 6),
-                child: Text('Tools', style: NotionTokens.heading),
-              ),
-              for (final category in NotionSettingsCategory.values.where(
-                (c) => c.isTool,
-              ))
-                row(category),
-            ],
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Divider(),
+                ),
+                for (final category in NotionSettingsCategory.values.where(
+                  (c) => c != NotionSettingsCategory.account && !c.isTool,
+                ))
+                  row(category),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(12, 24, 12, 6),
+                  child: Text('Tools', style: NotionTokens.heading),
+                ),
+                for (final category in NotionSettingsCategory.values.where(
+                  (c) => c.isTool,
+                ))
+                  row(category),
+              ]),
+            ),
           ),
         ),
       ),

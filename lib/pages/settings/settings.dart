@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion_motion.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -24,6 +25,7 @@ import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 import '../../widgets/matrix.dart';
+import 'settings_account_cache.dart';
 import 'settings_view.dart';
 
 enum SettingsSurface { overview, account, recovery, about }
@@ -39,8 +41,20 @@ class Settings extends StatefulWidget {
 class SettingsController extends State<Settings> {
   Future<Profile>? profileFuture;
   bool profileUpdated = false;
+  bool _refreshProfile = false;
   Client? _profileClient;
   int _accountRevision = 0;
+
+  /// Last known profile of the active account, available on the first frame
+  /// while [profileFuture] refreshes it.
+  Profile? get cachedProfile {
+    final client = _profileClient;
+    return client == null ? null : SettingsAccountCache.of(client).profile;
+  }
+
+  /// Per-account cache of settings values (management link, capabilities).
+  SettingsAccountCache get accountCache =>
+      SettingsAccountCache.of(_profileClient ?? Matrix.of(context).client);
 
   bool _isCurrentClient(Client client, int revision) =>
       mounted &&
@@ -50,6 +64,7 @@ class SettingsController extends State<Settings> {
 
   void updateProfile() => setState(() {
     profileUpdated = true;
+    _refreshProfile = true;
     profileFuture = null;
   });
 
@@ -210,11 +225,12 @@ class SettingsController extends State<Settings> {
 
       final state = await client.getCryptoIdentityState();
       if (!_isCurrentClient(client, revision)) return;
-      setState(() {
-        cryptoIdentityConnected = state.initialized && state.connected;
-      });
+      final connected = state.initialized && state.connected;
+      SettingsAccountCache.of(client).rememberRecovery(connected);
+      setState(() => cryptoIdentityConnected = connected);
     } catch (_) {
       if (_isCurrentClient(client, revision)) {
+        SettingsAccountCache.of(client).rememberRecovery(null);
         setState(() => cryptoIdentityConnected = null);
       }
     }
@@ -325,15 +341,26 @@ class SettingsController extends State<Settings> {
       _accountRevision++;
       profileFuture = null;
       profileUpdated = false;
-      cryptoIdentityConnected = null;
-      final revision = _accountRevision;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_isCurrentClient(client, revision)) {
-          unawaited(checkBootstrap(account: client, accountRevision: revision));
-        }
-      });
+      _refreshProfile = false;
+      final cache = SettingsAccountCache.of(client);
+      // Show the last known recovery state at once; re-check it only when it
+      // is stale, and only after the page finished sliding in.
+      cryptoIdentityConnected = cache.recoveryConnected;
+      if (!cache.recoveryFresh) {
+        final revision = _accountRevision;
+        NotionMotion.afterRouteSettled(context, () {
+          if (_isCurrentClient(client, revision)) {
+            unawaited(
+              checkBootstrap(account: client, accountRevision: revision),
+            );
+          }
+        });
+      }
     }
-    profileFuture ??= client.getProfileFromUserId(client.userID!);
+    profileFuture ??= SettingsAccountCache.of(
+      client,
+    ).loadProfile(force: _refreshProfile);
+    _refreshProfile = false;
     return SettingsView(this);
   }
 }

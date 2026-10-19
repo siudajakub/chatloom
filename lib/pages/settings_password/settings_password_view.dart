@@ -6,6 +6,7 @@
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_password/settings_password.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -73,9 +74,18 @@ class SettingsPasswordView extends StatelessWidget {
                     onPressed: controller.loading
                         ? null
                         : controller.changePassword,
-                    child: controller.loading
-                        ? const LinearProgressIndicator()
-                        : Text(L10n.of(context).changePassword),
+                    child: NotionFadeThrough(
+                      alignment: Alignment.center,
+                      child: controller.loading
+                          ? const NotionDelayedReveal(
+                              key: ValueKey('busy'),
+                              child: LinearProgressIndicator(),
+                            )
+                          : Text(
+                              L10n.of(context).changePassword,
+                              key: const ValueKey('idle'),
+                            ),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),

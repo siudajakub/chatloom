@@ -45,12 +45,13 @@ class SettingsSwitchListTileState extends State<SettingsSwitchListTile> {
                 await widget.setting.setItem(newValue);
                 if (mounted) widget.onChanged?.call(newValue);
               } catch (_) {
-                if (mounted)
-                  ScaffoldMessenger.of(context).showSnackBar(
+                if (mounted) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(
                     const SnackBar(
                       content: Text('Could not save this setting. Try again.'),
                     ),
                   );
+                }
               } finally {
                 if (mounted) setState(() => _pending = false);
               }

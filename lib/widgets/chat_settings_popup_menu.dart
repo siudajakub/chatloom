@@ -6,6 +6,7 @@
 import 'dart:async';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:go_router/go_router.dart';
@@ -52,6 +53,7 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
         const SizedBox.shrink(),
         PopupMenuButton<ChatPopupMenuActions>(
           useRootNavigator: true,
+          popUpAnimationStyle: NotionMotion.menuStyle,
           onSelected: (choice) async {
             switch (choice) {
               case ChatPopupMenuActions.leave:
