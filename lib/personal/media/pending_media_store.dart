@@ -211,6 +211,37 @@ class PendingMediaStore
           );
   });
 
+  /// Batched [getMediaState]: one query per [chunkSize] ids instead of one per
+  /// visible round. Unknown ids are absent from the result (known-null).
+  Future<Map<String, Map<String, dynamic>>> getMediaStates(
+    String accountId,
+    String roomId,
+    Iterable<String> eventIds, {
+    int chunkSize = 200,
+  }) => _protected(() async {
+    final ids = eventIds.toSet().toList();
+    final result = <String, Map<String, dynamic>>{};
+    if (ids.isEmpty) return result;
+    final step = chunkSize.clamp(1, 900);
+    for (var start = 0; start < ids.length; start += step) {
+      final chunk = ids.sublist(start, (start + step).clamp(0, ids.length));
+      final rows = await _database.query(
+        'personal_round_media_state',
+        columns: ['event_id', 'content'],
+        where:
+            'account_id = ? AND room_id = ? AND event_id IN '
+            '(${List.filled(chunk.length, '?').join(', ')})',
+        whereArgs: [accountId, roomId, ...chunk],
+      );
+      for (final row in rows) {
+        result[row['event_id'] as String] = Map<String, dynamic>.from(
+          jsonDecode(row['content'] as String) as Map,
+        );
+      }
+    }
+    return result;
+  });
+
   Future<bool> applyMediaState(
     String accountId,
     String roomId,

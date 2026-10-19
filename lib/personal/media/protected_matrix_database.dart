@@ -47,6 +47,9 @@ class ProtectedMatrixDatabase extends MatrixSdkDatabase {
   @override
   Future<Uint8List?> getFile(Uri mxcUri) => _media.getFile(mxcUri);
 
+  /// Cheap presence check used by the media prefetcher (no BLOB read).
+  Future<bool> hasFile(Uri mxcUri) => _media.hasFile(mxcUri);
+
   @override
   Future<bool> deleteFile(Uri mxcUri) => _media.deleteFile(mxcUri);
 

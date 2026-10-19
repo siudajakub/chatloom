@@ -65,7 +65,9 @@ Future<void> main() async {
       '\u{10ffff}',
       '\u{10ffff}/',
     ]) {
-      final expected = boundaryKeys.where((key) => key.startsWith(prefix)).toSet();
+      final expected = boundaryKeys
+          .where((key) => key.startsWith(prefix))
+          .toSet();
       final actual = (await db.readPrefix(prefix)).keys.toSet();
       check(
         actual.length == expected.length && actual.containsAll(expected),
@@ -103,11 +105,18 @@ Future<void> main() async {
     await media.storeFile(a, marker, 0);
     final wal = File('${mediaPath}-wal');
     check(await wal.exists(), 'WAL evidence missing');
-    check(!latin1.decode(await wal.readAsBytes()).contains('media_canary_bytes_12345'), 'Plaintext media in WAL');
+    check(
+      !latin1
+          .decode(await wal.readAsBytes())
+          .contains('media_canary_bytes_12345'),
+      'Plaintext media in WAL',
+    );
     check(
       base64Encode((await media.getFile(a))!) == base64Encode(marker),
       'Media bytes changed',
     );
+    check(await media.hasFile(a), 'Cached media not reported present');
+    check(!await media.hasFile(b), 'Missing media reported present');
     now = now.add(const Duration(seconds: 1));
     await media.storeFile(b, Uint8List(20), 0);
     check(await media.getFile(a) == null, 'Cache quota did not evict oldest');
@@ -116,6 +125,7 @@ Future<void> main() async {
     check(await media.getFile(c) == null, 'Oversize file cached');
     now = now.add(const Duration(days: 2));
     check(await media.getFile(b) == null, 'Expired file returned');
+    check(!await media.hasFile(b), 'Expired file reported present');
     await media.deleteOldFiles(0);
     check(await media.deleteFile(b) == false, 'Retention did not purge');
     await media.storeFile(a, marker, 0);

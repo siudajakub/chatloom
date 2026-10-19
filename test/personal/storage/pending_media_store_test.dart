@@ -269,6 +269,22 @@ Future<void> main() async {
       await store.getMediaState('foreign', '!room:fixture', r'$source') == null,
       'Reverse state leaked across own accounts',
     );
+    final batched = await store.getMediaStates('a', '!room:fixture', [
+      r'$source',
+      r'$missing',
+      r'$source',
+    ], chunkSize: 1);
+    check(
+      batched.keys.single == r'$source' &&
+          batched[r'$source']?['revision'] == 3,
+      'Batched media states differ from single lookup',
+    );
+    check(
+      (await store.getMediaStates('foreign', '!room:fixture', [
+        r'$source',
+      ])).isEmpty,
+      'Batched reverse state leaked across own accounts',
+    );
     await store.close();
     store = await open();
     check(
