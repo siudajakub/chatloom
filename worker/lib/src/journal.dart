@@ -2,6 +2,7 @@
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 import 'engine.dart';
+import 'journal_trust.dart';
 import 'ports.dart';
 import 'store.dart';
 import 'reminder_relay.dart';
@@ -73,7 +74,16 @@ class WorkerJournal {
       // Replay is cheap and op IDs provide durable de-duplication. A missing key
       // must not advance checkpoint past a command that could later decrypt.
       var undeciphered = false;
-      for (final event in timeline.events.reversed.toList()) {
+      final events = timeline.events.reversed.toList();
+      // Commands count only when the megolm session that decrypted them was
+      // delivered directly by a pinned verified device (see journal_trust).
+      await client.userDeviceKeysLoading;
+      final trust = WorkerJournalTrust.of(client, trustedDevices);
+      await trust.capture(timeline.room, [
+        for (final event in events)
+          if (event.type == personalEventType && !event.redacted) event,
+      ]);
+      for (final event in events) {
         if (event.type == EventTypes.Encrypted) {
           undeciphered = true;
           continue;
@@ -83,19 +93,7 @@ class WorkerJournal {
             event.senderId != client.userID) {
           continue;
         }
-        final original = event.originalSource;
-        if (original?.type != EventTypes.Encrypted) continue;
-        final senderKey = original?.content['sender_key'];
-        final devices = client.userDeviceKeys[client.userID]?.deviceKeys.values;
-        if (devices?.any(
-              (d) =>
-                  trustedDevices.contains(d.deviceId) &&
-                  d.verified &&
-                  d.curve25519Key == senderKey,
-            ) !=
-            true) {
-          continue;
-        }
+        if (!trust.trusts(event)) continue;
         authenticatedDecryptionSeen = true;
         PersonalOperation? op;
         try {
