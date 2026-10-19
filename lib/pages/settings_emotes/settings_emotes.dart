@@ -9,6 +9,7 @@ import 'package:archive/archive.dart'
     if (dart.library.io) 'package:archive/archive_io.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
@@ -376,7 +377,7 @@ class EmotesSettingsController extends State<EmotesSettings> {
     final archive = ZipDecoder().decodeStream(buffer);
     if (!mounted) return;
 
-    await showDialog(
+    await showNotionCustomDialog(
       context: context,
       // breaks [Matrix.of] calls otherwise
       useRootNavigator: false,

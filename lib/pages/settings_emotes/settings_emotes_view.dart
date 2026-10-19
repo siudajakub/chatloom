@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
@@ -70,6 +71,7 @@ class EmotesSettingsView extends StatelessWidget {
           else
             PopupMenuButton<PopupMenuEmojiActions>(
               useRootNavigator: true,
+              popUpAnimationStyle: NotionMotion.menuStyle,
               onSelected: (value) {
                 switch (value) {
                   case PopupMenuEmojiActions.export:
@@ -298,6 +300,7 @@ class EmotesSettingsView extends StatelessWidget {
                             ),
                             if (!controller.readonly)
                               PopupMenuButton<ImagePackUsage>(
+                                popUpAnimationStyle: NotionMotion.menuStyle,
                                 onSelected: (usage) =>
                                     controller.toggleUsage(imageCode, usage),
                                 itemBuilder: (context) => [
@@ -366,8 +369,10 @@ class _EmoteImage extends StatelessWidget {
     final key = 'sticker_preview_$mxc';
     return InkWell(
       borderRadius: BorderRadius.circular(4),
-      onTap: () =>
-          showDialog(context: context, builder: (_) => MxcImageViewer(mxc)),
+      onTap: () => showNotionCustomDialog(
+        context: context,
+        builder: (_) => MxcImageViewer(mxc),
+      ),
       child: MxcImage(
         key: ValueKey(key),
         cacheKey: key,

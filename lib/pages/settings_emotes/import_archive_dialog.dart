@@ -9,6 +9,7 @@ import 'package:archive/archive.dart';
 import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -48,27 +49,40 @@ class _ImportEmoteArchiveDialogState extends State<ImportEmoteArchiveDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text(L10n.of(context).importEmojis),
-      content: _loading
-          ? Center(child: CircularProgressIndicator(value: _progress))
-          : SingleChildScrollView(
-              child: Wrap(
-                alignment: WrapAlignment.spaceEvenly,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                runSpacing: 8,
-                spacing: 8,
-                children: _importMap.entries
-                    .map(
-                      (e) => _EmojiImportPreview(
-                        key: ValueKey(e.key.name),
-                        entry: e,
-                        onNameChanged: (name) => _importMap[e.key] = name,
-                        onRemove: () =>
-                            setState(() => _importMap.remove(e.key)),
-                      ),
-                    )
-                    .toList(),
+      content: NotionFadeThrough(
+        alignment: Alignment.center,
+        child: _loading
+            ? Center(
+                key: const ValueKey('loading'),
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween(end: _progress),
+                  duration: NotionMotion.of(context, NotionMotion.short),
+                  curve: NotionMotion.standard,
+                  builder: (context, value, _) =>
+                      CircularProgressIndicator(value: value),
+                ),
+              )
+            : SingleChildScrollView(
+                key: const ValueKey('preview'),
+                child: Wrap(
+                  alignment: WrapAlignment.spaceEvenly,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  runSpacing: 8,
+                  spacing: 8,
+                  children: _importMap.entries
+                      .map(
+                        (e) => _EmojiImportPreview(
+                          key: ValueKey(e.key.name),
+                          entry: e,
+                          onNameChanged: (name) => _importMap[e.key] = name,
+                          onRemove: () =>
+                              setState(() => _importMap.remove(e.key)),
+                        ),
+                      )
+                      .toList(),
+                ),
               ),
-            ),
+      ),
       actions: [
         TextButton(
           onPressed: _loading ? null : Navigator.of(context).pop,
