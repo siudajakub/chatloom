@@ -2706,5 +2706,69 @@
     "biometricsDescription": "Za pomocą biometrycznego uwierzytelniania możesz odblokować aplikację za pomocą swojej twarzy lub odsisku palca. Możliwości zależą od twojego urządzenia.",
     "doubleTapToReact": "Podwójne dotknięcie, aby zareagować",
     "doubleTapToReactDescription": "Podwójne dotknięcie wiadomości reaguje zamiast zaznaczania tekstu",
-    "doubleTapReaction": "Reakcja podwójnego dotknięcia"
+    "doubleTapReaction": "Reakcja podwójnego dotknięcia",
+    "replyCaptionYouReplied": "Odpowiedź dla: {name}",
+    "@replyCaptionYouReplied": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "replyCaptionYouRepliedSelf": "Odpowiedź na Twoją wiadomość",
+    "replyCaptionYouRepliedUnknown": "Twoja odpowiedź",
+    "replyCaptionRepliedToYou": "{name} odpowiada Tobie",
+    "@replyCaptionRepliedToYou": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "replyCaptionRepliedSelf": "{name} odpowiada sobie",
+    "@replyCaptionRepliedSelf": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "replyCaptionRepliedOther": "{name} odpowiada: {other}",
+    "@replyCaptionRepliedOther": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            },
+            "other": {
+                "type": "String"
+            }
+        }
+    },
+    "replyCaptionRepliedUnknown": "{name} odpowiada",
+    "@replyCaptionRepliedUnknown": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "replyingToName": "Odpowiadasz: {name}",
+    "@replyingToName": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "editingMessage": "Edytujesz wiadomość",
+    "replyLoading": "Wczytywanie wiadomości…",
+    "replyOriginalUnavailable": "Oryginalna wiadomość jest niedostępna",
+    "cancelReply": "Anuluj odpowiedź",
+    "showOriginalMessage": "Pokaż oryginalną wiadomość"
 }

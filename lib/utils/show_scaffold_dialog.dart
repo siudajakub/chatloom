@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 Future<T?> showScaffoldDialog<T>({
@@ -14,8 +15,9 @@ Future<T?> showScaffoldDialog<T>({
   double maxWidth = 480,
   double maxHeight = 720,
   required Widget Function(BuildContext context) builder,
-}) => showDialog<T>(
+}) => showNotionCustomDialog<T>(
   context: context,
+  barrierColor: barrierColor,
   useSafeArea: false,
   builder: FluffyThemes.isColumnMode(context)
       ? (context) => Center(

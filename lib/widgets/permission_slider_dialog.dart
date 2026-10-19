@@ -6,6 +6,7 @@
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/dialog_text_field.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 
 Future<int?> showPermissionChooser(
@@ -14,8 +15,8 @@ Future<int?> showPermissionChooser(
   int maxLevel = 100,
 }) async {
   final controller = TextEditingController(text: currentLevel.toString());
-  final error = ValueNotifier<String?>(null);
-  return await showAdaptiveDialog<int>(
+  final error = ValueNotifier(const DialogValidation());
+  return await showNotionAdaptiveDialog<int>(
     context: context,
     builder: (context) => AlertDialog.adaptive(
       title: Center(child: Text(L10n.of(context).chatPermissions)),
@@ -27,9 +28,9 @@ Future<int?> showPermissionChooser(
           spacing: 16.0,
           children: [
             Text(L10n.of(context).setPowerLevelDescription),
-            ValueListenableBuilder(
-              valueListenable: error,
-              builder: (context, errorText, _) => DialogTextField(
+            DialogValidationFeedback(
+              validation: error,
+              builder: (context, errorText) => DialogTextField(
                 controller: controller,
                 hintText: currentLevel.toString(),
                 keyboardType: TextInputType.number,
@@ -45,11 +46,13 @@ Future<int?> showPermissionChooser(
           onPressed: () {
             final level = int.tryParse(controller.text.trim());
             if (level == null) {
-              error.value = L10n.of(context).pleaseEnterANumber;
+              error.value = error.value.reject(
+                L10n.of(context).pleaseEnterANumber,
+              );
               return;
             }
             if (level > maxLevel) {
-              error.value = L10n.of(context).noPermission;
+              error.value = error.value.reject(L10n.of(context).noPermission);
               return;
             }
             Navigator.of(context).pop<int>(level);

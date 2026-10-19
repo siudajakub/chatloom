@@ -8,6 +8,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/personal/diagnostics.dart';
+import 'package:fluffychat/personal/performance_probe.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/privacy_transport.dart';
 import 'package:fluffychat/utils/custom_http_client.dart';
@@ -210,6 +211,7 @@ class ClientStartup extends ChangeNotifier {
   final Future<Client> Function(String, SharedPreferences) _factory;
   final Future<void> Function(Client, void Function())? _initializeClient;
   final bool initialize;
+  final bool backgroundSync;
   final List<ClientStartupAccount> accounts = [];
   // Matrix owns mutations caused by real login/logout; retain this list identity.
   final List<Client> clients = [];
@@ -225,6 +227,7 @@ class ClientStartup extends ChangeNotifier {
     Future<Client> Function(String, SharedPreferences)? clientFactory,
     Future<void> Function(Client, void Function())? initializeClient,
     this.initialize = true,
+    this.backgroundSync = true,
   }) : _factory = clientFactory ?? ClientManager.createClient,
        _initializeClient = initializeClient;
 
@@ -283,14 +286,17 @@ class ClientStartup extends ChangeNotifier {
       accounts.where((a) => !a.available).map((entry) async {
         try {
           final client = entry.client ??= await _factory(entry._name, store);
+          PersonalPerformanceProbe.startupPhase('client_created');
           if (_disposed) return;
+          if (!backgroundSync) {
+            client.backgroundSync = false;
+            client.syncPresence = PresenceType.offline;
+          }
           if (initialize) {
             void onMigration() {
               // Migration notification is optional and must not fail restoration.
               () async {
-                final l10n = await lookupL10n(
-                  PlatformDispatcher.instance.locale,
-                );
+                final l10n = await lookupL10n(AppConfig.appLocale);
                 await ClientManager.sendInitNotification(
                   l10n.databaseMigrationTitle,
                   l10n.databaseMigrationBody,
@@ -305,6 +311,9 @@ class ClientStartup extends ChangeNotifier {
             }
             // Also cover alternate initializers: account usability includes local
             // rooms, account metadata and trusted device keys, independently per account.
+            // Device keys stay required: preserve-mode SDK init already awaits
+            // them, and publishing earlier would expose a session whose crypto
+            // store may still fail (trust badges, sync and sends would degrade).
             await Future.wait<dynamic>([
               if (client.roomsLoading != null) client.roomsLoading!,
               if (client.accountDataLoading != null) client.accountDataLoading!,
@@ -313,6 +322,7 @@ class ClientStartup extends ChangeNotifier {
             ]);
           }
           if (_disposed) return;
+          PersonalPerformanceProbe.startupPhase('client_available');
           entry.available = true;
           entry.failure = null;
           if ((!initialize || client.isLogged() || accounts.length == 1) &&

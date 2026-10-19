@@ -31,6 +31,14 @@ class _FakeClient implements Client {
   }
 }
 
+class _BackgroundClient extends _FakeClient {
+  _BackgroundClient(super.clientName);
+  @override
+  bool backgroundSync = true;
+  @override
+  PresenceType? syncPresence;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -40,6 +48,37 @@ void main() {
     });
     return SharedPreferences.getInstance();
   }
+
+  test(
+    'background restore disables every sync loop before initialization',
+    () async {
+      final store = await savedAccounts(['healthy', 'slow']);
+      final slow = Completer<void>();
+      final initialized = <_BackgroundClient>[];
+      final startup = ClientStartup(
+        store: store,
+        backgroundSync: false,
+        clientFactory: (name, _) async => _BackgroundClient(name),
+        initializeClient: (client, _) async {
+          final background = client as _BackgroundClient;
+          expect(background.backgroundSync, isFalse);
+          expect(background.syncPresence, PresenceType.offline);
+          initialized.add(background);
+          if (client.clientName == 'slow') await slow.future;
+          background.loggedIn = true;
+        },
+      );
+      addTearDown(startup.dispose);
+      final restoring = startup.restore();
+      await Future<void>.delayed(Duration.zero);
+      expect(initialized.length, 2);
+      expect(startup.busy, isTrue);
+      expect(initialized.every((client) => !client.backgroundSync), isTrue);
+      slow.complete();
+      await restoring;
+      expect(startup.clients.length, 2);
+    },
+  );
 
   test(
     'failed account initialization preserves the recoverable namespace',

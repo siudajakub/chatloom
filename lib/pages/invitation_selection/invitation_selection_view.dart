@@ -5,6 +5,7 @@
 
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/invitation_selection/invitation_selection.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -60,20 +61,19 @@ class InvitationSelectionView extends StatelessWidget {
                     fontWeight: FontWeight.normal,
                   ),
                   hintText: L10n.of(context).inviteContactToGroup(groupName),
-                  prefixIcon: controller.loading
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(
-                            vertical: 10.0,
-                            horizontal: 12,
+                  prefixIcon: NotionMorphSwitcher(
+                    rotate: false,
+                    child: controller.loading
+                        ? const SizedBox.square(
+                            key: ValueKey('busy'),
+                            dimension: NotionSize.touchTarget,
+                            child: Center(child: NotionDelayedSpinner()),
+                          )
+                        : const Icon(
+                            Icons.search_outlined,
+                            key: ValueKey('search'),
                           ),
-                          child: SizedBox.square(
-                            dimension: 24,
-                            child: CircularProgressIndicator.adaptive(
-                              strokeWidth: 2,
-                            ),
-                          ),
-                        )
-                      : const Icon(Icons.search_outlined),
+                  ),
                 ),
                 onChanged: controller.searchUserWithCoolDown,
               ),
@@ -87,69 +87,96 @@ class InvitationSelectionView extends StatelessWidget {
                     .getParticipants()
                     .map((user) => user.id)
                     .toSet();
-                return controller.foundProfiles.isNotEmpty
-                    ? ListView.builder(
-                        physics: const NeverScrollableScrollPhysics(),
-                        shrinkWrap: true,
-                        itemCount: controller.foundProfiles.length,
-                        itemBuilder: (BuildContext context, int i) =>
-                            _InviteContactListTile(
-                              profile: controller.foundProfiles[i],
-                              isMember: participants.contains(
-                                controller.foundProfiles[i].userId,
-                              ),
-                              onTap: () => controller.inviteAction(
-                                context,
-                                controller.foundProfiles[i].userId,
-                                controller.foundProfiles[i].displayName ??
-                                    controller
-                                        .foundProfiles[i]
-                                        .userId
-                                        .localpart ??
-                                    L10n.of(context).user,
-                              ),
-                            ),
-                      )
-                    : FutureBuilder<List<User>>(
-                        future: controller.getContacts(context),
-                        builder: (BuildContext context, snapshot) {
-                          if (!snapshot.hasData) {
-                            return const Center(
-                              child: CircularProgressIndicator.adaptive(
-                                strokeWidth: 2,
-                              ),
-                            );
-                          }
-                          final contacts = snapshot.data!;
-                          return ListView.builder(
+                // Contacts ↔ search results fade through; rows rise in once.
+                return NotionFadeThrough(
+                  child: controller.foundProfiles.isNotEmpty
+                      ? NotionEntranceScope(
+                          key: ValueKey(controller.foundProfiles),
+                          child: ListView.builder(
                             physics: const NeverScrollableScrollPhysics(),
                             shrinkWrap: true,
-                            itemCount: contacts.length,
+                            itemCount: controller.foundProfiles.length,
                             itemBuilder: (BuildContext context, int i) =>
-                                _InviteContactListTile(
-                                  user: contacts[i],
-                                  profile: Profile(
-                                    avatarUrl: contacts[i].avatarUrl,
-                                    displayName:
-                                        contacts[i].displayName ??
-                                        contacts[i].id.localpart ??
-                                        L10n.of(context).user,
-                                    userId: contacts[i].id,
-                                  ),
-                                  isMember: participants.contains(
-                                    contacts[i].id,
-                                  ),
-                                  onTap: () => controller.inviteAction(
-                                    context,
-                                    contacts[i].id,
-                                    contacts[i].displayName ??
-                                        contacts[i].id.localpart ??
-                                        L10n.of(context).user,
+                                _FirstScreenEntrance(
+                                  index: i,
+                                  playKey: controller.foundProfiles[i].userId,
+                                  rise: NotionMotion.riseList,
+                                  child: _InviteContactListTile(
+                                    profile: controller.foundProfiles[i],
+                                    isMember: participants.contains(
+                                      controller.foundProfiles[i].userId,
+                                    ),
+                                    onTap: () => controller.inviteAction(
+                                      context,
+                                      controller.foundProfiles[i].userId,
+                                      controller.foundProfiles[i].displayName ??
+                                          controller
+                                              .foundProfiles[i]
+                                              .userId
+                                              .localpart ??
+                                          L10n.of(context).user,
+                                    ),
                                   ),
                                 ),
-                          );
-                        },
-                      );
+                          ),
+                        )
+                      : FutureBuilder<List<User>>(
+                          key: const ValueKey('contacts'),
+                          future: controller.getContacts(context),
+                          builder: (BuildContext context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return NotionSkeleton(
+                                child: Column(
+                                  children: [
+                                    for (var i = 0; i < 6; i++)
+                                      const Padding(
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal: NotionSpace.md,
+                                        ),
+                                        child: NotionSkeletonRow(),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            }
+                            final contacts = snapshot.data!;
+                            return NotionEntranceScope(
+                              child: ListView.builder(
+                                physics: const NeverScrollableScrollPhysics(),
+                                shrinkWrap: true,
+                                itemCount: contacts.length,
+                                itemBuilder: (BuildContext context, int i) =>
+                                    _FirstScreenEntrance(
+                                      index: i,
+                                      playKey: contacts[i].id,
+                                      rise: NotionMotion.riseList,
+                                      child: _InviteContactListTile(
+                                        user: contacts[i],
+                                        profile: Profile(
+                                          avatarUrl: contacts[i].avatarUrl,
+                                          displayName:
+                                              contacts[i].displayName ??
+                                              contacts[i].id.localpart ??
+                                              L10n.of(context).user,
+                                          userId: contacts[i].id,
+                                        ),
+                                        isMember: participants.contains(
+                                          contacts[i].id,
+                                        ),
+                                        onTap: () => controller.inviteAction(
+                                          context,
+                                          contacts[i].id,
+                                          contacts[i].displayName ??
+                                              contacts[i].id.localpart ??
+                                              L10n.of(context).user,
+                                        ),
+                                      ),
+                                    ),
+                              ),
+                            );
+                          },
+                        ),
+                );
               },
             ),
           ],
@@ -195,10 +222,40 @@ class _InviteContactListTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(color: theme.colorScheme.secondary),
       ),
-      trailing: TextButton(
-        onPressed: isMember ? null : onTap,
-        child: Text(isMember ? l10n.participant : l10n.invite),
+      // Invite → participant morphs once the invite lands.
+      trailing: NotionPressable(
+        enabled: !isMember,
+        child: TextButton(
+          onPressed: isMember ? null : onTap,
+          child: NotionFadeThrough(
+            alignment: Alignment.center,
+            child: Text(
+              isMember ? l10n.participant : l10n.invite,
+              key: ValueKey(isMember),
+            ),
+          ),
+        ),
       ),
     );
   }
+}
+
+/// Rises in with the first screenful only: these lists are shrink-wrapped,
+/// so every row is built up front and later rows must stay still.
+class _FirstScreenEntrance extends StatelessWidget {
+  final int index;
+  final Object playKey;
+  final double rise;
+  final Widget child;
+  const _FirstScreenEntrance({
+    required this.index,
+    required this.playKey,
+    required this.rise,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) => index < NotionMotion.staggerCap
+      ? NotionEntrance(playKey: playKey, rise: rise, child: child)
+      : child;
 }

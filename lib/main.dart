@@ -11,8 +11,9 @@ import 'dart:ui';
 import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/performance_probe.dart';
+import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/utils/background_startup_recovery.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
@@ -40,6 +41,7 @@ bool _vodozemacInitialized = false;
 bool isIntegrationTest = false;
 
 void main(List<String> args) => runZonedGuarded(() async {
+  PersonalPerformanceProbe.startupPhase('main');
   // Forward Flutter errors to global error reporter
   FlutterError.onError = (details) => Zone.current.handleUncaughtError(
     details.exception,
@@ -70,28 +72,24 @@ void main(List<String> args) => runZonedGuarded(() async {
   // widget bindings are initialized already.
   WidgetsFlutterBinding.ensureInitialized();
   PersonalPerformanceProbe.install();
+  PersonalPerformanceProbe.startupPhase('binding');
 
   PersonalPrivacy.installLogging();
   if (!kIsWeb) {
-    try {
-      final temporary = await getTemporaryDirectory();
-      for (final folder in [
-        'personal_audio',
-        'personal_video',
-        'personal_media',
-      ]) {
-        await MediaAccess.open(
-          directory: Directory('${temporary.path}/$folder'),
-        );
-      }
-    } catch (error) {
-      Logs().w('private_media_cleanup_failed', error.runtimeType.toString());
-    }
+    // Only leases of dead processes are swept, so this can wait for the first
+    // frame. A background-fetch start without GUI leaves it to the next start.
+    unawaited(
+      WidgetsBinding.instance.waitUntilFirstFrameRasterized.then((_) {
+        PersonalPerformanceProbe.startupPhase('first_frame');
+        return _cleanupPrivateMedia();
+      }),
+    );
   }
 
   ErrorReporter.startupPhase = 'settings';
   final store = await AppSettings.init();
   Logs().i('Welcome to ${AppSettings.applicationName.value} <3');
+  PersonalPerformanceProbe.startupPhase('settings');
 
   kEnableMatrixSdkBenchmarks = AppSettings.benchmarksInLogs.value;
 
@@ -101,6 +99,7 @@ void main(List<String> args) => runZonedGuarded(() async {
       wasmPath: './assets/assets/vodozemac/${AppConfig.vodozemacVersion}/',
     );
     _vodozemacInitialized = true;
+    PersonalPerformanceProbe.startupPhase('crypto');
   }
 
   Logs().nativeColors = !PlatformInfos.isIOS;
@@ -110,32 +109,61 @@ void main(List<String> args) => runZonedGuarded(() async {
   // currently only supported on Android.
   if (PlatformInfos.isAndroid &&
       AppLifecycleState.detached == WidgetsBinding.instance.lifecycleState) {
-    await ForegroundServices.startService('background_push');
+    final recovery = BackgroundFailureStarter(store);
+    WidgetsBinding.instance.addObserver(recovery);
+    final acquired = await ForegroundServices.startService('background_push');
     try {
-    ErrorReporter.startupPhase = 'background_clients';
-    final startup = ClientStartup(store: store);
-    await startup.restore();
-    final clients = startup.clients;
+      ErrorReporter.startupPhase = 'background_clients';
+      final startup = ClientStartup(store: store, backgroundSync: false);
+      final restoring = startup.restore();
+      try {
+        await restoring.timeout(const Duration(seconds: 30));
+      } catch (error, stack) {
+        // Initialization cannot be cancelled halfway through database/crypto
+        // loading. Retire its owned clients after any late completion; no client
+        // in this background-only startup is allowed to start a sync loop.
+        ErrorReporter.onFlutterError(error, stack);
+        recovery.failed(
+          restoring.then(
+            (_) => closeBackgroundStartup(startup),
+            onError: (Object _) => closeBackgroundStartup(startup),
+          ),
+        );
+        return;
+      }
+      final clients = startup.clients;
 
-    // Do not send online presences when app is in background fetch mode.
-    for (final client in clients) {
-      client.backgroundSync = false;
-      client.syncPresence = PresenceType.offline;
-    }
+      // Do not send online presences when app is in background fetch mode.
+      for (final client in clients) {
+        client.backgroundSync = false;
+        client.syncPresence = PresenceType.offline;
+      }
 
-    // In the background fetch mode we do not want to waste ressources with
-    // starting the Flutter engine but process incoming push notifications.
-    await BackgroundPush.clientOnly(clients).ready;
-    // To start the flutter engine afterwards we add an custom observer.
-    WidgetsBinding.instance.addObserver(
-      AppStarter(clients, store, startup: startup),
-    );
-    Logs().i(
-      '${AppSettings.applicationName.value} started in background-fetch mode. No GUI will be created unless the app is no longer detached.',
-    );
-    return;
+      // In the background fetch mode we do not want to waste ressources with
+      // starting the Flutter engine but process incoming push notifications.
+      final backgroundPush = BackgroundPush.clientOnly(clients);
+      try {
+        await backgroundPush.ready.timeout(const Duration(seconds: 30));
+      } catch (error, stack) {
+        backgroundPush.forgetClients(clients);
+        ErrorReporter.onFlutterError(error, stack);
+        recovery.failed(closeBackgroundStartup(startup));
+        return;
+      }
+      // To start the flutter engine afterwards we add an custom observer.
+      WidgetsBinding.instance.removeObserver(recovery);
+      final starter = AppStarter(clients, store, startup: startup);
+      WidgetsBinding.instance.addObserver(starter);
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state != null && state != AppLifecycleState.detached) {
+        starter.didChangeAppLifecycleState(state);
+      }
+      Logs().i(
+        '${AppSettings.applicationName.value} started in background-fetch mode. No GUI will be created unless the app is no longer detached.',
+      );
+      return;
     } finally {
-      await ForegroundServices.stopService('background_push');
+      if (acquired) await ForegroundServices.stopService('background_push');
     }
   }
 
@@ -152,6 +180,103 @@ void main(List<String> args) => runZonedGuarded(() async {
   await startGui(clients, store, startup: startup);
 }, ErrorReporter.onFlutterError);
 
+/// Removes plaintext leases left by dead processes (see [MediaAccess.open]).
+Future<void> _cleanupPrivateMedia() async {
+  try {
+    final temporary = await getTemporaryDirectory();
+    for (final folder in [
+      'personal_audio',
+      'personal_video',
+      'personal_media',
+    ]) {
+      await MediaAccess.open(directory: Directory('${temporary.path}/$folder'));
+    }
+  } catch (error) {
+    Logs().w('private_media_cleanup_failed', error.runtimeType.toString());
+  }
+  PersonalPerformanceProbe.startupPhase('media_cleanup');
+}
+
+Future<void> closeBackgroundStartup(ClientStartup startup) async {
+  var failed = false;
+  for (final account in startup.accounts) {
+    try {
+      await account.client?.dispose();
+    } catch (_) {
+      failed = true;
+    }
+  }
+  startup.dispose();
+  if (failed) throw StateError('Background storage cleanup failed');
+}
+
+/// A shared engine must still respond to opening the Activity after a timed-out
+/// push startup. The fresh foreground startup never adopts abandoned clients.
+class BackgroundFailureStarter with WidgetsBindingObserver {
+  late final BackgroundStartupRecovery _recovery;
+  bool _failed = false;
+
+  BackgroundFailureStarter(SharedPreferences store) {
+    _recovery = BackgroundStartupRecovery(
+      startForeground: () async {
+        WidgetsBinding.instance.removeObserver(this);
+        final startup = ClientStartup(store: store);
+        unawaited(startup.restore());
+        await startGui(startup.clients, store, startup: startup);
+      },
+    );
+  }
+
+  void failed(Future<void> cleanup) {
+    _failed = true;
+    unawaited(_recovery.fail(cleanup).catchError(ErrorReporter.onFlutterError));
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state == AppLifecycleState.resumed) {
+      didChangeAppLifecycleState(AppLifecycleState.resumed);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      _recovery.leaveForeground();
+      return;
+    }
+    if (_failed) {
+      // Cleanup can itself be delayed or fail. Show a content-free surface
+      // immediately instead of leaving the Activity blank while storage is
+      // still owned by the abandoned startup. Never open a second database.
+      runApp(const BackgroundStartupFailureView());
+    }
+    unawaited(
+      _recovery.requestForeground().catchError(ErrorReporter.onFlutterError),
+    );
+  }
+}
+
+class BackgroundStartupFailureView extends StatelessWidget {
+  const BackgroundStartupFailureView({super.key});
+
+  @override
+  Widget build(BuildContext context) => const MaterialApp(
+    home: Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'Secure startup could not finish. Your accounts, data and keys are preserved. '
+              'The app will retry when the previous startup has released storage. '
+              'If this screen persists, close and reopen the app. Keep app data.',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 /// Fetch the pincode for the applock and start the flutter engine.
 Future<void> startGui(
   List<Client> clients,
@@ -163,18 +288,20 @@ Future<void> startGui(
   var useBiometrics = false;
   if (PlatformInfos.supportsAppLock) {
     try {
-      pin = await const FlutterSecureStorage().read(
-        key: 'chat.fluffy.app_lock',
-      );
-      useBiometrics =
-          (await const FlutterSecureStorage().read(
-            key: 'chat.fluffy.use_biometrics',
-          )) ==
-          'true';
+      // Independent keystore reads; either failure still blocks the GUI.
+      const storage = FlutterSecureStorage();
+      final values = await Future.wait([
+        storage.read(key: 'chat.fluffy.app_lock'),
+        storage.read(key: 'chat.fluffy.use_biometrics'),
+      ]);
+      pin = values[0];
+      useBiometrics = values[1] == 'true';
+      PersonalPerformanceProbe.startupPhase('app_lock');
     } catch (_) {
       Logs().e('app_lock_storage_unavailable');
       runApp(
         StartupLockFailureView(
+          store: store,
           retry: () => startGui(clients, store, startup: startup),
         ),
       );
@@ -189,6 +316,7 @@ Future<void> startGui(
   // Render healthy accounts immediately; room/account loading is handled by
   // their existing screens, independently of failed account restoration.
 
+  PersonalPerformanceProbe.startupPhase('run_app');
   runApp(
     startup != null
         ? ClientStartupView(

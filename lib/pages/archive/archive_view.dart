@@ -6,6 +6,7 @@
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/archive/archive.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -27,50 +28,69 @@ class ArchiveView extends StatelessWidget {
           actions: [
             if (snapshot.data?.isNotEmpty ?? false)
               Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: TextButton.icon(
-                  onPressed: controller.forgetAllAction,
-                  label: Text(L10n.of(context).clearArchive),
-                  icon: const Icon(Icons.cleaning_services_outlined),
+                padding: const EdgeInsets.all(NotionSpace.xs),
+                child: NotionPop(
+                  bounce: false,
+                  child: TextButton.icon(
+                    onPressed: controller.forgetAllAction,
+                    label: Text(L10n.of(context).clearArchive),
+                    icon: const Icon(Icons.cleaning_services_outlined),
+                  ),
                 ),
               ),
           ],
         ),
         body: MaxWidthBody(
           withScrolling: false,
-          child: Builder(
-            builder: (BuildContext context) {
-              if (snapshot.hasError) {
-                return Center(
-                  child: Text(
-                    L10n.of(context).oopsSomethingWentWrong,
-                    textAlign: TextAlign.center,
-                  ),
-                );
-              }
-              if (!snapshot.hasData) {
-                return const Center(
-                  child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                );
-              } else {
-                if (controller.archive.isEmpty) {
-                  return const Center(
-                    child: Icon(Icons.archive_outlined, size: 80),
-                  );
-                }
-                return ListView.builder(
-                  itemCount: controller.archive.length,
-                  itemBuilder: (BuildContext context, int i) => ChatListItem(
-                    controller.archive[i].room,
-                    onForget: () => controller.forgetRoomAction(i),
-                    onTap: () => context.go(
-                      '/rooms/archive/${controller.archive[i].room.id}',
-                      extra: controller.archive[i].timeline,
+          // Loading skeleton → archive (or its empty state) fade through;
+          // the first screenful of rooms rises in.
+          child: NotionFadeThrough(
+            child: snapshot.hasError
+                ? Center(
+                    key: const ValueKey('error'),
+                    child: Text(
+                      L10n.of(context).oopsSomethingWentWrong,
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                : !snapshot.hasData
+                ? NotionSkeleton(
+                    key: const ValueKey('loading'),
+                    child: ListView(
+                      physics: const NeverScrollableScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: NotionSpace.md,
+                      ),
+                      children: [
+                        for (var i = 0; i < 8; i++) const NotionSkeletonRow(),
+                      ],
+                    ),
+                  )
+                : controller.archive.isEmpty
+                ? NotionEmptyState(
+                    key: const ValueKey('empty'),
+                    icon: Icons.archive_outlined,
+                    title: 'No archived chats',
+                  )
+                : NotionEntranceScope(
+                    key: const ValueKey('rooms'),
+                    child: ListView.builder(
+                      itemCount: controller.archive.length,
+                      itemBuilder: (BuildContext context, int i) =>
+                          NotionEntrance(
+                            playKey: controller.archive[i].room.id,
+                            rise: NotionMotion.riseList,
+                            child: ChatListItem(
+                              controller.archive[i].room,
+                              onForget: () => controller.forgetRoomAction(i),
+                              onTap: () => context.go(
+                                '/rooms/archive/${controller.archive[i].room.id}',
+                                extra: controller.archive[i].timeline,
+                              ),
+                            ),
+                          ),
                     ),
                   ),
-                );
-              }
-            },
           ),
         ),
       ),

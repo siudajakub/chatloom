@@ -3,11 +3,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_group/new_group.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -29,16 +30,20 @@ class NewGroupView extends StatelessWidget {
             onPressed: controller.loading ? null : Navigator.of(context).pop,
           ),
         ),
-        title: Text(
-          controller.createGroupType == CreateGroupType.space
-              ? L10n.of(context).newSpace
-              : L10n.of(context).createGroup,
+        title: NotionFadeThrough(
+          alignment: AlignmentDirectional.centerStart,
+          child: Text(
+            controller.createGroupType == CreateGroupType.space
+                ? L10n.of(context).newSpace
+                : L10n.of(context).createGroup,
+            key: ValueKey(controller.createGroupType),
+          ),
         ),
       ),
       body: MaxWidthBody(
         child: Column(
           mainAxisSize: .min,
-          children: <Widget>[
+          children: NotionEntrance.stagger(<Widget>[
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: SegmentedButton<CreateGroupType>(
@@ -57,22 +62,34 @@ class NewGroupView extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            InkWell(
-              borderRadius: BorderRadius.circular(90),
-              onTap: controller.loading ? null : controller.selectPhoto,
-              child: CircleAvatar(
-                radius: Avatar.defaultSize,
-                child: avatar == null
-                    ? const Icon(Icons.add_a_photo_outlined)
-                    : ClipRRect(
-                        borderRadius: BorderRadius.circular(90),
-                        child: Image.memory(
-                          avatar,
-                          width: Avatar.defaultSize * 2,
-                          height: Avatar.defaultSize * 2,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
+            NotionPressable(
+              scale: NotionMotion.pressIcon,
+              enabled: !controller.loading,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(90),
+                onTap: controller.loading ? null : controller.selectPhoto,
+                child: CircleAvatar(
+                  radius: Avatar.defaultSize,
+                  // The picked photo fades through the camera glyph.
+                  child: NotionFadeThrough(
+                    alignment: Alignment.center,
+                    child: avatar == null
+                        ? const Icon(
+                            Icons.add_a_photo_outlined,
+                            key: ValueKey('empty'),
+                          )
+                        : ClipRRect(
+                            key: ObjectKey(avatar),
+                            borderRadius: BorderRadius.circular(90),
+                            child: Image.memory(
+                              avatar,
+                              width: Avatar.defaultSize * 2,
+                              height: Avatar.defaultSize * 2,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 32),
@@ -103,95 +120,77 @@ class NewGroupView extends StatelessWidget {
               value: controller.publicGroup,
               onChanged: controller.loading ? null : controller.setPublicGroup,
             ),
-            AnimatedSize(
-              duration: FluffyThemes.animationDuration,
-              curve: FluffyThemes.animationCurve,
-              child: controller.publicGroup
-                  ? SwitchListTile.adaptive(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 32,
-                      ),
-                      secondary: const Icon(Icons.search_outlined),
-                      title: Text(L10n.of(context).groupCanBeFoundViaSearch),
-                      value: controller.groupCanBeFound,
-                      onChanged: controller.loading
-                          ? null
-                          : controller.setGroupCanBeFound,
-                    )
-                  : const SizedBox.shrink(),
+            NotionSizeReveal(
+              visible: controller.publicGroup,
+              child: SwitchListTile.adaptive(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 32),
+                secondary: const Icon(Icons.search_outlined),
+                title: Text(L10n.of(context).groupCanBeFoundViaSearch),
+                value: controller.groupCanBeFound,
+                onChanged: controller.loading
+                    ? null
+                    : controller.setGroupCanBeFound,
+              ),
             ),
-            AnimatedSize(
-              duration: FluffyThemes.animationDuration,
-              curve: FluffyThemes.animationCurve,
-              child: controller.createGroupType == CreateGroupType.space
-                  ? const SizedBox.shrink()
-                  : SwitchListTile.adaptive(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 32,
-                      ),
-                      secondary: Icon(
-                        Icons.lock_outlined,
-                        color: theme.colorScheme.onSurface,
-                      ),
-                      title: Text(
-                        L10n.of(context).enableEncryption,
-                        style: TextStyle(color: theme.colorScheme.onSurface),
-                      ),
-                      value: !controller.publicGroup,
-                      onChanged: null,
-                    ),
+            NotionSizeReveal(
+              visible: controller.createGroupType != CreateGroupType.space,
+              child: SwitchListTile.adaptive(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 32),
+                secondary: Icon(
+                  Icons.lock_outlined,
+                  color: theme.colorScheme.onSurface,
+                ),
+                title: Text(
+                  L10n.of(context).enableEncryption,
+                  style: TextStyle(color: theme.colorScheme.onSurface),
+                ),
+                value: !controller.publicGroup,
+                onChanged: null,
+              ),
             ),
-            AnimatedSize(
-              duration: FluffyThemes.animationDuration,
-              curve: FluffyThemes.animationCurve,
-              child: controller.createGroupType == CreateGroupType.space
-                  ? ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 32,
-                      ),
-                      trailing: const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16.0),
-                        child: Icon(Icons.info_outlined),
-                      ),
-                      subtitle: Text(L10n.of(context).newSpaceDescription),
-                    )
-                  : const SizedBox.shrink(),
+            NotionSizeReveal(
+              visible: controller.createGroupType == CreateGroupType.space,
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 32),
+                trailing: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16.0),
+                  child: Icon(Icons.info_outlined),
+                ),
+                subtitle: Text(L10n.of(context).newSpaceDescription),
+              ),
             ),
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: controller.loading
-                      ? null
-                      : controller.submitAction,
-                  child: controller.loading
-                      ? const LinearProgressIndicator()
-                      : Text(
-                          controller.createGroupType == CreateGroupType.space
-                              ? L10n.of(context).createNewSpace
-                              : L10n.of(context).createGroupAndInviteUsers,
-                        ),
+                child: NotionButton.primary(
+                  expand: true,
+                  busy: controller.loading,
+                  onPressed: controller.submitAction,
+                  label: controller.createGroupType == CreateGroupType.space
+                      ? L10n.of(context).createNewSpace
+                      : L10n.of(context).createGroupAndInviteUsers,
                 ),
               ),
             ),
-            AnimatedSize(
-              duration: FluffyThemes.animationDuration,
-              curve: FluffyThemes.animationCurve,
-              child: error == null
-                  ? const SizedBox.shrink()
-                  : ListTile(
-                      leading: Icon(
-                        Icons.warning_outlined,
-                        color: theme.colorScheme.error,
-                      ),
-                      title: Text(
-                        error.toLocalizedString(context),
-                        style: TextStyle(color: theme.colorScheme.error),
-                      ),
-                    ),
+            // A failure reveals and shakes once per new error.
+            NotionSizeReveal(
+              visible: error != null,
+              child: ErrorShake(
+                error: error,
+                child: ListTile(
+                  leading: Icon(
+                    Icons.warning_outlined,
+                    color: theme.colorScheme.error,
+                  ),
+                  title: Text(
+                    error?.toLocalizedString(context) ?? '',
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+                ),
+              ),
             ),
-          ],
+          ]),
         ),
       ),
     );

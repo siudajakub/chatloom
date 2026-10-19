@@ -2830,5 +2830,69 @@
                 "type": "String"
             }
         }
-    }
+    },
+    "replyCaptionYouReplied": "Replied to {name}",
+    "@replyCaptionYouReplied": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "replyCaptionYouRepliedSelf": "Replied to yourself",
+    "replyCaptionYouRepliedUnknown": "You replied",
+    "replyCaptionRepliedToYou": "{name} replied to you",
+    "@replyCaptionRepliedToYou": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "replyCaptionRepliedSelf": "{name} replied to themselves",
+    "@replyCaptionRepliedSelf": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "replyCaptionRepliedOther": "{name} replied to {other}",
+    "@replyCaptionRepliedOther": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            },
+            "other": {
+                "type": "String"
+            }
+        }
+    },
+    "replyCaptionRepliedUnknown": "{name} replied",
+    "@replyCaptionRepliedUnknown": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "replyingToName": "Replying to {name}",
+    "@replyingToName": {
+        "type": "String",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "editingMessage": "Editing message",
+    "replyLoading": "Loading reply…",
+    "replyOriginalUnavailable": "Original message unavailable",
+    "cancelReply": "Cancel reply",
+    "showOriginalMessage": "Show original message"
 }

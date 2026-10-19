@@ -12,6 +12,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/events/round_mini_player.dart';
 import 'package:fluffychat/personal/media/media_access.dart';
+import 'package:fluffychat/personal/person_location.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
@@ -345,6 +346,7 @@ class MatrixState extends State<Matrix> {
           final loggedInWithMultipleClients = widget.clients.length > 1;
 
           _cancelSubs(c.clientName);
+          backgroundPush?.forgetClients([c]);
           PersonalPrivacy.forget(c);
           PersonalClient.of(c).dispose();
           widget.clients.remove(c);
@@ -468,6 +470,7 @@ class MatrixState extends State<Matrix> {
 
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final foreground = state == AppLifecycleState.resumed;
+    backgroundPush?.setRegistrationForeground(foreground);
     for (final client in widget.clients) {
       client.syncPresence = PersonalPrivacy.policy.allowOnlinePresence
           ? (state == AppLifecycleState.resumed
@@ -552,7 +555,7 @@ class MatrixState extends State<Matrix> {
                       setActiveClient(event.room.client);
                     }
                     FluffyChatApp.router.go(
-                      '/rooms/${Uri.encodeComponent(event.room.id)}?event=${Uri.encodeComponent(event.eventId)}',
+                      conversationLocation(event.room, eventId: event.eventId),
                     );
                   },
                 ),

@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -38,6 +39,7 @@ class LogViewerState extends State<LogViewer> {
           ),
           PopupMenuButton<Level>(
             useRootNavigator: true,
+            popUpAnimationStyle: NotionMotion.menuStyle,
             itemBuilder: (context) => Level.values
                 .map(
                   (level) => PopupMenuItem(

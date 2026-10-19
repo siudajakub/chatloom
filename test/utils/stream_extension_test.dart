@@ -17,9 +17,7 @@ void main() {
   test('disposing a view cancels its trailing timer and subscription', () {
     fakeAsync((clock) {
       var cancellations = 0;
-      final source = StreamController<int>(
-        onCancel: () => cancellations++,
-      );
+      final source = StreamController<int>(onCancel: () => cancellations++);
       final values = <bool>[];
       final view = source.stream
           .rateLimit(const Duration(milliseconds: 200))
@@ -45,10 +43,9 @@ void main() {
       final source = StreamController<int>();
       final values = <bool>[];
       var done = false;
-      source.stream.rateLimit(const Duration(milliseconds: 200)).listen(
-        values.add,
-        onDone: () => done = true,
-      );
+      source.stream
+          .rateLimit(const Duration(milliseconds: 200))
+          .listen(values.add, onDone: () => done = true);
       source.add(1);
       source.add(2);
       clock.flushMicrotasks();

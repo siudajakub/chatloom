@@ -5,8 +5,8 @@
 
 import 'package:cross_file/cross_file.dart';
 import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
@@ -163,6 +163,7 @@ class _ShareScaffoldDialogState extends State<ShareScaffoldDialog> {
                         ),
                       ),
                       secondary: Avatar(
+                        client: room.client,
                         mxContent: room.avatar,
                         name: displayname,
                         size: Avatar.defaultSize * 0.75,
@@ -191,24 +192,26 @@ class _ShareScaffoldDialogState extends State<ShareScaffoldDialog> {
           ),
         ],
       ),
-      bottomNavigationBar: AnimatedSize(
-        duration: FluffyThemes.animationDuration,
-        curve: FluffyThemes.animationCurve,
-        child: selectedRoomId == null
-            ? const SizedBox.shrink()
-            : Material(
-                elevation: 8,
-                shadowColor: theme.appBarTheme.shadowColor,
-                child: SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: ElevatedButton(
-                      onPressed: _forwardAction,
-                      child: Text(L10n.of(context).forward),
-                    ),
-                  ),
+      bottomNavigationBar: NotionSizeReveal(
+        visible: selectedRoomId != null,
+        alignment: AlignmentDirectional.bottomStart,
+        // Full width, like the bar it replaces (the reveal loosens width).
+        child: SizedBox(
+          width: double.infinity,
+          child: Material(
+            elevation: 8,
+            shadowColor: theme.appBarTheme.shadowColor,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: ElevatedButton(
+                  onPressed: _forwardAction,
+                  child: Text(L10n.of(context).forward),
                 ),
               ),
+            ),
+          ),
+        ),
       ),
     );
   }

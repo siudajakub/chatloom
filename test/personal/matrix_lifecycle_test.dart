@@ -5,7 +5,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _OfflineMatrix extends Matrix {
-  const _OfflineMatrix({required super.store, super.key}) : super(clients: const []);
+  const _OfflineMatrix({required super.store, super.key})
+    : super(clients: const []);
 
   @override
   MatrixState createState() => _OfflineMatrixState();
@@ -20,7 +21,9 @@ class _OfflineMatrixState extends MatrixState {
 }
 
 void main() {
-  testWidgets('matrix teardown releases cached password and its timer', (tester) async {
+  testWidgets('matrix teardown releases cached password and its timer', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     final key = GlobalKey<MatrixState>();
     await tester.pumpWidget(

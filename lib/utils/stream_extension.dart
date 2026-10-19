@@ -33,6 +33,7 @@ extension StreamExtension on Stream {
         subscription = listen(
           (_) => onMessage(),
           onDone: () {
+            subscription = null;
             timer?.cancel();
             timer = null;
             if (gotMessage) controller.add(true);

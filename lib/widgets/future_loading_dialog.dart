@@ -7,8 +7,10 @@ import 'dart:async';
 
 import 'package:async/async.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix_api_lite/utils/logs.dart';
 
@@ -34,16 +36,17 @@ Future<Result<T>> showFutureLoadingDialog<T>({
   final resultFuture = ResultFuture(futureExec);
 
   if (delay) {
-    var i = 3;
-    while (i > 0) {
-      final result = resultFuture.result;
-      if (result != null) {
-        if (result.isError) break;
-        return result;
-      }
-      await Future.delayed(const Duration(milliseconds: 100));
-      i--;
-    }
+    // Fast operations finish inside the grace period and never flash a
+    // dialog. A cancelled timer (not `Future.delayed`) leaves nothing pending.
+    final grace = Completer<void>();
+    final timer = Timer(NotionMotion.loaderGrace, grace.complete);
+    await Future.any<void>([
+      futureExec.then<void>((_) {}, onError: (_, _) {}),
+      grace.future,
+    ]);
+    timer.cancel();
+    final result = resultFuture.result;
+    if (result != null && !result.isError) return result;
   }
 
   if (!context.mounted) {
@@ -55,7 +58,7 @@ Future<Result<T>> showFutureLoadingDialog<T>({
     return Result.capture(futureExec);
   }
 
-  final result = await showAdaptiveDialog<Result<T>>(
+  final result = await showNotionAdaptiveDialog<Result<T>>(
     context: context,
     barrierDismissible: barrierDismissible,
     builder: (BuildContext context) => LoadingDialog<T>(
@@ -90,9 +93,23 @@ class LoadingDialog<T> extends StatefulWidget {
   LoadingDialogState<T> createState() => LoadingDialogState<T>();
 }
 
-class LoadingDialogState<T> extends State<LoadingDialog> {
+/// Progress morphs into a check that pops in before the dialog leaves, or
+/// fades through to the error, which shakes once. The check is the only
+/// hold: its animation completing closes the dialog (no timers).
+class LoadingDialogState<T> extends State<LoadingDialog<T>>
+    with SingleTickerProviderStateMixin {
   Object? exception;
   StackTrace? stackTrace;
+  Result<T>? _done;
+
+  late final AnimationController _check = AnimationController(
+    vsync: this,
+    duration: NotionMotion.medium,
+  )..addStatusListener(_checkStatus);
+  late final CurvedAnimation _checkScale = CurvedAnimation(
+    parent: _check,
+    curve: NotionMotion.bouncyCurve,
+  );
 
   @override
   void initState() {
@@ -100,65 +117,156 @@ class LoadingDialogState<T> extends State<LoadingDialog> {
     widget.future.then(
       (result) {
         if (!mounted) return;
-        if (!Navigator.of(context).canPop()) return;
-        Navigator.of(context).pop<Result<T>>(Result.value(result));
+        _done = Result.value(result);
+        if (NotionMotion.reduced(context)) {
+          _close();
+          return;
+        }
+        setState(() {});
+        _check.forward();
       },
-      onError: (e, s) => setState(() {
-        exception = e;
-        stackTrace = s;
-      }),
+      onError: (e, s) {
+        if (!mounted) return;
+        setState(() {
+          exception = e;
+          stackTrace = s;
+        });
+      },
+    );
+  }
+
+  void _checkStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed) _close();
+  }
+
+  void _close() {
+    final done = _done;
+    if (!mounted || done == null) return;
+    _done = null;
+    if (!Navigator.of(context).canPop()) return;
+    Navigator.of(context).pop<Result<T>>(done);
+  }
+
+  @override
+  void dispose() {
+    _checkScale.dispose();
+    _check.dispose();
+    super.dispose();
+  }
+
+  Widget _progress(BuildContext context) {
+    final theme = Theme.of(context);
+    if (_check.isAnimating || _check.isCompleted) {
+      return SizedBox.square(
+        key: const ValueKey('done'),
+        dimension: NotionSize.icon,
+        child: ScaleTransition(
+          scale: _checkScale,
+          child: Icon(
+            Icons.check_circle_outline,
+            color: theme.colorScheme.primary,
+          ),
+        ),
+      );
+    }
+    return StreamBuilder<double?>(
+      key: const ValueKey('progress'),
+      stream: widget.onProgressStream,
+      builder: (context, snapshot) {
+        final value = snapshot.data;
+        if (value == null) {
+          return const CircularProgressIndicator.adaptive();
+        }
+        // Determinate progress glides between reported values.
+        return TweenAnimationBuilder<double>(
+          tween: Tween(end: value.clamp(0, 1).toDouble()),
+          duration: NotionMotion.of(context, NotionMotion.medium),
+          curve: NotionMotion.standard,
+          builder: (context, value, _) =>
+              CircularProgressIndicator.adaptive(value: value),
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final exception = this.exception;
+    final theme = Theme.of(context);
+    final apple = switch (theme.platform) {
+      TargetPlatform.iOS || TargetPlatform.macOS => true,
+      _ => false,
+    };
     final titleLabel = exception != null
         ? exception.toLocalizedString(context, widget.exceptionContext)
         : widget.title ?? L10n.of(context).loadingPleaseWait;
+    final close = AdaptiveDialogAction(
+      onPressed: () => Navigator.of(
+        context,
+      ).pop<Result<T>>(Result.error(exception!, stackTrace)),
+      child: Text(widget.backLabel ?? L10n.of(context).close),
+    );
+
+    final Widget body = exception == null
+        ? Row(
+            key: const ValueKey('loading'),
+            crossAxisAlignment: .center,
+            children: [
+              NotionMorphSwitcher(rotate: false, child: _progress(context)),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Text(
+                  titleLabel,
+                  maxLines: 4,
+                  textAlign: TextAlign.left,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          )
+        : Column(
+            key: const ValueKey('error'),
+            mainAxisSize: .min,
+            children: [
+              NotionPop(
+                bounce: false,
+                from: NotionMotion.dialogFrom,
+                child: Icon(
+                  Icons.error_outline_outlined,
+                  color: theme.colorScheme.error,
+                  size: 48,
+                ),
+              ),
+              const SizedBox(height: NotionSpace.md),
+              Text(titleLabel, maxLines: 4, overflow: TextOverflow.ellipsis),
+              // Material keeps the action with the content so the dialog
+              // grows in one smooth step; Cupertino needs its action row.
+              if (!apple)
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: NotionSpace.md),
+                    child: close,
+                  ),
+                ),
+            ],
+          );
 
     return AlertDialog.adaptive(
-      title: exception == null
-          ? null
-          : Icon(
-              Icons.error_outline_outlined,
-              color: Theme.of(context).colorScheme.error,
-              size: 48,
-            ),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 256),
-        child: Row(
-          crossAxisAlignment: .center,
-          children: [
-            if (exception == null) ...[
-              StreamBuilder(
-                stream: widget.onProgressStream,
-                builder: (context, snapshot) =>
-                    CircularProgressIndicator.adaptive(value: snapshot.data),
-              ),
-              const SizedBox(width: 20),
-            ],
-            Expanded(
-              child: Text(
-                titleLabel,
-                maxLines: 4,
-                textAlign: exception == null ? TextAlign.left : null,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
+        // The error arrives with a single shake.
+        child: NotionShake(
+          trigger: exception,
+          child: AnimatedSize(
+            duration: NotionMotion.of(context, NotionMotion.medium),
+            curve: NotionMotion.emphasized,
+            alignment: Alignment.topCenter,
+            child: NotionFadeThrough(alignment: Alignment.center, child: body),
+          ),
         ),
       ),
-      actions: exception == null
-          ? null
-          : [
-              AdaptiveDialogAction(
-                onPressed: () => Navigator.of(
-                  context,
-                ).pop<Result<T>>(Result.error(exception, stackTrace)),
-                child: Text(widget.backLabel ?? L10n.of(context).close),
-              ),
-            ],
+      actions: exception == null || !apple ? null : [close],
     );
   }
 }

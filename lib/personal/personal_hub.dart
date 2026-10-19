@@ -6,18 +6,22 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/personal/automatic_push.dart';
 import 'package:fluffychat/personal/capabilities.dart';
 import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/organization_page.dart';
 import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_content.dart';
 import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/push_registration.dart';
 import 'package:fluffychat/personal/scheduled_composer.dart';
 import 'package:fluffychat/personal/storage/storage_failure.dart';
+import 'package:fluffychat/personal/ui/notion_chat_details_content.dart';
 import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:fluffychat/personal/ui/notion_settings_load.dart';
+import 'package:fluffychat/personal/ui/transcription_settings.dart';
 import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/background_push.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/notion_room_actions.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -30,7 +34,7 @@ import 'package:mime/mime.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:uuid/uuid.dart';
 
-import 'merged_chat_page.dart';
+import 'person_route.dart';
 
 Future<String?> personalText(
   BuildContext context,
@@ -39,7 +43,7 @@ Future<String?> personalText(
 }) async {
   final c = TextEditingController(text: initial);
   try {
-    return await showDialog<String>(
+    return await showNotionCustomDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(title),
@@ -167,7 +171,7 @@ Future<bool> schedulePersonalAttachment(
   if (!due.isAfter(DateTime.now())) {
     throw StateError('Choose a future date and time.');
   }
-  final confirmed = await showDialog<bool>(
+  final confirmed = await showNotionCustomDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('Schedule an attachment'),
@@ -308,7 +312,8 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
       onStateChange: (_) => _updateReadinessTimer(),
     );
     _updateReadinessTimer();
-    personal.load();
+    // Load after the page slid in, and skip it right after another page did.
+    PersonalPageLoad.request(context, personal);
   }
 
   void _updateReadinessTimer() {
@@ -358,7 +363,7 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
     final form = GlobalKey<FormState>();
     String? nonce;
     try {
-      nonce = await showDialog<String>(
+      nonce = await showNotionCustomDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Private device key'),
@@ -427,6 +432,30 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
         ),
       );
     }
+  }
+
+  Future<void> _setupAutomaticPush() async {
+    final account = widget.client;
+    final owner = account.userID;
+    final device = account.deviceID;
+    bool current() =>
+        mounted &&
+        identical(widget.client, account) &&
+        identical(Matrix.of(context).client, account) &&
+        account.isLogged() &&
+        account.userID == owner &&
+        account.deviceID == device;
+    final push = BackgroundPush(Matrix.of(context));
+    push.beginRegistrationUpdate();
+    try {
+      await AppSettings.pushNotificationsGatewayUrl.setItem(
+        personalPushGateway,
+      );
+    } finally {
+      push.endRegistrationUpdate();
+    }
+    if (!mounted || !current()) return;
+    await push.setupPush(context);
   }
 
   Future<void> _copyPushRegistration() async {
@@ -540,7 +569,7 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
 
   Future<void> _unmerge(PersonGroup group) async {
     final owner = personal;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showNotionCustomDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Unmerge conversations?'),
@@ -573,360 +602,405 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
     listenable: personal,
     builder: (context, _) => NotionSettingsScaffold(
       title: widget.section.title,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (!personal.ready &&
-              widget.section != PersonalSettingsSection.push &&
-              widget.section != PersonalSettingsSection.sync)
-            NotionListRow(
-              leading: const Icon(Icons.lock_outline),
-              title: 'Private sync is unavailable',
-              subtitle: kIsWeb
-                  ? 'Private encrypted storage requires the native app.'
-                  : personal.problem ??
-                        'Connect private sync to use this feature.',
-              onTap: () => context.push('/rooms/settings/sync'),
+      // Rows rise in once after the page settles; rows that come and go
+      // later (sync problems, pending changes) reveal in place.
+      child: NotionEntranceScope(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: NotionEntrance.stagger([
+            NotionSizeReveal(
+              visible:
+                  !personal.ready &&
+                  widget.section != PersonalSettingsSection.push &&
+                  widget.section != PersonalSettingsSection.sync,
+              child: NotionListRow(
+                leading: const Icon(Icons.lock_outline),
+                title: 'Private sync is unavailable',
+                subtitle: kIsWeb
+                    ? 'Private encrypted storage requires the native app.'
+                    : personal.problem ??
+                          'Connect private sync to use this feature.',
+                onTap: () => context.push('/rooms/settings/sync'),
+              ),
             ),
-          ...switch (widget.section) {
-            PersonalSettingsSection.sync => <Widget>[
-              ListTile(
-                leading: Icon(personal.ready ? Icons.lock : Icons.lock_outline),
-                title: Text(
-                  personal.ready
-                      ? 'Private sync configured'
-                      : 'Private sync not connected',
+            ...switch (widget.section) {
+              PersonalSettingsSection.sync => <Widget>[
+                ListTile(
+                  leading: NotionMorphSwitcher(
+                    child: Icon(
+                      personal.ready ? Icons.lock : Icons.lock_outline,
+                      key: ValueKey(personal.ready),
+                    ),
+                  ),
+                  title: NotionFadeThrough(
+                    child: Text(
+                      personal.ready
+                          ? 'Private sync configured'
+                          : 'Private sync not connected',
+                      key: ValueKey(personal.ready),
+                    ),
+                  ),
+                  subtitle: Text(
+                    kIsWeb
+                        ? 'Private encrypted storage requires the native app. Ordinary conversations are available in the browser.'
+                        : personal.problem ??
+                              personal.workerReadinessDescription,
+                  ),
                 ),
-                subtitle: Text(
-                  kIsWeb
-                      ? 'Private encrypted storage requires the native app. Ordinary conversations are available in the browser.'
-                      : personal.problem ?? personal.workerReadinessDescription,
+                NotionSizeReveal(
+                  visible: !personal.ready && !kIsWeb,
+                  child: NotionListRow(
+                    title: 'Connect private sync',
+                    subtitle:
+                        'Find your existing private journal or set it up.',
+                    onTap: () => run(personal.connect),
+                  ),
                 ),
-              ),
-              if (!personal.ready && !kIsWeb)
                 NotionListRow(
-                  title: 'Connect private sync',
-                  subtitle: 'Find your existing private journal or set it up.',
-                  onTap: () => run(personal.connect),
+                  leading: const Icon(Icons.cloud_outlined),
+                  title: 'Background services',
+                  subtitle: personal.workerReadinessDescription,
                 ),
-              NotionListRow(
-                leading: const Icon(Icons.cloud_outlined),
-                title: 'Background services',
-                subtitle: personal.workerReadinessDescription,
-              ),
-              if (personal.problem != null)
-                NotionListRow(
-                  title: 'Retry private sync',
-                  subtitle:
-                      'Reload existing local state and synchronization status.',
-                  onTap: () => run(personal.retry),
-                ),
-              if (personal.pending.isNotEmpty)
-                ListTile(
-                  title: Text(
-                    '${personal.pending.length} changes awaiting confirmation',
+                NotionSizeReveal(
+                  visible: personal.problem != null,
+                  child: NotionListRow(
+                    title: 'Retry private sync',
+                    subtitle:
+                        'Reload existing local state and synchronization status.',
+                    onTap: () => run(personal.retry),
                   ),
                 ),
-              if (personal.conflicts.keys.any(
-                (key) =>
-                    !key.startsWith('label:') && !key.startsWith('labels:'),
-              )) ...[
-                const ListTile(
-                  title: Text('Conflicts — both versions retained'),
-                ),
-                for (final conflict in personal.conflicts.entries.where(
-                  (e) =>
-                      !e.key.startsWith('label:') &&
-                      !e.key.startsWith('labels:'),
-                ))
-                  ListTile(
-                    onTap: () => run(() async {
-                      if (conflict.key.startsWith('draft:')) {
-                        await Navigator.of(context).push<void>(
-                          MaterialPageRoute(
-                            builder: (_) => DraftConflictPage(
-                              personal: personal,
-                              entityKey: conflict.key,
-                            ),
-                          ),
-                        );
-                      } else {
-                        await resolvePersonalMetadataConflict(
-                          context,
-                          personal,
-                          conflict.key,
-                        );
-                      }
-                    }),
-                    title: Text(
-                      conflict.key.startsWith('draft:')
-                          ? 'Two draft versions'
-                          : 'Concurrent change',
-                    ),
-                    subtitle: const Text(
-                      'Reopen the affected draft or setting before choosing a version.',
+                NotionSizeReveal(
+                  visible: personal.pending.isNotEmpty,
+                  child: ListTile(
+                    leading: const NotionDelayedSpinner(),
+                    title: NotionAnimatedCount(
+                      count: personal.pending.length,
+                      format: (count) => '$count changes awaiting confirmation',
                     ),
                   ),
-              ],
-              for (final copy in personal.values.entries.where(
-                (e) => e.key.startsWith('draft-copy:'),
-              ))
-                ExpansionTile(
-                  title: const Text('Retained draft copy'),
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: SelectableText(
-                        copy.value['text'] is String
-                            ? copy.value['text'] as String
-                            : '',
-                      ),
-                    ),
-                  ],
                 ),
-              NotionListRow(
-                leading: const Icon(Icons.description_outlined),
-                title: 'Transcriptions',
-                subtitle: 'Manual requests, estimated costs and service status',
-                onTap: () => context.push('/rooms/settings/transcriptions'),
-              ),
-            ],
-            PersonalSettingsSection.push => <Widget>[
-              ListTile(
-                title: const Text('Notification setup'),
-                subtitle: Text(
-                  kIsWeb
-                      ? 'Private push gateway setup requires the native app.'
-                      : _push?.registrationDescription(widget.client) ??
-                            'Notification registration has not been checked.',
-                ),
-                onTap: kIsWeb ? null : () => run(_configurePush),
-                trailing: kIsWeb ? null : const Icon(Icons.chevron_right),
-              ),
-              ListTile(
-                title: const Text('Copy private push registration (secrets)'),
-                subtitle: const Text(
-                  'The token and key are copied only when you choose this action.',
-                ),
-                leading: const Icon(Icons.copy_outlined),
-                onTap: kIsWeb ? null : () => run(_copyPushRegistration),
-              ),
-              NotionListRow(
-                title: 'Notification registration details',
-                subtitle: 'Registered devices and available push providers',
-                onTap: () =>
-                    context.push('/rooms/settings/notifications/registration'),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text(
-                  'Registration describes this device configuration. It does not confirm gateway authorization or notification delivery.',
-                ),
-              ),
-            ],
-            PersonalSettingsSection.people => <Widget>[
-              ListTile(
-                title: const Text('Merge conversations'),
-                trailing: IconButton(
-                  tooltip: 'Merge conversations',
-                  icon: const Icon(Icons.add),
-                  onPressed: personal.ready ? () => run(merge) : null,
-                ),
-              ),
-              for (final group in personal.groups)
-                ListTile(
-                  title: Text(group.name),
-                  subtitle: Text('${group.members.length} sources'),
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          MergedChatPage(personal: personal, group: group),
-                    ),
+                if (personal.conflicts.keys.any(
+                  (key) =>
+                      !key.startsWith('label:') && !key.startsWith('labels:'),
+                )) ...[
+                  const ListTile(
+                    title: Text('Conflicts — both versions retained'),
                   ),
-                  trailing: IconButton(
-                    tooltip: 'Unmerge',
-                    icon: const Icon(Icons.call_split),
-                    onPressed:
-                        personal.ready &&
-                            !personal.pending.values.any(
-                              (op) => op.entityId == 'person:${group.id}',
-                            )
-                        ? () => run(() => _unmerge(group))
-                        : null,
-                  ),
-                ),
-              if (personal.invalidGroupCount > 0)
-                ListTile(
-                  leading: const Icon(Icons.warning_amber_outlined),
-                  title: const Text(
-                    'Some saved conversation groups could not be loaded. Their data is preserved.',
-                  ),
-                  subtitle: Text('${personal.invalidGroupCount} saved groups'),
-                ),
-              if (personal.groups.isEmpty)
-                const ListTile(
-                  subtitle: Text(
-                    'Merge two or more conversations for one person using the add button. Every message keeps its source network.',
-                  ),
-                ),
-            ],
-            PersonalSettingsSection.reminders => <Widget>[
-              for (final e in personal.reminders.entries)
-                ListTile(
-                  title: const Text('Conversation reminder'),
-                  subtitle: Text('${e.value['dueAt']} · ${e.value['state']}'),
-                  trailing: IconButton(
-                    tooltip: 'Cancel',
-                    icon: const Icon(Icons.close),
-                    onPressed:
-                        !personal.ready ||
-                            personal.pending.values.any(
-                              (op) => op.entityId == e.key,
-                            )
-                        ? null
-                        : () => run(() async {
-                            await personal.command('reminder.cancel', e.key, {
-                              'id': e.key,
-                            }, baseRevision: e.value['revision'] as int? ?? 0);
-                          }),
-                  ),
-                ),
-              if (personal.reminders.isEmpty)
-                const ListTile(
-                  title: Text('No reminders'),
-                  subtitle: Text(
-                    'Create a reminder from a conversation to bring it back at the right time.',
-                  ),
-                ),
-            ],
-            PersonalSettingsSection.scheduled => <Widget>[
-              for (final e in personal.schedules.entries)
-                ListTile(
-                  title: Text(
-                    (e.value['content'] as Map?)?['body'] as String? ??
-                        'Message',
-                  ),
-                  subtitle: Text(
-                    '${e.value['state']} · ${e.value['dueAt']}\n${scheduledSourceSummary(e.value)}',
-                  ),
-                  trailing: PopupMenuButton<String>(
-                    enabled:
-                        personal.ready &&
-                        {
-                          'queued',
-                          'paused',
-                          'waitingKeys',
-                        }.contains(e.value['state']) &&
-                        e.value['attempted'] != true &&
-                        !personal.pending.values.any(
-                          (op) => op.entityId == e.key,
-                        ),
-                    onSelected: (kind) => run(() async {
-                      final owner = personal;
-                      bool current() =>
-                          mounted &&
-                          identical(owner, personal) &&
-                          identical(Matrix.of(context).client, owner.client);
-                      if (!current()) return;
-                      if (kind == 'update') {
-                        final content = Map<String, dynamic>.from(
-                          e.value['content'] as Map,
-                        );
-                        if ({
-                          'm.text',
-                          'm.notice',
-                        }.contains(content['msgtype'])) {
-                          final text = await personalText(
-                            context,
-                            'Message text',
-                            initial: content['body'] as String? ?? '',
-                          );
-                          if (text == null ||
-                              text.trim().isEmpty ||
-                              !context.mounted) {
-                            return;
+                  for (final conflict in personal.conflicts.entries.where(
+                    (e) =>
+                        !e.key.startsWith('label:') &&
+                        !e.key.startsWith('labels:'),
+                  ))
+                    _pressable(
+                      ListTile(
+                        onTap: () => run(() async {
+                          if (conflict.key.startsWith('draft:')) {
+                            await Navigator.of(context).push<void>(
+                              MaterialPageRoute(
+                                builder: (_) => DraftConflictPage(
+                                  personal: personal,
+                                  entityKey: conflict.key,
+                                ),
+                              ),
+                            );
+                          } else {
+                            await resolvePersonalMetadataConflict(
+                              context,
+                              personal,
+                              conflict.key,
+                            );
                           }
-                          if (!current()) return;
-                          content['body'] = text;
-                        }
-                        if (!context.mounted) return;
-                        final due = await personalDate(context);
-                        if (due == null ||
-                            !due.isAfter(DateTime.now()) ||
-                            !current())
-                          return;
-                        final job = ScheduledSend.fromJson({
-                          ...e.value,
-                          'dueAt': due.toUtc().toIso8601String(),
-                          'content': content,
-                        });
-                        await owner.command(
-                          'schedule.update',
-                          e.key,
-                          job.toJson().cast<String, dynamic>(),
-                          baseRevision: e.value['revision'] as int? ?? 0,
-                        );
-                      } else {
-                        await owner.command('schedule.$kind', e.key, {
-                          'id': e.key,
-                        }, baseRevision: e.value['revision'] as int? ?? 0);
-                      }
-                    }),
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(
-                        value: 'sendNow',
-                        child: Text('Send now'),
+                        }),
+                        title: Text(
+                          conflict.key.startsWith('draft:')
+                              ? 'Two draft versions'
+                              : 'Concurrent change',
+                        ),
+                        subtitle: const Text(
+                          'Reopen the affected draft or setting before choosing a version.',
+                        ),
                       ),
-                      PopupMenuItem(
-                        value: 'update',
-                        enabled: {
-                          'queued',
-                          'paused',
-                        }.contains(e.value['state']),
-                        child: Text('Edit time or message'),
-                      ),
-                      const PopupMenuItem(
-                        value: 'cancel',
-                        child: Text('Cancel'),
+                    ),
+                ],
+                for (final copy in personal.values.entries.where(
+                  (e) => e.key.startsWith('draft-copy:'),
+                ))
+                  ExpansionTile(
+                    title: const Text('Retained draft copy'),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: SelectableText(
+                          copy.value['text'] is String
+                              ? copy.value['text'] as String
+                              : '',
+                        ),
                       ),
                     ],
                   ),
+                NotionListRow(
+                  leading: const Icon(Icons.description_outlined),
+                  title: 'Transcriptions',
+                  subtitle:
+                      'Automatic transcription, language, limits and usage',
+                  onTap: () => context.push('/rooms/settings/transcriptions'),
                 ),
-              if (personal.schedules.isEmpty)
-                const ListTile(
-                  title: Text('No scheduled messages'),
-                  subtitle: Text(
-                    'Choose Send later when composing a message in a conversation.',
+              ],
+              PersonalSettingsSection.push => <Widget>[
+                _pressable(
+                  ListTile(
+                    title: const Text('Set up notifications automatically'),
+                    subtitle: Text(
+                      kIsWeb
+                          ? 'Automatic notifications require the Android app.'
+                          : !PlatformInfos.isAndroid
+                          ? 'Automatic background notifications are available on Android.'
+                          : _push?.registrationDescription(widget.client) ??
+                                'Notification registration has not been checked.',
+                    ),
+                    onTap: !PlatformInfos.isAndroid
+                        ? null
+                        : () => run(_setupAutomaticPush),
+                    trailing: !PlatformInfos.isAndroid
+                        ? null
+                        : const Icon(Icons.refresh),
                   ),
                 ),
-            ],
-            PersonalSettingsSection.transcriptions => <Widget>[
-              ListTile(
-                title: const Text('Transcription service'),
-                subtitle: Text(personal.workerReadinessDescription),
-              ),
-              const ListTile(
-                title: Text('Manual transcriptions'),
-                subtitle: Text(
-                  'Only requested manually from a voice message. No monthly limit. Costs are estimates, not a bill.',
+                ExpansionTile(
+                  title: const Text('Advanced notification settings'),
+                  children: [
+                    ListTile(
+                      title: const Text('Configure a gateway manually'),
+                      onTap: kIsWeb ? null : () => run(_configurePush),
+                    ),
+                    ListTile(
+                      title: const Text(
+                        'Copy private push registration (secrets)',
+                      ),
+                      subtitle: const Text(
+                        'Only needed for manual gateway configuration.',
+                      ),
+                      leading: const Icon(Icons.copy_outlined),
+                      onTap: kIsWeb ? null : () => run(_copyPushRegistration),
+                    ),
+                  ],
                 ),
-              ),
-              ListTile(
-                title: Text(
-                  '${personal.transcripts.values.where((j) => j.state == JobState.done).length} completed',
+                NotionListRow(
+                  title: 'Notification registration details',
+                  subtitle: 'Registered devices and available push providers',
+                  onTap: () => context.push(
+                    '/rooms/settings/notifications/registration',
+                  ),
                 ),
-                subtitle: Text(
-                  'Estimated cost: \$${personal.transcripts.values.fold<double>(0, (v, j) => v + (j.estimatedCostUsd ?? 0)).toStringAsFixed(4)} · ${personal.transcripts.values.where((j) => j.state == JobState.unknown).length} unknown attempts',
+                NotionListRow(
+                  leading: const Icon(Icons.troubleshoot_outlined),
+                  title: 'Notification diagnostics',
+                  subtitle: 'Checks, recent outcomes and a test notification',
+                  onTap: () =>
+                      context.push('/rooms/settings/notifications/diagnostics'),
                 ),
-              ),
-            ],
-          },
-        ],
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    'On Android, notifications are set up after sign-in. Allow the notification permission when asked. Use Notification diagnostics to send a test notification.',
+                  ),
+                ),
+              ],
+              PersonalSettingsSection.people => <Widget>[
+                ListTile(
+                  title: const Text('Merge conversations'),
+                  trailing: IconButton(
+                    tooltip: 'Merge conversations',
+                    icon: const Icon(Icons.add),
+                    onPressed: personal.ready ? () => run(merge) : null,
+                  ),
+                ),
+                for (final group in personal.groups)
+                  _pressable(
+                    ListTile(
+                      key: ValueKey(group.id),
+                      title: Text(group.name),
+                      subtitle: Text('${group.members.length} sources'),
+                      onTap: () => context.push(personChatLocation(group.id)),
+                      trailing: IconButton(
+                        tooltip: 'Unmerge',
+                        icon: const Icon(Icons.call_split),
+                        onPressed:
+                            personal.ready &&
+                                !personal.pending.values.any(
+                                  (op) => op.entityId == 'person:${group.id}',
+                                )
+                            ? () => run(() => _unmerge(group))
+                            : null,
+                      ),
+                    ),
+                  ),
+                if (personal.invalidGroupCount > 0)
+                  ListTile(
+                    leading: const Icon(Icons.warning_amber_outlined),
+                    title: const Text(
+                      'Some saved conversation groups could not be loaded. Their data is preserved.',
+                    ),
+                    subtitle: Text(
+                      '${personal.invalidGroupCount} saved groups',
+                    ),
+                  ),
+                if (personal.groups.isEmpty)
+                  const ListTile(
+                    subtitle: Text(
+                      'Merge two or more conversations for one person using the add button. Every message keeps its source network.',
+                    ),
+                  ),
+              ],
+              PersonalSettingsSection.reminders => <Widget>[
+                for (final e in personal.reminders.entries)
+                  ListTile(
+                    title: Text(_reminderChatName(personal, e.value)),
+                    subtitle: Text(_reminderSubtitle(context, e.value)),
+                    trailing: IconButton(
+                      tooltip: 'Cancel',
+                      icon: const Icon(Icons.close),
+                      onPressed:
+                          !personal.ready ||
+                              personal.pending.values.any(
+                                (op) => op.entityId == e.key,
+                              )
+                          ? null
+                          : () => run(() async {
+                              await personal.command(
+                                'reminder.cancel',
+                                e.key,
+                                {'id': e.key},
+                                baseRevision: e.value['revision'] as int? ?? 0,
+                              );
+                            }),
+                    ),
+                  ),
+                if (personal.reminders.isEmpty)
+                  const ListTile(
+                    title: Text('No reminders'),
+                    subtitle: Text(
+                      'Create a reminder from a conversation to bring it back at the right time.',
+                    ),
+                  ),
+              ],
+              PersonalSettingsSection.scheduled => <Widget>[
+                for (final e in personal.schedules.entries)
+                  ListTile(
+                    title: Text(
+                      (e.value['content'] as Map?)?['body'] as String? ??
+                          'Message',
+                    ),
+                    subtitle: Text(
+                      '${e.value['state']} · ${e.value['dueAt']}\n${scheduledSourceSummary(e.value)}',
+                    ),
+                    trailing: PopupMenuButton<String>(
+                      popUpAnimationStyle: NotionMotion.menuStyle,
+                      enabled:
+                          personal.ready &&
+                          {
+                            'queued',
+                            'paused',
+                            'waitingKeys',
+                          }.contains(e.value['state']) &&
+                          e.value['attempted'] != true &&
+                          !personal.pending.values.any(
+                            (op) => op.entityId == e.key,
+                          ),
+                      onSelected: (kind) => run(() async {
+                        final owner = personal;
+                        bool current() =>
+                            mounted &&
+                            identical(owner, personal) &&
+                            identical(Matrix.of(context).client, owner.client);
+                        if (!current()) return;
+                        if (kind == 'update') {
+                          final content = Map<String, dynamic>.from(
+                            e.value['content'] as Map,
+                          );
+                          if ({
+                            'm.text',
+                            'm.notice',
+                          }.contains(content['msgtype'])) {
+                            final text = await personalText(
+                              context,
+                              'Message text',
+                              initial: content['body'] as String? ?? '',
+                            );
+                            if (text == null ||
+                                text.trim().isEmpty ||
+                                !context.mounted) {
+                              return;
+                            }
+                            if (!current()) return;
+                            content['body'] = text;
+                          }
+                          if (!context.mounted) return;
+                          final due = await personalDate(context);
+                          if (due == null ||
+                              !due.isAfter(DateTime.now()) ||
+                              !current())
+                            return;
+                          final job = ScheduledSend.fromJson({
+                            ...e.value,
+                            'dueAt': due.toUtc().toIso8601String(),
+                            'content': content,
+                          });
+                          await owner.command(
+                            'schedule.update',
+                            e.key,
+                            job.toJson().cast<String, dynamic>(),
+                            baseRevision: e.value['revision'] as int? ?? 0,
+                          );
+                        } else {
+                          await owner.command('schedule.$kind', e.key, {
+                            'id': e.key,
+                          }, baseRevision: e.value['revision'] as int? ?? 0);
+                        }
+                      }),
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(
+                          value: 'sendNow',
+                          child: Text('Send now'),
+                        ),
+                        PopupMenuItem(
+                          value: 'update',
+                          enabled: {
+                            'queued',
+                            'paused',
+                          }.contains(e.value['state']),
+                          child: Text('Edit time or message'),
+                        ),
+                        const PopupMenuItem(
+                          value: 'cancel',
+                          child: Text('Cancel'),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (personal.schedules.isEmpty)
+                  const ListTile(
+                    title: Text('No scheduled messages'),
+                    subtitle: Text(
+                      'Choose Send later when composing a message in a conversation.',
+                    ),
+                  ),
+              ],
+              PersonalSettingsSection.transcriptions => <Widget>[
+                TranscriptionSettingsSection(personal: personal, run: run),
+              ],
+            },
+          ]),
+        ),
       ),
     ),
   );
 }
+
+/// Press feedback for a tappable Material [ListTile] row.
+Widget _pressable(Widget row) =>
+    NotionPressable(scale: NotionMotion.pressRow, child: row);
 
 class _MergeSelectionPage extends StatefulWidget {
   final PersonalClient personal;
@@ -971,22 +1045,29 @@ class _MergeSelectionPageState extends State<_MergeSelectionPage> {
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: ListView(
-              children: [
-                for (final room in widget.rooms)
-                  CheckboxListTile(
-                    value: _selected.contains(room.id),
-                    title: Text(room.getLocalizedDisplayname()),
-                    subtitle: Text(PersonalClient.networkOf(room)),
-                    onChanged: !_current
-                        ? null
-                        : (value) => setState(() {
-                            value == true
-                                ? _selected.add(room.id)
-                                : _selected.remove(room.id);
-                          }),
-                  ),
-              ],
+            child: NotionEntranceScope(
+              child: ListView(
+                children: [
+                  for (final room in widget.rooms)
+                    NotionEntrance(
+                      key: ValueKey(room.id),
+                      playKey: room.id,
+                      rise: NotionMotion.riseList,
+                      child: CheckboxListTile(
+                        value: _selected.contains(room.id),
+                        title: Text(room.getLocalizedDisplayname()),
+                        subtitle: Text(PersonalClient.networkOf(room)),
+                        onChanged: !_current
+                            ? null
+                            : (value) => setState(() {
+                                value == true
+                                    ? _selected.add(room.id)
+                                    : _selected.remove(room.id);
+                              }),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
           Padding(
@@ -1042,6 +1123,7 @@ class RoomPersonalButton extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) => PopupMenuButton<String>(
+    popUpAnimationStyle: NotionMotion.menuStyle,
     tooltip: includeChatSettings
         ? 'Conversation options'
         : 'Conversation tools',
@@ -1112,7 +1194,7 @@ class RoomPersonalButton extends StatelessWidget {
               threadLastEventId: threadLastEventId?.call(),
             );
         if (kind == 'schedule') {
-          final choice = await showDialog<String>(
+          final choice = await showNotionCustomDialog<String>(
             context: context,
             builder: (context) => SimpleDialog(
               title: const Text('Send later'),
@@ -1268,12 +1350,48 @@ List<PopupMenuEntry<String>> conversationQuickActions({
   ),
 ];
 
+/// Chat name for a reminder row, respecting private nicknames.
+String _reminderChatName(PersonalClient p, Map<String, dynamic> reminder) {
+  try {
+    final conversation = reminder['conversation'];
+    final roomId = conversation is Map ? conversation['roomId'] : null;
+    final room = roomId is String ? p.client.getRoomById(roomId) : null;
+    if (room != null) return InboxProjection(p).displayName(room);
+  } catch (_) {}
+  return 'Conversation reminder';
+}
+
+String _reminderSubtitle(BuildContext context, Map<String, dynamic> reminder) {
+  final due = reminder['dueAt'];
+  final at = due is String ? DateTime.tryParse(due)?.toLocal() : null;
+  final localizations = MaterialLocalizations.of(context);
+  final when = at == null
+      ? 'No date'
+      : '${localizations.formatMediumDate(at)} · '
+            '${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(at), alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context))}';
+  final state = switch (reminder['state']) {
+    'queued' => 'Scheduled',
+    'waitingKeys' || 'waitingSync' => 'Waiting to check for replies',
+    'done' => 'Done',
+    'cancelled' => 'Cancelled',
+    'conflict' => 'Not saved',
+    _ => 'Pending',
+  };
+  return '$when · $state';
+}
+
 Future<void> requestConversationReminder(
   BuildContext context,
   PersonalClient p,
   Room room, {
   required bool Function() isCurrent,
 }) async {
+  // The message the user is looking at; the reminder notification shows it.
+  final anchor = room.lastEvent?.eventId;
+  final anchorEventId =
+      anchor != null && anchor.startsWith(r'$') && anchor.length <= 255
+      ? anchor
+      : null;
   final account = p.client.userID;
   final generation = PersonalPrivacy.surfaceGeneration;
   bool current() =>
@@ -1291,7 +1409,7 @@ Future<void> requestConversationReminder(
   if (due == null || !current()) return;
   if (!context.mounted) return;
   var untilReply = true, archive = false;
-  final options = await showDialog<Map<String, bool>>(
+  final options = await showNotionCustomDialog<Map<String, bool>>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, set) => AlertDialog(
@@ -1335,6 +1453,7 @@ Future<void> requestConversationReminder(
     'conversation': p.ref(room).toJson(),
     'dueAt': due.toUtc().toIso8601String(),
     'untilReply': options['untilReply'],
+    'anchorEventId': ?anchorEventId,
   });
   if (!current()) return;
   if (options['archive'] == true) {

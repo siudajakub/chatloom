@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart';
 import 'package:fluffychat/personal/capabilities.dart';
 import 'package:fluffychat/personal/diagnostics.dart';
 import 'package:fluffychat/personal/immediate_outbox.dart';
 import 'package:fluffychat/personal/journal_replay_batch.dart';
-import 'package:fluffychat/personal/privacy.dart';
+import 'package:fluffychat/personal/journal_trust.dart';
+import 'package:fluffychat/personal/own_sender.dart';
 import 'package:fluffychat/personal/performance_probe.dart';
+import 'package:fluffychat/personal/privacy.dart';
 import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 import 'package:fluffychat/personal/storage/personal_store.dart';
 import 'package:fluffychat/personal/worker_readiness.dart';
@@ -28,9 +31,37 @@ class PersonalClient extends ChangeNotifier {
   @override
   void notifyListeners() {
     if (!_disposed && !_changes.isClosed) {
+      _notifiedState = _observableState();
       _changes.add(++_changeVersion);
       super.notifyListeners();
     }
+  }
+
+  // Everything listeners render. Inbox, chats and settings rebuild on every
+  // notification, so journal activity which changes none of it stays silent.
+  Object? _notifiedState;
+  int _replicaRevision = 0;
+  int _alertRevision = 0;
+  Object _observableState() => (
+    _replicaRevision,
+    _alertRevision,
+    ready,
+    problem,
+    syncFailure,
+    diagnostic?.code,
+    diagnostic?.phase,
+    workerReadiness,
+    journal?.id,
+  );
+
+  void _notifyIfChanged() {
+    if (!_disposed && _observableState() != _notifiedState) notifyListeners();
+  }
+
+  void _replicaChanged() {
+    _replicaRevision++;
+    // Results applied by one replay pass produce one notification at its end.
+    if (!_replaying) notifyListeners();
   }
 
   PersonalClient._(this.client) : _openStore = PersonalStore.open;
@@ -60,7 +91,7 @@ class PersonalClient extends ChangeNotifier {
     syncFailure = privateSyncFailure(error, phase);
     problem = syncFailure!.message;
     _journalReady = false;
-    notifyListeners();
+    _notifyIfChanged();
   }
 
   void _clearFailure() {
@@ -90,7 +121,23 @@ class PersonalClient extends ChangeNotifier {
   Future<void>? _replayCompletion;
   bool _replayAgain = false;
   final _acceptedResultEvents = <String>{};
+  // Journal resume point: every event at or before it is applied or held.
+  JournalWatermark? _watermark;
+  // Held events outside the loaded timeline, re-read by id on attach.
+  final _heldEvents = <String, Event>{};
+  // Held ids the server no longer has: a full replay could not apply them.
+  final _unavailableHeld = <String>{};
+  bool _rescanJournal = true;
+  // Newest trusted due reminder result per entity; alerts are claimed once.
+  final _dueReminders = <String, Event>{};
+  final _claimedReminders = <String>{};
+  @visibleForTesting
+  int debugReplayPasses = 0;
   String? _journalTrustFingerprint;
+  // Trust snapshot of the latest replay pass (verified devices + sessions).
+  MegolmTrustSnapshot? _trust;
+  // Room keys arriving for held events outside the timeline (L2).
+  StreamSubscription<String>? _sessionKeys;
   Room? journal;
   String? problem;
   WorkerReadiness? workerReadiness;
@@ -153,11 +200,7 @@ class PersonalClient extends ChangeNotifier {
 
   void _dispatch() {
     if (ready) {
-      unawaited(
-        stagePending().catchError((Object _) {
-          if (!_disposed) notifyListeners();
-        }),
-      );
+      unawaited(stagePending().catchError((Object _) => _notifyIfChanged()));
     }
   }
 
@@ -244,7 +287,7 @@ class PersonalClient extends ChangeNotifier {
       },
       newOperationId: () => const Uuid().v4(),
       clock: DateTime.now,
-      onChanged: notifyListeners,
+      onChanged: _replicaChanged,
     );
     // Seen markers and immediate media/text outboxes can grow independently
     // from private metadata. They are read by their owners on demand, rather
@@ -381,8 +424,7 @@ class PersonalClient extends ChangeNotifier {
       }
       // Also replay activity that arrived after attach's initial replay but
       // before its pending-publication await finished.
-      if (replayRequested ||
-          _journalTrustFingerprint != _trustFingerprint()) {
+      if (replayRequested || _journalTrustFingerprint != _trustFingerprint()) {
         await _replay();
       }
       if (ready) await stagePending();
@@ -391,15 +433,45 @@ class PersonalClient extends ChangeNotifier {
     }
   }
 
-  Future<void> load() => _startLoad(const Duration(seconds: 3));
-  Future<void> retry() => _startLoad(const Duration(seconds: 15));
-
-  Future<void> _startLoad(Duration timeout) {
+  /// Cheap for an already-live journal: no participants request, replay or
+  /// notification. Every sync still validates membership and replays journal
+  /// activity, and each publication validates again.
+  Future<void> load() {
     _checkActive();
-    return _loading ??= _load(timeout).whenComplete(() => _loading = null);
+    if (_loading == null && _liveAndUnchanged()) return Future<void>.value();
+    return _startLoad(const Duration(seconds: 3));
   }
 
-  Future<void> _load(Duration timeout) async {
+  Future<void> retry() =>
+      _startLoad(const Duration(seconds: 15), refreshHistory: true);
+
+  bool _liveAndUnchanged() {
+    final room = journal;
+    if (!ready || _timeline == null || _attaching != null || room == null) {
+      return false;
+    }
+    try {
+      // Local state only; anything unexpected takes the validating path.
+      return room.encrypted &&
+          PersonalPrivacy.isJournal(room) &&
+          !room
+              .getParticipants(const [Membership.join, Membership.invite])
+              .any((member) => member.id != client.userID) &&
+          _journalTrustFingerprint == _trustFingerprint();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _startLoad(Duration timeout, {bool refreshHistory = false}) {
+    _checkActive();
+    return _loading ??= _load(
+      timeout,
+      refreshHistory: refreshHistory,
+    ).whenComplete(() => _loading = null);
+  }
+
+  Future<void> _load(Duration timeout, {required bool refreshHistory}) async {
     var phase = PersonalFailurePhase.localStorage;
     try {
       await _ensureLocal();
@@ -413,11 +485,19 @@ class PersonalClient extends ChangeNotifier {
         throw StateError('Private journal is not configured');
       }
       phase = PersonalFailurePhase.journalValidation;
+      if (!refreshHistory && ready && _timeline != null) {
+        // Opening a UI surface must not detach an already-live timeline or
+        // paginate the journal again. Keep membership and device trust checks.
+        await _validate();
+        _checkActive();
+        if (_journalTrustFingerprint != _trustFingerprint()) await _replay();
+        return;
+      }
       await _attach();
     } catch (error) {
       _setFailure(error, phase);
     }
-    notifyListeners();
+    _notifyIfChanged();
   }
 
   Future<void> connect() {
@@ -465,7 +545,7 @@ class PersonalClient extends ChangeNotifier {
     if (!_journalReady) {
       throw StateError('Journal synchronization is incomplete');
     }
-    notifyListeners();
+    _notifyIfChanged();
     await command('worker.pairing', 'worker', {
       'schema': personalSchemaVersion,
     });
@@ -502,7 +582,16 @@ class PersonalClient extends ChangeNotifier {
     } finally {
       _attaching = null;
     }
+    // Readiness flips after the final replay pass of a successful attach.
+    _notifyIfChanged();
   }
+
+  // Attach loads the resume point plus this margin before it: a still-fresh
+  // heartbeat, and results whose journal order could differ slightly. Its
+  // results are replayed again, which is idempotent.
+  static const _resumeMargin = WorkerReadiness.freshFor;
+  // After a full replay only the part after the resume point stays in memory.
+  static const _retainedJournalEvents = 500;
 
   Future<void> _attachOnce() async {
     final measurement = PersonalPerformanceProbe.enabled
@@ -514,7 +603,76 @@ class PersonalClient extends ChangeNotifier {
     final room = journal!;
     await room.setPushRuleState(PushRuleState.dontNotify);
     _checkActive();
+    final saved = await _replica!.journalWatermark(room.id);
+    _checkActive();
     _timeline?.cancelSubscriptions();
+    var timeline = await _openJournalTimeline(room);
+    _timeline = timeline;
+    _watchSessionKeys(room);
+    _acceptedResultEvents.clear();
+    _dueReminders.clear();
+    _heldEvents.clear();
+    _unavailableHeld.clear();
+    _rescanJournal = true;
+    // Reconstruct durable history back to the last applied position (or to
+    // the beginning: new or migrated store, unknown or vanished position)
+    // before replaying unsent commands.
+    var pages = await _pageBack(timeline, saved);
+    _checkActive();
+    final resumed = saved != null && _indexOf(timeline, saved.eventId) >= 0;
+    _watermark = resumed ? saved : null;
+    if (resumed) await _loadHeld(room, timeline, saved);
+    _checkActive();
+    // The first pass must see the stored device list, not an empty one.
+    await client.userDeviceKeysLoading;
+    _checkActive();
+    _clearFailure();
+    await _replay();
+    _checkActive();
+    final anchor = _watermark;
+    if (problem == null &&
+        anchor != null &&
+        timeline.events.length > _retainedJournalEvents) {
+      Timeline? bounded;
+      try {
+        bounded = await _openJournalTimeline(room);
+        pages += await _pageBack(bounded, anchor);
+      } catch (_) {
+        // Bounding is an optimization: keep the complete timeline instead.
+      }
+      _checkActive();
+      if (bounded != null && _indexOf(bounded, anchor.eventId) >= 0) {
+        // Held events leaving memory stay reachable for trust/claim changes.
+        final kept = {for (final event in bounded.events) event.eventId};
+        final held = anchor.held.toSet();
+        for (final event in timeline.events) {
+          if (held.contains(event.eventId) && !kept.contains(event.eventId)) {
+            _heldEvents[event.eventId] = event;
+          }
+        }
+        timeline.cancelSubscriptions();
+        _timeline = timeline = bounded;
+        _rescanJournal = true;
+        await _replay();
+        _checkActive();
+      } else {
+        bounded?.cancelSubscriptions();
+      }
+    }
+    _journalReady = problem == null;
+    if (ready) await stagePending();
+    if (measurement != null) {
+      PersonalPerformanceProbe.emit('journal_attach', {
+        'elapsed_ms': measurement.elapsedMilliseconds,
+        'events': timeline.events.length,
+        'pages': pages,
+        'resumed': resumed,
+        'held': _watermark?.held.length ?? 0,
+      });
+    }
+  }
+
+  Future<Timeline> _openJournalTimeline(Room room) async {
     final timeline = await room.getTimeline(
       onUpdate: () {
         // Initial pagination is replayed once after all pages have arrived.
@@ -527,11 +685,17 @@ class PersonalClient extends ChangeNotifier {
       timeline.cancelSubscriptions();
       rethrow;
     }
-    _timeline = timeline;
-    _acceptedResultEvents.clear();
-    // Reconstruct durable history before replaying unsent commands.
+    return timeline;
+  }
+
+  static int _indexOf(Timeline timeline, String eventId) =>
+      timeline.events.indexWhere((event) => event.eventId == eventId);
+
+  /// Pages history until [anchor] and the resume margin before it are loaded,
+  /// or to the beginning when there is no anchor or it is never found.
+  Future<int> _pageBack(Timeline timeline, JournalWatermark? anchor) async {
     var pages = 0;
-    while (timeline.canRequestHistory) {
+    while (timeline.canRequestHistory && !_resumable(timeline, anchor)) {
       _checkActive();
       final before = timeline.events.map((event) => event.eventId).toSet();
       await timeline.requestHistory(historyCount: 100);
@@ -546,43 +710,135 @@ class PersonalClient extends ChangeNotifier {
         throw StateError('Journal history exceeds safe pagination limit');
       }
     }
+    return pages;
+  }
+
+  static bool _resumable(Timeline timeline, JournalWatermark? anchor) =>
+      anchor != null &&
+      _indexOf(timeline, anchor.eventId) >= 0 &&
+      timeline.events.last.originServerTs.isBefore(
+        anchor.originServerTs.subtract(_resumeMargin),
+      );
+
+  // Held ids re-read by id per attach, and how many at once: a long held list
+  // must not delay readiness. Ids left unread stay held for a later attach
+  // (or a key arrival); the newest half is always read, the rest sampled.
+  static const _heldReadsPerAttach = 32;
+  static const _heldReadConcurrency = 4;
+  // A held id the server reports missing on this many attaches in a row is
+  // dropped; a single miss may be a server hiccup or a not yet backfilled event.
+  static const _heldMissingLimit = 3;
+  static const _heldMissingKey = 'journal:heldMissing';
+  static final _heldSample = math.Random();
+
+  /// Held events outside the loaded window are re-read by id: they may have
+  /// become decryptable, trusted or claimed since the watermark was stored.
+  Future<void> _loadHeld(
+    Room room,
+    Timeline timeline,
+    JournalWatermark watermark,
+  ) async {
+    if (watermark.held.isEmpty) return;
+    final stored = await _store!.get('$_prefix$_heldMissingKey');
     _checkActive();
-    _clearFailure();
-    await _replay();
-    _checkActive();
-    _journalReady = problem == null;
-    if (ready) await stagePending();
-    if (measurement != null) {
-      PersonalPerformanceProbe.emit('journal_attach', {
-        'elapsed_ms': measurement.elapsedMilliseconds,
-        'events': timeline.events.length,
-        'pages': pages,
-      });
+    final counts = stored?['counts'];
+    final misses = <String, int>{
+      if (counts is Map)
+        for (final entry in counts.entries)
+          if (entry.key is String && entry.value is int)
+            entry.key as String: entry.value as int,
+    };
+    final before = Map.of(misses);
+    final held = watermark.held.toSet();
+    misses.removeWhere((id, _) => !held.contains(id));
+    final loaded = {for (final event in timeline.events) event.eventId};
+    final unread = [
+      for (final id in watermark.held.reversed)
+        if (!loaded.contains(id)) id,
+    ];
+    final chosen = unread.length <= _heldReadsPerAttach
+        ? unread
+        : [
+            ...unread.take(_heldReadsPerAttach ~/ 2),
+            ...(unread.skip(_heldReadsPerAttach ~/ 2).toList()
+                  ..shuffle(_heldSample))
+                .take(_heldReadsPerAttach - _heldReadsPerAttach ~/ 2),
+          ];
+    for (var i = 0; i < chosen.length; i += _heldReadConcurrency) {
+      _checkActive();
+      final slice = chosen.sublist(
+        i,
+        math.min(i + _heldReadConcurrency, chosen.length),
+      );
+      final reads = await Future.wait(slice.map((id) => _readHeld(room, id)));
+      _checkActive();
+      for (var j = 0; j < slice.length; j++) {
+        final id = slice[j];
+        final (event, missing) = reads[j];
+        if (event != null) {
+          _heldEvents[id] = event;
+          misses.remove(id);
+        } else if (missing) {
+          final count = (misses[id] ?? 0) + 1;
+          if (count >= _heldMissingLimit) {
+            // The homeserver no longer has it; a full replay could not apply
+            // it either.
+            _unavailableHeld.add(id);
+            misses.remove(id);
+          } else {
+            misses[id] = count;
+          }
+        }
+      }
+    }
+    if (!mapEquals(before, misses)) {
+      await _store!.put('$_prefix$_heldMissingKey', {'counts': misses});
+      _checkActive();
     }
   }
 
-  bool _trusted(Event event) {
-    if (event.senderId != client.userID ||
-        event.originalSource?.type != EventTypes.Encrypted) {
-      return false;
+  /// One held event by id: (event, false), (null, true) when the server
+  /// reports it missing, (null, false) when offline or transient.
+  Future<(Event?, bool)> _readHeld(Room room, String id) async {
+    try {
+      var event = await room.getEventById(id);
+      if (event == null) return (null, true);
+      if (event.type == EventTypes.Encrypted && client.encryptionEnabled) {
+        event = await client.encryption?.decryptRoomEvent(event) ?? event;
+      }
+      return (event, false);
+    } catch (_) {
+      // Offline or transient: the id stays held and is read again later.
+      return (null, false);
     }
-    final key = event.originalSource?.content['sender_key'];
-    return client.userDeviceKeys[client.userID]?.deviceKeys.values.any(
-          (d) => d.verified && d.curve25519Key == key,
-        ) ??
-        false;
   }
 
-  String _trustFingerprint() {
-    final keys =
-        client.userDeviceKeys[client.userID]?.deviceKeys.values
-            .where((device) => device.verified)
-            .map((device) => device.curve25519Key)
-            .toList() ??
-        [];
-    keys.sort((a, b) => (a ?? '').compareTo(b ?? ''));
-    return jsonEncode([client.userID, keys]);
+  /// Room keys for held undecrypted events outside the timeline trigger a
+  /// replay, whose trust capture decrypts them (the SDK timeline already
+  /// re-decrypts its own events and reports them through onUpdate).
+  void _watchSessionKeys(Room room) {
+    _sessionKeys?.cancel();
+    _sessionKeys = room.onSessionKeyReceived.stream.listen((sessionId) {
+      if (_disposed || _attaching != null) return;
+      final waiting = _heldEvents.values.any(
+        (event) =>
+            event.type == EventTypes.Encrypted &&
+            MegolmTrustSnapshot.sessionIdOf(event) == sessionId,
+      );
+      if (waiting) unawaited(_replay());
+    });
   }
+
+  /// Journal events whose trust matters to the client: results and worker
+  /// heartbeats (commands are the worker's business).
+  static bool _journalSignal(Event event) {
+    if (event.type != personalEventType) return false;
+    final kind = event.content['kind'];
+    return kind is String &&
+        (kind.endsWith('.result') || kind == 'worker.heartbeat');
+  }
+
+  String _trustFingerprint() => MegolmTrustSnapshot.fingerprintOf(client);
 
   Future<void> _replay() async {
     if (_timeline == null || _replica == null || _disposed) return;
@@ -600,25 +856,7 @@ class PersonalClient extends ChangeNotifier {
       _checkActive();
       do {
         _replayAgain = false;
-        workerReadiness = null;
-        _journalTrustFingerprint = _trustFingerprint();
-        final batch = JournalReplayBatch(
-          _timeline!.events,
-          acceptedEventIds: _acceptedResultEvents,
-          trusted: _trusted,
-        );
-        final heartbeat = batch.heartbeat;
-        if (heartbeat != null) {
-          workerReadiness = WorkerReadiness.fromPayload(
-            Map<String, dynamic>.from(heartbeat.$2.payload),
-            heartbeat.$1.originServerTs,
-          );
-        }
-        for (final (event, op) in batch.results) {
-          _checkActive();
-          await _replica!.acceptResult(op);
-          _acceptedResultEvents.add(event.eventId);
-        }
+        await _replayPass();
       } while (_replayAgain && !_disposed);
     } catch (error) {
       _setFailure(error, PersonalFailurePhase.journalReplay);
@@ -626,36 +864,200 @@ class PersonalClient extends ChangeNotifier {
       _replaying = false;
       _replayCompletion = null;
       completion.complete();
-      notifyListeners();
+      _notifyIfChanged();
     }
   }
 
-  List<Event> get dueReminderEvents =>
-      _timeline?.events.where((event) {
-        if (event.type != personalEventType ||
-            event.redacted ||
-            !_trusted(event)) {
-          return false;
-        }
-        final payload = event.content['payload'];
-        return event.content['kind'] == 'reminder.result' &&
-            payload is Map &&
-            payload['due'] == true &&
-            payload['state'] == 'done' &&
-            reminders[event.content['entityId']]?['state'] == 'done';
-      }).toList() ??
-      [];
+  /// Replays the events after the resume point plus the held ones. After an
+  /// attach or a device-trust change it rescans every loaded event instead.
+  /// The watermark advances only over events applied or settled for good.
+  ///
+  /// One trust snapshot per pass (verified devices at its start, sessions of
+  /// its events): the batch and the settlement below see the same verdicts, so
+  /// a result is never settled as applied without having been applied (M1).
+  Future<void> _replayPass() async {
+    debugReplayPasses++;
+    final timeline = _timeline!;
+    final room = journal!;
+    final trust = MegolmTrustSnapshot.devices(client);
+    final rescan =
+        _rescanJournal || trust.fingerprint != _journalTrustFingerprint;
+    _rescanJournal = false;
+    _journalTrustFingerprint = trust.fingerprint;
+    var anchor = _watermark;
+    if (anchor != null && _indexOf(timeline, anchor.eventId) < 0) {
+      // A limited sync dropped the resume point from the live timeline: page
+      // back across the gap instead of skipping the events inside it.
+      await _pageBack(timeline, anchor);
+      _checkActive();
+      if (_indexOf(timeline, anchor.eventId) < 0) anchor = _watermark = null;
+    }
+    // Newest first; events arriving while this pass awaits wait for the next.
+    final events = List<Event>.of(timeline.events);
+    final anchorIndex = anchor == null
+        ? -1
+        : events.indexWhere((event) => event.eventId == anchor!.eventId);
+    if (anchorIndex < 0) anchor = null;
+    final newer = anchor == null ? events : events.sublist(0, anchorIndex);
+    final heldIds = anchor?.held ?? const <String>[];
+    final held = <String, Event>{};
+    if (heldIds.isNotEmpty) {
+      final wanted = heldIds.toSet();
+      for (final event in events) {
+        if (wanted.contains(event.eventId)) held[event.eventId] = event;
+      }
+      for (final id in heldIds) {
+        final fetched = _heldEvents[id];
+        if (fetched != null) held.putIfAbsent(id, () => fetched);
+      }
+    }
+    final replayed = rescan ? events : newer;
+    await trust.capture(room, [
+      ...replayed,
+      ...held.values,
+      ..._dueReminders.values,
+    ], needsProof: _journalSignal);
+    _checkActive();
+    _trust = trust;
+    // Undecrypted events whose room keys are present now replay decrypted.
+    final redecrypted = trust.redecrypted;
+    Event latest(Event event) => redecrypted[event.eventId] ?? event;
+    for (final id in List.of(held.keys)) {
+      held[id] = latest(held[id]!);
+      if (_heldEvents.containsKey(id)) _heldEvents[id] = held[id]!;
+    }
+    final unique = <String>{};
+    final batch = JournalReplayBatch(
+      [
+        ...replayed.map(latest),
+        ...held.values,
+      ].where((event) => unique.add(event.eventId)),
+      acceptedEventIds: _acceptedResultEvents,
+      trusted: trust.trusts,
+    );
+    // A rescan recomputes readiness, so a revoked device's heartbeat drops.
+    if (rescan) workerReadiness = null;
+    final heartbeat = batch.heartbeat;
+    final current = workerReadiness;
+    if (heartbeat != null &&
+        (current == null ||
+            heartbeat.$1.originServerTs.isAfter(current.receivedAt))) {
+      workerReadiness = WorkerReadiness.fromPayload(
+        Map<String, dynamic>.from(heartbeat.$2.payload),
+        heartbeat.$1.originServerTs,
+      );
+    }
+    for (final (event, op) in batch.results) {
+      _checkActive();
+      await _replica!.acceptResult(op);
+      _acceptedResultEvents.add(event.eventId);
+      _indexDueReminder(event, op);
+    }
+    // An applied due reminder stays held until its alert is claimed, so the
+    // alert survives a restart between replay and presentation.
+    final pendingAlerts = <String>{};
+    for (final entry in List.of(_dueReminders.entries)) {
+      if (reminders[entry.key]?['state'] != 'done') continue;
+      if (await _reminderClaimed(entry.key)) continue;
+      pendingAlerts.add(entry.value.eventId);
+    }
+    _checkActive();
+    // Without an anchor the loaded timeline must reach the journal's start;
+    // otherwise keep full replays (and no watermark) as before.
+    if (anchor == null &&
+        (events.isEmpty || events.last.type != EventTypes.RoomCreate)) {
+      return;
+    }
+    if (_trustFingerprint() != trust.fingerprint) {
+      // Devices changed while this pass awaited: rescan with the new set
+      // before the watermark moves over anything.
+      _rescanJournal = true;
+      _replayAgain = true;
+      return;
+    }
+    JournalSettlement settle(Event event) => JournalReplayBatch.settle(
+      latest(event),
+      userId: client.userID,
+      trust: trust,
+      pendingAlert: (event) => pendingAlerts.contains(event.eventId),
+    );
+    final resolved = <String>{
+      for (final id in heldIds)
+        if (_unavailableHeld.contains(id) ||
+            (held[id] != null &&
+                settle(held[id]!) == JournalSettlement.settled))
+          id,
+    };
+    final next = JournalWatermark.advance(
+      roomId: room.id,
+      previous: anchor,
+      newer: [
+        for (final event in newer.reversed)
+          JournalPosition(event.eventId, event.originServerTs, settle(event)),
+      ],
+      resolved: resolved,
+    );
+    if (next == null) return;
+    if (!next.sameAs(anchor)) {
+      // Serialized behind the commits above: never durable before them.
+      await _replica!.saveJournalWatermark(next);
+      _checkActive();
+    }
+    _watermark = next;
+    _heldEvents.removeWhere((id, _) => !next.held.contains(id));
+    _unavailableHeld.removeAll(resolved);
+  }
+
+  void _indexDueReminder(Event event, PersonalOperation op) {
+    if (op.kind != 'reminder.result' ||
+        op.payload['due'] != true ||
+        op.payload['state'] != 'done') {
+      return;
+    }
+    final previous = _dueReminders[op.entityId];
+    if (previous != null && JournalReplayBatch.compare(previous, event) >= 0) {
+      return;
+    }
+    _dueReminders[op.entityId] = event;
+    // A new alert must wake listeners even when the result was already seen.
+    if (!_claimedReminders.contains(op.entityId)) _alertRevision++;
+  }
+
+  Future<bool> _reminderClaimed(String entity) async {
+    if (_claimedReminders.contains(entity)) return true;
+    if (await _store!.get('${_prefix}reminderAlert:$entity') == null) {
+      return false;
+    }
+    _claimedReminders.add(entity);
+    return true;
+  }
+
+  /// Unclaimed alerts of due reminders, from an index kept by replay rather
+  /// than a walk over the journal on every change.
+  List<Event> get dueReminderEvents => [
+    for (final entry in _dueReminders.entries)
+      if (!_claimedReminders.contains(entry.key) &&
+          !entry.value.redacted &&
+          reminders[entry.key]?['state'] == 'done' &&
+          (_trust?.trusts(entry.value) ?? false))
+        entry.value,
+  ];
 
   final _claimingAlerts = <String>{};
   Future<bool> claimReminderAlert(Event event) async {
     await _ensureLocal();
-    final key = '${_prefix}reminderAlert:${event.content['entityId']}';
+    final entity = event.content['entityId'];
+    final key = '${_prefix}reminderAlert:$entity';
     if (!_claimingAlerts.add(key)) return false;
     try {
-      if (await _store!.get(key) != null) return false;
+      if (await _store!.get(key) != null) {
+        if (entity is String) _claimedReminders.add(entity);
+        return false;
+      }
       await _store!.put(key, {
         'shownAt': DateTime.now().toUtc().toIso8601String(),
       });
+      if (entity is String) _claimedReminders.add(entity);
       return true;
     } finally {
       _claimingAlerts.remove(key);
@@ -673,6 +1075,7 @@ class PersonalClient extends ChangeNotifier {
       await _store!.delete(
         '${_prefix}reminderAlert:${event.content['entityId']}',
       );
+      _claimedReminders.remove(event.content['entityId']);
       rethrow;
     }
   }
@@ -723,6 +1126,269 @@ class PersonalClient extends ChangeNotifier {
 
   String transcriptId(Event e) =>
       'transcript:${sha256.convert(utf8.encode(source(e).key))}';
+
+  // ── Automatic transcription (2026-10-17 wave, A-AUTOTRANS) ──────────────
+  // The synced TranscriptionPolicy (journal metadata) is shared with the
+  // worker. Automatic work needs BOTH that policy and the worker operator
+  // switch, which the worker reports as heartbeat `autoTranscription: scan`.
+  // Local bridge rooms are scanned by the worker; cloud rooms are invisible
+  // to that scan, so a visible message there is requested by this device on
+  // the policy's behalf. Old workers (no field) ignore `origin: auto` and
+  // would run such a request as an unlimited manual job: never ask them.
+
+  /// How long the panel shows "Transcribing…" while no job is visible.
+  static const autoTranscriptPendingWindow = Duration(minutes: 3);
+
+  /// Grace period for the worker's own scan of local bridge rooms before
+  /// this device asks instead (idempotent: same entity id, conflict-safe).
+  static const autoTranscriptCatchUpDelay = Duration(minutes: 2);
+
+  Object? _policyValue;
+  TranscriptionPolicy _policy = TranscriptionPolicy.defaults;
+  final _autoRequested = <String>{};
+  final _autoTimers = <String, Timer>{};
+  Timer? _autoPendingExpiry;
+  DateTime? _autoPendingExpiresAt;
+  DateTime? _autoBaseline;
+  Future<void>? _autoBaselineLoading;
+
+  /// True when the worker reports its operator switch on. Only then does
+  /// this device show automatic progress or send `origin: auto` requests.
+  bool get autoTranscriptionAvailable =>
+      workerReadiness?.autoTranscription == 'scan';
+
+  /// A policy that was never switched on explicitly has no `enabledAt`. Its
+  /// window then starts when this device first saw it together with a
+  /// scanning worker (kept in the local encrypted store, never journaled, so
+  /// devices do not conflict; a later device only narrows its own window).
+  /// Without it, an upgrade would request every voice note of the last 24 h.
+  DateTime? _autoEnabledAt(TranscriptionPolicy policy) =>
+      policy.enabledAt ?? _autoBaseline;
+
+  /// Completes once the window start for a policy without `enabledAt` is
+  /// known; records it if this device never saw one.
+  @visibleForTesting
+  Future<void> loadAutoTranscriptionBaseline() {
+    _loadAutoBaseline();
+    return _autoBaselineLoading ?? Future<void>.value();
+  }
+
+  void _loadAutoBaseline() {
+    if (_autoBaseline != null || _autoBaselineLoading != null || _disposed) {
+      return;
+    }
+    final seen = DateTime.now().toUtc();
+    final key = '${_prefix}autoTranscriptionBaseline';
+    _autoBaselineLoading = () async {
+      DateTime? baseline;
+      try {
+        await _ensureLocal();
+        final store = _store;
+        if (store != null) {
+          final stored = await store.get(key);
+          final since = stored?['since'];
+          baseline = since is String ? DateTime.tryParse(since)?.toUtc() : null;
+          if (baseline == null) {
+            await store.put(key, {'since': seen.toIso8601String()});
+          }
+        }
+      } catch (_) {
+        // Storage unavailable: this session starts its window now. A later
+        // start only narrows it, never widens it.
+      }
+      if (_disposed) return;
+      _autoBaseline = baseline ?? seen;
+      notifyListeners();
+    }();
+  }
+
+  /// Synced policy; absent = automatic for incoming voice/round messages.
+  TranscriptionPolicy get transcriptionPolicy {
+    final value = values[transcriptionPolicyEntity];
+    if (!identical(value, _policyValue)) {
+      _policyValue = value;
+      _policy = TranscriptionPolicy.fromValue(value);
+    }
+    return _policy;
+  }
+
+  /// Saves the policy as private journal metadata (coalesced while pending).
+  Future<void> setTranscriptionPolicy(TranscriptionPolicy policy) =>
+      put(transcriptionPolicyEntity, policy.toJson());
+
+  /// The synced default transcription language (null = automatic detection).
+  String? get transcriptionDefaultLanguage =>
+      transcriptionPolicy.defaultLanguage;
+
+  /// Voice notes and Telegram round videos that may be sent for
+  /// transcription; null for anything else, including protected media.
+  static AutoTranscriptionKind? autoTranscriptionKind(Event e) {
+    if (e.redacted ||
+        e.type != EventTypes.Message ||
+        !e.eventId.startsWith(r'$') ||
+        !RoundMediaPolicy.fromContent(e.content).canTranscribe) {
+      return null;
+    }
+    if (RoundVideoDescriptor.fromContent(e.content) != null) {
+      return AutoTranscriptionKind.round;
+    }
+    if (e.messageType == MessageTypes.Audio &&
+        e.content.containsKey('org.matrix.msc3245.voice')) {
+      return AutoTranscriptionKind.voice;
+    }
+    return null;
+  }
+
+  /// Why [e] is not transcribed automatically (see autoTranscriptionBlock).
+  /// Extra codes: `worker_off` (worker switch off or an old worker),
+  /// `disappearing` (the chat has a disappearing-message timer) and
+  /// `before_enabled` while this device's window start is not known yet.
+  String? autoTranscriptionBlockFor(Event e, DateTime now) {
+    if (!autoTranscriptionAvailable) return 'worker_off';
+    final room = e.room;
+    // Room state is the chat's current setting; fail closed on any value
+    // other than an explicit "off".
+    if (disappearingTimerLimits(
+      room.getState(beeperDisappearingTimerKey)?.content,
+    )) {
+      return 'disappearing';
+    }
+    final policy = transcriptionPolicy;
+    final enabledAt = _autoEnabledAt(policy);
+    if (policy.auto && enabledAt == null) return 'before_enabled';
+    final network = networkOf(room);
+    String? group;
+    for (final candidate in groups) {
+      if (candidate.members.any((member) => member.roomId == room.id)) {
+        group = candidate.id;
+        break;
+      }
+    }
+    final duration = e.content['info'] is Map
+        ? (e.content['info'] as Map)['duration']
+        : null;
+    return autoTranscriptionBlock(
+      policy.enabledAt == null
+          ? policy.copyWith(enabledAt: () => enabledAt)
+          : policy,
+      AutoTranscriptionCandidate(
+        kind: autoTranscriptionKind(e),
+        network: network,
+        roomId: room.id,
+        outgoing: OwnSenderResolver.of(client).isOwnEvent(e),
+        timestamp: e.originServerTs,
+        durationMs: duration is int && duration >= 0 ? duration : null,
+        chatMetadata: values['org:${room.id}'],
+        personMetadata: group == null ? null : values['org:person:$group'],
+        networkMetadata: values['network-policy:$network'],
+      ),
+      now: now,
+    );
+  }
+
+  /// True while an automatic transcription for [e] is expected but no job is
+  /// visible yet, so the panel shows "Transcribing…". Requires the policy,
+  /// a fresh heartbeat of a worker whose operator switch is on
+  /// ([autoTranscriptionAvailable]), an incoming eligible message, no job and
+  /// a message younger than [autoTranscriptPendingWindow]. Also schedules
+  /// the catch-up request for a visible message the worker did not pick up.
+  bool autoTranscriptPending(Event e) {
+    if (!ready ||
+        !transcriptionPolicy.auto ||
+        !workerOnline ||
+        !autoTranscriptionAvailable) {
+      return false;
+    }
+    if (transcriptionPolicy.enabledAt == null && _autoBaseline == null) {
+      _loadAutoBaseline();
+      return false;
+    }
+    final id = transcriptId(e);
+    if (transcripts.containsKey(id) || _autoRequested.contains(id)) {
+      return false;
+    }
+    final now = DateTime.now();
+    if (autoTranscriptionBlockFor(e, now) != null) return false;
+    final age = now.difference(e.originServerTs);
+    _scheduleAutoCatchUp(
+      e,
+      id,
+      // Give the scanning worker time to pick up local-bridge messages
+      // first; cloud rooms are asked for right away.
+      e.room.id.endsWith(':beeper.local')
+          ? autoTranscriptCatchUpDelay - age
+          : Duration.zero,
+    );
+    if (age >= autoTranscriptPendingWindow) return false;
+    _armAutoPendingExpiry(e.originServerTs.add(autoTranscriptPendingWindow));
+    return true;
+  }
+
+  /// Panels re-read [autoTranscriptPending] only on notification: one timer
+  /// for the earliest window end keeps an expired spinner from sticking.
+  void _armAutoPendingExpiry(DateTime at) {
+    final armed = _autoPendingExpiresAt;
+    if (_disposed || (armed != null && !at.isBefore(armed))) return;
+    _autoPendingExpiry?.cancel();
+    _autoPendingExpiresAt = at;
+    final wait = at.difference(DateTime.now());
+    _autoPendingExpiry = Timer(
+      (wait.isNegative ? Duration.zero : wait) +
+          const Duration(milliseconds: 50),
+      () {
+        _autoPendingExpiry = null;
+        _autoPendingExpiresAt = null;
+        notifyListeners();
+      },
+    );
+  }
+
+  /// Cancels pending catch-up and expiry timers (dispose and tests).
+  void cancelAutoTranscriptionTimers() {
+    for (final timer in _autoTimers.values) {
+      timer.cancel();
+    }
+    _autoTimers.clear();
+    _autoPendingExpiry?.cancel();
+    _autoPendingExpiry = null;
+    _autoPendingExpiresAt = null;
+  }
+
+  void _scheduleAutoCatchUp(Event e, String id, Duration wait) {
+    if (_disposed || _autoTimers.containsKey(id)) return;
+    // Never inside build: the request notifies listeners.
+    _autoTimers[id] = Timer(wait.isNegative ? Duration.zero : wait, () {
+      _autoTimers.remove(id);
+      unawaited(_autoCatchUp(e, id));
+    });
+  }
+
+  Future<void> _autoCatchUp(Event e, String id) async {
+    // Re-checked when the timer fires: the switch may have gone off since.
+    if (_disposed ||
+        !ready ||
+        !workerOnline ||
+        !autoTranscriptionAvailable ||
+        transcripts.containsKey(id)) {
+      return;
+    }
+    if (autoTranscriptionBlockFor(e, DateTime.now()) != null ||
+        !_autoRequested.add(id)) {
+      return;
+    }
+    try {
+      await _requestTranscript(
+        e,
+        language: transcriptionPolicy.defaultLanguage,
+        origin: TranscriptionOrigin.auto,
+      );
+    } catch (_) {
+      // Keep the id: an automatic request is never retried in a loop. The
+      // panel falls back to its manual button.
+    }
+    notifyListeners();
+  }
+
   Future<TranscriptCancellation> cancelTranscript(String id) async {
     await _ensureLocal();
     _installSync();
@@ -731,7 +1397,14 @@ class PersonalClient extends ChangeNotifier {
     return result;
   }
 
-  Future<void> transcribe(Event e, {String? language}) async {
+  Future<void> transcribe(Event e, {String? language}) =>
+      _requestTranscript(e, language: language);
+
+  Future<void> _requestTranscript(
+    Event e, {
+    String? language,
+    TranscriptionOrigin origin = TranscriptionOrigin.manual,
+  }) async {
     final round = RoundVideoDescriptor.fromContent(e.content);
     if (e.redacted ||
         !e.eventId.startsWith(r'$') ||
@@ -747,12 +1420,13 @@ class PersonalClient extends ChangeNotifier {
     final id = transcriptId(e);
     final existing = transcripts[id];
     if (existing != null &&
-        {
-          JobState.queued,
-          JobState.processing,
-          JobState.waitingKeys,
-          JobState.waitingSync,
-        }.contains(existing.state)) {
+        (origin == TranscriptionOrigin.auto ||
+            {
+              JobState.queued,
+              JobState.processing,
+              JobState.waitingKeys,
+              JobState.waitingSync,
+            }.contains(existing.state))) {
       return;
     }
     final job = TranscriptionJob(
@@ -760,6 +1434,7 @@ class PersonalClient extends ChangeNotifier {
       source: source(e),
       state: JobState.waitingSync,
       language: language,
+      origin: origin,
     );
     await _replica!.stageCommand(
       'transcript.request',
@@ -907,7 +1582,9 @@ class PersonalClient extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     if (identical(_instances[client], this)) _instances.remove(client);
+    cancelAutoTranscriptionTimers();
     _sync?.cancel();
+    _sessionKeys?.cancel();
     _timeline?.cancelSubscriptions();
     _timeline = null;
     _store?.close();

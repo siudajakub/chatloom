@@ -25,6 +25,8 @@ class _Client implements Client {
   @override
   final onSync = CachedStreamController<SyncUpdate>();
   @override
+  Future<dynamic>? get userDeviceKeysLoading => null;
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -41,6 +43,7 @@ class _Store implements PersonalStore {
         if (entry.key.startsWith(prefix)) entry.key: entry.value,
     };
   }
+
   @override
   Future<Map<String, dynamic>?> get(String key) async => records[key];
   @override
@@ -89,6 +92,8 @@ class _Journal implements Room {
   final publishedTransactions = <String>[];
   final publishedWithRetry = <bool>[];
   final publishedWithLocalEcho = <bool>[];
+  @override
+  final onSessionKeyReceived = CachedStreamController<String>();
 
   Future<List<User>> _participants() async {
     participantReads++;
@@ -100,13 +105,12 @@ class _Journal implements Room {
       await participantGate;
       return trusted
           ? []
-          : [
-              User('@untrusted:example.org', room: this, membership: 'join'),
-            ];
+          : [User('@untrusted:example.org', room: this, membership: 'join')];
     } finally {
       activeParticipantReads--;
     }
   }
+
   @override
   bool get encrypted => valid;
   @override
@@ -120,6 +124,10 @@ class _Journal implements Room {
         );
       case #requestParticipants:
         return _participants();
+      case #getParticipants:
+        return trusted
+            ? <User>[]
+            : [User('@untrusted:example.org', room: this, membership: 'join')];
       case #setPushRuleState:
         return Future<void>.value();
       case #getTimeline:
@@ -144,40 +152,62 @@ class _Journal implements Room {
 }
 
 void main() {
-  test('opening multiple surfaces reuses the active journal timeline', () async {
-    final client = _Client();
-    final personal = PersonalClient.forTesting(client, openStore: () async => _Store());
-    addTearDown(personal.dispose);
-    addTearDown(client.onSync.close);
-    final journal = _Journal();
-    personal.journal = journal;
-    await personal.load();
-    var changes = 0;
-    personal.addListener(() => changes++);
-    await Future.wait(List.generate(4, (_) => personal.load()));
-    await personal.load();
-    expect(personal.ready, isTrue);
-    expect(journal.timelineReads, 1);
-    expect(changes, 0);
-    await personal.retry();
-    expect(journal.timelineReads, 2, reason: 'Explicit retry still reconstructs history');
-  });
+  test(
+    'opening multiple surfaces reuses the active journal timeline',
+    () async {
+      final client = _Client();
+      final personal = PersonalClient.forTesting(
+        client,
+        openStore: () async => _Store(),
+      );
+      addTearDown(personal.dispose);
+      addTearDown(client.onSync.close);
+      final journal = _Journal();
+      personal.journal = journal;
+      await personal.load();
+      var changes = 0;
+      personal.addListener(() => changes++);
+      final participants = journal.participantReads;
+      await Future.wait(List.generate(4, (_) => personal.load()));
+      await personal.load();
+      expect(personal.ready, isTrue);
+      expect(journal.timelineReads, 1);
+      expect(changes, 0);
+      expect(
+        journal.participantReads,
+        participants,
+        reason: 'Reusing a live journal needs no participants request',
+      );
+      await personal.retry();
+      expect(
+        journal.timelineReads,
+        2,
+        reason: 'Explicit retry still reconstructs history',
+      );
+    },
+  );
 
-  test('reused load still validates membership before returning ready', () async {
-    final client = _Client();
-    final personal = PersonalClient.forTesting(client, openStore: () async => _Store());
-    addTearDown(personal.dispose);
-    addTearDown(client.onSync.close);
-    final journal = _Journal();
-    personal.journal = journal;
-    await personal.load();
-    journal.trusted = false;
-    await personal.load();
-    expect(personal.ready, isFalse);
-    expect(personal.syncFailure, PrivateSyncFailure.membershipUntrusted);
-    expect(journal.timelineReads, 1);
-    expect(journal.publishes, 0);
-  });
+  test(
+    'reused load still validates membership before returning ready',
+    () async {
+      final client = _Client();
+      final personal = PersonalClient.forTesting(
+        client,
+        openStore: () async => _Store(),
+      );
+      addTearDown(personal.dispose);
+      addTearDown(client.onSync.close);
+      final journal = _Journal();
+      personal.journal = journal;
+      await personal.load();
+      journal.trusted = false;
+      await personal.load();
+      expect(personal.ready, isFalse);
+      expect(personal.syncFailure, PrivateSyncFailure.membershipUntrusted);
+      expect(journal.timelineReads, 1);
+      expect(journal.publishes, 0);
+    },
+  );
 
   test('sync bursts keep one membership validation in flight', () async {
     final client = _Client();
@@ -207,31 +237,34 @@ void main() {
     expect(personal.ready, isTrue);
   });
 
-  test('Matrix ACK prevents pending-command resend on unrelated sync', () async {
-    final client = _Client();
-    final personal = PersonalClient.forTesting(
-      client,
-      openStore: () async => _Store(),
-    );
-    addTearDown(personal.dispose);
-    addTearDown(client.onSync.close);
-    final journal = _Journal();
-    personal.journal = journal;
-    await personal.load();
-    final op = await personal.command('worker.pairing', 'worker', {});
-    await personal.stagePending();
-    expect(personal.pending, contains(op.opId));
-    expect(journal.publishes, 1);
-    for (var i = 0; i < 5; i++) {
-      client.onSync.add(SyncUpdate(nextBatch: 'idle-$i'));
-      await Future<void>.delayed(Duration.zero);
-    }
-    await personal.stagePending();
-    expect(journal.publishes, 1);
-    expect(journal.publishedWithRetry, [false]);
-    expect(journal.publishedWithLocalEcho, [false]);
-    expect(personal.pending, contains(op.opId));
-  });
+  test(
+    'Matrix ACK prevents pending-command resend on unrelated sync',
+    () async {
+      final client = _Client();
+      final personal = PersonalClient.forTesting(
+        client,
+        openStore: () async => _Store(),
+      );
+      addTearDown(personal.dispose);
+      addTearDown(client.onSync.close);
+      final journal = _Journal();
+      personal.journal = journal;
+      await personal.load();
+      final op = await personal.command('worker.pairing', 'worker', {});
+      await personal.stagePending();
+      expect(personal.pending, contains(op.opId));
+      expect(journal.publishes, 1);
+      for (var i = 0; i < 5; i++) {
+        client.onSync.add(SyncUpdate(nextBatch: 'idle-$i'));
+        await Future<void>.delayed(Duration.zero);
+      }
+      await personal.stagePending();
+      expect(journal.publishes, 1);
+      expect(journal.publishedWithRetry, [false]);
+      expect(journal.publishedWithLocalEcho, [false]);
+      expect(personal.pending, contains(op.opId));
+    },
+  );
 
   test('coalescing retains journal activity behind unrelated syncs', () async {
     final client = _Client();
@@ -246,6 +279,7 @@ void main() {
     await personal.load();
     var changes = 0;
     personal.addListener(() => changes++);
+    final passes = personal.debugReplayPasses;
     final gate = Completer<void>();
     journal.participantGate = gate.future;
     client.onSync.add(SyncUpdate(nextBatch: 'active'));
@@ -263,32 +297,40 @@ void main() {
     gate.complete();
     journal.participantGate = null;
     await Future<void>.delayed(Duration.zero);
-    expect(changes, 1, reason: 'The queued journal update must replay once');
+    expect(
+      personal.debugReplayPasses - passes,
+      1,
+      reason: 'The queued journal update must replay once',
+    );
+    expect(changes, 0, reason: 'An unchanged journal does not wake listeners');
     expect(journal.maxParticipantReads, 1);
     expect(personal.ready, isTrue);
   });
 
-  test('unconfirmed journal publication retries with the original txid', () async {
-    final client = _Client();
-    final personal = PersonalClient.forTesting(
-      client,
-      openStore: () async => _Store(),
-    );
-    addTearDown(personal.dispose);
-    addTearDown(client.onSync.close);
-    final journal = _Journal();
-    personal.journal = journal;
-    await personal.load();
-    journal.rejectPublish = true;
-    final op = await personal.command('worker.pairing', 'worker', {});
-    await expectLater(personal.stagePending(), throwsStateError);
-    expect(personal.ready, isFalse);
-    expect(personal.pending, contains(op.opId));
-    journal.rejectPublish = false;
-    await personal.retry();
-    expect(journal.publishedTransactions, [op.opId, op.opId]);
-    expect(personal.ready, isTrue);
-  });
+  test(
+    'unconfirmed journal publication retries with the original txid',
+    () async {
+      final client = _Client();
+      final personal = PersonalClient.forTesting(
+        client,
+        openStore: () async => _Store(),
+      );
+      addTearDown(personal.dispose);
+      addTearDown(client.onSync.close);
+      final journal = _Journal();
+      personal.journal = journal;
+      await personal.load();
+      journal.rejectPublish = true;
+      final op = await personal.command('worker.pairing', 'worker', {});
+      await expectLater(personal.stagePending(), throwsStateError);
+      expect(personal.ready, isFalse);
+      expect(personal.pending, contains(op.opId));
+      journal.rejectPublish = false;
+      await personal.retry();
+      expect(journal.publishedTransactions, [op.opId, op.opId]);
+      expect(personal.ready, isTrue);
+    },
+  );
 
   test('missing Matrix ACK leaves publication eligible for retry', () async {
     final client = _Client();
@@ -312,41 +354,47 @@ void main() {
     expect(personal.ready, isTrue);
   });
 
-  test('local hydration reads metadata namespaces without loading outboxes', () async {
-    final client = _Client();
-    final store = _Store();
-    final prefix = 'account:${client.userID}:';
-    store.records['${prefix}replica:draft:synthetic'] = {
-      'localValue': {'text': 'synthetic draft'},
-      'commands': <String, dynamic>{},
-    };
-    store.records['${prefix}seen:synthetic'] = {'seen': true};
-    store.records['${prefix}outbox:immediate:synthetic'] = {
-      'state': 'unknown',
-      'text': 'synthetic pending message',
-    };
-    final personal = PersonalClient.forTesting(
-      client,
-      openStore: () async => store,
-    );
-    addTearDown(personal.dispose);
-    addTearDown(client.onSync.close);
-    await personal.loadLocal();
-    expect(personal.values['draft:synthetic']?['text'], 'synthetic draft');
-    expect(store.prefixes, isNot(contains(prefix)));
-    expect(
-      store.prefixes.any((p) => '${prefix}seen:synthetic'.startsWith(p)),
-      isFalse,
-    );
-    expect(
-      store.prefixes.any(
-        (p) => '${prefix}outbox:immediate:synthetic'.startsWith(p),
-      ),
-      isFalse,
-    );
-    expect(store.records['${prefix}outbox:immediate:synthetic']?['state'], 'unknown');
-    expect(store.writes, 0);
-  });
+  test(
+    'local hydration reads metadata namespaces without loading outboxes',
+    () async {
+      final client = _Client();
+      final store = _Store();
+      final prefix = 'account:${client.userID}:';
+      store.records['${prefix}replica:draft:synthetic'] = {
+        'localValue': {'text': 'synthetic draft'},
+        'commands': <String, dynamic>{},
+      };
+      store.records['${prefix}seen:synthetic'] = {'seen': true};
+      store.records['${prefix}outbox:immediate:synthetic'] = {
+        'state': 'unknown',
+        'text': 'synthetic pending message',
+      };
+      final personal = PersonalClient.forTesting(
+        client,
+        openStore: () async => store,
+      );
+      addTearDown(personal.dispose);
+      addTearDown(client.onSync.close);
+      await personal.loadLocal();
+      expect(personal.values['draft:synthetic']?['text'], 'synthetic draft');
+      expect(store.prefixes, isNot(contains(prefix)));
+      expect(
+        store.prefixes.any((p) => '${prefix}seen:synthetic'.startsWith(p)),
+        isFalse,
+      );
+      expect(
+        store.prefixes.any(
+          (p) => '${prefix}outbox:immediate:synthetic'.startsWith(p),
+        ),
+        isFalse,
+      );
+      expect(
+        store.records['${prefix}outbox:immediate:synthetic']?['state'],
+        'unknown',
+      );
+      expect(store.writes, 0);
+    },
+  );
 
   test(
     'empty sync avoids replay notifications but still rejects unsafe membership',

@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/widgets/permission_slider_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -44,6 +45,7 @@ Future<void> showMemberActionsPopupMenu({
 
   final action = await showMenu<_MemberActions>(
     context: context,
+    popUpAnimationStyle: NotionMotion.menuStyle,
     position: position,
     items: <PopupMenuEntry<_MemberActions>>[
       PopupMenuItem(

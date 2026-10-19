@@ -3,12 +3,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
 import 'dart:convert';
-import 'dart:ui';
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/personal/performance_probe.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -56,13 +57,52 @@ class SessionBackup {
   String toString() => jsonEncode(toJson());
 }
 
+/// Session backup writes run after startup instead of blocking it. Writes and
+/// deletes for one key are serialized so a logout delete always lands last.
+class SessionBackupWriter {
+  static final Map<String, Future<void>> _pending = {};
+
+  /// Completes when every queued write or delete for [key] has finished.
+  static Future<void> settled(String key) => _pending[key] ?? Future.value();
+
+  /// Rewrites [key] only when the stored backup differs from [value].
+  static Future<void> write(
+    FlutterSecureStorage storage,
+    String key,
+    String value,
+  ) => _enqueue(key, () async {
+    if (await storage.read(key: key) == value) return;
+    await storage.write(key: key, value: value);
+  });
+
+  static Future<void> delete(FlutterSecureStorage storage, String key) =>
+      _enqueue(key, () => storage.delete(key: key));
+
+  static Future<void> _enqueue(String key, Future<void> Function() action) {
+    late final Future<void> next;
+    next = settled(key)
+        .then((_) => action())
+        .catchError((Object error) {
+          // A backup failure must not restart an already initialized session.
+          Logs().e('Session backup unavailable: ${error.runtimeType}');
+        })
+        .whenComplete(() {
+          if (identical(_pending[key], next)) _pending.remove(key);
+        });
+    _pending[key] = next;
+    return next;
+  }
+}
+
 extension InitWithRestoreExtension on Client {
   static Future<void> deleteSessionBackup(String clientName) async {
     final storage = PlatformInfos.isMobile || PlatformInfos.isLinux
         ? const FlutterSecureStorage()
         : null;
-    await storage?.delete(
-      key: '${AppSettings.applicationName.value}_session_backup_$clientName',
+    if (storage == null) return;
+    await SessionBackupWriter.delete(
+      storage,
+      '${AppSettings.applicationName.value}_session_backup_$clientName',
     );
   }
 
@@ -75,12 +115,14 @@ extension InitWithRestoreExtension on Client {
     final storage = PlatformInfos.isMobile || PlatformInfos.isLinux
         ? const FlutterSecureStorage()
         : null;
+    void onInitState(InitState state) {
+      if (state == InitState.migratingDatabase) onMigration?.call();
+      if (PersonalPerformanceProbe.enabled) _probeInitState(state);
+    }
 
     try {
       await init(
-        onInitStateChanged: (state) {
-          if (state == InitState.migratingDatabase) onMigration?.call();
-        },
+        onInitStateChanged: onInitState,
         waitForFirstSync: false,
         waitUntilLoadCompletedLoaded: true,
         preserveSessionOnInitFailure: true,
@@ -96,12 +138,15 @@ extension InitWithRestoreExtension on Client {
             deviceId != null &&
             userId != null;
         assert(hasBackup);
-        if (hasBackup) {
+        if (hasBackup && storage != null) {
           Logs().v('Store session in backup');
-          try {
-            await storage?.write(
-              key: storageKey,
-              value: SessionBackup(
+          // Captured now, written later: startup does not wait for keystore
+          // I/O, and an unchanged backup is not rewritten.
+          unawaited(
+            SessionBackupWriter.write(
+              storage,
+              storageKey,
+              SessionBackup(
                 olmAccount: encryption?.pickledOlmAccount,
                 accessToken: accessToken,
                 deviceId: deviceId,
@@ -109,11 +154,8 @@ extension InitWithRestoreExtension on Client {
                 deviceName: deviceName,
                 userId: userId,
               ).toString(),
-            );
-          } catch (error) {
-            // A backup failure must not restart an already initialized session.
-            Logs().e('Session backup unavailable: ${error.runtimeType}');
-          }
+            ),
+          );
         }
       }
     } catch (e) {
@@ -121,7 +163,8 @@ extension InitWithRestoreExtension on Client {
       // Opening failed storage is not consent to replace its session from a
       // backup. Startup retries the existing database without relogin/recovery.
       if (!allowSessionRestore) rethrow;
-      final l10n = await lookupL10n(PlatformDispatcher.instance.locale);
+      final l10n = await lookupL10n(AppConfig.appLocale);
+      await SessionBackupWriter.settled(storageKey);
       final sessionBackupString = await storage?.read(key: storageKey);
       if (sessionBackupString == null) {
         ClientManager.sendInitNotification(
@@ -146,9 +189,7 @@ extension InitWithRestoreExtension on Client {
           waitForFirstSync: false,
           waitUntilLoadCompletedLoaded: true,
           preserveSessionOnInitFailure: true,
-          onInitStateChanged: (state) {
-            if (state == InitState.migratingDatabase) onMigration?.call();
-          },
+          onInitStateChanged: onInitState,
         );
         ClientManager.sendInitNotification(
           l10n.initAppError,
@@ -168,6 +209,31 @@ extension InitWithRestoreExtension on Client {
         );
         rethrow;
       }
+    }
+  }
+
+  /// Startup timeline per local loader (PERSONAL_PERFORMANCE_PROBE only).
+  void _probeInitState(InitState state) {
+    switch (state) {
+      case InitState.loadingData:
+        PersonalPerformanceProbe.startupPhase('client_loading');
+        for (final (phase, loader) in [
+          ('loaded_rooms', roomsLoading),
+          ('loaded_account_data', accountDataLoading),
+          ('loaded_device_keys', userDeviceKeysLoading),
+        ]) {
+          if (loader == null) continue;
+          unawaited(
+            loader.then(
+              (_) => PersonalPerformanceProbe.startupPhase(phase),
+              onError: (Object _) {},
+            ),
+          );
+        }
+      case InitState.finished:
+        PersonalPerformanceProbe.startupPhase('client_init');
+      default:
+        break;
     }
   }
 }

@@ -3,67 +3,30 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:flutter/material.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:material_ui/material_ui.dart';
 
-class PulsatingWidget extends StatefulWidget {
-  final Color color;
+/// Legacy name for [NotionPulse]: an expanding, fading ring behind [child]
+/// (transform and opacity only, stopped under reduced motion and
+/// `TickerMode` off). New code uses [NotionPulse] directly.
+class PulsatingWidget extends StatelessWidget {
+  final Color? color;
   final Widget child;
+
+  /// Extra ring reach in logical pixels, mapped to a ring scale.
   final double spreadRadius;
+
   const PulsatingWidget({
     required this.child,
-    this.color = Colors.red,
+    this.color,
     this.spreadRadius = 1.0,
     super.key,
   });
 
   @override
-  State<PulsatingWidget> createState() => _PulsatingWidgetState();
-}
-
-/// [AnimationController]s can be created with `vsync: this` because of
-/// [TickerProviderStateMixin].
-class _PulsatingWidgetState extends State<PulsatingWidget>
-    with TickerProviderStateMixin {
-  late final DecorationTween decorationTween = DecorationTween(
-    begin: BoxDecoration(
-      borderRadius: BorderRadius.circular(128),
-      boxShadow: <BoxShadow>[
-        BoxShadow(
-          color: widget.color.withAlpha(16),
-          blurRadius: 0.0,
-          spreadRadius: 0.0,
-        ),
-      ],
-    ),
-    end: BoxDecoration(
-      borderRadius: BorderRadius.circular(128),
-      boxShadow: <BoxShadow>[
-        BoxShadow(
-          color: widget.color.withAlpha(128),
-          blurRadius: 0.0,
-          spreadRadius: widget.spreadRadius,
-        ),
-      ],
-    ),
+  Widget build(BuildContext context) => NotionPulse(
+    color: color,
+    spread: 1.15 + (spreadRadius / 40).clamp(0.0, 0.35),
+    child: child,
   );
-
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 2),
-  )..repeat(reverse: true);
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (MediaQuery.disableAnimationsOf(context)) return widget.child;
-    return DecoratedBoxTransition(
-      decoration: decorationTween.animate(_controller),
-      child: widget.child,
-    );
-  }
 }

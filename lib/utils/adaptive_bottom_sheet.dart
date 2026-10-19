@@ -7,6 +7,7 @@ import 'dart:math';
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 Future<T?> showAdaptiveBottomSheet<T>({
@@ -17,7 +18,7 @@ Future<T?> showAdaptiveBottomSheet<T>({
   bool useRootNavigator = true,
 }) {
   if (FluffyThemes.isColumnMode(context)) {
-    return showDialog<T>(
+    return showNotionCustomDialog<T>(
       context: context,
       useRootNavigator: useRootNavigator,
       barrierDismissible: isDismissible,
@@ -49,6 +50,7 @@ Future<T?> showAdaptiveBottomSheet<T>({
       ),
       child: builder(context),
     ),
+    sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
     useSafeArea: true,
     useRootNavigator: useRootNavigator,
     isDismissible: isDismissible,
