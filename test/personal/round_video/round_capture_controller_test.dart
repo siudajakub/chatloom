@@ -133,27 +133,31 @@ RoundCapturePreview capturePreview({
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const profile = RoundCaptureProfile(maxBytes: 25000000);
-  testWidgets('paused capture has no periodic UI wakeups and resume restarts it', (
-    tester,
-  ) async {
-    final backend = FakeCapture();
-    final controller = RoundCaptureController(backend: backend, profile: profile);
-    addTearDown(controller.dispose);
-    var changes = 0;
-    controller.addListener(() => changes++);
-    await controller.initialize();
-    await controller.start();
-    await tester.pump(const Duration(milliseconds: 200));
-    await controller.pause();
-    final pausedChanges = changes;
-    await tester.pump(const Duration(seconds: 5));
-    expect(changes, pausedChanges);
-    await controller.resume();
-    final resumedChanges = changes;
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(changes, greaterThan(resumedChanges));
-    await controller.cancel();
-  });
+  testWidgets(
+    'paused capture has no periodic UI wakeups and resume restarts it',
+    (tester) async {
+      final backend = FakeCapture();
+      final controller = RoundCaptureController(
+        backend: backend,
+        profile: profile,
+      );
+      addTearDown(controller.dispose);
+      var changes = 0;
+      controller.addListener(() => changes++);
+      await controller.initialize();
+      await controller.start();
+      await tester.pump(const Duration(milliseconds: 200));
+      await controller.pause();
+      final pausedChanges = changes;
+      await tester.pump(const Duration(seconds: 5));
+      expect(changes, pausedChanges);
+      await controller.resume();
+      final resumedChanges = changes;
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(changes, greaterThan(resumedChanges));
+      await controller.cancel();
+    },
+  );
   test(
     'Dart and native share the narrow-range zoom availability threshold',
     () {
@@ -767,6 +771,80 @@ void main() {
       controller.dispose();
     },
   );
+  test(
+    'Telegram limits: stop into review at max − 0.5 s, no pause in the last second',
+    () {
+      RoundCaptureController controller(int maxMs) => RoundCaptureController(
+        backend: FakeCapture(),
+        profile: RoundCaptureProfile(maxBytes: 25000000, maxDurationMs: maxMs),
+      );
+      final standard = controller(60000);
+      expect(standard.autoStopMs, 59500);
+      expect(standard.canPause, isFalse); // not recording yet
+      // Short bridge limits never stop before the 800 ms minimum.
+      final short = controller(1000);
+      expect(short.autoStopMs, 1000);
+      standard.dispose();
+      short.dispose();
+    },
+  );
+  test(
+    'camera facing starts front, flips with a switch, natives correct it',
+    () async {
+      final backend = FakeCapture()
+        ..previewValue = capturePreview(available: true);
+      final controller = RoundCaptureController(
+        backend: backend,
+        profile: profile,
+      );
+      await controller.initialize();
+      expect(controller.frontCamera, isTrue);
+      backend.previewValue = capturePreview(available: true, revision: 2);
+      await controller.switchCamera();
+      expect(controller.frontCamera, isFalse);
+      // A native controls event for the same revision is authoritative.
+      backend.eventController.add(
+        const RoundCaptureNativeEvent('controls', {
+          'textureId': 1,
+          'width': 384,
+          'height': 384,
+          'rotation': 0,
+          'cameraRevision': 2,
+          'isFrontCamera': true,
+        }),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.frontCamera, isTrue);
+      controller.dispose();
+    },
+  );
+  test(
+    'gesture thresholds follow Telegram (width, release, lock, interrupt)',
+    () {
+      expect(RoundCaptureGestureController.cancelDistanceFor(320), 112);
+      expect(RoundCaptureGestureController.cancelDistanceFor(1000), 140);
+      final release = RoundCaptureGestureController(held: true)
+        ..move(dx: -76, dy: 0); // 54 % of 140: still sends on release
+      release.release();
+      expect(release.phase, RoundCaptureGesturePhase.released);
+      final lock = RoundCaptureGestureController(held: true)
+        ..move(dx: 0, dy: -56);
+      expect(lock.phase, RoundCaptureGesturePhase.holding);
+      lock.move(dx: 0, dy: -57);
+      expect(lock.phase, RoundCaptureGesturePhase.locked);
+      final interrupted = RoundCaptureGestureController(held: true)
+        ..move(dx: -20, dy: 0)
+        ..interrupt();
+      expect(interrupted.phase, RoundCaptureGesturePhase.locked);
+      final slid = RoundCaptureGestureController(held: true)
+        ..move(dx: -60, dy: 0)
+        ..interrupt();
+      expect(slid.phase, RoundCaptureGesturePhase.canceled);
+      for (final gesture in [release, lock, interrupted, slid]) {
+        gesture.dispose();
+      }
+    },
+  );
   test('cancellation during permission setup rejects late ready', () async {
     final backend = FakeCapture()..pendingInitialize = Completer();
     final controller = RoundCaptureController(
@@ -925,10 +1003,7 @@ void main() {
         expect(controller.state, RoundCaptureState.review);
         expect(controller.prepared, same(backend.media));
         final media = controller.takePrepared();
-        expect(
-          () => controller.takePrepared(),
-          throwsA(isA<RoundCaptureException>()),
-        );
+        expect(controller.takePrepared, throwsA(isA<RoundCaptureException>()));
         controller.dispose();
         expect(backend.kept, isTrue);
         await media.close();

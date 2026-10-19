@@ -17,6 +17,7 @@ FIXTURES = {
     'capture_codec_native_test.kt': 'Capture_codec_native_testKt',
     'capture_controls_native_test.kt': 'Capture_controls_native_testKt',
     'capture_trim_native_test.kt': 'Capture_trim_native_testKt',
+    'capture_quality_native_test.kt': 'Capture_quality_native_testKt',
 }
 
 

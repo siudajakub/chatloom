@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:fluffychat/pages/chat/events/round_mini_player.dart';
 import 'package:fluffychat/pages/chat/events/round_video_message.dart';
+import 'package:fluffychat/pages/chat/events/round_video_stage.dart';
 import 'package:fluffychat/personal/media/media_access.dart';
 import 'package:fluffychat/personal/round_video/round_media_loader.dart';
 import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
@@ -85,51 +86,54 @@ void main() {
   });
 
   for (final removed in [false, true]) {
-    testWidgets('late audible acquisition respects ${removed ? 'disposal' : 'source invalidation'}', (
-      tester,
-    ) async {
-      final event = _event();
-      final loader = _NeverLoad();
-      final coordinator = RoundPlaybackCoordinator();
-      final pause = Completer<void>();
-      final previous = coordinator.register(
-        pause: () => pause.future,
-        stop: () async {},
-      );
-      await previous.acquireAudible();
-      Widget build({bool expired = false}) => MaterialApp(
-        home: Scaffold(
-          body: RoundVideoMessage(
-            event,
-            loader: loader,
-            coordinator: coordinator,
-            showThumbnail: false,
-            isExpired: expired,
+    testWidgets(
+      'late audible acquisition respects ${removed ? 'disposal' : 'source invalidation'}',
+      (tester) async {
+        final event = _event();
+        final loader = _NeverLoad();
+        final coordinator = RoundPlaybackCoordinator();
+        final pause = Completer<void>();
+        final previous = coordinator.register(
+          pause: () => pause.future,
+          stop: () async {},
+        );
+        await previous.acquireAudible();
+        Widget build({bool expired = false}) => MaterialApp(
+          home: Scaffold(
+            body: RoundVideoMessage(
+              event,
+              loader: loader,
+              coordinator: coordinator,
+              showThumbnail: false,
+              isExpired: expired,
+            ),
           ),
-        ),
-      );
-      await tester.pumpWidget(build());
-      await tester.tap(find.byTooltip('Play round video'));
-      await tester.pump();
-      await tester.pumpWidget(removed ? const SizedBox.shrink() : build(expired: true));
-      pause.complete();
-      await tester.pump();
-      expect(loader.downloads, 0);
-      expect(tester.takeException(), isNull);
-      previous.dispose();
-      await tester.pumpWidget(const SizedBox.shrink());
-    });
+        );
+        await tester.pumpWidget(build());
+        await tester.tap(find.byTooltip('Play round video'));
+        await tester.pump();
+        await tester.pumpWidget(
+          removed ? const SizedBox.shrink() : build(expired: true),
+        );
+        pause.complete();
+        await tester.pump();
+        expect(loader.downloads, 0);
+        expect(tester.takeException(), isNull);
+        previous.dispose();
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   }
 
   testWidgets(
     'leaving a round tile cancels its in-flight SDK thumbnail safely',
     (tester) async {
       final event = _event();
-    event.content['info'] = {
-      ...event.infoMap,
+      event.content['info'] = {
+        ...event.infoMap,
         'thumbnail_url': 'mxc://example.invalid/thumbnail',
         'thumbnail_info': {'size': 4, 'mimetype': 'image/jpeg'},
-    };
+      };
       var started = false;
       var cancelled = false;
       final stream = StreamController<List<int>>(
@@ -355,4 +359,151 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('pending rows keep the ready frame and show no caption', (
+    tester,
+  ) async {
+    final event = _event();
+    Widget build(bool pending) => MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topLeft,
+          child: RoundVideoMessage(
+            event,
+            loader: _NeverLoad(),
+            coordinator: RoundPlaybackCoordinator(),
+            showThumbnail: false,
+            sourceStatePending: pending,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(build(true));
+    final pendingSize = tester.getSize(find.byType(RoundVideoMessage));
+    expect(find.textContaining('Checking message availability'), findsNothing);
+    await tester.pumpWidget(build(false));
+    expect(tester.getSize(find.byType(RoundVideoMessage)), pendingSize);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('remounted rounds reuse the in-memory thumbnail', (tester) async {
+    RoundVideoMessage.clearThumbnailCache();
+    final event = _event();
+    event.content['info'] = {
+      ...event.infoMap,
+      'thumbnail_url': 'mxc://example.invalid/cached-thumbnail',
+      'thumbnail_info': {'size': 4, 'mimetype': 'image/jpeg'},
+    };
+    var downloads = 0;
+    final loader = RoundMediaLoader(
+      thumbnailDownload: (event, {onDownloadProgress}) async {
+        downloads++;
+        return MatrixFile(
+          bytes: Uint8List.fromList([1, 2, 3, 4]),
+          name: 'fixture.jpg',
+          mimeType: 'image/jpeg',
+        );
+      },
+    );
+    Widget build() => MaterialApp(
+      home: Scaffold(
+        body: RoundVideoMessage(
+          event,
+          loader: loader,
+          coordinator: RoundPlaybackCoordinator(),
+        ),
+      ),
+    );
+    await tester.pumpWidget(build());
+    await tester.pump();
+    await tester.pump();
+    expect(downloads, 1);
+    expect(find.byType(Image), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(build());
+    expect(find.byType(Image), findsOneWidget, reason: 'first frame, no flash');
+    await tester.pump();
+    await tester.pump();
+    expect(downloads, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    RoundVideoMessage.clearThumbnailCache();
+  });
+
+  testWidgets(
+    'mini player adopts a staged controller, hides its bar and releases it',
+    (tester) async {
+      final event = _event();
+      addTearDown(() => TelegramRoundService.closeFor(event.room.client));
+      final coordinator = RoundPlaybackCoordinator();
+      final control = RoundMiniPlayerController(coordinator: coordinator);
+      addTearDown(control.dispose);
+      final video = VideoPlayerController.networkUrl(
+        Uri.parse('https://example.invalid/fixture'),
+      );
+      video.value = const VideoPlayerValue(
+        duration: Duration(seconds: 10),
+        position: Duration(seconds: 1),
+        size: Size(100, 100),
+        isInitialized: true,
+      );
+      final stage = RoundStageController.shared;
+      var rowStops = 0;
+      final rowActions = RoundStageActions(
+        toggle: () async {},
+        seek: (_) async {},
+        setSpeed: (_) async {},
+        stop: () async => rowStops++,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Column(
+                children: [
+                  TextButton(
+                    onPressed: () => stage.present(
+                      context,
+                      video: video,
+                      actions: rowActions,
+                    ),
+                    child: const Text('Open'),
+                  ),
+                  RoundMiniPlayer(controller: control, onOpenSource: (_) {}),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      final handle = coordinator.register(
+        pause: () async {},
+        stop: () async {},
+      );
+      control.adopt(
+        RoundDetachedPlayback(
+          event: event,
+          video: video,
+          handle: handle,
+          intent: RoundPlaybackIntent(),
+        ),
+      );
+      await tester.pump();
+      expect(stage.isStaged(video), isTrue);
+      expect(stage.actions, isNot(same(rowActions)));
+      expect(
+        find.byTooltip('Stop playback'),
+        findsOneWidget,
+        reason: 'only the stage button, the mini bar is hidden',
+      );
+      await tester.runAsync(control.stop);
+      await tester.pumpAndSettle();
+      expect(stage.isOpen, isFalse);
+      expect(rowStops, 0);
+      expect(control.current, isNull);
+      expect(find.byType(RoundVideoStage), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
