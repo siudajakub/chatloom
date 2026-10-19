@@ -7,6 +7,7 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/dialog_text_field.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -33,11 +34,13 @@ Future<String?> showTextInputDialog({
 }) {
   // TODO: Dispose this somewhere
   final controller = TextEditingController(text: initialText);
-  return showAdaptiveDialog<String>(
+  // Outside the builder: the dialog rebuilds when the keyboard opens, and the
+  // shown error must survive that.
+  final error = ValueNotifier(const DialogValidation());
+  return showNotionAdaptiveDialog<String>(
     context: context,
     useRootNavigator: useRootNavigator,
     builder: (context) {
-      final error = ValueNotifier<String?>(null);
       return AlertDialog.adaptive(
         title: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 256),
@@ -63,9 +66,9 @@ Future<String?> showTextInputDialog({
                   onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
                 ),
               const SizedBox(height: 16),
-              ValueListenableBuilder<String?>(
-                valueListenable: error,
-                builder: (context, error, _) {
+              DialogValidationFeedback(
+                validation: error,
+                builder: (context, error) {
                   return DialogTextField(
                     hintText: hintText,
                     errorText: error,
@@ -95,7 +98,7 @@ Future<String?> showTextInputDialog({
               final input = controller.text;
               final errorText = validator?.call(input);
               if (errorText != null) {
-                error.value = errorText;
+                error.value = error.value.reject(errorText);
                 return;
               }
               Navigator.of(context).pop<String>(input);

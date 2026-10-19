@@ -19,6 +19,16 @@ abstract final class PersonalPerformanceProbe {
     });
   }
 
+  static final Stopwatch _sinceMain = Stopwatch();
+
+  /// Startup timeline: milliseconds since the first mark (`main`). [phase] is
+  /// a fixed code label, never an account, room or file name.
+  static void startupPhase(String phase) {
+    if (!enabled) return;
+    if (!_sinceMain.isRunning) _sinceMain.start();
+    emit('startup.$phase', {'ms': _sinceMain.elapsedMilliseconds});
+  }
+
   static void emit(String operation, Map<String, Object> counters) {
     if (!enabled) return;
     debugPrint(

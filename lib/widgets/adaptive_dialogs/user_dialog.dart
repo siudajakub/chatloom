@@ -3,11 +3,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/presence_builder.dart';
@@ -30,7 +31,7 @@ class UserDialog extends StatelessWidget {
     required BuildContext context,
     required Profile profile,
     bool noProfileWarning = false,
-  }) => showAdaptiveDialog(
+  }) => showNotionAdaptiveDialog(
     context: context,
     barrierDismissible: true,
     builder: (context) =>
@@ -81,7 +82,7 @@ class UserDialog extends StatelessWidget {
                     name: displayname,
                     size: Avatar.defaultSize * 1.5,
                     onTap: avatar != null
-                        ? () => showDialog(
+                        ? () => showNotionCustomDialog(
                             context: context,
                             builder: (_) => MxcImageViewer(avatar),
                           )
@@ -120,22 +121,27 @@ class UserDialog extends StatelessWidget {
                                             right: 4.0,
                                           ),
                                           child: AnimatedScale(
-                                            duration:
-                                                FluffyThemes.animationDuration,
-                                            curve: FluffyThemes.animationCurve,
+                                            duration: NotionMotion
+                                                .snappyCurve
+                                                .duration,
+                                            curve: NotionMotion.snappyCurve,
                                             scale: hovered
                                                 ? 1.33
                                                 : copied
                                                 ? 1.25
                                                 : 1.0,
-                                            child: Icon(
-                                              copied
-                                                  ? Icons.check_circle
-                                                  : Icons.copy,
-                                              size: 12,
-                                              color: copied
-                                                  ? Colors.green
-                                                  : null,
+                                            child: NotionMorphSwitcher(
+                                              bounce: true,
+                                              child: Icon(
+                                                key: ValueKey(copied),
+                                                copied
+                                                    ? Icons.check_circle
+                                                    : Icons.copy,
+                                                size: 12,
+                                                color: copied
+                                                    ? Colors.green
+                                                    : null,
+                                              ),
                                             ),
                                           ),
                                         ),

@@ -3,6 +3,10 @@
 /// Only allowlisted fields of an already authenticated heartbeat are retained.
 /// Unknown or older payloads never imply that optional services are ready.
 class WorkerReadiness {
+  /// The worker sends a heartbeat every five minutes, and sooner when its
+  /// payload changes. Fresh means at most one missed heartbeat plus slack.
+  static const freshFor = Duration(minutes: 11);
+
   final DateTime receivedAt;
   final bool? healthy;
   final bool? verified;
@@ -10,6 +14,10 @@ class WorkerReadiness {
   final String? reminderPush;
   final int? pending;
   final int? pendingReminderHints;
+
+  /// Whether the worker scans local bridges for automatic transcription
+  /// (`scan`) or not (`off`); null for older workers.
+  final String? autoTranscription;
 
   const WorkerReadiness({
     required this.receivedAt,
@@ -19,6 +27,7 @@ class WorkerReadiness {
     this.reminderPush,
     this.pending,
     this.pendingReminderHints,
+    this.autoTranscription,
   });
 
   factory WorkerReadiness.fromPayload(
@@ -46,13 +55,38 @@ class WorkerReadiness {
       }),
       pending: count(payload['pending']),
       pendingReminderHints: count(payload['pendingReminderHints']),
+      autoTranscription: allowed(payload['autoTranscription'], {'scan', 'off'}),
     );
   }
 
   bool freshAt(DateTime now) {
     final age = now.difference(receivedAt);
-    return !age.isNegative && age < const Duration(minutes: 3);
+    return !age.isNegative && age < freshFor;
   }
+
+  @override
+  bool operator ==(Object other) =>
+      other is WorkerReadiness &&
+      other.receivedAt == receivedAt &&
+      other.healthy == healthy &&
+      other.verified == verified &&
+      other.transcription == transcription &&
+      other.reminderPush == reminderPush &&
+      other.pending == pending &&
+      other.pendingReminderHints == pendingReminderHints &&
+      other.autoTranscription == autoTranscription;
+
+  @override
+  int get hashCode => Object.hash(
+    receivedAt,
+    healthy,
+    verified,
+    transcription,
+    reminderPush,
+    pending,
+    pendingReminderHints,
+    autoTranscription,
+  );
 
   String describe(DateTime now) {
     if (!freshAt(now)) {

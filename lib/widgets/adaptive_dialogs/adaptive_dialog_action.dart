@@ -5,6 +5,7 @@
 
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 class AdaptiveDialogAction extends StatelessWidget {
@@ -48,35 +49,41 @@ class AdaptiveDialogAction extends StatelessWidget {
       case TargetPlatform.linux:
       case TargetPlatform.windows:
         if (bigButtons) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2.0),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  shape: RoundedRectangleBorder(
-                    borderRadius:
-                        borderRadius ??
-                        BorderRadius.circular(AppConfig.borderRadius),
+          return NotionPressable(
+            enabled: onPressed != null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2.0),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius:
+                          borderRadius ??
+                          BorderRadius.circular(AppConfig.borderRadius),
+                    ),
+                    backgroundColor: autofocus
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.surfaceBright,
+                    foregroundColor: autofocus
+                        ? theme.colorScheme.onPrimary
+                        : theme.colorScheme.primary,
                   ),
-                  backgroundColor: autofocus
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.surfaceBright,
-                  foregroundColor: autofocus
-                      ? theme.colorScheme.onPrimary
-                      : theme.colorScheme.primary,
+                  onPressed: onPressed,
+                  autofocus: autofocus,
+                  child: child,
                 ),
-                onPressed: onPressed,
-                autofocus: autofocus,
-                child: child,
               ),
             ),
           );
         }
-        return TextButton(
-          onPressed: onPressed,
-          autofocus: autofocus,
-          child: child,
+        return NotionPressable(
+          enabled: onPressed != null,
+          child: TextButton(
+            onPressed: onPressed,
+            autofocus: autofocus,
+            child: child,
+          ),
         );
       case TargetPlatform.iOS:
       case TargetPlatform.macOS:
@@ -113,17 +120,20 @@ class AdaptiveDialogInkWell extends StatelessWidget {
         child: child,
       );
     }
-    return Material(
-      color: onTap == null
-          ? theme.colorScheme.surfaceContainer
-          : theme.colorScheme.surfaceBright,
-      borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-      child: InkWell(
+    return NotionPressable(
+      enabled: onTap != null,
+      child: Material(
+        color: onTap == null
+            ? theme.colorScheme.surfaceContainer
+            : theme.colorScheme.surfaceBright,
         borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-        onTap: onTap,
-        child: Padding(
-          padding: padding,
-          child: Center(child: child),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+          onTap: onTap,
+          child: Padding(
+            padding: padding,
+            child: Center(child: child),
+          ),
         ),
       ),
     );

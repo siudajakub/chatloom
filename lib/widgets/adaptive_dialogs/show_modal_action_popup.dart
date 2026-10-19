@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 Future<T?> showModalActionPopup<T>({
@@ -22,6 +23,7 @@ Future<T?> showModalActionPopup<T>({
     case TargetPlatform.windows:
     case TargetPlatform.linux:
       return showModalBottomSheet(
+        sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
         isScrollControlled: true,
         useRootNavigator: useRootNavigator,
         context: context,
@@ -30,9 +32,10 @@ Future<T?> showModalActionPopup<T>({
           maxWidth: 512,
           maxHeight: MediaQuery.sizeOf(context).height - 32,
         ),
+        // Rows rise in one after another while the sheet slides up.
         builder: (context) => ListView(
           shrinkWrap: true,
-          children: [
+          children: NotionEntrance.stagger(afterRoute: false, [
             if (title != null || message != null) ...[
               ListTile(
                 title: title == null
@@ -67,7 +70,7 @@ Future<T?> showModalActionPopup<T>({
                 onTap: () => Navigator.of(context).pop(null),
               ),
             ],
-          ],
+          ]),
         ),
       );
     case TargetPlatform.iOS:

@@ -6,6 +6,7 @@
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -19,7 +20,7 @@ Future<OkCancelResult?> showOkCancelAlertDialog({
   String? cancelLabel,
   bool isDestructive = false,
   bool useRootNavigator = true,
-}) => showAdaptiveDialog<OkCancelResult>(
+}) => showNotionAdaptiveDialog<OkCancelResult>(
   context: context,
   useRootNavigator: useRootNavigator,
   builder: (context) => AlertDialog.adaptive(
@@ -72,7 +73,7 @@ Future<OkCancelResult?> showOkAlertDialog({
   String? message,
   String? okLabel,
   bool useRootNavigator = true,
-}) => showAdaptiveDialog<OkCancelResult>(
+}) => showNotionAdaptiveDialog<OkCancelResult>(
   context: context,
   useRootNavigator: useRootNavigator,
   builder: (context) => AlertDialog.adaptive(
