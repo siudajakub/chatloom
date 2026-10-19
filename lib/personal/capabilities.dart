@@ -2,6 +2,7 @@
 
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/bridge_capabilities.dart';
+import 'round_video/round_availability.dart';
 import 'round_video/telegram_room_binding.dart';
 
 export 'package:personal_core/bridge_capabilities.dart';
@@ -76,12 +77,18 @@ abstract final class RoomCapabilities {
     if (feature == BridgeFeature.roundVideo) {
       final binding = TelegramRoomBinding.of(room, stateKey: stateKey);
       if (binding == null) {
+        final gate = TelegramRoomBinding.diagnose(room, stateKey: stateKey);
         return BridgeCapabilityEvidence(
-          const CapabilityResult(
-            CapabilityStatus.unverified,
-            'Your Telegram login and bridge capabilities have not been verified.',
+          CapabilityResult(
+            gate.terminal
+                ? CapabilityStatus.unavailable
+                : CapabilityStatus.unverified,
+            gate.terminal || gate.code == RoundGateCode.needsTrust
+                ? roundGateMessage(gate.code)
+                : 'Your Telegram login and bridge capabilities have not been verified.',
           ),
           source: 'telegram.identity',
+          reasonCode: 'round:${gate.code.name}',
         );
       }
       final round = binding.capabilities(room);
@@ -124,7 +131,9 @@ abstract final class RoomCapabilities {
     }
     if (feature == BridgeFeature.disappearing) {
       if (!room.canChangeStateEvent('com.beeper.disappearing_timer')) {
-        return _denied('You do not have permission to change this conversation.');
+        return _denied(
+          'You do not have permission to change this conversation.',
+        );
       }
     } else if (feature == BridgeFeature.delete) {
       if (event != null && !event.canRedact) {

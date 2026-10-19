@@ -36,6 +36,18 @@ class ConversationClassification {
 /// Uses only already-loaded state. A name or a message never identifies a bot.
 class ConversationClassifier {
   final Set<String> _serviceMembers = {};
+  late final int _serviceSignature = Object.hashAllUnordered(_serviceMembers);
+
+  /// Per-room memo: classification is reused while the room's relevant state
+  /// is unchanged (see [_signature]); `classify` used to walk every member
+  /// state up to three times per room per inbox rebuild.
+  static final _memo = Expando<(int, ConversationClassification)>(
+    'conversation classification',
+  );
+
+  /// Classifications computed (not served from the memo); tests only.
+  static int debugComputations = 0;
+
   ConversationClassifier(Iterable<Room> rooms) {
     for (final room in rooms) {
       for (final info in _infos(room)) {
@@ -56,7 +68,69 @@ class ConversationClassifier {
     }
   }
 
+  /// Whether this classifier already knows every service member [room]
+  /// declares, i.e. a changed [room] cannot change other rooms' results.
+  bool covers(Room room) {
+    for (final info in _infos(room)) {
+      final bot = info.content['bridgebot'];
+      if (bot is String &&
+          bot.isValidMatrixIdStrict() &&
+          !_serviceMembers.contains(bot)) {
+        return false;
+      }
+    }
+    final services = room
+        .getState('io.element.functional_members')
+        ?.content['service_members'];
+    if (services is List) {
+      for (final id in services.whereType<String>()) {
+        if (id.isValidMatrixIdStrict() && !_serviceMembers.contains(id)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /// Cheap identity signature of everything [classify] reads. State events
+  /// are replaced (never mutated) when they change, so identity hashes of the
+  /// loaded member/bridge events detect every relevant update.
+  int _signature(Room room) {
+    var members = 0;
+    final memberStates = room.states[EventTypes.RoomMember];
+    if (memberStates != null) {
+      for (final event in memberStates.values) {
+        members = (members * 31 + identityHashCode(event)) & 0x3fffffff;
+      }
+    }
+    return Object.hashAll([
+      _serviceSignature,
+      room.client.userID,
+      room.membership,
+      room.isSpace,
+      room.summary.mJoinedMemberCount,
+      room.summary.mInvitedMemberCount,
+      Object.hashAll(room.summary.mHeroes ?? const []),
+      room.directChatMatrixID,
+      memberStates?.length,
+      members,
+      for (final info in _infos(room)) identityHashCode(info),
+      identityHashCode(room.getState('io.element.functional_members')),
+      identityHashCode(room.getState(EventTypes.RoomCreate)),
+    ]);
+  }
+
   ConversationClassification classify(Room room) {
+    final signature = _signature(room);
+    final cached = _memo[room];
+    if (cached != null && cached.$1 == signature) return cached.$2;
+    final result = _classify(room);
+    _memo[room] = (signature, result);
+    return result;
+  }
+
+  ConversationClassification _classify(Room room) {
+    debugComputations++;
     final infos = _infos(room).toList();
     final networks = <String>{};
     for (final info in infos) {
@@ -67,8 +141,11 @@ class ConversationClassifier {
           canonicalNetwork(protocol['displayname']);
       if (network != null) networks.add(network);
     }
-    final peers = room
-        .getParticipants([Membership.join, Membership.invite])
+    final participants = room.getParticipants([
+      Membership.join,
+      Membership.invite,
+    ]);
+    final peers = participants
         .map((user) => user.id)
         .where((id) => id != room.client.userID)
         .toSet();
@@ -77,8 +154,7 @@ class ConversationClassifier {
     final complete =
         joined != null &&
         invited != null &&
-        room.getParticipants([Membership.join, Membership.invite]).length ==
-            joined + invited;
+        participants.length == joined + invited;
     final direct = room.directChatMatrixID;
     final botDirect =
         direct != null &&

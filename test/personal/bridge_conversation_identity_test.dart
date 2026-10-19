@@ -3,6 +3,8 @@ import 'package:fluffychat/personal/inbox_projection.dart';
 import 'package:fluffychat/personal/personal_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart'
+    show ConversationRef, PersonGroup;
 
 const _owner = '@owner:example.invalid';
 const _bot = '@bridge:example.invalid';
@@ -213,5 +215,37 @@ void main() {
     (room.client as _Client).direct[_person] = [room.id];
     expect(room.getLocalizedDisplayname(), 'Alicja');
     expect(room.summary.mHeroes, isEmpty);
+  });
+  test('merged person avatar falls back to a source network with a photo', () {
+    final client = _Client();
+    Room source(String id, {String? avatar}) {
+      final room = Room(id: id, client: client, membership: Membership.join);
+      client.rooms.add(room);
+      if (avatar != null) {
+        _state(room, EventTypes.RoomAvatar, {'url': avatar});
+      }
+      return room;
+    }
+
+    final whatsapp = source('!whatsapp:example.invalid');
+    source('!telegram:example.invalid', avatar: 'mxc://example.invalid/tg');
+    final personal = PersonalClient.of(client);
+    addTearDown(personal.dispose);
+    final group = PersonGroup(
+      id: 'alicja',
+      name: 'Alicja',
+      defaultRoomId: whatsapp.id,
+      members: const [
+        ConversationRef(accountId: _owner, roomId: '!whatsapp:example.invalid'),
+        ConversationRef(accountId: _owner, roomId: '!telegram:example.invalid'),
+      ],
+    );
+    final projection = InboxProjection(personal);
+    expect(whatsapp.avatar, isNull);
+    expect(
+      projection.avatarForGroup(group),
+      Uri.parse('mxc://example.invalid/tg'),
+    );
+    expect(projection.avatarFor(whatsapp), isNull);
   });
 }

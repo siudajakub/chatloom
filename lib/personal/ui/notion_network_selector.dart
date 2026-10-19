@@ -6,19 +6,26 @@ import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
-IconData notionNetworkIcon(String? network) => switch (network) {
-  null => Icons.hub_outlined,
-  'slack' => Icons.tag,
-  'instagram' => Icons.camera_alt_outlined,
-  'telegram' => Icons.send_outlined,
-  'whatsapp' ||
-  'messenger' ||
-  'facebook' ||
-  'signal' => Icons.chat_bubble_outline,
-  'discord' => Icons.headset_mic_outlined,
-  'sms' || 'imessage' => Icons.sms_outlined,
-  _ => Icons.language_outlined,
+String? _networkGlyphKey(String? network) => switch (network?.toLowerCase()) {
+  'facebookgo' || 'facebook' => 'messenger',
+  'instagramgo' => 'instagram',
+  final value => value,
 };
+
+IconData notionNetworkIcon(String? network) =>
+    switch (_networkGlyphKey(network)) {
+      null => Icons.hub_outlined,
+      'slack' => Icons.tag,
+      'instagram' => Icons.camera_alt_outlined,
+      'telegram' => Icons.send_outlined,
+      'whatsapp' ||
+      'messenger' ||
+      'facebook' ||
+      'signal' => Icons.chat_bubble_outline,
+      'discord' => Icons.headset_mic_outlined,
+      'sms' || 'imessage' => Icons.sms_outlined,
+      _ => Icons.language_outlined,
+    };
 
 /// Restrained monochrome identifiers, with the actual network kept in text.
 class NotionNetworkGlyph extends StatelessWidget {
@@ -27,20 +34,21 @@ class NotionNetworkGlyph extends StatelessWidget {
   const NotionNetworkGlyph({super.key, this.network, this.size = 24});
   @override
   Widget build(BuildContext context) {
+    final glyph = _networkGlyphKey(network);
     if (![
       'whatsapp',
       'slack',
       'instagram',
       'messenger',
       'facebook',
-    ].contains(network)) {
+    ].contains(glyph)) {
       return Icon(notionNetworkIcon(network), size: size);
     }
     return SizedBox.square(
       dimension: size,
       child: CustomPaint(
         painter: _NetworkGlyphPainter(
-          network!,
+          glyph!,
           Theme.of(context).colorScheme.onSurface,
           Theme.of(context).colorScheme.surfaceContainer,
         ),
@@ -175,112 +183,126 @@ Future<String?> showNotionNetworkSelector(
   InboxFilter selectedView = InboxFilter.inbox,
   ValueChanged<InboxFilter>? onViewSelected,
   VoidCallback? onManageNetworks,
-}) => showGeneralDialog<String>(
-  context: context,
-  barrierDismissible: true,
-  barrierLabel: 'Dismiss network selector',
-  barrierColor: Colors.transparent,
-  transitionDuration: Duration.zero,
-  pageBuilder: (context, _, _) => LayoutBuilder(
-    builder: (context, constraints) {
-      final scale = MediaQuery.textScalerOf(context).scale(16) / 16;
-      final width = math.min(
-        constraints.maxWidth - 32,
-        scale > 1.4 ? 300.0 : 196.0,
-      );
-      final bottom = math.max(16.0, constraints.maxHeight - anchor.top + 12);
-      final right = math.max(16.0, constraints.maxWidth - anchor.right);
-      final maxHeight = math.max(
-        96.0,
-        constraints.maxHeight - bottom - MediaQuery.paddingOf(context).top - 16,
-      );
-      return Stack(
-        children: [
-          Positioned(
-            right: right,
-            bottom: bottom,
-            width: width,
-            child: Shortcuts(
-              shortcuts: const {
-                SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
-              },
-              child: Actions(
-                actions: {
-                  DismissIntent: CallbackAction<DismissIntent>(
-                    onInvoke: (_) {
-                      Navigator.of(context).pop();
-                      return null;
-                    },
-                  ),
+}) {
+  // Grow from the dock pill: the scale origin is the pointer's tip, in the
+  // root navigator's coordinates (the same space as [anchor]).
+  final root = Navigator.of(context, rootNavigator: true).context;
+  final window =
+      (root.findRenderObject() as RenderBox?)?.size ??
+      MediaQuery.sizeOf(context);
+  final origin = Offset(anchor.center.dx, anchor.top - 3);
+  return showNotionPopover<String>(
+    context: context,
+    alignment: window.isEmpty
+        ? Alignment.bottomRight
+        : Alignment(
+            (origin.dx / window.width * 2 - 1).clamp(-1.0, 1.0),
+            (origin.dy / window.height * 2 - 1).clamp(-1.0, 1.0),
+          ),
+    builder: (context) => LayoutBuilder(
+      builder: (context, constraints) {
+        final scale = MediaQuery.textScalerOf(context).scale(16) / 16;
+        final width = math.min(
+          constraints.maxWidth - 32,
+          scale > 1.4 ? 300.0 : 196.0,
+        );
+        final bottom = math.max(16.0, constraints.maxHeight - anchor.top + 12);
+        final right = math.max(16.0, constraints.maxWidth - anchor.right);
+        final maxHeight = math.max(
+          96.0,
+          constraints.maxHeight -
+              bottom -
+              MediaQuery.paddingOf(context).top -
+              16,
+        );
+        return Stack(
+          children: [
+            Positioned(
+              right: right,
+              bottom: bottom,
+              width: width,
+              child: Shortcuts(
+                shortcuts: const {
+                  SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
                 },
-                child: Focus(
-                  autofocus: true,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Material(
-                        color: Theme.of(context).colorScheme.surfaceContainer,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(9),
-                          side: BorderSide(
-                            color: Theme.of(context).dividerColor,
+                child: Actions(
+                  actions: {
+                    DismissIntent: CallbackAction<DismissIntent>(
+                      onInvoke: (_) {
+                        Navigator.of(context).pop();
+                        return null;
+                      },
+                    ),
+                  },
+                  child: Focus(
+                    autofocus: true,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Material(
+                          color: Theme.of(context).colorScheme.surfaceContainer,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(9),
+                            side: BorderSide(
+                              color: Theme.of(context).dividerColor,
+                            ),
                           ),
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(maxHeight: maxHeight),
-                          child: SingleChildScrollView(
-                            child: NotionNetworkMenu(
-                              networks: networks,
-                              selected: selected,
-                              selectedView: selectedView,
-                              onViewSelected: onViewSelected == null
-                                  ? null
-                                  : (view) {
-                                      Navigator.of(context).pop();
-                                      onViewSelected(view);
-                                    },
-                              onManageNetworks: onManageNetworks == null
-                                  ? null
-                                  : () {
-                                      Navigator.of(context).pop();
-                                      onManageNetworks();
-                                    },
-                              onSelected: (network) {
-                                onSelected(network);
-                                Navigator.of(context).pop(network);
-                              },
+                          clipBehavior: Clip.antiAlias,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(maxHeight: maxHeight),
+                            child: SingleChildScrollView(
+                              child: NotionNetworkMenu(
+                                networks: networks,
+                                selected: selected,
+                                selectedView: selectedView,
+                                onViewSelected: onViewSelected == null
+                                    ? null
+                                    : (view) {
+                                        Navigator.of(context).pop();
+                                        onViewSelected(view);
+                                      },
+                                onManageNetworks: onManageNetworks == null
+                                    ? null
+                                    : () {
+                                        Navigator.of(context).pop();
+                                        onManageNetworks();
+                                      },
+                                onSelected: (network) {
+                                  onSelected(network);
+                                  Navigator.of(context).pop(network);
+                                },
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      Positioned(
-                        bottom: -9,
-                        right:
-                            (constraints.maxWidth -
-                                    right -
-                                    anchor.center.dx -
-                                    9)
-                                .clamp(12.0, width - 30),
-                        child: CustomPaint(
-                          size: const Size(18, 9),
-                          painter: _MenuPointerPainter(
-                            Theme.of(context).colorScheme.surfaceContainer,
-                            Theme.of(context).dividerColor,
+                        Positioned(
+                          bottom: -9,
+                          right:
+                              (constraints.maxWidth -
+                                      right -
+                                      anchor.center.dx -
+                                      9)
+                                  .clamp(12.0, width - 30),
+                          child: CustomPaint(
+                            size: const Size(18, 9),
+                            painter: _MenuPointerPainter(
+                              Theme.of(context).colorScheme.surfaceContainer,
+                              Theme.of(context).dividerColor,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
-      );
-    },
-  ),
-);
+          ],
+        );
+      },
+    ),
+  );
+}
 
 class NotionNetworkMenu extends StatelessWidget {
   final List<String> networks;
@@ -302,55 +324,62 @@ class NotionNetworkMenu extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(12, 13, 12, 12),
-        child: Text(
-          'Show chats',
-          style: NotionTokens.body.copyWith(fontWeight: FontWeight.w600),
-        ),
+    // Rows settle in one after another while the popover grows.
+    children: NotionEntrance.stagger(
+      _children(context),
+      rise: NotionMotion.rise / 2,
+      afterRoute: false,
+    ),
+  );
+
+  List<Widget> _children(BuildContext context) => [
+    Padding(
+      padding: const EdgeInsets.fromLTRB(12, 13, 12, 12),
+      child: Text(
+        'Show chats',
+        style: NotionTokens.body.copyWith(fontWeight: FontWeight.w600),
       ),
-      if (onViewSelected != null) ...[
-        for (final view in [
-          InboxFilter.inbox,
-          InboxFilter.groups,
-          InboxFilter.ignored,
-          InboxFilter.technical,
-        ])
-          ListTile(
-            dense: true,
-            selected: selectedView == view,
-            title: Text(
-              view == InboxFilter.inbox ? 'Main list' : inboxViewLabel(view),
-            ),
-            leading: Icon(switch (view) {
-              InboxFilter.groups => Icons.group_outlined,
-              InboxFilter.ignored => Icons.visibility_off_outlined,
-              InboxFilter.technical => Icons.build_outlined,
-              _ => Icons.chat_bubble_outline,
-            }),
-            trailing: selectedView == view
-                ? const Icon(Icons.check, size: 20)
-                : null,
-            onTap: () => onViewSelected!(view),
-          ),
-        const Divider(height: 1),
-        const Padding(padding: EdgeInsets.all(12), child: Text('Networks')),
-      ],
-      _option(context, null),
-      for (final network in networks) _option(context, network),
-      if (onManageNetworks != null) ...[
-        const Divider(height: 1),
+    ),
+    if (onViewSelected != null) ...[
+      for (final view in [
+        InboxFilter.inbox,
+        InboxFilter.groups,
+        InboxFilter.ignored,
+        InboxFilter.technical,
+      ])
         ListTile(
           dense: true,
-          leading: const Icon(Icons.tune),
-          title: const Text('Manage networks'),
-          onTap: onManageNetworks,
+          selected: selectedView == view,
+          title: Text(
+            view == InboxFilter.inbox ? 'Main list' : inboxViewLabel(view),
+          ),
+          leading: Icon(switch (view) {
+            InboxFilter.groups => Icons.group_outlined,
+            InboxFilter.ignored => Icons.visibility_off_outlined,
+            InboxFilter.technical => Icons.build_outlined,
+            _ => Icons.chat_bubble_outline,
+          }),
+          trailing: selectedView == view
+              ? const Icon(Icons.check, size: 20)
+              : null,
+          onTap: () => onViewSelected!(view),
         ),
-      ],
-      const SizedBox(height: 4),
+      const Divider(height: 1),
+      const Padding(padding: EdgeInsets.all(12), child: Text('Networks')),
     ],
-  );
+    _option(context, null),
+    for (final network in networks.toSet()) _option(context, network),
+    if (onManageNetworks != null) ...[
+      const Divider(height: 1),
+      ListTile(
+        dense: true,
+        leading: const Icon(Icons.tune),
+        title: const Text('Manage networks'),
+        onTap: onManageNetworks,
+      ),
+    ],
+    const SizedBox(height: 4),
+  ];
 
   Widget _option(BuildContext context, String? network) {
     final active = selected == network;
@@ -365,24 +394,28 @@ class NotionNetworkMenu extends StatelessWidget {
             : Colors.transparent,
         child: InkWell(
           onTap: () => onSelected(network),
-          child: Container(
-            constraints: const BoxConstraints(minHeight: 44),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-            decoration: BoxDecoration(
-              border: Border(
-                top: BorderSide(color: Theme.of(context).dividerColor),
+          child: ExcludeSemantics(
+            child: Container(
+              constraints: const BoxConstraints(
+                minHeight: NotionTokens.touchTarget,
               ),
-            ),
-            child: Row(
-              children: [
-                NotionNetworkGlyph(network: network, size: 23),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(name, style: const TextStyle(fontSize: 15)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: Theme.of(context).dividerColor),
                 ),
-                const SizedBox(width: 6),
-                if (active) const Icon(Icons.check, size: 20),
-              ],
+              ),
+              child: Row(
+                children: [
+                  NotionNetworkGlyph(network: network, size: 23),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(name, style: const TextStyle(fontSize: 15)),
+                  ),
+                  const SizedBox(width: 6),
+                  if (active) const Icon(Icons.check, size: 20),
+                ],
+              ),
             ),
           ),
         ),
