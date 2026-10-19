@@ -1,3 +1,4 @@
+import 'package:fluffychat/ui/notion/notion.dart';
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/personal/personal_client.dart';
@@ -230,8 +231,9 @@ void main() {
         ),
       );
       await tester.pump();
-      final choose = find.widgetWithText(TextButton, 'Choose a source');
-      expect(tester.widget<TextButton>(choose).onPressed, isNotNull);
+      final choose = find.widgetWithText(NotionListRow, 'Notifications');
+      await tester.scrollUntilVisible(choose, 200);
+      expect(tester.widget<NotionListRow>(choose).onTap, isNotNull);
       await tester.tap(choose);
       await tester.pumpAndSettle();
       expect(

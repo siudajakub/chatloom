@@ -38,87 +38,92 @@ class NotionInboxSearch extends StatelessWidget {
       onClose();
       return KeyEventResult.handled;
     },
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: controller,
-                focusNode: focusNode,
-                onChanged: onChanged,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  hintText: 'Search your chats',
-                  prefixIcon: const Icon(Icons.search, size: 20),
-                  suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: controller,
-                    builder: (context, value, _) => TextButton(
-                      onPressed: value.text.isEmpty
-                          ? null
-                          : () {
-                              controller.clear();
-                              onChanged('');
-                              focusNode.requestFocus();
-                            },
-                      child: const Text('Clear'),
+    child: ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  onChanged: onChanged,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: 'Search your chats',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: controller,
+                      builder: (context, value, _) => TextButton(
+                        onPressed: value.text.isEmpty
+                            ? null
+                            : () {
+                                controller.clear();
+                                onChanged('');
+                                focusNode.requestFocus();
+                              },
+                        child: const Text('Clear'),
+                      ),
                     ),
-                  ),
-                  isDense: true,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(5),
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(5),
+                    ),
                   ),
                 ),
               ),
-            ),
-            NotionIconButton(
-              icon: Icons.close,
-              label: 'Close search',
-              onPressed: onClose,
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'Private search · loaded conversation names and metadata',
-          style: TextStyle(
-            fontSize: 12,
-            height: 1.4,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 8,
-          runSpacing: 4,
-          children: [
-            TextButton.icon(
-              onPressed: onHistorySearch,
-              icon: const Icon(Icons.manage_search, size: 18),
-              label: const Text('Search message history'),
-            ),
-            TextButton.icon(
-              onPressed: searchingPublic ? null : onPublicDiscovery,
-              icon: NotionMorphSwitcher(
-                rotate: false,
-                child: searchingPublic
-                    ? const NotionDelayedSpinner(
-                        key: ValueKey('searching'),
-                        size: 16,
-                      )
-                    : const Icon(
-                        Icons.public,
-                        key: ValueKey('public'),
-                        size: 18,
-                      ),
+              NotionIconButton(
+                icon: Icons.close,
+                label: 'Close search',
+                onPressed: onClose,
               ),
-              label: const Text('Discover publicly'),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Private search · loaded conversation names and metadata',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.4,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
-            ?options,
-          ],
-        ),
-      ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              TextButton.icon(
+                onPressed: onHistorySearch,
+                icon: const Icon(Icons.manage_search, size: 18),
+                label: const Text('Search message history'),
+              ),
+              TextButton.icon(
+                onPressed: searchingPublic || value.text.trim().isEmpty
+                    ? null
+                    : onPublicDiscovery,
+                icon: NotionMorphSwitcher(
+                  rotate: false,
+                  child: searchingPublic
+                      ? const NotionDelayedSpinner(
+                          key: ValueKey('searching'),
+                          size: 16,
+                        )
+                      : const Icon(
+                          Icons.public,
+                          key: ValueKey('public'),
+                          size: 18,
+                        ),
+                ),
+                label: const Text('Discover publicly'),
+              ),
+              ?options,
+            ],
+          ),
+        ],
+      ),
     ),
   );
 }

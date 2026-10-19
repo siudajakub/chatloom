@@ -22,6 +22,7 @@ import 'package:fluffychat/utils/size_string.dart';
 import 'package:fluffychat/utils/start_push_foreground_service.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/dialog_text_field.dart';
+import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart' hide Result;
 import 'package:mime/mime.dart';
@@ -349,11 +350,8 @@ class SendFileDialogState extends State<SendFileDialog> {
         return PopScope(
           canPop: !_sending,
           child: AlertDialog.adaptive(
-            insetPadding: const EdgeInsets.all(16),
-            title: Text(
-              sendStr,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-            ),
+            insetPadding: const EdgeInsets.all(NotionSpace.md),
+            title: Text(sendStr, style: NotionType.heading),
             content: SizedBox(
               width: 256,
               child: SingleChildScrollView(
@@ -368,7 +366,9 @@ class SendFileDialogState extends State<SendFileDialog> {
                       Semantics(
                         liveRegion: true,
                         child: Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.only(
+                            bottom: NotionSpace.sm,
+                          ),
                           child: Text(
                             _problem!,
                             style: TextStyle(color: theme.colorScheme.error),

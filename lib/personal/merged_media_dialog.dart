@@ -436,13 +436,20 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
   Widget build(BuildContext context) => PopScope(
     canPop: !sending,
     child: AlertDialog(
-      insetPadding: const EdgeInsets.all(16),
-      titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-      contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-      title: const Text(
-        'Send attachments',
-        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+      insetPadding: const EdgeInsets.all(NotionSpace.md),
+      titlePadding: const EdgeInsets.fromLTRB(
+        NotionSpace.lg,
+        NotionSpace.lg,
+        NotionSpace.lg,
+        NotionSpace.xs,
       ),
+      contentPadding: const EdgeInsets.fromLTRB(
+        NotionSpace.lg,
+        NotionSpace.sm,
+        NotionSpace.lg,
+        NotionSpace.md,
+      ),
+      title: const Text('Send attachments', style: NotionType.heading),
       content: SizedBox(
         width: 480,
         child: SingleChildScrollView(
@@ -469,7 +476,7 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
                           dimension: 56,
                           child: file.file is MatrixImageFile
                               ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
+                                  borderRadius: NotionRadius.mdAll,
                                   child: Image.memory(
                                     file.file.bytes,
                                     fit: BoxFit.cover,
@@ -521,7 +528,7 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
               ),
               if (problem != null)
                 Padding(
-                  padding: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.only(top: NotionSpace.sm),
                   child: Text(
                     problem!,
                     style: TextStyle(
@@ -531,7 +538,7 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
                 ),
               if (sending)
                 const Padding(
-                  padding: EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.only(top: NotionSpace.sm),
                   child: LinearProgressIndicator(),
                 ),
             ],
