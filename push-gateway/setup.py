@@ -4,6 +4,7 @@
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -72,6 +73,21 @@ def register(config_path, app_id, nonce_file, pushkey, nonce):
     atomic_private_json(config_path, value)
 
 
+def enable_enrollment(config_path, user, server_name, origin):
+    """Authorize an account once, outside Git, without exposing its identifier."""
+    config_path = outside_repository(config_path)
+    Config.load(config_path)
+    if not isinstance(user, str) or not user.startswith("@") or ":" not in user or len(user) > 512:
+        raise ConfigError()
+    value = private_json(config_path)
+    owners = set(value.get("registration_allowed_users_sha256", []))
+    owners.add(hashlib.sha256(user.encode()).hexdigest())
+    value.update(registration_allowed_users_sha256=sorted(owners),
+                 registration_openid_server=server_name, registration_openid_origin=origin)
+    Config(**{**value, "registrations": tuple(Registration(**e) for e in value["registrations"])}).validate()
+    atomic_private_json(config_path, value)
+
+
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -84,6 +100,10 @@ def main():
     add.add_argument("--nonce-file", required=True)
     reminder = commands.add_parser("reminder-key")
     reminder.add_argument("--file", required=True)
+    enrollment = commands.add_parser("enable-enrollment")
+    enrollment.add_argument("--config", required=True)
+    enrollment.add_argument("--server-name", required=True, help="Pinned OpenID matrix_server_name")
+    enrollment.add_argument("--origin", required=True, help="Pinned HTTPS federation origin; no discovery")
     args = parser.parse_args()
     try:
         if args.command == "check-android":
@@ -94,6 +114,10 @@ def main():
                 raise ConfigError()
             atomic_private_json(args.file, {"token": secrets.token_urlsafe(32)})
             print("Private reminder credential created; no service or API changed")
+        elif args.command == "enable-enrollment":
+            user = getpass.getpass("Own Matrix user ID (hidden): ")
+            enable_enrollment(args.config, user, args.server_name, args.origin)
+            print("Account authorized for automatic setup; no service or API changed")
         else:
             pushkey = getpass.getpass("FCM registration token (hidden): ")
             nonce = getpass.getpass("Gateway nonce (hidden; empty generates one): ") or secrets.token_urlsafe(32)

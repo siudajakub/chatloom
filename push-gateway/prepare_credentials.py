@@ -25,10 +25,18 @@ def source_bytes(directory_fd, name):
     try:
         info = os.fstat(fd)
         groups = {*os.getgroups(), os.getegid()}
+        # systemd's read-only credential mount can expose root:root 0440 files
+        # with a per-UID ACL. Opening the file already checks that ACL. Permit
+        # this precise root-owned, read-only case without trusting other groups
+        # on a writable filesystem or relaxing the private runtime checks.
+        systemd_read_only = (info.st_uid == 0
+                            and stat.S_IMODE(info.st_mode) == 0o440
+                            and bool(os.fstatvfs(fd).f_flag & os.ST_RDONLY))
         if (not stat.S_ISREG(info.st_mode)
                 or stat.S_IMODE(info.st_mode) not in (0o400, 0o440, 0o600)
                 or info.st_uid not in (0, os.geteuid())
-                or (info.st_mode & 0o040 and info.st_gid not in groups)
+                or (info.st_mode & 0o040 and info.st_gid not in groups
+                    and not systemd_read_only)
                 or info.st_size > MAXIMUM or info.st_nlink != 1):
             raise CredentialError()
         with os.fdopen(fd, 'rb', closefd=False) as stream:
@@ -45,7 +53,11 @@ def prepare(source, runtime):
     runtime = Path(runtime)
     if not source.is_absolute() or not runtime.is_absolute():
         raise CredentialError()
-    source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    # systemd may grant this UID search-only access to its credential directory.
+    # A path descriptor needs no directory listing permission; openat below
+    # still enforces search/read ACLs and all individual file checks.
+    source_fd = os.open(source, getattr(os, 'O_PATH', os.O_RDONLY)
+                        | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         source_info = os.fstat(source_fd)
         if source_info.st_uid not in (0, os.geteuid()) or source_info.st_mode & 0o022:

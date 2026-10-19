@@ -1,8 +1,29 @@
-# Własny push Androida — konfiguracja po buildzie
+# Własny push Androida — automatyczna konfiguracja
 
-Kod i testy są lokalnie gotowe. Bez własnego projektu Firebase, klucza serwisowego, rejestracji telefonu oraz wybranego publicznego HTTPS **nie potwierdzono dostarczania powiadomień**. Nie wdrożono usługi, nie ustawiono DNS i nie używano sekretów innych usług.
+Aktualizacja 2026-10-16: klient i gateway mają lokalny automatyczny enrollment. Ta zmiana nie została jeszcze wdrożona na VPS ani zainstalowana na telefonie. Historyczny stan wdrożenia z 6 października jest opisany niżej; nie jest świeżym potwierdzeniem runtime. **Dostarczanie powiadomień na telefon nadal wymaga odbioru.**
+
+## Przepływ po zalogowaniu
+
+Klient zna domyślny adres `https://push.example.org/_matrix/push/v1/notify`. Na Androidzie zapisuje losowy 256-bitowy nonce w secure storage i uzyskuje krótkotrwały token [Matrix OpenID](https://spec.matrix.org/v1.16/client-server-api/#openid). Wysyła `POST /_personal/push/v1/register` z dokładnym app ID, tokenem FCM, nonce, skrótem konta i OpenID proof. Główne credentials Matrix, wiadomości i kontakty nie trafiają do tego endpointu. Oba transporty odmawiają przekierowań.
+
+Gateway sprawdza proof przez [OpenID userinfo](https://spec.matrix.org/v1.16/server-server-api/#get_matrixfederationv1openiduserinfo) na HTTPS origin przypiętym przez operatora. Nie wykonuje discovery ani połączeń pod adres podany przez telefon. Skrót zwróconego `sub` musi odpowiadać żądaniu i prywatnej allowliście kont. Proof nie jest zapisywany. Po potwierdzeniu gateway zapisuje rejestrację w prywatnej bazie SQLite (plik 0600, katalog 0700), bez restartu usługi; klient dopiero wtedy ustawia pusher Matrix. Token i nonce są sekretami operacyjnymi koniecznymi do wysyłki, więc backup tej bazy musi być prywatny. Hashe kont nie są anonimizacją identyfikatorów.
+
+Ponowienie tego samego żądania jest idempotentne. Nowy token dla tego samego konta/app ID zastępuje stary w jednej transakcji i przeżywa restart. App ID zawiera Matrix device ID, więc po wylogowaniu i ponownym zalogowaniu ten sam token FCM przychodzi z nowym app ID: dla tego samego (zweryfikowanego przez OpenID) konta gateway przenosi token na nowy app ID w jednej transakcji (aktualizacja 2026-10-18); `409 M_CONFLICT` dostaje tylko inne konto próbujące przejąć zarejestrowany token. Dynamiczny app ID zastępuje również jego historyczną rejestrację statyczną; odebranie kontu uprawnienia nie przywraca starego tokena statycznego. Operator powinien wycofać odpowiadające stare wpisy config dopiero w kontrolowanym wdrożeniu. Limit to 8 dynamicznych rejestracji na konto (`MAX_DEVICES_PER_ACCOUNT`); nowa rejestracja ponad limit usuwa najdawniej zarejestrowaną (lub odświeżoną) rejestrację tego samego konta zamiast odmawiać (`M_DEVICE_LIMIT` już nie występuje). Allowlista ma maks. 16 kont, więc tabela pozostaje ograniczona. Klient wymaga jednego zalogowanego konta ze względu na obecny routing payloadu. Wybór innej własnej bramy i istniejący wybór UnifiedPush pozostają ręcznymi ścieżkami zaawansowanymi.
+
+## Jednorazowe przygotowanie usługi przez operatora
+
+1. Zachowaj prywatną kopię bieżącego config, bazy stanu, kodu i konfiguracji proxy. Istniejące FCM credentials i klucz podpisu pozostają na miejscu. Ta instrukcja nie upoważnia sama do restartu lub wdrożenia.
+2. Zweryfikuj obsługę OpenID przez rzeczywisty homeserver. `registration_openid_server` musi być dokładnym `matrix_server_name` z jego proof, a `registration_openid_origin` jawnie sprawdzonym origin HTTPS jego federation OpenID userinfo (bez ścieżki lub końcowego slash). Wartości przykładowe `matrix.beeper.com` / `https://matrix.beeper.com` są pinami przykładu, nie wynikiem odbioru konta.
+3. W upoważnionym oknie, poza repo, wykonaj `rtk python3 setup.py enable-enrollment --config PRIVATE_CONFIG --server-name PINNED_SERVER --origin PINNED_HTTPS_ORIGIN`. Własny Matrix ID wpisz wyłącznie w ukrytym promptcie TTY. Helper zapisuje jedynie jego SHA-256 w `registration_allowed_users_sha256`, waliduje config przed zapisem i nie wykonuje API ani restartu. Nigdy nie zezwalaj wszystkim użytkownikom serwera. Pusta allowlista oznacza `503 M_REGISTRATION_DISABLED`.
+4. Wdróż zweryfikowany kod gateway wraz z dotychczasowymi pinned dependencies i preparerem credentials. Zwaliduj config przez `--check`, zaktualizuj istniejący reverse proxy o dokładną ścieżkę `/_personal/push/v1/register` według szablonu i kontrolowanie uruchom nową wersję. Nie publikuj `/internal/reminder`, `/healthz`, portu 8088 ani innych ścieżek. Rejestracja ma `no-store`, wyłączone logowanie treści/URL, limit współbieżności i globalny limit 20 weryfikacji OpenID/minutę. Zachowaj pozostałe vhosty.
+5. Wgraj zgodnie podpisany APK jako aktualizację, bez odinstalowania i kasowania danych. Otwórz aplikację, zaloguj się i zaakceptuj systemową zgodę Androida. Nie trzeba kopiować tokena, adresu ani klucza. Starsze puste ustawienie adresu migruje w locie do domyślnej bramy.
+6. Oddzielnie sprawdź rejestrację, FCM receipt, widoczne powiadomienie i otwarcie właściwej rozmowy: foreground, wygaszony ekran, Doze, offline → reconnect i restart aplikacji. Test wymaga kontrolowanego źródła/odbiorcy wskazanego przez J. Sam enrollment nie wysyła testowego push ani wiadomości.
+
+Klient automatycznie odświeża token i po błędzie przejściowym podejmuje do pięciu ponowień: 30 s → 60 s → 120 s → 240 s → 300 s. Timery działają tylko na pierwszym planie. Przejście w tło/detach zatrzymuje timer, powrót zachowuje budżet prób, a wylogowanie usuwa stan retry danego konta. Po wyczerpaniu prób lub błędzie autoryzacji klient pokazuje potrzebę widocznej ponownej konfiguracji. Nowa widoczna konfiguracja, restart lub rotacja tokena rozpoczyna świeżą serię. Zgoda systemowa jest żądana tylko w widocznym setupie, nigdy w callbacku tokena lub automatycznym retry. Nie ma obietnicy działania po Android force-stop ani gwarancji FCM/Doze.
 
 Gateway przyjmuje `POST /_matrix/push/v1/notify`, wiąże dokładne własne `app_id`, token FCM i losowy nonce. Nonce przechodzi w `device.data.gateway_nonce`, nigdy w URL. Aplikacja ma Android package `pl.personal.chat`; Matrix pusher ma `pl.personal.chat.<deviceID>` (maks. 64 znaki), zgodnie z kodem klienta. Nie przejmuje pusherów oficjalnego Beepera.
+
+Problemy pojedynczego urządzenia nie blokują kolejki homeservera (aktualizacja 2026-10-17). Brakujący lub błędny `gateway_nonce` jest liczony, urządzenie jest pomijane bez wysyłki, a odpowiedź to nadal **200** bez wpisu w `rejected` — homeserver nie wycofuje się z backoffem i nie usuwa pushera. Inny `format` niż `event_id_only` przy poprawnym nonce jest liczony, ale wysyłka następuje (payload FCM i tak nie zawiera treści). Nieznany pushkey lub inny app ID pozostają w `rejected`. **400** oznacza wyłącznie niepoprawną kopertę JSON (np. brak `notification`, zła lista `devices`, złe `counts`/`event_id`/`room_id`).
 
 ## Konfiguracja Firebase — 2026-10-06
 
@@ -14,7 +35,7 @@ Brama została wdrożona pod `https://push.example.org/_matrix/push/v1/notify`. 
 
 Rejestracje są nadal puste, nie ma potwierdzonego odbioru na telefonie. Pozostają rejestracja urządzenia i fizyczne testy. Szczegóły wdrożenia: `../../docs/personal-push-deployment-2026-10-06.md`.
 
-## Kroki J
+## Historyczna ręczna konfiguracja / własny alternatywny gateway
 
 | Krok | Co przygotować / wykonać | Dowód odbioru |
 |---|---|---|
@@ -38,7 +59,7 @@ W upoważnionej konfiguracji utwórz sekret `setup.py reminder-key --file /etc/p
 
 `service_account_file` musi wskazywać `/run/personal-push-gateway/fcm-service-account.json`, zgodnie z przykładem. Preparer sprawdza zgodność obu ścieżek z prywatnym RuntimeDirectory. Gdy `reminder_credential_file` jest pominięte lub null, relay pozostaje wyłączony i dodatkowy credential nie jest wymagany. Gdy jest ustawione, preparer wymaga `reminder-relay.json` i kopiuje go razem z config/FCM jako 0600; brak pliku, błędna ścieżka, owner, mode, symlink lub rozmiar powyżej 65536 B blokuje start przed zapisem kopii. Niepoprawny JSON/token relaya blokuje następujące po preparerze `gateway.py --check`. Nie kieruj config do oryginalnego `/run/credentials/...`, ponieważ validator owner-only celowo odrzuca 0440. Źródła muszą mieć owner root/usługi, mode 0400/0440/0600 i jeden hardlink; 0440 wymaga grupy usługi. Katalog runtime musi należeć do UID usługi i mieć 0700. Przepływ nie drukuje credentiali i nie wymaga połączenia z Google.
 
-Gateway kieruje do zarejestrowanych aktywnych urządzeń jedynie `{personal_wake: "reminder"}`. Android po tym sygnale synchronizuje i odszyfrowuje journal; alert wynika wyłącznie z zaufanego przypomnienia, którego termin minął. Sygnał nie zawiera tekstu powiadomienia i sam nie jest dowodem należnego przypomnienia. Brak rejestracji / same nieważne tokeny zwraca **503 `M_NO_DEVICES`**, z `Retry-After: 300`; worker zachowuje hint i ponawia z backoff. **200** oznacza potwierdzone przyjęcie przez FCM wszystkich zarejestrowanych ważnych urządzeń i trwały zapis dedup. Nie oznacza dostarczenia na ekran. Przy timeoutach / częściowych błędach jest 503, a kolejna próba tego samego hintu omija wcześniej potwierdzone urządzenia. Sam `emittedAt` jest walidowany, bez trwałego wygaszenia zaległego hintu i bez zapisywania osobistych timestampów do logów.
+Gateway kieruje do zarejestrowanych aktywnych urządzeń jedynie `{personal_wake: "reminder"}`. Credential relaya nie jest przypisany do konta: przy więcej niż jednym koncie w `registration_allowed_users_sha256` wake trafia do urządzeń wszystkich dozwolonych kont (oraz statycznych rejestracji). Sygnał jest bez treści, a telefon pokazuje wyłącznie własne zaufane przypomnienia, więc to tylko zbędne wybudzenie innych telefonów. Powiązanie relaya z jednym kontem wymagałoby nowego pola konfiguracji — świadomie niewdrożone; przy jednym koncie (stan obecny) nic się nie zmienia. Android po tym sygnale synchronizuje i odszyfrowuje journal; alert wynika wyłącznie z zaufanego przypomnienia, którego termin minął. Sygnał nie zawiera tekstu powiadomienia i sam nie jest dowodem należnego przypomnienia. Brak rejestracji / same nieważne tokeny zwraca **503 `M_NO_DEVICES`**, z `Retry-After: 300`; worker zachowuje hint i ponawia z backoff. **200** oznacza potwierdzone przyjęcie przez FCM wszystkich zarejestrowanych ważnych urządzeń i trwały zapis dedup. Nie oznacza dostarczenia na ekran. Przy timeoutach / częściowych błędach jest 503, a kolejna próba tego samego hintu omija wcześniej potwierdzone urządzenia. Sam `emittedAt` jest walidowany, bez trwałego wygaszenia zaległego hintu i bez zapisywania osobistych timestampów do logów.
 
 ## Uruchomienie i granice
 
@@ -50,8 +71,43 @@ Obecny minimalny routing pasuje do jednego Matrix account obsługującego wszyst
 
 Potwierdzone wysyłki są deduplikowane przez maksymalnie 24 godziny / 20 tys. rekordów. Na dysku zostają tylko skróty token/event/room oraz czasy — bez wiadomości i identyfikatorów źródłowych. Utrata odpowiedzi FCM jest nieustalona: gateway odpowiada `503` z `Retry-After`, żeby homeserver ponowił; klient musi także tłumić duplikaty według event ID. Nie ma obietnicy exactly-once ani gwarancji dostarczenia przez FCM. Transient/IAM/błędny projekt nie usuwa pusherów; dopiero strukturalne `UNREGISTERED` lub `SENDER_ID_MISMATCH` trafiają do `rejected`. Rejestrację odświeżonego tokena trzeba dodać do prywatnego config przed ponownym ustawieniem pushera.
 
+## Diagnostyka bez treści: log i liczniki
+
+Każde żądanie (także odrzucone przed parsowaniem) daje jedną linię INFO w journalu usługi, np.:
+
+```
+req path=notify status=200 reason=ok devices=1 event=1 authorized=1 skipped=0 unknown=0 appid_mismatch=0 prio=high format=ok nonce=ok fcm=accepted ua=Synapse/1.98.0 ms=143
+req path=notify status=400 reason=bad_json ua=Go-http-client/2.0 ms=0
+```
+
+Linia zawiera tylko enumy, liczby, czas i token produktu z User-Agent (np. `Synapse/1.98.0`). Nigdy: tokenów, nonce, Matrix/room/event ID, adresów IP, nagłówków ani treści. `reason` dla odrzuceń transportu: `te`, `no_length`, `too_large`, `content_type`, `short_body`, `bad_json`, `unknown_path`, `method`, `malformed`; dla koperty: `envelope`, `devices`, `counts`, `event`; dla FCM: `fcm_retry`; przeciążenie: `busy`. Wartości `fcm`: `accepted`, `transient`, `rejected`, `dedup`, `ratelimited`, `invalid_token`; `nonce`/`format`: `ok`, `missing`, `mismatch`/`other`.
+
+Żądanie bez żadnego autoryzowanego urządzenia (zła koperta, nieznany pushkey, inny app ID, brak/zły nonce) jest walidowane i klasyfikowane bez globalnej blokady i bez otwierania bazy (aktualizacja 2026-10-18). Rejestracje aktywne są trzymane w pamięci; zmienia je tylko `register` po zatwierdzonej transakcji. Liczniki takich żądań (także odrzuceń transportu, `busy`, nieudanych rejestracji i relaya) czekają w pamięci i trafiają do bazy: w transakcji następnej prawdziwej wysyłki, najpóźniej co `STATS_FLUSH_SECONDS` (60 s, z pętli serwera, bez czekania na blokadę) oraz przy zatrzymaniu usługi (SIGTERM, best effort). `--stats` czyta tylko bazę, więc te liczniki mogą się spóźniać do ok. minuty; liczniki z ostatniej minuty przed awarią procesu mogą przepaść. Linia logu pozostaje jedna na żądanie i jest zapisywana natychmiast.
+
+Te same zdarzenia trafiają do tabeli `stats(name, n, last)` w `push_state.sqlite`, w tej samej transakcji co deduplikacja (nazwy są stałymi enumami, np. `notify.requests`, `notify.status.200`, `notify.reason.bad_json`, `notify.nonce.mismatch`, `notify.device.skipped`, `notify.fcm.accepted`, `reminder.fcm.dedup`, `register.status.200`, `server.busy`). Odczyt tylko do odczytu (bez połączeń z Google, bez zapisu, nie tworzy bazy):
+
+```
+sudo /opt/personal-push-gateway/.venv/bin/python /opt/personal-push-gateway/gateway.py --config /etc/personal-push/config.json --stats
+sudo sqlite3 -readonly /var/lib/personal-push-gateway/push_state.sqlite "SELECT name, n, datetime(last,'unixepoch') FROM stats ORDER BY name;"
+sudo journalctl -u personal-push-gateway --since today -o cat --no-pager | grep '^req ' | cut -d' ' -f2-4 | sort | uniq -c
+```
+
+Jak czytać (`--stats` dodaje też listę `hints`):
+
+| Obserwacja | Wniosek |
+|---|---|
+| brak `notify.requests` po wysłaniu kontrolowanej wiadomości | homeserver nie wywołuje pushera (hipoteza H1) — problem przed gatewayem |
+| `notify.status.4xx` / `notify.reason.*` | homeserver wywołuje, ale koperta jest odrzucana; powód w `reason` |
+| `notify.nonce.missing` / `notify.nonce.mismatch`, `notify.device.skipped` | pusher na koncie nie pasuje do rejestracji; ponów konfigurację na telefonie |
+| `notify.device.unknown` / `appid_mismatch` | pusher bez rejestracji w gateway (np. stary token) |
+| `notify.format.other` / `notify.format.missing` (hint `pusher_format_not_event_id_only`) | pusher nie ma `format=event_id_only`, więc homeserver wysyła do gatewaya pełną treść; gateway nadal przekazuje tylko ID, ale pusher trzeba ustawić ponownie na telefonie |
+| `notify.fcm.transient` / `ratelimited` | Google/IAM/limit; homeserver ponowi po `Retry-After` |
+| `notify.fcm.accepted` rośnie, a alertu brak | problem po stronie telefonu — sprawdź Settings → Notifications → Notification diagnostics |
+
+Liczniki są od chwili wdrożenia tej wersji; wcześniejszych żądań nie odtworzą. Tabela ma ograniczony zbiór nazw i nie wymaga czyszczenia.
+
 ## Weryfikacja bez kont i kosztów
 
-`python3 -W error::ResourceWarning -m unittest discover -s push-gateway/tests -v` w katalogu repo sprawdza prywatność payloadu, nonce/rejestrację, walidację przed side effects, dedup przy współbieżności/restartach, rate limit, nieprawidłowe tokeny, transient `503`, kontrakt HTTP, przypomnienia i ochronę config. Publisher jest wstrzykniętą atrapą; żaden test nie wysyła do FCM. W venv z `requirements.txt` uruchamia się także test rzeczywistego signera `google-auth` z syntetycznym kluczem i zamockowanymi OAuth/FCM endpointami. Całe **15 testów PASS** w takim izolowanym venv; bez zależności test auth jest jawnie pomijany. Nowe syntetyczne regresje obu preparerów są automatycznie wykrywane w tym samym katalogu testów; aktualny zakres i niewykonany odbiór systemd: [credentials acceptance](../docs/personal/credentials-acceptance-2026-10-15.md). `python3 -m py_compile push-gateway/gateway.py push-gateway/setup.py push-gateway/prepare_credentials.py worker/deploy/prepare_credentials.py` sprawdza składnię. Testy nie dowodzą fizycznego push ani zgodności IAM/TLS/Doze.
+`python3 -W error::ResourceWarning -m unittest discover -s push-gateway/tests -v` w katalogu repo sprawdza prywatność payloadu, nonce/rejestrację, walidację przed side effects, dedup przy współbieżności/restartach, rate limit, nieprawidłowe tokeny, transient `503`, kontrakt HTTP, przypomnienia i ochronę config. Publisher jest wstrzykniętą atrapą; żaden test nie wysyła do FCM. W venv z `requirements.txt` uruchamia się także test rzeczywistego signera `google-auth` z syntetycznym kluczem i zamockowanymi OAuth/FCM endpointami. Stan 2026-10-18: 76 testów w katalogu `tests` (gateway, rejestracja, preparery) PASS; bez `google-auth` test signera jest jawnie pomijany (1 skip). Nowe syntetyczne regresje obu preparerów są automatycznie wykrywane w tym samym katalogu testów; aktualny zakres i niewykonany odbiór systemd: [credentials acceptance](../docs/personal/credentials-acceptance-2026-10-15.md). `python3 -m py_compile push-gateway/gateway.py push-gateway/setup.py push-gateway/prepare_credentials.py worker/deploy/prepare_credentials.py` sprawdza składnię. Testy nie dowodzą fizycznego push ani zgodności IAM/TLS/Doze.
 
 Źródła: [Matrix Push Gateway API](https://spec.matrix.org/v1.16/push-gateway-api/), [FCM HTTP v1](https://firebase.google.com/docs/cloud-messaging/send/v1-api), [kody błędów FCM](https://firebase.google.com/docs/cloud-messaging/error-codes), [IAM FCM](https://docs.cloud.google.com/iam/docs/roles-permissions/firebasecloudmessaging), [Android Firebase setup](https://firebase.google.com/docs/android/setup), [google-auth transport](https://googleapis.dev/python/google-auth/latest/reference/google.auth.transport.html), [Sygnal FCM envelope](https://github.com/matrix-org/sygnal/blob/main/sygnal/gcmpushkin.py). Własny kod SDK `packages/matrix/lib/src/utils/push_notification.dart` jest bezpośrednim źródłem zgodności JSON stringów z klientem.

@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -150,6 +151,30 @@ class WorkerCredentialsTests(unittest.TestCase):
 
 class GatewayCredentialsTests(WorkerCredentialsTests):
     preparer = gateway
+
+    def test_root_readonly_systemd_acl_credentials_are_copied_privately(self):
+        original = os.fstat
+        def root_credentials(fd):
+            info = original(fd)
+            if stat.S_ISREG(info.st_mode):
+                fields = list(info)
+                fields[4], fields[5] = 0, 987654321
+                return os.stat_result(fields)
+            return info
+        with patch.object(self.preparer.os, 'fstat', side_effect=root_credentials), patch.object(
+                self.preparer.os, 'getgroups', return_value=[]), patch.object(
+                self.preparer.os, 'getegid', return_value=123456789), patch.object(
+                self.preparer.os, 'fstatvfs', return_value=SimpleNamespace(f_flag=os.ST_RDONLY)):
+            self.prepare()
+        self.assertEqual((self.runtime / self.primary.name).read_bytes(), self.primary.read_bytes())
+        self.assertEqual(stat.S_IMODE((self.runtime / self.primary.name).stat().st_mode), 0o600)
+
+    def test_readonly_mount_never_allows_world_readable_or_group_writable_source(self):
+        for mode in (0o444, 0o640, 0o660):
+            with self.subTest(mode=mode):
+                self.primary.chmod(mode)
+                with patch.object(self.preparer.os, 'fstatvfs', return_value=SimpleNamespace(f_flag=os.ST_RDONLY)):
+                    self.assert_refused()
 
     def setUp(self):
         super().setUp()
