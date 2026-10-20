@@ -6,13 +6,13 @@
 import 'dart:async';
 
 import 'package:archive/archive.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/settings_emotes/settings_emotes.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:collection/collection.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -299,7 +299,6 @@ class _EmojiImportPreviewState extends State<_EmojiImportPreview> {
                       hintText: L10n.of(context).emoteShortcode,
                       prefixText: ': ',
                       suffixText: ':',
-                      border: const OutlineInputBorder(),
                       prefixStyle: TextStyle(
                         color: theme.colorScheme.secondary,
                         fontWeight: FontWeight.bold,

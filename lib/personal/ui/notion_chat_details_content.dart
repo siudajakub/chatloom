@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/pages/image_viewer/image_viewer.dart';
-import 'package:fluffychat/personal/merged_chat_page.dart' show SourceChatPage;
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/ui/conversation_content_controller.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
-import 'package:fluffychat/utils/url_launcher.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:chatloom/pages/image_viewer/image_viewer.dart';
+import 'package:chatloom/personal/merged_chat_page.dart' show SourceChatPage;
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/ui/conversation_content_controller.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:chatloom/utils/url_launcher.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show RoundMediaPolicy;
@@ -650,63 +650,76 @@ class _NotionConversationContentPageState
                         scale: NotionMotion.pressRow,
                         child: InkWell(
                           onTap: () => _openEvent(context, event),
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              if (_thumbnailAllowed(event))
-                                MxcImage(
-                                  event: event,
-                                  width: 240,
-                                  height: 240,
-                                  fit: BoxFit.cover,
-                                  isThumbnail: true,
-                                  animated: false,
-                                  placeholder: _thumbnailPlaceholder,
-                                )
-                              else
-                                ColoredBox(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.surfaceContainerHigh,
-                                  child: Icon(
-                                    video
-                                        ? Icons.videocam_outlined
-                                        : Icons.image_outlined,
+                          borderRadius: NotionRadius.smAll,
+                          // Rounded tiles; a clip per tile is cheap next to
+                          // the image decode (no blur in the grid).
+                          child: ClipRRect(
+                            borderRadius: NotionRadius.smAll,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                if (_thumbnailAllowed(event))
+                                  MxcImage(
+                                    event: event,
+                                    width: 240,
+                                    height: 240,
+                                    fit: BoxFit.cover,
+                                    isThumbnail: true,
+                                    animated: false,
+                                    placeholder: _thumbnailPlaceholder,
+                                  )
+                                else
+                                  ColoredBox(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.surfaceContainerHigh,
+                                    child: Icon(
+                                      video
+                                          ? Icons.videocam_outlined
+                                          : Icons.image_outlined,
+                                    ),
                                   ),
-                                ),
-                              if (video)
-                                Align(
-                                  alignment: Alignment.bottomRight,
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(6),
-                                    child: Container(
-                                      color: Colors.black54,
-                                      padding: const EdgeInsets.all(3),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(
-                                            Icons.play_circle_outline,
-                                            color: Colors.white,
-                                            size: 18,
-                                          ),
-                                          if (event.infoMap['duration']
-                                              is num) ...[
-                                            const SizedBox(width: 4),
-                                            Text(
-                                              '${Duration(milliseconds: (event.infoMap['duration'] as num).toInt()).inSeconds}s',
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 12,
-                                              ),
+                                if (video)
+                                  Align(
+                                    alignment: Alignment.bottomRight,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(6),
+                                      child: Container(
+                                        decoration: const BoxDecoration(
+                                          color: NotionMediaColors.scrim,
+                                          borderRadius: NotionRadius.pillAll,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: NotionSpace.xs,
+                                          vertical: NotionSpace.xxs,
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(
+                                              Icons.play_circle_outline,
+                                              color: NotionMediaColors.onScrim,
+                                              size: 18,
                                             ),
+                                            if (event.infoMap['duration']
+                                                is num) ...[
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                '${Duration(milliseconds: (event.infoMap['duration'] as num).toInt()).inSeconds}s',
+                                                style: NotionType.caption
+                                                    .copyWith(
+                                                      color: NotionMediaColors
+                                                          .onScrim,
+                                                    ),
+                                              ),
+                                            ],
                                           ],
-                                        ],
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),

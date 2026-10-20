@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// The same presentation is used by ordinary and merged conversation adapters.
@@ -341,12 +341,13 @@ class NotionSharedContentBlock extends StatelessWidget {
       enabled: onTap != null,
       child: InkWell(
         onTap: onTap,
+        borderRadius: NotionRadius.smAll,
         child: Container(
           width: thumbnail != null ? 144 : 88,
           height: 92,
           decoration: BoxDecoration(
             border: Border.all(color: Theme.of(context).dividerColor),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: NotionRadius.smAll,
           ),
           clipBehavior: Clip.antiAlias,
           child:
@@ -391,7 +392,7 @@ class NotionValueTag extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: NotionRadius.pillAll,
     ),
     child: Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,

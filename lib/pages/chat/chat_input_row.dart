@@ -5,22 +5,22 @@
 
 import 'dart:async';
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/pages/chat/notion_conversation.dart';
+import 'package:chatloom/pages/chat/recording_input_row.dart';
+import 'package:chatloom/pages/chat/recording_view_model.dart';
+import 'package:chatloom/pages/chat/voice_record_button.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/round_video/round_outbox_panel.dart';
+import 'package:chatloom/personal/round_video/round_record_button.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/other_party_can_receive.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:emoji_picker_flutter/locales/default_emoji_set_locale.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/compact_composer.dart';
-import 'package:fluffychat/pages/chat/notion_conversation.dart';
-import 'package:fluffychat/pages/chat/recording_input_row.dart';
-import 'package:fluffychat/pages/chat/recording_view_model.dart';
-import 'package:fluffychat/pages/chat/voice_record_button.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/round_video/round_outbox_panel.dart';
-import 'package:fluffychat/personal/round_video/round_record_button.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/other_party_can_receive.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -86,7 +86,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
         style: IconButton.styleFrom(
           minimumSize: const Size.square(NotionSize.touchTarget),
           foregroundColor: Theme.of(context).colorScheme.onSurface,
-          shape: const RoundedRectangleBorder(borderRadius: NotionRadius.smAll),
+          shape: NotionShapes.pill,
         ),
         onSelected: (choice) {
           used();

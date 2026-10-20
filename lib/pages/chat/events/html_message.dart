@@ -3,16 +3,17 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/code_highlight_theme.dart';
+import 'package:chatloom/utils/event_checkbox_extension.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:collection/collection.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/code_highlight_theme.dart';
-import 'package:fluffychat/utils/event_checkbox_extension.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:highlight/highlight.dart' show highlight;
 import 'package:html/dom.dart' as dom;
@@ -368,7 +369,7 @@ class HtmlMessage extends StatelessWidget {
             color: atomOneBackgroundColor,
             shape: RoundedRectangleBorder(
               side: const BorderSide(color: hightlightTextColor),
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: isInline ? NotionRadius.xsAll : NotionRadius.smAll,
             ),
             child: Padding(
               padding: isInline
@@ -657,8 +658,8 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
       mainAxisSize: MainAxisSize.min,
       children: [
         AnimatedSize(
-          duration: FluffyThemes.animationDuration,
-          curve: FluffyThemes.animationCurve,
+          duration: ChatLoomThemes.animationDuration,
+          curve: ChatLoomThemes.animationCurve,
           alignment: AlignmentDirectional.topStart,
           child: Text.rich(
             widget.span,

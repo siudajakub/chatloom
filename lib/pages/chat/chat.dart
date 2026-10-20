@@ -6,51 +6,51 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat_view.dart';
+import 'package:chatloom/pages/chat/compact_composer.dart'
+    show ConversationSourceChip;
+import 'package:chatloom/pages/chat/conversation_source.dart';
+import 'package:chatloom/pages/chat/event_info_dialog.dart';
+import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/start_poll_bottom_sheet.dart';
+import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/pages/chat/utils/web_file_to_x_file.dart';
+import 'package:chatloom/pages/chat/voice_message_sender.dart';
+import 'package:chatloom/pages/chat_details/chat_details.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/immediate_outbox.dart';
+import 'package:chatloom/personal/media/immediate_media_outbox.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_availability.dart';
+import 'package:chatloom/personal/round_video/round_capture_controller.dart';
+import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
+import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
+import 'package:chatloom/utils/error_reporter.dart';
+import 'package:chatloom/utils/file_selector.dart';
+import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:chatloom/utils/other_party_can_receive.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/show_scaffold_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:chatloom/widgets/app_lock.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/chat_view.dart';
-import 'package:fluffychat/pages/chat/compact_composer.dart'
-    show ConversationSourceChip;
-import 'package:fluffychat/pages/chat/conversation_source.dart';
-import 'package:fluffychat/pages/chat/event_info_dialog.dart';
-import 'package:fluffychat/pages/chat/events/message.dart';
-import 'package:fluffychat/pages/chat/start_poll_bottom_sheet.dart';
-import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
-import 'package:fluffychat/pages/chat/utils/web_file_to_x_file.dart';
-import 'package:fluffychat/pages/chat/voice_message_sender.dart';
-import 'package:fluffychat/pages/chat_details/chat_details.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/immediate_outbox.dart';
-import 'package:fluffychat/personal/media/immediate_media_outbox.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/round_video/round_availability.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
-import 'package:fluffychat/personal/round_video/telegram_media_protocol.dart';
-import 'package:fluffychat/personal/round_video/telegram_room_binding.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
-import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
-import 'package:fluffychat/utils/error_reporter.dart';
-import 'package:fluffychat/utils/file_selector.dart';
-import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/utils/other_party_can_receive.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/show_scaffold_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/app_lock.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
-import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -754,7 +754,7 @@ class ChatController extends State<ChatPageWithRoom>
     final firstEvent = timeline?.events.firstOrNull;
     final eventId = firstEvent?.transactionId ?? firstEvent?.eventId;
     animateInEventId = eventId;
-    await Future.delayed(FluffyThemes.animationDuration);
+    await Future.delayed(ChatLoomThemes.animationDuration);
     if (animateInEventId == eventId) animateInEventId = null;
   }
 
@@ -1877,7 +1877,7 @@ class ChatController extends State<ChatPageWithRoom>
     }
     await scrollController.scrollToIndex(
       eventIndex + 1,
-      duration: FluffyThemes.animationDuration,
+      duration: ChatLoomThemes.animationDuration,
       preferPosition: AutoScrollPosition.middle,
     );
     _updateScrollController();
@@ -2305,12 +2305,12 @@ class ChatController extends State<ChatPageWithRoom>
           ValueListenableBuilder(
             valueListenable: _displayChatDetailsColumn,
             builder: (context, displayChatDetailsColumn, _) =>
-                !FluffyThemes.isThreeColumnMode(context) ||
+                !ChatLoomThemes.isThreeColumnMode(context) ||
                     room.membership != Membership.join ||
                     !displayChatDetailsColumn
                 ? const SizedBox(height: double.infinity, width: 0)
                 : Container(
-                    width: FluffyThemes.columnWidth,
+                    width: ChatLoomThemes.columnWidth,
                     clipBehavior: Clip.hardEdge,
                     decoration: BoxDecoration(
                       border: Border(

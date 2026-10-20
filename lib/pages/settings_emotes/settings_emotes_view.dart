@@ -3,13 +3,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/url_launcher.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
-import 'package:fluffychat/widgets/mxc_image_viewer.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/url_launcher.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:chatloom/widgets/mxc_image_viewer.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -283,6 +283,7 @@ class EmotesSettingsView extends StatelessWidget {
                                       counter: const SizedBox.shrink(),
                                       filled: false,
                                       enabledBorder: const OutlineInputBorder(
+                                        borderRadius: NotionRadius.fieldAll,
                                         borderSide: BorderSide(
                                           color: Colors.transparent,
                                         ),
@@ -368,7 +369,7 @@ class _EmoteImage extends StatelessWidget {
     const size = 44.0;
     final key = 'sticker_preview_$mxc';
     return InkWell(
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: NotionRadius.smAll,
       onTap: () => showNotionCustomDialog(
         context: context,
         builder: (_) => MxcImageViewer(mxc),

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:math' as math;
 
-import 'package:fluffychat/personal/ui/notion_network_filter.dart';
-import 'package:fluffychat/personal/ui/notion_network_selector.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/personal/ui/notion_network_selector.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -59,11 +60,18 @@ Future<ConversationRef?> showConversationSourcePicker(
       sheetAnimationStyle: ConversationMotion.reduced(context)
           ? AnimationStyle.noAnimation
           : null,
+      // A glass sheet in the dock's language (DESIGN.md "Glass").
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      shape: NotionShapes.sheet,
       builder: (context) => Padding(
         padding: EdgeInsets.only(
           bottom: MediaQuery.viewInsetsOf(context).bottom,
         ),
-        child: SafeArea(top: false, child: contents(context)),
+        child: NotionGlassPanel(
+          borderRadius: NotionGlass.sheetRadius,
+          child: SafeArea(top: false, child: contents(context)),
+        ),
       ),
     );
   }
@@ -73,8 +81,19 @@ Future<ConversationRef?> showConversationSourcePicker(
     animationStyle: ConversationMotion.reduced(context)
         ? AnimationStyle.noAnimation
         : null,
-    builder: (context) =>
-        Dialog(child: SizedBox(width: 420, child: contents(context))),
+    builder: (context) => Dialog(
+      backgroundColor: Colors.transparent,
+      shape: const RoundedRectangleBorder(
+        borderRadius: NotionGlass.dialogRadius,
+      ),
+      child: SizedBox(
+        width: 420,
+        child: NotionGlassPanel(
+          borderRadius: NotionGlass.dialogRadius,
+          child: contents(context),
+        ),
+      ),
+    ),
   );
 }
 
@@ -151,49 +170,59 @@ class _ConversationSourceList extends StatelessWidget {
       enabled: option.available,
       excludeSemantics: true,
       onTap: option.available ? select : null,
-      child: Material(
-        color: active
-            ? Theme.of(context).colorScheme.surfaceContainerHighest
-            : Colors.transparent,
-        child: InkWell(
-          onTap: option.available ? select : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Row(
-              children: [
-                NotionNetworkGlyph(
-                  network: option.conversation.network.toLowerCase(),
-                  size: 24,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        network,
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                      Text(option.title),
-                      if (option.subtitle != null)
-                        Text(
-                          option.subtitle!,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      if (reason != null)
-                        Text(
-                          reason,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                    ],
+      // Rounded highlight inset from the panel edge; text stays on the
+      // 20 pt gutter (8 inset + 12 padding).
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
+        child: Material(
+          color: active
+              ? Theme.of(context).colorScheme.surfaceContainerHighest
+              : Colors.transparent,
+          shape: NotionShapes.row,
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: option.available ? select : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: NotionSpace.sm,
+                vertical: NotionSpace.sm,
+              ),
+              child: Row(
+                children: [
+                  NotionNetworkGlyph(
+                    network: option.conversation.network.toLowerCase(),
+                    size: 24,
                   ),
-                ),
-                const SizedBox(width: 8),
-                if (active)
-                  const Icon(Icons.check, size: 20)
-                else if (!option.available)
-                  const Icon(Icons.block_outlined, size: 20),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          network,
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        Text(option.title),
+                        if (option.subtitle != null)
+                          Text(
+                            option.subtitle!,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        if (reason != null)
+                          Text(
+                            reason,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  if (active)
+                    const Icon(Icons.check, size: 20)
+                  else if (!option.available)
+                    const Icon(Icons.block_outlined, size: 20),
+                ],
+              ),
             ),
           ),
         ),

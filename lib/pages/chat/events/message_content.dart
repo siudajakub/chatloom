@@ -5,16 +5,18 @@
 
 import 'dart:math';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/events/poll.dart';
-import 'package:fluffychat/pages/chat/events/round_video_bridge_message.dart';
-import 'package:fluffychat/pages/chat/events/round_video_message.dart';
-import 'package:fluffychat/pages/chat/events/undecryptable_message.dart';
-import 'package:fluffychat/pages/chat/events/video_player.dart';
-import 'package:fluffychat/pages/image_viewer/image_viewer.dart';
-import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
-import 'package:fluffychat/personal/round_video/round_playback_queue.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/events/poll.dart';
+import 'package:chatloom/pages/chat/events/round_video_bridge_message.dart';
+import 'package:chatloom/pages/chat/events/round_video_message.dart';
+import 'package:chatloom/pages/chat/events/undecryptable_message.dart';
+import 'package:chatloom/pages/chat/events/video_player.dart';
+import 'package:chatloom/pages/image_viewer/image_viewer.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/personal/round_video/round_playback_queue.dart';
+import 'package:chatloom/personal/transcript_panel.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
@@ -185,10 +187,32 @@ class MessageContent extends StatelessWidget {
               timeline: timeline,
             );
           case MessageTypes.File:
-            return MessageDownloadContent(
+            final download = MessageDownloadContent(
               event,
               textColor: textColor,
               linkColor: linkColor,
+            );
+            // Audio/video sent as a file: transcript slot (transcription
+            // feature), empty unless the paired worker supports it.
+            if (!TranscriptPanel.mayTranscribe(event)) return download;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                download,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    NotionSpace.md,
+                    0,
+                    NotionSpace.md,
+                    NotionSpace.xs,
+                  ),
+                  child: TranscriptPanel(
+                    event: event,
+                    foregroundColor: textColor,
+                  ),
+                ),
+              ],
             );
           case MessageTypes.Location:
             if (event.redacted) continue textmessage;

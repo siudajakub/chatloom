@@ -7,32 +7,32 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:async/async.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat.dart';
+import 'package:chatloom/pages/chat/chat_app_bar_list_tile.dart';
+import 'package:chatloom/pages/chat/chat_app_bar_title.dart';
+import 'package:chatloom/pages/chat/chat_event_list.dart';
+import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/pinned_events.dart';
+import 'package:chatloom/pages/chat/reply_display.dart';
+import 'package:chatloom/pages/chat/undecryptable_chat_hint.dart';
+import 'package:chatloom/pages/chat/undecryptable_fix_sheet.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/personal_hub.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/account_config.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
+import 'package:chatloom/utils/sync_status_localization.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:chatloom/widgets/pulsating_widget.dart';
 import 'package:desktop_drop/desktop_drop.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/chat.dart';
-import 'package:fluffychat/pages/chat/chat_app_bar_list_tile.dart';
-import 'package:fluffychat/pages/chat/chat_app_bar_title.dart';
-import 'package:fluffychat/pages/chat/chat_event_list.dart';
-import 'package:fluffychat/pages/chat/events/message.dart';
-import 'package:fluffychat/pages/chat/pinned_events.dart';
-import 'package:fluffychat/pages/chat/reply_display.dart';
-import 'package:fluffychat/pages/chat/undecryptable_chat_hint.dart';
-import 'package:fluffychat/pages/chat/undecryptable_fix_sheet.dart';
-import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/personal_hub.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/account_config.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
-import 'package:fluffychat/utils/sync_status_localization.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
-import 'package:fluffychat/widgets/pulsating_widget.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -58,7 +58,7 @@ class ChatView extends StatelessWidget {
         exceptionContext: ExceptionContext.joinRoom,
       );
     }
-    final bottomSheetPadding = FluffyThemes.isColumnMode(context) ? 16.0 : 12.0;
+    final bottomSheetPadding = ChatLoomThemes.isColumnMode(context) ? 16.0 : 12.0;
     final scrollUpBannerEventId = controller.scrollUpBannerEventId;
 
     final accountConfig = Matrix.of(context).client.applicationAccountConfig;
@@ -171,14 +171,14 @@ class ChatView extends StatelessWidget {
                           tooltip: L10n.of(context).backToMainChat,
                           color: theme.colorScheme.onSecondaryContainer,
                         )
-                      : FluffyThemes.isColumnMode(context)
+                      : ChatLoomThemes.isColumnMode(context)
                       ? null
                       : IconButton(
                           icon: const Icon(Icons.chevron_left),
                           tooltip: 'Back',
                           onPressed: () => Navigator.maybePop(context),
                         ),
-                  titleSpacing: FluffyThemes.isColumnMode(context) ? 24 : 0,
+                  titleSpacing: ChatLoomThemes.isColumnMode(context) ? 24 : 0,
                   title: ChatAppBarTitle(controller),
                   // Selection and chat actions cross-fade instead of
                   // swapping in one frame.
@@ -415,9 +415,6 @@ class ChatView extends StatelessWidget {
                                 style: TextButton.styleFrom(
                                   foregroundColor:
                                       theme.colorScheme.onSecondaryContainer,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
                                 ),
                               ),
                             ),
@@ -502,7 +499,7 @@ class ChatView extends StatelessWidget {
                                 child: Container(
                                   margin: EdgeInsets.all(bottomSheetPadding),
                                   constraints: const BoxConstraints(
-                                    maxWidth: FluffyThemes.maxTimelineWidth,
+                                    maxWidth: ChatLoomThemes.maxTimelineWidth,
                                   ),
                                   child: controller.room.isExtinct
                                       ? ElevatedButton.icon(

@@ -2,8 +2,8 @@
 import 'dart:math' as math;
 import 'dart:ui' show FontFeature;
 
-import 'package:fluffychat/pages/chat/conversation_motion.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// The same authored grid is used for incoming and outgoing source events.
@@ -527,7 +527,9 @@ class NotionWaveformTrackShape extends SliderTrackShape
         canvas.drawRRect(
           RRect.fromRectAndRadius(
             Rect.fromCenter(center: rect.center, width: rect.width, height: 4),
-            const Radius.circular(2),
+            const Radius.circular(
+              2,
+            ), // design-lint: allow pill: half the 4 px bar
           ),
           paint,
         );
@@ -554,7 +556,9 @@ class NotionWaveformTrackShape extends SliderTrackShape
               width: math.min(3.0, step * .6),
               height: 4 + amplitude * (rect.height - 4),
             ),
-            const Radius.circular(2),
+            const Radius.circular(
+              2,
+            ), // design-lint: allow pill: half the 4 px bar
           ),
           paint,
         );
