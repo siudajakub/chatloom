@@ -17,7 +17,9 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 def project_root(checkout):
- for candidate in (checkout, *checkout.parents):
+ # A Claude worktree lives outside the project; devbox-env.sh names it.
+ shared = [Path(os.environ['PERSONAL_CHAT_ROOT'])] if os.environ.get('PERSONAL_CHAT_ROOT') else []
+ for candidate in (checkout, *checkout.parents, *shared):
   if (candidate / 'docs/notion-ui/SOURCE-SNAPSHOT.json').is_file():
    return candidate
  raise RuntimeError('Cannot locate the Personal Chat project from ' + str(checkout))
@@ -90,6 +92,8 @@ def prepare(flutter):
  sources += list(SOURCES)
  # SDK/controller suites run with native hooks through run-personal-app-tests.py.
  full_graph_only = {'two_column_accessibility_test.dart',
+                    'attachment_flow_test.dart',
+                    'composer_ux_integration_test.dart',
                     'dialog_motion_test.dart',
                     'inbox_motion_test.dart',
                     'conversation_message_actions_test.dart',
@@ -123,7 +127,7 @@ def prepare(flutter):
  write('assets/reference/chat.png', reference.read_bytes())
  overrides = ''.join(f'  {name}: "{version}"\n' for name, version in sorted(pinned.items()))
  motion = ''.join(f'  {name}: "{pinned[name]}"\n' for name in MOTION_PACKAGES)
- write('pubspec.yaml', f'''name: fluffychat
+ write('pubspec.yaml', f'''name: chatloom
 publish_to: none
 environment:
   sdk: '>=3.13.0 <4.0.0'

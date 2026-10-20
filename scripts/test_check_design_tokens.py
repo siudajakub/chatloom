@@ -58,7 +58,7 @@ final d = AnimatedSwitcher(reverseDuration: Duration(milliseconds: 90), child: x
 
     def test_allows_motion_tokens_and_static_blur_filters(self):
         self.assertEqual(self.hits('''
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 // import 'package:flutter_animate/flutter_animate.dart';
 final a = AnimatedOpacity(duration: NotionMotion.short, opacity: 1);
@@ -76,6 +76,36 @@ final d = Tween<double>(begin: 0, end: 1).animate(controller);
 final e = Animate(); // design-lint: allow unmounted owner
 final f = Colors.red;
 ''', notion=True), ['motion-animate-widget', 'motion-animate-widget', 'motion-animate-widget'])
+
+    def test_flags_square_corners(self):
+        self.assertEqual(self.hits('''
+final a = BorderRadius.zero;
+final b = Radius.zero;
+final c = RoundedRectangleBorder();
+final d = RoundedRectangleBorder(
+  side: BorderSide(color: x),
+);
+final e = OutlineInputBorder(borderSide: BorderSide.none);
+final f = ContinuousRectangleBorder(borderRadius: r);
+final g = Radius.circular(NotionRadius.md);
+final h = RoundedRectangleBorder(borderRadius: NotionRadius.mdAll);
+final i = NotionShapes.pill;
+final j = BorderRadius.zero; // design-lint: allow full-bleed bar
+'''), ['square-corner'] * 6)
+
+    def test_small_literal_radius_is_square_and_numeric(self):
+        self.assertEqual(self.hits('''
+final a = BorderRadius.circular(4);
+final b = Radius.circular(2.5);
+final c = BorderRadius.circular(16);
+'''), ['radius', 'radius', 'radius', 'square-corner', 'square-corner'])
+
+    def test_notion_files_are_checked_for_square_corners(self):
+        self.assertEqual(self.hits('''
+final a = RoundedRectangleBorder();
+final b = BorderRadius.circular(3);
+final c = BorderRadius.circular(12);
+''', notion=True), ['square-corner', 'square-corner'])
 
 
 if __name__ == '__main__':

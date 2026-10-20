@@ -19,6 +19,11 @@ Rules (per file, per rule counts):
   legacy-material-import  package:flutter/material.dart (the app uses material_ui)
   motion-animate-widget   (lib/ui/notion only) mounting flutter_animate's
                    Animate/AnimateList or `.animate(...)`: they start timers
+  square-corner    (also in lib/ui/notion) a square or near-square shape:
+                   BorderRadius.zero, Radius.zero, a literal radius below 6,
+                   RoundedRectangleBorder/OutlineInputBorder without a
+                   borderRadius, ContinuousRectangleBorder, BeveledRectangleBorder
+                   (use NotionRadius.* / NotionShapes.*; nothing is square)
 
 Exempt: lib/ui/notion/ (the token source), lib/utils/code_highlight_theme.dart,
 lib/l10n/ and generated files. A line ending in `// design-lint: allow`
@@ -60,6 +65,13 @@ SIMPLE = {
     'motion-blur': re.compile(r'(?<!ImageFilter)\.blur\(|\bBlurEffect\(|\bImageFiltered\('),
     'motion-duration': re.compile(r'\b(?:duration|reverseDuration|transitionDuration|reverseTransitionDuration):\s*(?:const\s+)?Duration\('),
 }
+SQUARE = re.compile(
+    r'\b(?:BorderRadius(?:Directional)?|Radius)\.zero\b'
+    r'|\b(?:ContinuousRectangleBorder|BeveledRectangleBorder)\('
+    r'|\b(?:BorderRadius|Radius)\.circular\(\s*[0-5](?:\.\d+)?\s*\)'
+)
+# Default radius is zero (RoundedRectangleBorder) or 4 (OutlineInputBorder).
+NEEDS_RADIUS = re.compile(r'\b(?:RoundedRectangleBorder|OutlineInputBorder)\(')
 INSETS = re.compile(r'\bEdgeInsets(?:Directional)?\.(?:all|symmetric|only|fromLTRB|fromSTEB)\(')
 HINTS = {
     'raw-color': 'context.notion.colors.*',
@@ -74,6 +86,7 @@ HINTS = {
     'motion-duration': 'NotionMotion.instant/quick/short/medium/long',
     'legacy-material-import': "package:material_ui/material_ui.dart",
     'motion-animate-widget': 'controller-driven effects (_EffectChain in notion_entrance.dart)',
+    'square-corner': 'NotionRadius.* / NotionShapes.* (DESIGN.md "Radius": nothing is square)',
 }
 
 
@@ -110,12 +123,27 @@ def matching_paren(text, start):
     return len(text)
 
 
+def square_corners(code, allowed):
+    hits = []
+    for number, line in enumerate(code.split('\n'), 1):
+        if number not in allowed:
+            hits += [('square-corner', number)] * len(SQUARE.findall(line))
+    for match in NEEDS_RADIUS.finditer(code):
+        number = code.count('\n', 0, match.start()) + 1
+        if number in allowed:
+            continue
+        args = code[match.end():matching_paren(code, match.end() - 1)]
+        if 'borderRadius' not in args:
+            hits.append(('square-corner', number))
+    return hits
+
+
 def scan(path, notion=False):
     raw = path.read_text(encoding='utf-8')
     lines = raw.split('\n')
     allowed = {i for i, line in enumerate(lines, 1) if ALLOW in line}
     code = '\n'.join(strip_comment(line) for line in lines)
-    hits = []
+    hits = square_corners(code, allowed)
     if notion:
         for number, line in enumerate(code.split('\n'), 1):
             if number in allowed:
