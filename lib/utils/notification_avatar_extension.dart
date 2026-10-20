@@ -7,7 +7,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/utils/client_download_content_extension.dart';
+import 'package:chatloom/utils/client_download_content_extension.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as path;
 

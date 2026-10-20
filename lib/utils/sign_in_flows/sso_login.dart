@@ -3,10 +3,10 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/sign_in_flows/calc_redirect_url.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/sign_in_flows/calc_redirect_url.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

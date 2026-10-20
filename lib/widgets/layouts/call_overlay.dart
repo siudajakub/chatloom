@@ -3,10 +3,10 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/pages/call/call_page.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/pages/call/call_page.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 
 class CallOverlay extends StatelessWidget {

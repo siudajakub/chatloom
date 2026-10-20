@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/personal/ui/notion_inbox_dock.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
-import 'package:fluffychat/personal/ui/notion_network_filter.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/personal/ui/notion_inbox_dock.dart';
+import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
 

@@ -5,7 +5,7 @@
 
 import 'dart:math';
 
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 class EmptyPage extends StatelessWidget {

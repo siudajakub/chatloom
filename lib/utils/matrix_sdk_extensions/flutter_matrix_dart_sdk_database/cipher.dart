@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/personal/storage/cipher_policy.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/personal/storage/cipher_policy.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 const _passwordStorageKey = 'database_password';

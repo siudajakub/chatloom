@@ -5,10 +5,10 @@
 
 import 'dart:convert';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/oidc_session_json_extension.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/sign_in_flows/calc_redirect_url.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/oidc_session_json_extension.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/sign_in_flows/calc_redirect_url.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:material_ui/material_ui.dart';

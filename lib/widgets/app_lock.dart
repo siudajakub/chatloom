@@ -5,11 +5,11 @@
 
 import 'dart:async';
 
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/lock_screen.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_capture_controller.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/lock_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';

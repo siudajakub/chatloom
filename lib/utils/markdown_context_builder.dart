@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 
 class MarkdownContextBuilder extends StatelessWidget {

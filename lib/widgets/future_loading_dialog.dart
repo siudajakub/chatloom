@@ -6,11 +6,11 @@
 import 'dart:async';
 
 import 'package:async/async.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix_api_lite/utils/logs.dart';
 

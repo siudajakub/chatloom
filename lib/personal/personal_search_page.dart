@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/merged_chat_page.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/ui/notion_settings_load.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/merged_chat_page.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';

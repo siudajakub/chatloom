@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/round_video/telegram_media_protocol.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:matrix/matrix.dart';
 
 extension VisibleInGuiExtension on List<Event> {

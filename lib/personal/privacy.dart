@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/media/media_prefetcher.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/media/media_prefetcher.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 

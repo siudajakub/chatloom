@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:material_ui/material_ui.dart';
 
 class SettingsSwitchListTile extends StatefulWidget {

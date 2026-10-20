@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/person_location.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

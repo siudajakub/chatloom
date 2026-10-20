@@ -5,13 +5,13 @@
 
 import 'dart:io';
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/media/protected_matrix_database.dart';
-import 'package:fluffychat/personal/storage/database_policy.dart';
-import 'package:fluffychat/personal/storage/storage_failure.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/media/protected_matrix_database.dart';
+import 'package:chatloom/personal/storage/database_policy.dart';
+import 'package:chatloom/personal/storage/storage_failure.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart';

@@ -5,10 +5,10 @@
 
 import 'dart:async';
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:fluffychat/widgets/avatar.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
+import 'package:chatloom/widgets/avatar.dart';
 import 'package:go_router/go_router.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';

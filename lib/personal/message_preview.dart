@@ -23,7 +23,7 @@
 /// localized fallback without an extra prefix.
 library;
 
-import 'package:fluffychat/personal/own_sender.dart';
+import 'package:chatloom/personal/own_sender.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show RoundVideoDescriptor;
 

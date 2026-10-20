@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:intl/intl.dart';
 import 'package:material_ui/material_ui.dart';
 

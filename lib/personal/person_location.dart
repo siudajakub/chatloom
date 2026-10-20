@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Locations of merged person chats. No page imports: also used by the
 // notification tap handler.
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/personal_client.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/personal_client.dart';
 import 'package:flutter/widgets.dart';
 import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';

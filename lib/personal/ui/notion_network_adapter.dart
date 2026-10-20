@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/personal/inbox_projection.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:matrix/matrix.dart';
 
 /// Only eligible groups returned by InboxProjection participate; invalid or

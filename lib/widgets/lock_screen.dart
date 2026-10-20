@@ -5,9 +5,9 @@
 
 import 'dart:async';
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/app_lock.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/app_lock.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';

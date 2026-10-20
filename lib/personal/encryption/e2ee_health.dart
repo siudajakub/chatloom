@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:go_router/go_router.dart';

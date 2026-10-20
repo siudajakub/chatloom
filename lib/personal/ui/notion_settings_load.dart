@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/ui/notion/notion_motion.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:flutter/widgets.dart';
 
 /// Opening a settings or details page used to call [PersonalClient.load] in

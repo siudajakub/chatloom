@@ -5,7 +5,7 @@
 
 import 'dart:async';
 
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 

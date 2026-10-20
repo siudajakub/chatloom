@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
-import 'package:fluffychat/widgets/presence_builder.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:chatloom/widgets/presence_builder.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
