@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 Future<T?> showModalActionPopup<T>({
@@ -27,50 +27,61 @@ Future<T?> showModalActionPopup<T>({
         isScrollControlled: true,
         useRootNavigator: useRootNavigator,
         context: context,
-        clipBehavior: Clip.hardEdge,
+        // A glass sheet like the dock; rows keep rounded highlights inset
+        // from its edges.
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        shape: NotionShapes.sheet,
         constraints: BoxConstraints(
           maxWidth: 512,
           maxHeight: MediaQuery.sizeOf(context).height - 32,
         ),
         // Rows rise in one after another while the sheet slides up.
-        builder: (context) => ListView(
-          shrinkWrap: true,
-          children: NotionEntrance.stagger(afterRoute: false, [
-            if (title != null || message != null) ...[
-              ListTile(
-                title: title == null
-                    ? null
-                    : Text(title, style: theme.textTheme.labelSmall),
-                subtitle: message == null ? null : Text(message),
-              ),
-              const Divider(height: 1),
-            ],
-            ...actions.map(
-              (action) => ListTile(
-                leading: action.icon,
-                title: Text(
-                  action.label,
-                  maxLines: 1,
-                  style: action.isDestructive
-                      ? TextStyle(
-                          color: theme.colorScheme.error,
-                          fontWeight: action.isDefaultAction
-                              ? FontWeight.bold
-                              : null,
-                        )
-                      : null,
+        builder: (context) => NotionGlassPanel(
+          borderRadius: NotionGlass.sheetRadius,
+          child: SafeArea(
+            top: false,
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.all(NotionSpace.xs),
+              children: NotionEntrance.stagger(afterRoute: false, [
+                if (title != null || message != null) ...[
+                  ListTile(
+                    title: title == null
+                        ? null
+                        : Text(title, style: theme.textTheme.labelSmall),
+                    subtitle: message == null ? null : Text(message),
+                  ),
+                  const NotionGlassDivider(vertical: false),
+                ],
+                ...actions.map(
+                  (action) => ListTile(
+                    leading: action.icon,
+                    title: Text(
+                      action.label,
+                      maxLines: 1,
+                      style: action.isDestructive
+                          ? TextStyle(
+                              color: theme.colorScheme.error,
+                              fontWeight: action.isDefaultAction
+                                  ? FontWeight.bold
+                                  : null,
+                            )
+                          : null,
+                    ),
+                    onTap: () => Navigator.of(context).pop<T>(action.value),
+                  ),
                 ),
-                onTap: () => Navigator.of(context).pop<T>(action.value),
-              ),
+                if (cancelLabel != null) ...[
+                  const NotionGlassDivider(vertical: false),
+                  ListTile(
+                    title: Text(cancelLabel),
+                    onTap: () => Navigator.of(context).pop(null),
+                  ),
+                ],
+              ]),
             ),
-            if (cancelLabel != null) ...[
-              const Divider(height: 1),
-              ListTile(
-                title: Text(cancelLabel),
-                onTap: () => Navigator.of(context).pop(null),
-              ),
-            ],
-          ]),
+          ),
         ),
       );
     case TargetPlatform.iOS:

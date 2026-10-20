@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 class AdaptiveDialogAction extends StatelessWidget {
@@ -19,15 +19,15 @@ class AdaptiveDialogAction extends StatelessWidget {
   static const BorderRadius topRadius = BorderRadius.only(
     topLeft: Radius.circular(AppConfig.borderRadius),
     topRight: Radius.circular(AppConfig.borderRadius),
-    bottomLeft: Radius.circular(2),
-    bottomRight: Radius.circular(2),
+    bottomLeft: Radius.circular(NotionRadius.xs),
+    bottomRight: Radius.circular(NotionRadius.xs),
   );
-  static const BorderRadius centerRadius = BorderRadius.all(Radius.circular(2));
+  static const BorderRadius centerRadius = NotionRadius.xsAll;
   static const BorderRadius bottomRadius = BorderRadius.only(
     bottomLeft: Radius.circular(AppConfig.borderRadius),
     bottomRight: Radius.circular(AppConfig.borderRadius),
-    topLeft: Radius.circular(2),
-    topRight: Radius.circular(2),
+    topLeft: Radius.circular(NotionRadius.xs),
+    topRight: Radius.circular(NotionRadius.xs),
   );
 
   const AdaptiveDialogAction({

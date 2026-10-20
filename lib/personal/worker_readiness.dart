@@ -19,6 +19,16 @@ class WorkerReadiness {
   /// (`scan`) or not (`off`); null for older workers.
   final String? autoTranscription;
 
+  /// Media the worker transcribes: 2 = voice, rounds, any video and audio
+  /// (also sent as files); null for older workers (voice notes, other
+  /// `m.audio` and strict rounds only).
+  final int? transcriptionMedia;
+
+  /// True when the worker also picks up cloud-room messages from its own
+  /// Matrix sync, so this device need not ask for them; null for older
+  /// workers.
+  final bool? autoTranscriptionLive;
+
   const WorkerReadiness({
     required this.receivedAt,
     this.healthy,
@@ -28,6 +38,8 @@ class WorkerReadiness {
     this.pending,
     this.pendingReminderHints,
     this.autoTranscription,
+    this.transcriptionMedia,
+    this.autoTranscriptionLive,
   });
 
   factory WorkerReadiness.fromPayload(
@@ -56,6 +68,15 @@ class WorkerReadiness {
       pending: count(payload['pending']),
       pendingReminderHints: count(payload['pendingReminderHints']),
       autoTranscription: allowed(payload['autoTranscription'], {'scan', 'off'}),
+      transcriptionMedia:
+          payload['transcriptionMedia'] is int &&
+              (payload['transcriptionMedia'] as int) > 0 &&
+              (payload['transcriptionMedia'] as int) < 100
+          ? payload['transcriptionMedia'] as int
+          : null,
+      autoTranscriptionLive: payload['autoTranscriptionLive'] is bool
+          ? payload['autoTranscriptionLive'] as bool
+          : null,
     );
   }
 
@@ -74,7 +95,9 @@ class WorkerReadiness {
       other.reminderPush == reminderPush &&
       other.pending == pending &&
       other.pendingReminderHints == pendingReminderHints &&
-      other.autoTranscription == autoTranscription;
+      other.autoTranscription == autoTranscription &&
+      other.transcriptionMedia == transcriptionMedia &&
+      other.autoTranscriptionLive == autoTranscriptionLive;
 
   @override
   int get hashCode => Object.hash(
@@ -86,6 +109,8 @@ class WorkerReadiness {
     pending,
     pendingReminderHints,
     autoTranscription,
+    transcriptionMedia,
+    autoTranscriptionLive,
   );
 
   String describe(DateTime now) {
