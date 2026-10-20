@@ -1,7 +1,7 @@
 // Synthetic web-only smoke: no login, provider calls or real account data.
 import 'dart:async';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/personal_hub.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/personal_hub.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
