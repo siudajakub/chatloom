@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/ui/notion_network_filter.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/personal/ui/notion_transcribe_button.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
@@ -15,6 +15,20 @@ String transcriptionLanguageLabel(String? code) =>
 String transcriptionMinutesLabel(int seconds) => seconds % 60 == 0
     ? '${seconds ~/ 60} min'
     : '${(seconds / 60).toStringAsFixed(1)} min';
+
+/// Settings labels for the synced per-kind switches.
+const transcriptionKindLabels = <AutoTranscriptionKind, (String, String)>{
+  AutoTranscriptionKind.voice: (
+    'Voice messages',
+    'Voice notes from every network',
+  ),
+  AutoTranscriptionKind.round: ('Round videos', 'Telegram video messages'),
+  AutoTranscriptionKind.video: (
+    'Videos',
+    'Only the audio track is sent; clips without sound are skipped',
+  ),
+  AutoTranscriptionKind.audio: ('Other audio', 'Audio files and recordings'),
+};
 
 String transcriptionUsdLabel(double value) => '\$${value.toStringAsFixed(2)}';
 
@@ -116,7 +130,7 @@ class TranscriptionSettingsSection extends StatelessWidget {
           key: const ValueKey('transcription-auto'),
           title: 'Transcribe automatically',
           subtitle:
-              'Incoming voice and round messages are sent to OpenAI as audio and transcribed. Your own messages, muted and ignored chats are skipped.'
+              'Incoming voice messages, round videos and videos are transcribed on the server as soon as they arrive; only their audio is sent to OpenAI. Your own messages, disappearing messages, muted and ignored chats are skipped.'
               '${policy.auto && !personal.autoTranscriptionAvailable ? ' Currently off on the worker: tap Transcribe on a message instead.' : ''}',
           value: policy.auto,
           onChanged: editable
@@ -187,6 +201,23 @@ class TranscriptionSettingsSection extends StatelessWidget {
                 }
               : null,
         ),
+        const NotionSectionHeader(title: 'Media'),
+        for (final entry in transcriptionKindLabels.entries)
+          NotionSettingsToggle(
+            key: ValueKey('transcription-kind-${entry.key.name}'),
+            title: entry.value.$1,
+            subtitle:
+                entry.key == AutoTranscriptionKind.video ||
+                    entry.key == AutoTranscriptionKind.audio
+                ? personal.workerTranscribesAllMedia || !personal.workerOnline
+                      ? entry.value.$2
+                      : '${entry.value.$2} · needs a worker update'
+                : entry.value.$2,
+            value: policy.kindEnabled(entry.key),
+            onChanged: editable && policy.auto
+                ? (value) => _save(policy.withKind(entry.key, value))
+                : null,
+          ),
         if (networks.isNotEmpty) ...[
           const NotionSectionHeader(title: 'Networks'),
           for (final network in networks)

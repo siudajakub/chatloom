@@ -5,15 +5,16 @@
 
 import 'dart:math';
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/file_description.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/url_launcher.dart';
-import 'package:fluffychat/widgets/blur_hash.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/transcript_panel.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/file_description.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/url_launcher.dart';
+import 'package:chatloom/widgets/blur_hash.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -140,6 +141,21 @@ class EventVideoPlayer extends StatelessWidget {
                 ),
               ),
             ),
+            // Transcript slot (transcription feature): the panel renders
+            // nothing unless the paired worker can transcribe this video.
+            if (TranscriptPanel.mayTranscribe(event))
+              SizedBox(
+                width: width,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: NotionSpace.sm,
+                  ),
+                  child: TranscriptPanel(
+                    event: event,
+                    foregroundColor: textColor,
+                  ),
+                ),
+              ),
             if (fileDescription != null &&
                 textColor != null &&
                 linkColor != null)

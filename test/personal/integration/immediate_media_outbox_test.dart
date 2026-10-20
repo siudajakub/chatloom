@@ -6,8 +6,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
 import 'package:personal_core/personal_core.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
 import '../../../lib/personal/media/immediate_media_outbox.dart';
 import '../../../lib/personal/media/pending_media_store.dart';
 
@@ -16,10 +18,15 @@ void check(bool condition, String reason) {
 }
 
 class FaultStore
-    implements PendingMediaRepository, PendingMediaSummaryRepository {
+    implements
+        PendingMediaRepository,
+        PendingMediaSummaryRepository,
+        PendingMediaMetadataRepository,
+        PendingMediaVerifiedStaging {
   final PendingMediaRepository inner;
-  int summaryScans = 0;
+  int summaryScans = 0, fullWrites = 0, metadataWrites = 0;
   bool failAccepted = false, failStaging = false, failUploadCheckpoint = false;
+  bool failCipherWrite = false;
   FaultStore(this.inner);
   @override
   Future<void> stage(PendingMediaRecord r) async {
@@ -28,16 +35,42 @@ class FaultStore
   }
 
   @override
-  Future<void> put(PendingMediaRecord r) async {
+  Future<PendingMediaRecord> stageVerified(PendingMediaRecord r) async {
+    if (failStaging) throw const PendingMediaFailure('fixtureDiskFull');
+    return (inner as PendingMediaVerifiedStaging).stageVerified(r);
+  }
+
+  /// Same disk faults for full and metadata-only writes. The upload
+  /// checkpoint is the first write that carries an uploaded URL.
+  void _fault(PendingMediaRecord r) {
     if (r.metadata['state'] == 'matrixAccepted' && failAccepted) {
       failAccepted = false;
       throw const PendingMediaFailure('fixtureDiskFull');
     }
-    if (r.metadata['state'] == 'fileUploaded' && failUploadCheckpoint) {
+    if (r.metadata['fileUrl'] != null && failUploadCheckpoint) {
       failUploadCheckpoint = false;
       throw const PendingMediaFailure('fixtureDiskFull');
     }
+    if (r.metadata['state'] == 'encrypted' &&
+        r.encryptedBytes != null &&
+        failCipherWrite) {
+      failCipherWrite = false;
+      throw const PendingMediaFailure('fixtureDiskFull');
+    }
+  }
+
+  @override
+  Future<void> put(PendingMediaRecord r) async {
+    fullWrites++;
+    _fault(r);
     await inner.put(r);
+  }
+
+  @override
+  Future<void> putMetadata(PendingMediaRecord r) async {
+    metadataWrites++;
+    _fault(r);
+    await (inner as PendingMediaMetadataRepository).putMetadata(r);
   }
 
   @override
@@ -184,6 +217,7 @@ Future<void> main() async {
       stages.first.actionId == stages.last.actionId && actions == 1,
       'Double stage generated two identities',
     );
+    final writesBeforeDispatch = (faults.fullWrites, faults.metadataWrites);
     sendHold = Completer<void>();
     final sends = [
       o.dispatch(stagedOffline.actionId),
@@ -199,6 +233,13 @@ Future<void> main() async {
           encryptions == 1 &&
           uploads == 2,
       'Double dispatch duplicated send/upload/encryption',
+    );
+    // One BLOB write (the ciphertext checkpoint); every later transition is
+    // metadata-only: inFlight before the send and the accepted outcome.
+    check(
+      faults.fullWrites - writesBeforeDispatch.$1 == 1 &&
+          faults.metadataWrites - writesBeforeDispatch.$2 == 2,
+      'Dispatch rewrote media BLOBs for metadata transitions',
     );
     check(
       accepted.first.state == ImmediateMediaState.matrixAccepted &&
@@ -392,13 +433,171 @@ Future<void> main() async {
       'Pre-dispatch storage failure not distinguished',
     );
     final encryptedCount = encryptions;
-    final firstCipher = uploadPayloads.last;
+    final uploadsBeforeRecovery = uploads;
     final recoveredUpload = await o.dispatch(fourth.actionId);
     check(
       recoveredUpload.state == ImmediateMediaState.matrixAccepted &&
           encryptions == encryptedCount &&
-          uploadPayloads[uploadPayloads.length - 2] == firstCipher,
-      'Lost upload checkpoint changed encryption keys/bytes',
+          uploads == uploadsBeforeRecovery,
+      'Lost upload checkpoint changed encryption keys/bytes or re-uploaded',
+    );
+    // Encrypt-while-staging: the plaintext draft is durable first; the SDK
+    // ciphertext computed alongside it is committed by the first dispatch
+    // while the uploads run, and never encrypted twice.
+    var fastEncryptions = 0, fastUploads = 0, fastSends = 0;
+    var failEarlyEncryption = false;
+    var clock = DateTime(2026, 10, 20, 12);
+    final phases = <RoundSendPhase?>[];
+    ImmediateMediaOutbox fast() => ImmediateMediaOutbox(
+      accountId: 'a',
+      deviceId: 'd',
+      store: faults,
+      newActionId: () => 'fixture-${++actions}',
+      now: () => clock,
+      guard: (target, descriptor) async {},
+      encrypt: (bytes, thumb) async {
+        fastEncryptions++;
+        if (failEarlyEncryption) {
+          failEarlyEncryption = false;
+          throw StateError('fixture SDK encryption failure');
+        }
+        return RoundEncryptionResult(
+          bytes: Uint8List.fromList(bytes.map((b) => b ^ 85).toList()),
+          thumbnailBytes: thumb == null
+              ? null
+              : Uint8List.fromList(thumb.map((b) => b ^ 85).toList()),
+          fileDescriptor: encryptedDescriptor(),
+          thumbnailDescriptor: thumb == null ? null : encryptedDescriptor(),
+        );
+      },
+      upload: (target, bytes, part) async {
+        fastUploads++;
+        return Uri.parse('mxc://fixture.invalid/fast-$fastUploads');
+      },
+      sendEvent: (target, content, txid) async {
+        fastSends++;
+        return '\$fixture-$txid';
+      },
+      onPhase: (id, phase) => phases.add(phase),
+    );
+    var draftSeed = 0;
+    Future<ImmediateMediaResult> stageFast(ImmediateMediaOutbox outbox) {
+      // A distinct recording per call (distinct staging fingerprint).
+      final seed = ++draftSeed;
+      return outbox.stage(
+        target: target,
+        descriptor: descriptor,
+        profile: profile,
+        bytes: Uint8List.fromList(
+          List<int>.generate(1024, (i) => i == 0 ? seed : (i * 7) % 256),
+        ),
+        thumbnailBytes: thumb,
+        encryptWhileStaging: true,
+      );
+    }
+
+    Future<void> durablePlaintext(
+      ImmediateMediaResult staged,
+      String label,
+    ) async {
+      final stored = (await database.get(staged.actionId))!;
+      check(
+        staged.state == ImmediateMediaState.staged &&
+            stored.metadata['state'] == 'staged' &&
+            stored.encryptedBytes == null &&
+            stored.bytes.length == 1024,
+        '$label: plaintext draft not durable before encryption',
+      );
+    }
+
+    // Happy path: no second encryption, one cipher write, two metadata writes.
+    var outboxA = fast();
+    final sixth = await stageFast(outboxA);
+    await durablePlaintext(sixth, 'staged');
+    check(
+      fastEncryptions == 1 && fastUploads + fastSends == 0,
+      'Early encryption missing or network before durable staging',
+    );
+    final writes = (faults.fullWrites, faults.metadataWrites);
+    phases.clear();
+    final sixthSent = await outboxA.dispatch(sixth.actionId);
+    check(
+      sixthSent.state == ImmediateMediaState.matrixAccepted &&
+          fastEncryptions == 1 &&
+          faults.fullWrites - writes.$1 == 1 &&
+          faults.metadataWrites - writes.$2 == 2 &&
+          jsonEncode(phases.map((p) => p?.name).toList()) ==
+              jsonEncode(['uploading', 'sending', null]),
+      'Early ciphertext re-encrypted, extra BLOB writes or wrong progress',
+    );
+
+    // Crash between staging and dispatch: a fresh outbox (no memory) finds the
+    // durable plaintext and encrypts it again.
+    final seventh = await stageFast(fast());
+    await durablePlaintext(seventh, 'crash');
+    outboxA = fast();
+    phases.clear();
+    final beforeCrashRetry = fastEncryptions;
+    final seventhSent = await outboxA.dispatch(seventh.actionId);
+    check(
+      seventhSent.state == ImmediateMediaState.matrixAccepted &&
+          fastEncryptions == beforeCrashRetry + 1 &&
+          phases.first == RoundSendPhase.encrypting,
+      'Crash between staging and dispatch lost or mis-sent the round',
+    );
+
+    // SDK encryption fails while staging: the draft is still saved (not a
+    // storage failure) and dispatch encrypts it.
+    failEarlyEncryption = true;
+    final eighth = await stageFast(outboxA);
+    await durablePlaintext(eighth, 'encryption failure');
+    check(
+      eighth.errorCode == null,
+      'Encryption failure reported as staging failure',
+    );
+    final eighthSent = await outboxA.dispatch(eighth.actionId);
+    check(
+      eighthSent.state == ImmediateMediaState.matrixAccepted,
+      'Draft with failed early encryption was not sendable',
+    );
+
+    // The cipher write fails while the uploads run: nothing that references
+    // the unsaved keys is persisted or sent; the retry succeeds.
+    final ninth = await stageFast(outboxA);
+    faults.failCipherWrite = true;
+    final sendsBefore = fastSends;
+    final ninthFailed = await outboxA.dispatch(ninth.actionId);
+    final afterCipherFailure = (await database.get(ninth.actionId))!;
+    check(
+      ninthFailed.state == ImmediateMediaState.failed &&
+          fastSends == sendsBefore &&
+          afterCipherFailure.metadata['fileUrl'] == null &&
+          afterCipherFailure.metadata['finalContent'] == null,
+      'Failed cipher write persisted an upload URL or sent the event',
+    );
+    final ninthSent = await outboxA.dispatch(ninth.actionId);
+    check(
+      ninthSent.state == ImmediateMediaState.matrixAccepted &&
+          fastSends == sendsBefore + 1,
+      'Retry after a failed cipher write did not send once',
+    );
+
+    // In-memory drafts expire and can be released (lock/background).
+    final tenth = await stageFast(outboxA);
+    clock = clock.add(ImmediateMediaOutbox.stagedCacheLifetime);
+    final beforeExpired = fastEncryptions;
+    await outboxA.dispatch(tenth.actionId);
+    check(
+      fastEncryptions == beforeExpired + 1,
+      'Expired in-memory draft was still used',
+    );
+    final eleventh = await stageFast(outboxA);
+    outboxA.releaseStaged();
+    final beforeReleased = fastEncryptions;
+    await outboxA.dispatch(eleventh.actionId);
+    check(
+      fastEncryptions == beforeReleased + 1,
+      'Released in-memory draft was still used',
     );
     check(
       !recoveredUpload.toString().contains('fixture-key'),

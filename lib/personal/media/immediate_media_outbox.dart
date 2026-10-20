@@ -12,6 +12,10 @@ enum ImmediateMediaState { staged, matrixAccepted, unknown, failed, cancelled }
 
 enum RoundBridgeDelivery { unconfirmed, delivered, rejected }
 
+/// In-memory progress of a dispatch, for the optimistic outbox row only.
+/// Never persisted and never used to decide what was sent.
+enum RoundSendPhase { encrypting, uploading, sending }
+
 class ImmediateMediaResult {
   final String actionId, transactionId;
   final ImmediateMediaState state;
@@ -75,6 +79,17 @@ typedef RoundMediaSend =
       Map<String, dynamic> finalContent,
       String stableTransactionId,
     );
+typedef RoundSendProgress =
+    void Function(String actionId, RoundSendPhase? phase);
+
+/// A draft this outbox just committed and read back, plus the SDK ciphertext
+/// computed while that write ran. Memory only: the draft itself is durable.
+class _StagedDraft {
+  final PendingMediaRecord record;
+  final PendingMediaRecord? encrypted;
+  final DateTime at;
+  const _StagedDraft(this.record, this.encrypted, this.at);
+}
 
 /// One durable operation owns bytes, SDK encryption, uploads, final event and txid.
 /// Retry is explicit and bound to the original Matrix account/device/destination.
@@ -85,8 +100,20 @@ class ImmediateMediaOutbox {
   final RoundMediaEncrypt encrypt;
   final RoundMediaUpload upload;
   final RoundMediaSend sendEvent;
+
+  /// Optional optimistic-UI hook; `null` phase = this dispatch ended.
+  final RoundSendProgress? onPhase;
   final String Function() _newActionId;
   final _tails = <String, Future<void>>{};
+
+  /// The draft this outbox staged and read back moments ago (with its early
+  /// ciphertext), handed to the first dispatch so it neither re-reads and
+  /// re-verifies the same BLOBs nor encrypts again. Multi-megabyte, so it is
+  /// dropped after [stagedCacheLifetime], by [releaseStaged] (lock,
+  /// background, skipped dispatch) and by any other operation on the action.
+  final _staged = <String, _StagedDraft>{};
+  static const stagedCacheLifetime = Duration(minutes: 2);
+  final DateTime Function() _now;
   ImmediateMediaOutbox({
     required this.accountId,
     required this.deviceId,
@@ -95,9 +122,111 @@ class ImmediateMediaOutbox {
     required this.encrypt,
     required this.upload,
     required this.sendEvent,
+    this.onPhase,
     String Function()? newActionId,
-  }) : _newActionId = newActionId ?? _randomId;
+    DateTime Function()? now,
+  }) : _newActionId = newActionId ?? _randomId,
+       _now = now ?? DateTime.now;
 
+  /// Drops in-memory drafts (one, or all). Durable records are unaffected; a
+  /// later dispatch reads, verifies and, if needed, encrypts from storage.
+  void releaseStaged([String? actionId]) {
+    if (actionId == null) {
+      _staged.clear();
+    } else {
+      _staged.remove(actionId);
+    }
+  }
+
+  _StagedDraft? _takeStaged(String actionId) {
+    final draft = _staged.remove(actionId);
+    if (draft == null || _now().difference(draft.at) >= stagedCacheLifetime) {
+      return null;
+    }
+    return draft;
+  }
+
+  void _pruneStaged() => _staged.removeWhere(
+    (_, draft) => _now().difference(draft.at) >= stagedCacheLifetime,
+  );
+
+  /// [record] with the ciphertext and keys that [early] computed from the
+  /// same plaintext (checked by digest, memoized on both sides).
+  PendingMediaRecord? _withEarlyCipher(
+    PendingMediaRecord record,
+    PendingMediaRecord? early,
+  ) {
+    if (early == null ||
+        early.encryptedBytes == null ||
+        pendingMediaDigest(early.bytes) != pendingMediaDigest(record.bytes) ||
+        (early.thumbnailBytes == null) != (record.thumbnailBytes == null) ||
+        (record.thumbnailBytes != null &&
+            pendingMediaDigest(early.thumbnailBytes!) !=
+                pendingMediaDigest(record.thumbnailBytes!))) {
+      return null;
+    }
+    return PendingMediaRecord(
+      actionId: record.actionId,
+      bytes: record.bytes,
+      thumbnailBytes: record.thumbnailBytes,
+      encryptedBytes: early.encryptedBytes,
+      encryptedThumbnailBytes: early.encryptedThumbnailBytes,
+      metadata: {
+        ...record.metadata,
+        'state': 'encrypted',
+        'fileDescriptor': early.metadata['fileDescriptor'],
+        'thumbnailDescriptor': early.metadata['thumbnailDescriptor'],
+      },
+    );
+  }
+
+  /// State transitions that keep every payload use the metadata-only write
+  /// when the repository offers it (no BLOB transfer, read-back or hashing).
+  Future<void> _saveMetadata(PendingMediaRecord record) {
+    final repository = store;
+    return repository is PendingMediaMetadataRepository
+        ? (repository as PendingMediaMetadataRepository).putMetadata(record)
+        : repository.put(record);
+  }
+
+  /// SDK encryption of the plaintext (and thumbnail), validated, as the
+  /// `encrypted` checkpoint metadata. Shared by staging and dispatch.
+  Future<PendingMediaRecord> _encrypted(PendingMediaRecord record) async {
+    final prepared = await encrypt(record.bytes, record.thumbnailBytes);
+    if (!_encryptedDescriptor(prepared.fileDescriptor) ||
+        prepared.bytes.length != record.bytes.length ||
+        (record.thumbnailBytes != null &&
+            (prepared.thumbnailBytes == null ||
+                prepared.thumbnailBytes!.length !=
+                    record.thumbnailBytes!.length ||
+                !_encryptedDescriptor(prepared.thumbnailDescriptor)))) {
+      throw const ImmediateMediaRejected('invalidSdkEncryption');
+    }
+    final fileDescriptor = {...prepared.fileDescriptor}..remove('url');
+    final thumbnailDescriptor = prepared.thumbnailDescriptor == null
+        ? null
+        : ({...prepared.thumbnailDescriptor!}..remove('url'));
+    return PendingMediaRecord(
+      actionId: record.actionId,
+      bytes: record.bytes,
+      thumbnailBytes: record.thumbnailBytes,
+      encryptedBytes: prepared.bytes,
+      encryptedThumbnailBytes: prepared.thumbnailBytes,
+      metadata: {
+        ...record.metadata,
+        'state': 'encrypted',
+        'fileDescriptor': fileDescriptor,
+        'thumbnailDescriptor': thumbnailDescriptor,
+      },
+    );
+  }
+
+  /// Durable staging before any network: the plaintext draft is committed and
+  /// read back first, so neither a crash nor an SDK encryption failure can
+  /// lose the round. With [encryptWhileStaging] the SDK ciphertext is computed
+  /// while that write runs and kept in memory for the first dispatch, which
+  /// commits it while the uploads already run. An encryption failure here is
+  /// not a staging failure: dispatch simply encrypts again.
   Future<ImmediateMediaResult> stage({
     required RoundSendTarget target,
     required RoundVideoDescriptor descriptor,
@@ -105,21 +234,25 @@ class ImmediateMediaOutbox {
     required Uint8List bytes,
     Uint8List? thumbnailBytes,
     String? actionId,
-  }) {
-    final frozenBytes = Uint8List.fromList(bytes).asUnmodifiableView();
+    bool encryptWhileStaging = false,
+  }) async {
+    _pruneStaged();
+    final frozenBytes = freezePendingMediaBytes(bytes);
     final frozenThumbnail = thumbnailBytes == null
         ? null
-        : Uint8List.fromList(thumbnailBytes).asUnmodifiableView();
+        : freezePendingMediaBytes(thumbnailBytes);
+    // Hashed once (off the UI isolate); the store reuses the memoized digest.
+    final mediaDigest = await pendingMediaDigestAsync(frozenBytes);
     final fingerprint = sha256
         .convert(
           utf8.encode(
             jsonEncode([
               target.toJson(),
               descriptor.toJson(),
-              sha256.convert(frozenBytes).toString(),
+              mediaDigest,
               frozenThumbnail == null
                   ? null
-                  : sha256.convert(frozenThumbnail).toString(),
+                  : pendingMediaDigest(frozenThumbnail),
             ]),
           ),
         )
@@ -169,14 +302,30 @@ class ImmediateMediaOutbox {
             'bridgeRevision': 0,
           },
         );
-        await store.stage(record);
-        final verified = await store.get(id);
+        final repository = store;
+        // The read-back verified inside the write transaction when available;
+        // otherwise a separate verified read.
+        final writing = repository is PendingMediaVerifiedStaging
+            ? (repository as PendingMediaVerifiedStaging).stageVerified(record)
+            : store.stage(record).then((_) => store.get(id));
+        // Local SDK work while the plaintext commit is in flight; it never
+        // decides whether the draft is saved.
+        final encrypting = encryptWhileStaging
+            ? _encrypted(
+                record,
+              ).then<PendingMediaRecord?>((r) => r, onError: (Object _) => null)
+            : null;
+        final verified = await writing;
         if (verified == null ||
             verified.bytes.length != frozenBytes.length ||
-            sha256.convert(verified.bytes).toString() !=
-                sha256.convert(frozenBytes).toString()) {
+            pendingMediaDigest(verified.bytes) != mediaDigest) {
           return _failed(id, 'stagingIntegrityFailure');
         }
+        _staged[id] = _StagedDraft(
+          verified,
+          encrypting == null ? null : await encrypting,
+          _now(),
+        );
         return _result(verified);
       } on ImmediateMediaRejected catch (e) {
         return _failed(actionId ?? '', e.code);
@@ -217,7 +366,8 @@ class ImmediateMediaOutbox {
     var dispatchStarted = false;
     var wasUnknown = false;
     try {
-      record = await store.get(actionId);
+      final draft = _takeStaged(actionId);
+      record = draft?.record ?? await store.get(actionId);
       if (record == null) return _failed(actionId, 'actionUnavailable');
       if (!_owns(record))
         return _failed(actionId, 'differentSessionNeedsReconciliation');
@@ -247,62 +397,79 @@ class ImmediateMediaOutbox {
         target,
         descriptor,
       ); // before upload, on every explicit retry.
+      // Keys and cipher BLOB are committed while the uploads run. Nothing that
+      // references them (an upload URL, the final event) is persisted or sent
+      // before that write succeeded; a failed write leaves the uploads as
+      // unreferenced ciphertext and the draft is encrypted again on retry.
+      Future<(Object, StackTrace)?>? cipherWrite;
       if (record.encryptedBytes == null) {
-        final prepared = await encrypt(record.bytes, record.thumbnailBytes);
-        if (!_encryptedDescriptor(prepared.fileDescriptor) ||
-            prepared.bytes.length != record.bytes.length ||
-            (record.thumbnailBytes != null &&
-                (prepared.thumbnailBytes == null ||
-                    prepared.thumbnailBytes!.length !=
-                        record.thumbnailBytes!.length ||
-                    !_encryptedDescriptor(prepared.thumbnailDescriptor)))) {
-          throw const ImmediateMediaRejected('invalidSdkEncryption');
+        final early = _withEarlyCipher(record, draft?.encrypted);
+        if (early == null) onPhase?.call(actionId, RoundSendPhase.encrypting);
+        final encrypted = early ?? await _encrypted(record);
+        record = encrypted;
+        cipherWrite = _attemptWrite(() => store.put(encrypted));
+      }
+      onPhase?.call(actionId, RoundSendPhase.uploading);
+      // Video and thumbnail upload concurrently; each URL that arrived is kept
+      // even when the other part fails, so a retry re-uploads only what is
+      // missing (same ciphertext, same keys).
+      final needsFile = record.metadata['fileUrl'] == null;
+      final needsThumbnail =
+          record.encryptedThumbnailBytes != null &&
+          record.metadata['thumbnailUrl'] == null;
+      if (needsFile || needsThumbnail) {
+        final cipher = record.encryptedBytes!;
+        final thumbnailCipher = record.encryptedThumbnailBytes;
+        final parts = await Future.wait([
+          _attempt(needsFile ? () => upload(target, cipher, 'file') : null),
+          _attempt(
+            needsThumbnail
+                ? () => upload(target, thumbnailCipher!, 'thumbnail')
+                : null,
+          ),
+        ]);
+        final cipherFailure = await cipherWrite;
+        cipherWrite = null;
+        if (cipherFailure != null) {
+          Error.throwWithStackTrace(cipherFailure.$1, cipherFailure.$2);
         }
-        final fileDescriptor = {...prepared.fileDescriptor}..remove('url');
-        final thumbnailDescriptor = prepared.thumbnailDescriptor == null
-            ? null
-            : ({...prepared.thumbnailDescriptor!}..remove('url'));
-        record = PendingMediaRecord(
-          actionId: actionId,
-          bytes: record.bytes,
-          thumbnailBytes: record.thumbnailBytes,
-          encryptedBytes: prepared.bytes,
-          encryptedThumbnailBytes: prepared.thumbnailBytes,
-          metadata: {
-            ...record.metadata,
-            'state': 'encrypted',
-            'fileDescriptor': fileDescriptor,
-            'thumbnailDescriptor': thumbnailDescriptor,
-          },
-        );
-        await store.put(record); // keys and cipher BLOB are atomic before I/O.
-      }
-      if (record.metadata['fileUrl'] == null) {
-        final uri = await upload(target, record.encryptedBytes!, 'file');
-        if (!_mxc(uri))
+        final uploaded = <String, String>{
+          if (parts[0].$1 != null && _mxc(parts[0].$1!))
+            'fileUrl': parts[0].$1.toString(),
+          if (parts[1].$1 != null && _mxc(parts[1].$1!))
+            'thumbnailUrl': parts[1].$1.toString(),
+        };
+        final failure = parts[0].$2 ?? parts[1].$2;
+        if (uploaded.isNotEmpty) {
+          final metadata = {...record.metadata, ...uploaded};
+          record = record.withMetadata({
+            ...metadata,
+            'state': metadata['fileUrl'] == null
+                ? 'encrypted'
+                : (record.encryptedThumbnailBytes == null ||
+                      metadata['thumbnailUrl'] != null)
+                ? 'uploaded'
+                : 'fileUploaded',
+          });
+        }
+        if (failure != null) {
+          if (uploaded.isNotEmpty) {
+            try {
+              await _saveMetadata(record);
+            } catch (_) {
+              /* the original upload failure decides the outcome */
+            }
+          }
+          Error.throwWithStackTrace(failure.$1, failure.$2);
+        }
+        if ((needsFile && uploaded['fileUrl'] == null) ||
+            (needsThumbnail && uploaded['thumbnailUrl'] == null)) {
           throw const ImmediateMediaRejected('invalidUploadResult');
-        record = record.withMetadata({
-          ...record.metadata,
-          'state': 'fileUploaded',
-          'fileUrl': uri.toString(),
-        });
-        await store.put(record);
+        }
       }
-      if (record.encryptedThumbnailBytes != null &&
-          record.metadata['thumbnailUrl'] == null) {
-        final uri = await upload(
-          target,
-          record.encryptedThumbnailBytes!,
-          'thumbnail',
-        );
-        if (!_mxc(uri))
-          throw const ImmediateMediaRejected('invalidUploadResult');
-        record = record.withMetadata({
-          ...record.metadata,
-          'state': 'uploaded',
-          'thumbnailUrl': uri.toString(),
-        });
-        await store.put(record);
+      final cipherFailure = await cipherWrite;
+      if (cipherFailure != null) {
+        Error.throwWithStackTrace(cipherFailure.$1, cipherFailure.$2);
       }
       if (record.metadata['finalContent'] == null) {
         final info = descriptor.matrixInfo;
@@ -352,12 +519,13 @@ class ImmediateMediaOutbox {
             'm.in_reply_to': {'event_id': target.replyEventId},
           };
         }
+        // Deterministic from the frozen metadata: committed together with the
+        // inFlight checkpoint below (or with a failure), one write fewer.
         record = record.withMetadata({
           ...record.metadata,
           'state': 'prepared',
           'finalContent': content,
         });
-        await store.put(record);
       }
       await guard(
         target,
@@ -368,8 +536,9 @@ class ImmediateMediaOutbox {
         'state': 'inFlight',
         'errorCode': null,
       });
-      await store.put(record);
+      await _saveMetadata(record);
       dispatchStarted = true;
+      onPhase?.call(actionId, RoundSendPhase.sending);
       final eventId = await sendEvent(
         target,
         Map<String, dynamic>.from(record.metadata['finalContent'] as Map),
@@ -385,7 +554,7 @@ class ImmediateMediaOutbox {
             ? null
             : 'noAcceptedEvent',
       });
-      await store.put(record);
+      await _saveMetadata(record);
       return _result(record);
     } on ImmediateMediaRejected catch (e) {
       return _saveFailure(
@@ -408,8 +577,36 @@ class ImmediateMediaOutbox {
         dispatchStarted || wasUnknown ? 'unknown' : 'failed',
         dispatchStarted || wasUnknown ? 'unconfirmed' : 'preDispatchFailure',
       );
+    } finally {
+      onPhase?.call(actionId, null);
     }
   });
+
+  /// Starts [write] and keeps its failure (synchronous throws included) for
+  /// the caller to decide; never an unhandled error.
+  static Future<(Object, StackTrace)?> _attemptWrite(
+    Future<void> Function() write,
+  ) async {
+    try {
+      await write();
+      return null;
+    } catch (error, stack) {
+      return (error, stack);
+    }
+  }
+
+  /// Starts [upload] and keeps its value or failure (synchronous throws
+  /// included) for the caller to decide; never an unhandled error.
+  static Future<(Uri?, (Object, StackTrace)?)> _attempt(
+    Future<Uri> Function()? upload,
+  ) async {
+    if (upload == null) return (null, null);
+    try {
+      return (await upload(), null);
+    } catch (error, stack) {
+      return (null, (error, stack));
+    }
+  }
 
   /// Only the caller's authenticated/source-bound reverse-state adapter may call.
   /// Stale or contradictory updates cannot override a trusted delivery result.
@@ -419,6 +616,7 @@ class ImmediateMediaOutbox {
     required int revision,
     required RoundBridgeDelivery delivery,
   }) => _serialize(actionId, () async {
+    _staged.remove(actionId);
     final record = await store.get(actionId);
     if (record == null ||
         !_owns(record) ||
@@ -434,7 +632,7 @@ class ImmediateMediaOutbox {
       'bridgeDelivery': delivery.name,
       'bridgeRevision': revision,
     });
-    await store.put(updated);
+    await _saveMetadata(updated);
     if (updated.metadata['state'] == 'completed' &&
         delivery == RoundBridgeDelivery.delivered) {
       await _releaseBytes(updated);
@@ -444,6 +642,7 @@ class ImmediateMediaOutbox {
 
   /// After encrypted composer clear, keep an accepted tombstone to prevent resend.
   Future<void> complete(String actionId) => _serialize(actionId, () async {
+    _staged.remove(actionId);
     final record = await store.get(actionId);
     if (record == null || !_owns(record)) {
       throw const PendingMediaFailure('differentSessionNeedsReconciliation');
@@ -456,7 +655,7 @@ class ImmediateMediaOutbox {
       ...record.metadata,
       'state': 'completed',
     });
-    await store.put(completed);
+    await _saveMetadata(completed);
     if (completed.metadata['bridgeDelivery'] == 'delivered')
       await _releaseBytes(completed);
   });
@@ -465,6 +664,7 @@ class ImmediateMediaOutbox {
   /// Keeps stable identity/final-content tombstone; unknown media cannot be purged.
   Future<void> purgeAcceptedMedia(String actionId) =>
       _serialize(actionId, () async {
+        _staged.remove(actionId);
         final record = await store.get(actionId);
         if (record == null ||
             !_owns(record) ||
@@ -482,6 +682,7 @@ class ImmediateMediaOutbox {
   );
 
   Future<void> cancel(String actionId) => _serialize(actionId, () async {
+    _staged.remove(actionId);
     final record = await store.get(actionId);
     if (record == null) return;
     if (!_owns(record))
@@ -494,7 +695,7 @@ class ImmediateMediaOutbox {
     }.contains(record.metadata['state'])) {
       throw const PendingMediaFailure('needsReconciliation');
     }
-    await store.put(
+    await _saveMetadata(
       record.withMetadata({...record.metadata, 'state': 'cancelled'}),
     );
     await store.remove(actionId);
@@ -512,8 +713,13 @@ class ImmediateMediaOutbox {
       'errorCode': errorCode,
     });
     try {
-      await store.put(failed);
-    } catch (_) {}
+      await _saveMetadata(failed);
+    } catch (_) {
+      // E.g. a ciphertext whose own write just failed: try the full write.
+      try {
+        await store.put(failed);
+      } catch (_) {}
+    }
     return _result(failed);
   }
 

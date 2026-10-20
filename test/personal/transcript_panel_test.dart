@@ -2,9 +2,10 @@
 // Offline widget tests for the transcription split button and panel.
 import 'dart:async';
 
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/transcript_panel.dart';
-import 'package:fluffychat/personal/ui/notion_transcribe_button.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/transcript_panel.dart';
+import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
+import 'package:chatloom/personal/worker_readiness.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -62,6 +63,8 @@ class _FakePersonal extends PersonalClient {
     return TranscriptCancellation.waitingAcknowledgement;
   }
 
+  void poke() => notifyListeners();
+
   void setJob(
     Event e,
     JobState state, {
@@ -69,6 +72,7 @@ class _FakePersonal extends PersonalClient {
     String? text,
     String? errorCode,
     double? cost,
+    TranscriptionOrigin origin = TranscriptionOrigin.manual,
   }) {
     final id = transcriptId(e);
     jobs[id] = TranscriptionJob(
@@ -85,6 +89,7 @@ class _FakePersonal extends PersonalClient {
       text: text,
       errorCode: errorCode,
       estimatedCostUsd: cost,
+      origin: origin,
     );
     notifyListeners();
   }
@@ -225,9 +230,8 @@ void main() {
     );
     expect(find.textContaining('Connect private sync'), findsNothing);
 
-    ScaffoldMessenger.of(
-      tester.element(find.byType(TranscriptPanel)),
-    ).removeCurrentSnackBar();
+    ScaffoldMessenger.of(tester.element(find.byType(TranscriptPanel)))
+        .removeCurrentSnackBar();
     await settle(tester);
     personal
       ..fakeReady = false
@@ -516,5 +520,114 @@ void main() {
       tester.getSize(find.byKey(const ValueKey('transcribe-primary'))).height,
       greaterThanOrEqualTo(56),
     );
+  });
+
+  group('videos and automatic work', () {
+    late Event clip;
+    setUp(() {
+      clip = room.message(
+        r'$clip',
+        'clip.mp4',
+        content: {
+          'msgtype': MessageTypes.Video,
+          'body': 'clip.mp4',
+          'url': 'mxc://example.invalid/clip',
+          'info': {'mimetype': 'video/mp4', 'duration': 30000},
+        },
+      );
+    });
+
+    testWidgets('a video is offered only by a media-capable worker', (
+      tester,
+    ) async {
+      expect(TranscriptPanel.mayTranscribe(clip), isTrue);
+      await pump(tester, events: [clip]);
+      expect(find.text('Transcribe'), findsNothing);
+      personal.workerReadiness = WorkerReadiness(
+        receivedAt: DateTime.now(),
+        transcriptionMedia: 2,
+      );
+      personal.poke();
+      await settle(tester);
+      expect(find.text('Transcribe'), findsOneWidget);
+    });
+
+    testWidgets('GIF-style loops and images never get a transcript slot', (
+      tester,
+    ) async {
+      final gif = room.message(
+        r'$gif',
+        'loop.mp4',
+        content: {
+          'msgtype': MessageTypes.Video,
+          'body': 'loop.mp4',
+          'info': {'mimetype': 'video/mp4', 'fi.mau.gif': true},
+        },
+      );
+      expect(TranscriptPanel.mayTranscribe(gif), isFalse);
+      final photo = room.message(
+        r'$photo',
+        'photo.jpg',
+        content: {'msgtype': MessageTypes.Image, 'body': 'photo.jpg'},
+      );
+      expect(TranscriptPanel.mayTranscribe(photo), isFalse);
+    });
+
+    testWidgets('automatic work shows one quiet line, then the transcript', (
+      tester,
+    ) async {
+      personal.setJob(clip, JobState.queued, origin: TranscriptionOrigin.auto);
+      await pump(tester, events: [clip]);
+      expect(
+        find.byKey(const ValueKey('transcript-auto-busy')),
+        findsOneWidget,
+      );
+      expect(find.text('Transcribing…'), findsOneWidget);
+      expect(find.byKey(const ValueKey('transcribe-cancel')), findsNothing);
+      expect(find.text('Transcribe'), findsNothing);
+      personal.setJob(
+        clip,
+        JobState.done,
+        text: 'Hello from the video',
+        origin: TranscriptionOrigin.auto,
+      );
+      await settle(tester);
+      expect(find.text('Hello from the video'), findsOneWidget);
+      expect(find.byKey(const ValueKey('transcript-auto-busy')), findsNothing);
+    });
+
+    testWidgets('a silent clip found automatically renders nothing', (
+      tester,
+    ) async {
+      personal.setJob(
+        clip,
+        JobState.cancelled,
+        errorCode: 'no_audio_track',
+        origin: TranscriptionOrigin.auto,
+      );
+      await pump(tester, events: [clip]);
+      expect(find.byType(NotionTranscribeSplitButton), findsNothing);
+      expect(find.textContaining('audio'), findsNothing);
+    });
+
+    testWidgets('a manual request on a silent clip explains why', (
+      tester,
+    ) async {
+      personal.setJob(clip, JobState.failed, errorCode: 'no_audio_track');
+      await pump(tester, events: [clip]);
+      expect(find.text('This video has no audio track'), findsOneWidget);
+    });
+
+    testWidgets('a kind switched off leaves the manual button', (tester) async {
+      personal.setJob(
+        voice,
+        JobState.cancelled,
+        errorCode: 'auto_skipped_kind',
+        origin: TranscriptionOrigin.auto,
+      );
+      await pump(tester);
+      expect(find.text('Transcribe'), findsOneWidget);
+      expect(find.text('Not transcribed automatically (limit)'), findsNothing);
+    });
   });
 }

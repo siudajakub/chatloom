@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/pages/chat/conversation_motion.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/ui/notion_transcribe_button.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -29,7 +29,10 @@ const _busyStates = {
 /// Short, user-facing reason for a failed or skipped transcription job.
 String transcriptionErrorText(String? errorCode) => switch (errorCode) {
   'protected_media' ||
-  'invalid_round_format' => 'Protected or unsupported media',
+  'invalid_round_format' ||
+  'invalid_media_format' ||
+  'not_audio' => 'Protected or unsupported media',
+  'no_audio_track' => 'This video has no audio track',
   'media_conversion_failed' ||
   'invalid_audio_duration' ||
   'empty_audio' => 'Couldn’t read the audio track',
@@ -38,6 +41,7 @@ String transcriptionErrorText(String? errorCode) => switch (errorCode) {
   'local_source_unavailable' ||
   'source_status_unknown' => 'Source temporarily unavailable',
   'auto_skipped_duration' ||
+  'auto_skipped_size' ||
   'auto_skipped_budget' => 'Not transcribed automatically (limit)',
   'invalid_language' => 'Unsupported transcription language',
   final String code when code.startsWith('openai_') =>
@@ -57,11 +61,15 @@ String transcriptionBusyLabel(JobState? state, {bool requesting = false}) =>
       _ => requesting ? 'Starting…' : 'Transcribing…',
     };
 
-/// Transcription controls and result for one voice or round message.
+/// Transcription controls and result for one voice note, audio, round or
+/// video message (also media sent as a file).
 ///
 /// Listens to [PersonalClient] but rebuilds only when this event's job (or
 /// its automatic-pending flag) actually changes, so a timeline full of voice
-/// messages does not rebuild on every private-sync notification.
+/// messages does not rebuild on every private-sync notification. Renders
+/// nothing for media the paired worker cannot transcribe, and for automatic
+/// jobs that found no audio track (a silent clip). Automatic work shows a
+/// subtle "Transcribing…" line instead of the manual controls.
 class TranscriptPanel extends StatefulWidget {
   final Event event;
 
@@ -78,6 +86,12 @@ class TranscriptPanel extends StatefulWidget {
     this.foregroundColor,
     @visibleForTesting this.personalClient,
   });
+
+  /// Cheap, synchronous pre-check for bubbles that add a transcript slot:
+  /// true when [event] carries speech media at all (the panel itself then
+  /// checks what the paired worker supports).
+  static bool mayTranscribe(Event event) =>
+      !event.redacted && PersonalClient.autoTranscriptionKind(event) != null;
   @override
   State<TranscriptPanel> createState() => _TranscriptPanelState();
 }
@@ -145,8 +159,17 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
       job?.estimatedCostUsd,
       job != null && personal.isTranscriptCancellationPending(job.id),
       job == null && _autoPending(),
+      job == null && _offered(),
       personal.transcriptionDefaultLanguage,
     );
+  }
+
+  bool _offered() {
+    try {
+      return personal.transcribableKind(widget.event) != null;
+    } catch (_) {
+      return false;
+    }
   }
 
   bool _autoPending() {
@@ -175,9 +198,8 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
 
   void _snack(String text) {
     if (!mounted) return;
-    ScaffoldMessenger.maybeOf(
-      context,
-    )?.showSnackBar(SnackBar(content: Text(text)));
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _request([String? language]) async {
@@ -229,6 +251,14 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
     final foreground =
         widget.foregroundColor ?? Theme.of(context).colorScheme.onSurface;
     final job = _job;
+    if (job == null && !_offered()) return const SizedBox.shrink();
+    // A silent clip found by automatic work is not worth a line of UI.
+    if (job != null &&
+        job.automatic &&
+        job.state == JobState.cancelled &&
+        job.errorCode == 'no_audio_track') {
+      return const SizedBox.shrink();
+    }
     final autoPending = job == null && _autoPending();
     final busy =
         _requesting ||
@@ -247,11 +277,17 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
               }.contains(job.state)
         ? _Phase.error
         : job?.state == JobState.cancelled &&
-              (job?.errorCode?.startsWith('auto_skipped_') ?? false)
+              (job?.errorCode?.startsWith('auto_skipped_') ?? false) &&
+              job?.errorCode != 'auto_skipped_kind'
         ? _Phase.error
         : _Phase.idle;
+    final subtle =
+        phase == _Phase.busy &&
+        !_requesting &&
+        (autoPending || (job?.automatic ?? false));
 
     final child = switch (phase) {
+      _Phase.busy when subtle => _autoBusy(job, foreground),
       _Phase.busy => _busy(job, foreground),
       _Phase.done => _done(job!, foreground),
       _Phase.error => _error(job!, foreground),
@@ -267,7 +303,10 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
         curve: NotionMotion.emphasized,
         child: NotionFadeThrough(
           duration: NotionMotion.short,
-          child: KeyedSubtree(key: ValueKey(phase), child: child),
+          child: KeyedSubtree(
+            key: ValueKey(subtle ? 'auto-busy' : phase),
+            child: child,
+          ),
         ),
       ),
     );
@@ -309,6 +348,44 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
     );
   }
 
+  /// Automatic work in progress: one quiet line, no controls, so a fresh
+  /// voice note or video looks finished-in-a-moment rather than actionable.
+  Widget _autoBusy(TranscriptionJob? job, Color foreground) {
+    final label = transcriptionBusyLabel(
+      job != null && _busyStates.contains(job.state) ? job.state : null,
+    );
+    // Queued automatic work reads as "Transcribing…": the wait is short.
+    final text = label == 'Queued' ? 'Transcribing…' : label;
+    return Semantics(
+      key: const ValueKey('transcript-auto-busy'),
+      liveRegion: true,
+      label: text,
+      child: ExcludeSemantics(
+        child: Padding(
+          padding: const EdgeInsetsDirectional.only(
+            start: _textInset,
+            top: NotionSpace.xxs,
+            bottom: NotionSpace.xxs,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox.square(
+                dimension: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: foreground.withValues(alpha: .6),
+                ),
+              ),
+              const SizedBox(width: NotionSpace.xs),
+              _caption(text, foreground),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _idle(TranscriptionJob? job, Color foreground) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     mainAxisSize: MainAxisSize.min,
@@ -322,7 +399,8 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
       ),
       if (job?.state == JobState.done)
         _caption('No speech detected', foreground),
-      if (job?.state == JobState.cancelled)
+      if (job?.state == JobState.cancelled &&
+          job?.errorCode != 'auto_skipped_kind')
         _caption('Transcription cancelled.', foreground),
       if (job?.state == JobState.paused)
         _caption('Transcription paused.', foreground),

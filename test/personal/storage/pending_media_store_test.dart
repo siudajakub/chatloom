@@ -140,6 +140,85 @@ Future<void> main() async {
     } on PendingMediaFailure catch (e) {
       check(e.code == 'immutableRecordMismatch', 'Wrong mutation reason');
     }
+    // Metadata-only transitions: same rules as put, BLOBs untouched.
+    check(
+      identical(freezePendingMediaBytes(current.bytes), current.bytes),
+      'Stored bytes copied again instead of reused',
+    );
+    await store.putMetadata(
+      current.withMetadata({
+        ...current.metadata,
+        'state': 'inFlight',
+        'fileUrl': 'mxc://fixture.invalid/file',
+      }),
+    );
+    final transitioned = (await store.get('big'))!;
+    check(
+      transitioned.metadata['state'] == 'inFlight' &&
+          transitioned.metadata['fileUrl'] == 'mxc://fixture.invalid/file' &&
+          transitioned.storedBytes == current.storedBytes &&
+          pendingMediaDigest(transitioned.bytes) ==
+              pendingMediaDigest(current.bytes),
+      'Metadata transition lost state or changed BLOBs',
+    );
+    for (final (label, mutated) in [
+      (
+        'retarget',
+        transitioned.withMetadata({
+          ...transitioned.metadata,
+          'target': {'roomId': 'retargeted'},
+        }),
+      ),
+      (
+        'descriptor',
+        transitioned.withMetadata({
+          ...transitioned.metadata,
+          'fileDescriptor': {'fixture': false},
+        }),
+      ),
+      (
+        'payload',
+        PendingMediaRecord(
+          actionId: 'big',
+          metadata: transitioned.metadata,
+          bytes: Uint8List.fromList([...transitioned.bytes.take(64)]),
+          encryptedBytes: transitioned.encryptedBytes,
+        ),
+      ),
+      (
+        'owner',
+        transitioned.withMetadata({
+          ...transitioned.metadata,
+          'deviceId': 'foreign',
+        }),
+      ),
+    ]) {
+      try {
+        await store.putMetadata(mutated);
+        throw StateError('Metadata-only $label mutation accepted');
+      } on PendingMediaFailure catch (e) {
+        check(
+          e.code == 'immutableRecordMismatch',
+          'Wrong metadata $label reason: ${e.code}',
+        );
+      }
+    }
+    try {
+      await store.putMetadata(
+        PendingMediaRecord(
+          actionId: 'absent',
+          metadata: transitioned.metadata,
+          bytes: Uint8List(1),
+        ),
+      );
+      throw StateError('Metadata-only write created a row');
+    } on PendingMediaFailure catch (e) {
+      check(e.code == 'actionUnavailable', 'Wrong absent-row reason');
+    }
+    check(
+      (await store.get('big'))!.metadata['state'] == 'inFlight',
+      'Rejected metadata mutation changed the row',
+    );
     await store.close();
     final disk = await File(path).readAsBytes();
     check(

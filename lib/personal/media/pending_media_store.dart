@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -7,6 +8,71 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../storage/database_policy.dart';
 import '../storage/storage_failure.dart';
+
+/// Unmodifiable copies owned by this library. Their bytes can never change, so
+/// they are never copied again and their SHA-256 is computed at most once.
+final Expando<bool> _frozenViews = Expando<bool>('pending-media-frozen');
+final Expando<String> _digests = Expando<String>('pending-media-sha256');
+
+/// Payloads at least this large are hashed on a background isolate: a 5 MB
+/// round took ~70 ms of pure-Dart SHA-256 on the calling (UI) isolate.
+const pendingMediaIsolateDigestBytes = 512 * 1024;
+
+/// An unmodifiable private copy of [value]; no copy when it already is one.
+Uint8List freezePendingMediaBytes(Uint8List value) {
+  if (_frozenViews[value] == true) return value;
+  return _adoptPendingMediaBytes(Uint8List.fromList(value));
+}
+
+/// Freezes bytes nobody else references (fresh from storage) without copying.
+Uint8List _adoptPendingMediaBytes(Uint8List owned) {
+  final frozen = owned.asUnmodifiableView();
+  _frozenViews[frozen] = true;
+  return frozen;
+}
+
+/// Hex SHA-256 of [value], remembered for frozen payloads.
+String pendingMediaDigest(Uint8List value) {
+  final cached = _digests[value];
+  if (cached != null) return cached;
+  final digest = sha256.convert(value).toString();
+  if (_frozenViews[value] == true) _digests[value] = digest;
+  return digest;
+}
+
+/// [pendingMediaDigest] computed off the calling isolate for large payloads.
+Future<String> pendingMediaDigestAsync(Uint8List value) async {
+  final cached = _digests[value];
+  if (cached != null) return cached;
+  if (value.length < pendingMediaIsolateDigestBytes) {
+    return pendingMediaDigest(value);
+  }
+  final transfer = TransferableTypedData.fromList([value]);
+  final digest = await Isolate.run(
+    () => sha256.convert(transfer.materialize().asUint8List()).toString(),
+  );
+  if (_frozenViews[value] == true) _digests[value] = digest;
+  return digest;
+}
+
+Future<String?> _digestOrNull(Uint8List? value) async =>
+    value == null ? null : pendingMediaDigestAsync(value);
+
+/// Metadata is stored padded with JSON whitespace to a multiple of this many
+/// UTF-8 bytes. A state transition then usually leaves the row size unchanged,
+/// and SQLite overwrites the row in place, writing only pages whose bytes
+/// differ: the multi-megabyte media BLOBs are not rewritten, journaled or
+/// zeroed (secure_delete) for every checkpoint. Readers decode it unchanged.
+const pendingMediaMetadataBucketBytes = 4096;
+
+String _encodeMetadata(Map<String, dynamic> metadata) {
+  final json = jsonEncode(metadata);
+  final length = utf8.encode(json).length;
+  final padded =
+      (length ~/ pendingMediaMetadataBucketBytes + 1) *
+      pendingMediaMetadataBucketBytes;
+  return json.padRight(json.length + padded - length);
+}
 
 class PendingMediaFailure implements Exception {
   final String code;
@@ -47,7 +113,7 @@ class PendingMediaRecord {
         encryptedThumbnailBytes: encryptedThumbnailBytes,
       );
   static Uint8List? _copyBytes(Uint8List? value) =>
-      value == null ? null : Uint8List.fromList(value).asUnmodifiableView();
+      value == null ? null : freezePendingMediaBytes(value);
   static Map<String, dynamic> _copyJson(Map<String, dynamic> value) =>
       _freeze(jsonDecode(jsonEncode(value))) as Map<String, dynamic>;
   static Object? _freeze(Object? value) {
@@ -84,6 +150,20 @@ abstract interface class PendingMediaSummaryRepository {
   });
 }
 
+/// Optional: persists a state transition whose payloads are unchanged without
+/// re-sending, re-reading or re-hashing the media BLOBs. Implementations must
+/// enforce the same identity/immutability rules as a full write.
+abstract interface class PendingMediaMetadataRepository {
+  Future<void> putMetadata(PendingMediaRecord record);
+}
+
+/// Optional: [PendingMediaRepository.stage] that returns the row it read back
+/// and verified inside the write transaction, so the caller does not read and
+/// hash the same payloads a second time.
+abstract interface class PendingMediaVerifiedStaging {
+  Future<PendingMediaRecord> stageVerified(PendingMediaRecord record);
+}
+
 abstract interface class PendingMediaRepository {
   Future<void> stage(PendingMediaRecord record);
   Future<PendingMediaRecord?> get(String actionId);
@@ -98,7 +178,11 @@ abstract interface class PendingMediaRepository {
 /// Durable staging, not a playback cache. No eviction, retention, or clearCache.
 /// Each atomic row includes raw/encrypted BLOBs, hashes and its operation ledger.
 class PendingMediaStore
-    implements PendingMediaRepository, PendingMediaSummaryRepository {
+    implements
+        PendingMediaRepository,
+        PendingMediaSummaryRepository,
+        PendingMediaMetadataRepository,
+        PendingMediaVerifiedStaging {
   final Database _database;
   final int maxFileBytes, maxThumbnailBytes, maxStoreBytes;
   PendingMediaStore(
@@ -300,12 +384,12 @@ class PendingMediaStore
   @override
   Future<void> stage(PendingMediaRecord record) => _write(record, true);
   @override
+  Future<PendingMediaRecord> stageVerified(PendingMediaRecord record) =>
+      _write(record, true);
+  @override
   Future<void> put(PendingMediaRecord record) => _write(record, false);
 
-  Future<void> _write(
-    PendingMediaRecord record,
-    bool first,
-  ) => _protected(() async {
+  static void _requireIdentity(PendingMediaRecord record) {
     if (!RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(record.actionId) ||
         record.metadata['accountId'] is! String ||
         record.metadata['deviceId'] is! String ||
@@ -313,6 +397,33 @@ class PendingMediaStore
         (record.metadata['deviceId'] as String).isEmpty) {
       throw const PendingMediaFailure('invalidRecord');
     }
+  }
+
+  /// Frozen identity, routing and once-set descriptors never change in place.
+  static bool _immutableChanged(
+    Map oldMetadata,
+    Map<String, dynamic> metadata,
+  ) =>
+      _canonical(oldMetadata['target']) != _canonical(metadata['target']) ||
+      oldMetadata['transactionId'] != metadata['transactionId'] ||
+      _canonical(oldMetadata['descriptor']) !=
+          _canonical(metadata['descriptor']) ||
+      (oldMetadata['fileDescriptor'] != null &&
+          _canonical(oldMetadata['fileDescriptor']) !=
+              _canonical(metadata['fileDescriptor'])) ||
+      (oldMetadata['thumbnailDescriptor'] != null &&
+          _canonical(oldMetadata['thumbnailDescriptor']) !=
+              _canonical(metadata['thumbnailDescriptor'])) ||
+      (oldMetadata['finalContent'] != null &&
+          _canonical(oldMetadata['finalContent']) !=
+              _canonical(metadata['finalContent']));
+
+  /// Returns the row as read back (and hash-verified) before commit.
+  Future<PendingMediaRecord> _write(
+    PendingMediaRecord record,
+    bool first,
+  ) => _protected(() async {
+    _requireIdentity(record);
     if ((first && record.bytes.isEmpty) ||
         record.bytes.length > maxFileBytes ||
         (record.thumbnailBytes?.length ?? 0) > maxThumbnailBytes ||
@@ -321,9 +432,25 @@ class PendingMediaStore
             maxThumbnailBytes + 1024) {
       throw const PendingMediaFailure('fileQuota');
     }
-    await _database.transaction((tx) async {
+    // One digest per payload (memoized for frozen views), outside the UI isolate.
+    final mediaHash = await pendingMediaDigestAsync(record.bytes);
+    final thumbnailHash = await _digestOrNull(record.thumbnailBytes);
+    final encryptedHash = await _digestOrNull(record.encryptedBytes);
+    final encryptedThumbnailHash = await _digestOrNull(
+      record.encryptedThumbnailBytes,
+    );
+    return _database.transaction((tx) async {
       final existing = await tx.query(
         'personal_pending_media',
+        columns: [
+          'account_id',
+          'device_id',
+          'metadata',
+          'media_hash',
+          'thumbnail_hash',
+          'encrypted_hash',
+          'encrypted_thumbnail_hash',
+        ],
         where: 'action_id = ?',
         whereArgs: [record.actionId],
         limit: 1,
@@ -348,28 +475,14 @@ class PendingMediaStore
         if (old['account_id'] != record.metadata['accountId'] ||
             old['device_id'] != record.metadata['deviceId'] ||
             (!releasing &&
-                (old['media_hash'] != _hash(record.bytes) ||
-                    old['thumbnail_hash'] != _hash(record.thumbnailBytes) ||
+                (old['media_hash'] != mediaHash ||
+                    old['thumbnail_hash'] != thumbnailHash ||
                     (old['encrypted_hash'] != null &&
-                        old['encrypted_hash'] !=
-                            _hash(record.encryptedBytes)) ||
+                        old['encrypted_hash'] != encryptedHash) ||
                     (old['encrypted_thumbnail_hash'] != null &&
                         old['encrypted_thumbnail_hash'] !=
-                            _hash(record.encryptedThumbnailBytes)))) ||
-            _canonical(oldMetadata['target']) !=
-                _canonical(record.metadata['target']) ||
-            oldMetadata['transactionId'] != record.metadata['transactionId'] ||
-            _canonical(oldMetadata['descriptor']) !=
-                _canonical(record.metadata['descriptor']) ||
-            (oldMetadata['fileDescriptor'] != null &&
-                _canonical(oldMetadata['fileDescriptor']) !=
-                    _canonical(record.metadata['fileDescriptor'])) ||
-            (oldMetadata['thumbnailDescriptor'] != null &&
-                _canonical(oldMetadata['thumbnailDescriptor']) !=
-                    _canonical(record.metadata['thumbnailDescriptor'])) ||
-            (oldMetadata['finalContent'] != null &&
-                _canonical(oldMetadata['finalContent']) !=
-                    _canonical(record.metadata['finalContent']))) {
+                            encryptedThumbnailHash))) ||
+            _immutableChanged(oldMetadata, record.metadata)) {
           throw const PendingMediaFailure('immutableRecordMismatch');
         }
       }
@@ -387,15 +500,15 @@ class PendingMediaStore
         'action_id': record.actionId,
         'account_id': record.metadata['accountId'],
         'device_id': record.metadata['deviceId'],
-        'metadata': jsonEncode(record.metadata),
+        'metadata': _encodeMetadata(record.metadata),
         'media': record.bytes,
         'thumbnail': record.thumbnailBytes,
         'encrypted': record.encryptedBytes,
         'encrypted_thumbnail': record.encryptedThumbnailBytes,
-        'media_hash': _hash(record.bytes),
-        'thumbnail_hash': _hash(record.thumbnailBytes),
-        'encrypted_hash': _hash(record.encryptedBytes),
-        'encrypted_thumbnail_hash': _hash(record.encryptedThumbnailBytes),
+        'media_hash': mediaHash,
+        'thumbnail_hash': thumbnailHash,
+        'encrypted_hash': encryptedHash,
+        'encrypted_thumbnail_hash': encryptedThumbnailHash,
       };
       await tx.insert(
         'personal_pending_media',
@@ -410,9 +523,77 @@ class PendingMediaStore
         whereArgs: [record.actionId],
         limit: 1,
       );
-      _decode(
+      return _decode(
         verified.single,
       ); // read-back and all hashes before commit/network.
+    });
+  });
+
+  /// Metadata-only transition: the stored payload hashes must equal the
+  /// record's (memoized, so normally free), the same identity/immutability
+  /// rules as [put] apply, and the written metadata is read back before
+  /// commit. BLOBs are never sent, read or re-hashed. Releasing bytes still
+  /// requires [put].
+  @override
+  Future<void> putMetadata(PendingMediaRecord record) => _protected(() async {
+    _requireIdentity(record);
+    final hashes = [
+      await pendingMediaDigestAsync(record.bytes),
+      await _digestOrNull(record.thumbnailBytes),
+      await _digestOrNull(record.encryptedBytes),
+      await _digestOrNull(record.encryptedThumbnailBytes),
+    ];
+    const hashColumns = [
+      'media_hash',
+      'thumbnail_hash',
+      'encrypted_hash',
+      'encrypted_thumbnail_hash',
+    ];
+    final metadata = _encodeMetadata(record.metadata);
+    await _database.transaction((tx) async {
+      Future<Map<String, Object?>?> row() async {
+        final rows = await tx.query(
+          'personal_pending_media',
+          columns: ['account_id', 'device_id', 'metadata', ...hashColumns],
+          where: 'action_id = ?',
+          whereArgs: [record.actionId],
+          limit: 1,
+        );
+        return rows.isEmpty ? null : rows.single;
+      }
+
+      bool sameOwnerAndPayload(Map<String, Object?> value) =>
+          value['account_id'] == record.metadata['accountId'] &&
+          value['device_id'] == record.metadata['deviceId'] &&
+          [
+            for (var i = 0; i < hashColumns.length; i++)
+              value[hashColumns[i]] == hashes[i],
+          ].every((same) => same);
+
+      final old = await row();
+      if (old == null) throw const PendingMediaFailure('actionUnavailable');
+      final oldMetadata = jsonDecode(old['metadata'] as String) as Map;
+      if (!sameOwnerAndPayload(old) ||
+          _immutableChanged(oldMetadata, record.metadata)) {
+        throw const PendingMediaFailure('immutableRecordMismatch');
+      }
+      await tx.update(
+        'personal_pending_media',
+        {'metadata': metadata},
+        where: 'action_id = ? AND account_id = ? AND device_id = ?',
+        whereArgs: [
+          record.actionId,
+          record.metadata['accountId'],
+          record.metadata['deviceId'],
+        ],
+      );
+      final verified = await row();
+      if (verified == null ||
+          !sameOwnerAndPayload(verified) ||
+          _canonical(jsonDecode(verified['metadata'] as String)) !=
+              _canonical(record.metadata)) {
+        throw const PendingMediaFailure('integrityFailure');
+      }
     });
   });
 
@@ -424,7 +605,7 @@ class PendingMediaStore
       whereArgs: [actionId],
       limit: 1,
     );
-    return rows.isEmpty ? null : _decode(rows.single);
+    return rows.isEmpty ? null : await _decode(rows.single);
   });
   @override
   Future<List<PendingMediaRecord>> list({
@@ -437,7 +618,7 @@ class PendingMediaStore
       whereArgs: [accountId, deviceId],
       orderBy: 'action_id',
     );
-    return rows.map(_decode).toList(growable: false);
+    return [for (final row in rows) await _decode(row)];
   });
 
   @override
@@ -480,7 +661,12 @@ class PendingMediaStore
     );
   });
   Future<void> close() => _protected(_database.close);
-  PendingMediaRecord _decode(Map<String, Object?> row) {
+
+  /// Every payload read from storage is verified against its stored hash.
+  /// The bytes are adopted (frozen, not copied) and keep their digest, so the
+  /// caller's later integrity checks and writes do not hash them again.
+  Future<PendingMediaRecord> _decode(Map<String, Object?> row) async {
+    final payloads = <String, Uint8List?>{};
     for (final field in [
       'media',
       'thumbnail',
@@ -488,10 +674,16 @@ class PendingMediaStore
       'encrypted_thumbnail',
     ]) {
       final value = row[field];
-      if ((value != null && value is! Uint8List) ||
-          _hash(value as Uint8List?) != row['${field}_hash']) {
+      if (value != null && value is! Uint8List) {
         throw const PendingMediaFailure('integrityFailure');
       }
+      final adopted = value == null
+          ? null
+          : _adoptPendingMediaBytes(value as Uint8List);
+      if (await _digestOrNull(adopted) != row['${field}_hash']) {
+        throw const PendingMediaFailure('integrityFailure');
+      }
+      payloads[field] = adopted;
     }
     final metadata = Map<String, dynamic>.from(
       jsonDecode(row['metadata'] as String) as Map,
@@ -503,15 +695,13 @@ class PendingMediaStore
     return PendingMediaRecord(
       actionId: row['action_id'] as String,
       metadata: metadata,
-      bytes: row['media'] as Uint8List,
-      thumbnailBytes: row['thumbnail'] as Uint8List?,
-      encryptedBytes: row['encrypted'] as Uint8List?,
-      encryptedThumbnailBytes: row['encrypted_thumbnail'] as Uint8List?,
+      bytes: payloads['media']!,
+      thumbnailBytes: payloads['thumbnail'],
+      encryptedBytes: payloads['encrypted'],
+      encryptedThumbnailBytes: payloads['encrypted_thumbnail'],
     );
   }
 
-  static String? _hash(Uint8List? value) =>
-      value == null ? null : sha256.convert(value).toString();
   static String _canonical(Object? value) {
     Object? sorted(Object? v) {
       if (v is Map) {

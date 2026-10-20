@@ -10,12 +10,12 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/bounded_byte_cache.dart';
-import 'package:fluffychat/utils/client_download_content_extension.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/bounded_byte_cache.dart';
+import 'package:chatloom/utils/client_download_content_extension.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:http/http.dart' as http;
 import 'package:lottie/lottie.dart';
 import 'package:material_ui/material_ui.dart';
@@ -53,13 +53,14 @@ class MxcImage extends StatefulWidget {
     this.usePlaceholderOnError = false,
     this.isThumbnail = true,
     this.animated = false,
-    this.animationDuration = FluffyThemes.animationDuration,
+    this.animationDuration = ChatLoomThemes.animationDuration,
     this.retryDuration = const Duration(seconds: 2),
-    this.animationCurve = FluffyThemes.animationCurve,
+    this.animationCurve = ChatLoomThemes.animationCurve,
     this.thumbnailMethod = ThumbnailMethod.scale,
     this.cacheKey,
     this.client,
-    this.borderRadius = BorderRadius.zero,
+    this.borderRadius = BorderRadius
+        .zero, // design-lint: allow unclipped by default; callers pass a radius
     this.cacheName,
     super.key,
   });
@@ -429,7 +430,10 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
                   errorBuilder: errorFallback,
                 ));
 
-    final clipped = widget.borderRadius == BorderRadius.zero
+    final clipped =
+        widget.borderRadius ==
+            BorderRadius
+                .zero // design-lint: allow sentinel
         ? imageChild
         : ClipRRect(borderRadius: widget.borderRadius, child: imageChild);
     if (_fromCache && hasData) return clipped;

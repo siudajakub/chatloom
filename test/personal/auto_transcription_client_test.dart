@@ -5,13 +5,13 @@
 @Timeout(Duration(seconds: 60))
 library;
 
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/storage/personal_store.dart';
-import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/personal/ui/transcription_settings.dart';
-import 'package:fluffychat/personal/worker_readiness.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/storage/personal_store.dart';
+import 'package:chatloom/personal/ui/chat_preferences_page.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/personal/ui/transcription_settings.dart';
+import 'package:chatloom/personal/worker_readiness.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -105,14 +105,38 @@ Event round(Room room, String id, {Map<String, dynamic> extra = const {}}) =>
       },
     );
 
+Event video(
+  Room room,
+  String id, {
+  Map<String, dynamic> info = const {},
+  Duration age = const Duration(seconds: 20),
+}) => Event(
+  room: room,
+  eventId: id,
+  type: EventTypes.Message,
+  senderId: '@anna:example.invalid',
+  originServerTs: DateTime.now().subtract(age),
+  content: {
+    'msgtype': 'm.video',
+    'body': 'clip.mp4',
+    'url': 'mxc://example.invalid/clip',
+    'info': {'mimetype': 'video/mp4', 'duration': 30000, ...info},
+  },
+);
+
 Future<void> flushTimers() =>
     Future<void>.delayed(const Duration(milliseconds: 20));
 
 String baselineKey(Client client) =>
     'account:${client.userID}:autoTranscriptionBaseline';
 
-WorkerReadiness heartbeat(String? auto) =>
-    WorkerReadiness(receivedAt: DateTime.now(), autoTranscription: auto);
+WorkerReadiness heartbeat(String? auto, {int? media, bool? live}) =>
+    WorkerReadiness(
+      receivedAt: DateTime.now(),
+      autoTranscription: auto,
+      transcriptionMedia: media,
+      autoTranscriptionLive: live,
+    );
 
 void main() {
   late ConversationClient client;
@@ -169,15 +193,26 @@ void main() {
     },
   );
 
-  test('only incoming voice notes and transcribable rounds qualify', () {
+  test('voice notes, other audio, rounds and videos qualify', () {
     expect(
       PersonalClient.autoTranscriptionKind(voice(cloud, r'$v')),
       AutoTranscriptionKind.voice,
     );
     expect(
       PersonalClient.autoTranscriptionKind(voice(cloud, r'$f', marker: false)),
+      AutoTranscriptionKind.audio,
+      reason: 'An audio file without the voice marker is other audio',
+    );
+    expect(
+      PersonalClient.autoTranscriptionKind(video(cloud, r'$clip')),
+      AutoTranscriptionKind.video,
+    );
+    expect(
+      PersonalClient.autoTranscriptionKind(
+        video(cloud, r'$gif', info: {'fi.mau.gif': true}),
+      ),
       isNull,
-      reason: 'An audio file without the voice marker is not a voice note',
+      reason: 'GIF-style loops carry no speech',
     );
     expect(
       PersonalClient.autoTranscriptionKind(round(local, r'$r')),
@@ -340,6 +375,72 @@ void main() {
       );
     },
   );
+
+  test('videos wait for a worker that transcribes them', () async {
+    // The current worker (no capability field) refuses videos.
+    final clip = video(cloud, r'$clip');
+    expect(personal.transcribableKind(clip), isNull);
+    expect(
+      personal.autoTranscriptionBlockFor(clip, DateTime.now()),
+      'worker_off',
+    );
+    expect(personal.autoTranscriptPending(clip), isFalse);
+    await expectLater(personal.transcribe(clip), throwsStateError);
+    await flushTimers();
+    expect(personal.requests, isEmpty);
+    // Voice and other m.audio stay available with an older worker.
+    expect(
+      personal.transcribableKind(voice(cloud, r'$a', marker: false)),
+      AutoTranscriptionKind.audio,
+    );
+    // A media-capable worker without its own sync feed: asked at once.
+    personal.workerReadiness = heartbeat('scan', media: 2);
+    expect(personal.transcribableKind(clip), AutoTranscriptionKind.video);
+    expect(personal.autoTranscriptPending(clip), isTrue);
+    await flushTimers();
+    expect(personal.requests.single.payload['origin'], 'auto');
+  });
+
+  test('a worker watching its own sync gets a grace period in cloud rooms '
+      'and per-kind switches apply', () async {
+    personal.workerReadiness = heartbeat('scan', media: 2, live: true);
+    final clip = video(cloud, r'$fresh-clip');
+    expect(personal.autoTranscriptPending(clip), isTrue);
+    await flushTimers();
+    expect(personal.requests, isEmpty, reason: 'the worker picks it up');
+    await personal.setTranscriptionPolicy(
+      TranscriptionPolicy.defaults.withKind(AutoTranscriptionKind.video, false),
+    );
+    expect(
+      personal.autoTranscriptionBlockFor(
+        video(cloud, r'$off-clip'),
+        DateTime.now(),
+      ),
+      'kind_disabled',
+    );
+    expect(personal.autoTranscriptPending(video(cloud, r'$off-clip')), isFalse);
+    expect(
+      personal.autoTranscriptionBlockFor(voice(cloud, r'$v2'), DateTime.now()),
+      isNull,
+    );
+  });
+
+  test('heartbeat capabilities parse defensively', () {
+    final at = DateTime.now();
+    final parsed = WorkerReadiness.fromPayload({
+      'autoTranscription': 'scan',
+      'transcriptionMedia': 2,
+      'autoTranscriptionLive': true,
+    }, at);
+    expect(parsed.transcriptionMedia, 2);
+    expect(parsed.autoTranscriptionLive, isTrue);
+    final odd = WorkerReadiness.fromPayload({
+      'transcriptionMedia': '2',
+      'autoTranscriptionLive': 'yes',
+    }, at);
+    expect(odd.transcriptionMedia, isNull);
+    expect(odd.autoTranscriptionLive, isNull);
+  });
 
   test('local bridge rooms give the worker scan a grace period', () async {
     final fresh = voice(local, r'$fresh');
