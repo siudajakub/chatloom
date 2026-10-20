@@ -5,10 +5,12 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
+// Kept: PRODUCT_NAME names the .app bundle/executable of existing installs.
+// The visible name comes from CFBundleDisplayName/CFBundleName (Info.plist).
 PRODUCT_NAME = Personal Chat
 
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = pl.personal.chat
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2023 FluffyChat authors. All rights reserved.
+PRODUCT_COPYRIGHT = ChatLoom, based on FluffyChat. Copyright © 2019-Present FluffyChat authors. AGPL-3.0-or-later.

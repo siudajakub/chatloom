@@ -351,7 +351,7 @@ def prepare():
     direct = ''.join(f'  {name}: "{pinned[name]}"\n' for name in DIRECT)
     overrides = ''.join(f'  {name}: "{version}"\n' for name, version in pinned.items())
     vendor = ''.join(f'  {name}:\n    path: {json.dumps(str(path.resolve()))}\n' for name, path in VENDORED.items())
-    checked_write('pubspec.yaml', f'''name: fluffychat
+    checked_write('pubspec.yaml', f'''name: chatloom
 publish_to: none
 description: Source-exact round playback fixtures with explicit app/UI ports.
 environment:

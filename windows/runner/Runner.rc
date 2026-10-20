@@ -90,7 +90,7 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "chat.fluffy" "\0"
-            VALUE "FileDescription", "fluffychat" "\0"
+            VALUE "FileDescription", "ChatLoom" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "fluffychat" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2022 chat.fluffy. All rights reserved." "\0"

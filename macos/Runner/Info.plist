@@ -12,8 +12,10 @@
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleDisplayName</key>
+	<string>ChatLoom</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>ChatLoom</string>
 	<key>CFBundleURLTypes</key>
 	<array><dict><key>CFBundleURLName</key><string>pl.personal.chat</string>
 	<key>CFBundleURLSchemes</key><array><string>pl.personal.chat</string><string>pl.personal.chat.auth</string></array></dict></array>
@@ -28,7 +30,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSLocationUsageDescription</key>
-	<string>Share your location with your contacts in Personal Chat.</string>
+	<string>Share your location with your contacts in ChatLoom.</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>

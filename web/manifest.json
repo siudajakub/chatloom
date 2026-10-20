@@ -1,11 +1,11 @@
 {
-    "name": "FluffyChat",
-    "short_name": "FluffyChat",
+    "name": "ChatLoom",
+    "short_name": "ChatLoom",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#FFFFFF",
-    "theme_color": "#41a2bc",
-    "description": "The cutest messenger in the Matrix network",
+    "background_color": "#191919",
+    "theme_color": "#191919",
+    "description": "Private Matrix and Beeper client, based on FluffyChat",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

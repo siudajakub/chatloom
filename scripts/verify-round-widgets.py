@@ -191,7 +191,7 @@ def prepare(flutter):
         checked_write('assets/fonts/' + name, data)
         sdk_manifest[name] = hashlib.sha256(data).hexdigest()
     overrides = ''.join(f'  {name}: "{version}"\n' for name, version in pinned.items())
-    checked_write('pubspec.yaml', f'''name: fluffychat
+    checked_write('pubspec.yaml', f'''name: chatloom
 publish_to: none
 description: Isolated production round widget and controller fixtures.
 environment:
