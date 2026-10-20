@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/message_notification.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/push_diagnostics.dart';
-import 'package:fluffychat/personal/storage/personal_store.dart';
-import 'package:fluffychat/utils/notification_client_routing.dart';
-import 'package:fluffychat/utils/push_helper.dart';
-import 'package:fluffychat/utils/start_push_foreground_service.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/message_notification.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/personal/storage/personal_store.dart';
+import 'package:chatloom/utils/notification_client_routing.dart';
+import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -242,7 +242,7 @@ void main() {
     final shown = f.plugin.shown.single;
     expect(shown.id, messageNotificationId('synthetic-account', _roomId));
     expect(
-      FluffyChatPushPayload.fromString(shown.payload!).clientName,
+      ChatLoomPushPayload.fromString(shown.payload!).clientName,
       'synthetic-account',
     );
     expect(f.client.returnNullIfSeen, isFalse);
@@ -286,7 +286,7 @@ void main() {
     f.client.fetch = () async => f.event();
     await f.push();
     final shown = f.plugin.shown.single;
-    expect(shown.title, 'Personal Chat');
+    expect(shown.title, 'ChatLoom');
     expect(shown.body, 'Open the app to read your message.');
     expect(shown.details!.android!.actions!.single.id, 'markAsRead');
   });

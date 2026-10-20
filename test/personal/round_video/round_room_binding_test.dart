@@ -2,13 +2,12 @@
 // Run through worker's pure-Dart package config; no live account or Flutter.
 // ignore_for_file: avoid_relative_lib_imports
 import 'package:matrix/matrix.dart';
-import 'package:personal_core/bridge_capabilities.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:test/test.dart';
 
-import '../../../lib/personal/round_video/telegram_room_binding.dart';
 import '../../../lib/personal/capabilities.dart';
 import '../../../lib/personal/round_video/round_availability.dart';
+import '../../../lib/personal/round_video/telegram_room_binding.dart';
 
 const _owner = '@fixture-owner:example.invalid';
 const _bot = '@fixture-bridge:example.invalid';
@@ -390,7 +389,7 @@ void main() {
         availability.reason,
         "This Telegram bridge doesn't support round video messages yet.",
       );
-      expect(availability.hint, contains('Personal Chat round bridge'));
+      expect(availability.hint, contains('ChatLoom round bridge'));
       final evidence = RoomCapabilities.evidenceForFeature(
         BridgeFeature.roundVideo,
         room,

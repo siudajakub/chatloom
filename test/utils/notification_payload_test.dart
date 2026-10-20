@@ -3,12 +3,12 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:ui';
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/notification_background_handler.dart';
-import 'package:fluffychat/utils/notification_client_routing.dart';
-import 'package:fluffychat/utils/push_helper.dart';
-import 'package:fluffychat/utils/push_work_policy.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/notification_client_routing.dart';
+import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/utils/push_work_policy.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -123,23 +123,23 @@ void main() {
   });
 
   test('reminder payloads keep their message and stay compatible', () {
-    final reminder = FluffyChatPushPayload(
+    final reminder = ChatLoomPushPayload(
       'synthetic',
       '!fixture:invalid',
       r'$anchor',
       reminder: true,
     );
-    final parsed = FluffyChatPushPayload.fromString(reminder.toString());
+    final parsed = ChatLoomPushPayload.fromString(reminder.toString());
     expect(parsed.reminder, isTrue);
     expect(parsed.eventId, r'$anchor');
     expect(parsed.roomId, '!fixture:invalid');
-    final legacy = FluffyChatPushPayload.fromString(
+    final legacy = ChatLoomPushPayload.fromString(
       'synthetic|!fixture:invalid|null',
     );
     expect(legacy.reminder, isFalse);
     expect(legacy.roomId, '!fixture:invalid');
     expect(
-      FluffyChatPushPayload.fromString('a|b|c|other').roomId,
+      ChatLoomPushPayload.fromString('a|b|c|other').roomId,
       isNull,
       reason: 'Unknown payload suffixes are rejected',
     );
@@ -147,22 +147,22 @@ void main() {
 
   test('incognito Dismiss and legacy mute exist as actions', () {
     expect(
-      FluffyChatNotificationActions.values.map((a) => a.name),
+      ChatLoomNotificationActions.values.map((a) => a.name),
       containsAll(['dismiss', 'markAsRead', 'mute']),
     );
   });
 
   test('optional payload values round trip as null, not the string null', () {
-    final original = FluffyChatPushPayload(
+    final original = ChatLoomPushPayload(
       'synthetic',
       '!fixture:invalid',
       null,
     );
-    final parsed = FluffyChatPushPayload.fromString(original.toString());
+    final parsed = ChatLoomPushPayload.fromString(original.toString());
     expect(parsed.clientName, original.clientName);
     expect(parsed.roomId, original.roomId);
     expect(parsed.eventId, isNull);
-    final invalid = FluffyChatPushPayload.fromString('malformed');
+    final invalid = ChatLoomPushPayload.fromString('malformed');
     expect(invalid.clientName, isNull);
     expect(invalid.roomId, isNull);
     expect(invalid.eventId, isNull);

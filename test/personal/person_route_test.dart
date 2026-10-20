@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The merged person chat is a route: locations, notification mapping, child
 // source chats and relative chat chrome. Fictional offline fixtures only.
-import 'package:fluffychat/config/routes.dart';
-import 'package:fluffychat/personal/person_location.dart';
-import 'package:fluffychat/utils/notification_background_handler.dart';
-import 'package:fluffychat/utils/push_helper.dart';
+import 'package:chatloom/config/routes.dart';
+import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/push_helper.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -39,8 +39,8 @@ void main() {
   test('a grouped notification opens the person with its source', () {
     final client = ConversationClient();
     final room = ConversationRoom(client, '!notify:example.invalid');
-    final plain = FluffyChatPushPayload('main', room.id, r'$message');
-    final reminder = FluffyChatPushPayload(
+    final plain = ChatLoomPushPayload('main', room.id, r'$message');
+    final reminder = ChatLoomPushPayload(
       'main',
       room.id,
       r'$reminded',

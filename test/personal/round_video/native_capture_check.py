@@ -40,7 +40,7 @@ def main():
     android = Path(sdk) / 'platforms/android-37.0/android.jar'
     flutter = next((CACHE / 'io.flutter/flutter_embedding_release').glob('*/*/*.jar'))
     compile_classpath = os.pathsep.join(map(str, [compiler[1], compiler[-1], flutter, android]))
-    sources = sorted((CLIENT / 'android/app/src/main/kotlin/chat/fluffy/fluffychat/round').glob('*.kt'))
+    sources = sorted((CLIENT / 'android/app/src/main/kotlin/pl/personal/chatloom/round').glob('*.kt'))
     sources.extend(Path(__file__).with_name(name) for name in FIXTURES)
     snapshot = {}
     for source in sources:
@@ -68,7 +68,7 @@ def main():
                             *map(str, copied)], check=True)
             for entrypoint in FIXTURES.values():
                 subprocess.run(['rtk', str(java), '-cp', str(classes) + os.pathsep + str(compiler[1]),
-                                f'chat.fluffy.fluffychat.round.{entrypoint}'], check=True)
+                                f'pl.personal.chatloom.round.{entrypoint}'], check=True)
         finally:
             if any(not path.is_file() or path.is_symlink() or path.read_bytes() != data
                    for path, data in snapshot.items()):

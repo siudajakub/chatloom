@@ -28,7 +28,7 @@ void main() {
         const ImmediateMediaRejected('round:bridgeLacksRoundSupport'),
       ),
       "This Telegram bridge doesn't support round video messages yet. "
-      'It needs the Personal Chat round bridge.',
+      'It needs the ChatLoom round bridge.',
     );
     expect(
       roundFailureMessage(

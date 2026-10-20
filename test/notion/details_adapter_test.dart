@@ -1,9 +1,9 @@
-import 'package:fluffychat/ui/notion/notion.dart';
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_adapter.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

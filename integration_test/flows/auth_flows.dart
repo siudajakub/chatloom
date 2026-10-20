@@ -3,17 +3,17 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/pages/sign_in/view_model/model/public_homeserver_data.dart';
+import 'package:chatloom/pages/sign_in/view_model/model/public_homeserver_data.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../data/environment_constants.dart';
-import '../utils/fluffy_chat_tester.dart';
+import '../utils/chatloom_tester.dart';
 
 Future<void> finalLogout(WidgetTester widgetTester) =>
-    widgetTester.startFluffyChatTest().then((tester) => tester.logout());
+    widgetTester.startChatLoomTest().then((tester) => tester.logout());
 
-extension AuthFlows on FluffyChatTester {
+extension AuthFlows on ChatLoomTester {
   Future<void> initCryptoIdentity({String username = user1Name}) async {
     final passphrase = userPassphrases[username];
     if (passphrase != null) {

@@ -3,11 +3,11 @@
 // one-shot animation settles to identity, reduced motion is instant, no
 // timers are left behind (the test binding asserts this after each test),
 // loops stop under TickerMode off and reduced motion.
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/widgets/pulsating_widget.dart';
-import 'package:fluffychat/widgets/typing_animation.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/pulsating_widget.dart';
+import 'package:chatloom/widgets/typing_animation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -61,9 +61,9 @@ bool _identity(WidgetTester tester, Finder finder) =>
 
 void main() {
   group('tokens', () {
-    test('legacy FluffyThemes timing points at the Notion tokens', () {
-      expect(FluffyThemes.animationDuration, NotionMotion.short);
-      expect(FluffyThemes.animationCurve, NotionMotion.standard);
+    test('legacy ChatLoomThemes timing points at the Notion tokens', () {
+      expect(ChatLoomThemes.animationDuration, NotionMotion.short);
+      expect(ChatLoomThemes.animationCurve, NotionMotion.standard);
       expect(NotionMotion.forward, NotionMotion.long);
     });
 

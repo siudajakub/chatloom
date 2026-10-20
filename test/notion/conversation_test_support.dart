@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Fictional offline production-adapter fixtures. No HTTP/account storage.
 import 'dart:async';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/immediate_outbox.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/immediate_outbox.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:matrix/matrix.dart';
 import 'package:matrix/src/models/timeline_chunk.dart';
 import 'package:personal_core/personal_core.dart';

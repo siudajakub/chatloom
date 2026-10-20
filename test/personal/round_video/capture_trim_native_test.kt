@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-package chat.fluffy.fluffychat.round
+package pl.personal.chatloom.round
 
 import java.io.File
 import java.nio.file.Files

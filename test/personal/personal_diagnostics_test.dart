@@ -2,8 +2,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/storage/storage_failure.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -14,16 +14,16 @@ void main() {
           PersonalFailurePhase.accountRestore,
         ).report(
           StackTrace.fromString('''
-#0 secretSymbol (package:fluffychat/utils/client_manager.dart:42:9)
+#0 secretSymbol (package:chatloom/utils/client_manager.dart:42:9)
 #1 @private:host (https://host/private.dart:99:1)
 #2 secret (file:///private/secret.dart:12:1)
 #3 secret (package:other/credentials.dart:12:1)
-#4 secret (package:fluffychat/private.dart?token=secret:12:1)
+#4 secret (package:chatloom/private.dart?token=secret:12:1)
 '''),
         );
     expect(
       report,
-      'Personal Chat: invalid_state [accountRestore]\nutils/client_manager.dart:42:9',
+      'ChatLoom: invalid_state [accountRestore]\nutils/client_manager.dart:42:9',
     );
     for (final secret in [
       'secret',
@@ -52,7 +52,7 @@ Error: synthetic-private-message
         );
     expect(
       report,
-      'Personal Chat: operation_failed [action]\n'
+      'ChatLoom: operation_failed [action]\n'
       'main.dart.js:123:45\nnative_executor.js:77:8',
     );
     for (final private in [
@@ -89,7 +89,7 @@ at privateSymbol (file:///fictional/private/main.dart.js:12:3)
 at privateSymbol (blob:https://fictional.invalid/native_executor.js:12:3)
 '''),
           );
-      expect(report, 'Personal Chat: operation_failed [action]');
+      expect(report, 'ChatLoom: operation_failed [action]');
     },
   );
 
@@ -97,7 +97,7 @@ at privateSymbol (blob:https://fictional.invalid/native_executor.js:12:3)
     'package and compiled web frames share the eight unique frame limit',
     () {
       final frames = [
-        '#0 privateSymbol (package:fluffychat/utils/client_manager.dart:42:9)',
+        '#0 privateSymbol (package:chatloom/utils/client_manager.dart:42:9)',
         'at privateSymbol (main.dart.js:100:1)',
         'at privateSymbol (main.dart.js:100:1)',
         for (var line = 101; line <= 109; line++)
@@ -108,7 +108,7 @@ at privateSymbol (blob:https://fictional.invalid/native_executor.js:12:3)
         PersonalFailurePhase.action,
       ).report(StackTrace.fromString(frames.join('\n')));
       expect(report.split('\n'), [
-        'Personal Chat: operation_failed [action]',
+        'ChatLoom: operation_failed [action]',
         'utils/client_manager.dart:42:9',
         for (var line = 100; line <= 106; line++) 'main.dart.js:$line:1',
       ]);

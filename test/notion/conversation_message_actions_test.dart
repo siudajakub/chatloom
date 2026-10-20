@@ -1,13 +1,15 @@
 import 'dart:async';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/pages/chat/conversation_message_actions.dart';
+
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/conversation_message_actions.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:matrix/src/models/timeline_chunk.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'conversation_test_support.dart';
 
 class _Reaction extends Event {

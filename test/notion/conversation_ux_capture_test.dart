@@ -1,16 +1,17 @@
 // Fictional captures of the production message/composer and merged presenters.
-import 'dart:io';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui' as ui;
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/compact_composer.dart';
-import 'package:fluffychat/pages/chat/events/message.dart';
-import 'package:fluffychat/pages/chat/conversation_message_gestures.dart';
-import 'package:fluffychat/pages/chat/voice_record_button.dart';
-import 'package:fluffychat/personal/merged_chat_page.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
+import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/voice_record_button.dart';
+import 'package:chatloom/personal/merged_chat_page.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,6 +21,7 @@ import 'package:matrix/src/models/timeline_chunk.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'conversation_test_support.dart';
 
 bool _emojiFontLoaded = false;

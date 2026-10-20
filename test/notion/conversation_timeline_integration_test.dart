@@ -1,21 +1,21 @@
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/compact_composer.dart';
-import 'package:fluffychat/pages/chat/conversation_message_gestures.dart';
-import 'package:fluffychat/pages/chat/events/message.dart';
-import 'package:fluffychat/pages/chat/events/message_content.dart';
-import 'package:fluffychat/pages/chat/events/reply_content.dart';
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/pages/chat/chat.dart';
-import 'package:fluffychat/pages/chat/chat_input_row.dart';
-import 'package:fluffychat/pages/chat/reply_display.dart';
-import 'package:flutter/services.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat.dart';
+import 'package:chatloom/pages/chat/chat_input_row.dart';
+import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
+import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/events/message_content.dart';
+import 'package:chatloom/pages/chat/events/reply_content.dart';
+import 'package:chatloom/pages/chat/reply_display.dart';
+import 'package:chatloom/personal/immediate_outbox.dart';
+import 'package:chatloom/personal/merged_chat_page.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
-import 'package:fluffychat/personal/merged_chat_page.dart';
-import 'package:fluffychat/personal/immediate_outbox.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -23,6 +23,7 @@ import 'package:matrix/src/models/timeline_chunk.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'conversation_test_support.dart';
 
 Future<ConversationMatrix> mountConversation(

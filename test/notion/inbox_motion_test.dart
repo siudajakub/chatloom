@@ -3,15 +3,15 @@
 // Motion of the inbox surfaces: every animation settles to identity, rows
 // built later never animate, loaders do not flash and reduced motion is
 // instant.
-import 'package:fluffychat/config/routes.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_dock.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_row.dart';
-import 'package:fluffychat/personal/ui/notion_network_selector.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
+import 'package:chatloom/config/routes.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/personal/ui/notion_inbox_dock.dart';
+import 'package:chatloom/personal/ui/notion_inbox_page.dart';
+import 'package:chatloom/personal/ui/notion_inbox_row.dart';
+import 'package:chatloom/personal/ui/notion_network_selector.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/layouts/two_column_layout.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -276,7 +276,7 @@ void main() {
     addTearDown(router.dispose);
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
     await tester.pumpAndSettle();
-    expect(FluffyThemes.isColumnMode(tester.element(find.text('Main'))), true);
+    expect(ChatLoomThemes.isColumnMode(tester.element(find.text('Main'))), true);
     // The layout's own fade: the one that keeps semantics while it runs.
     FadeTransition pane() => tester
         .widgetList<FadeTransition>(

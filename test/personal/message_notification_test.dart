@@ -2,8 +2,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/personal/message_notification.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/personal/message_notification.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -16,7 +16,7 @@ void main() {
       preview: 'Secret plans',
       group: false,
     );
-    expect(text.title, 'Personal Chat');
+    expect(text.title, 'ChatLoom');
     expect(text.body, 'Open the app to read your message.');
     expect(text.detailed, isFalse);
   });

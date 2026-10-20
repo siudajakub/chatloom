@@ -1,17 +1,17 @@
 // Offline SDK adapter checks: no account, files, codec, HTTP or microphone.
 import 'dart:async';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/pages/chat/events/audio_player.dart';
-import 'package:fluffychat/pages/chat/notion_conversation.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/events/audio_player.dart';
+import 'package:chatloom/pages/chat/notion_conversation.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:provider/provider.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _NoDatabase implements DatabaseApi {

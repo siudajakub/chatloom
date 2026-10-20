@@ -3,9 +3,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/send_file_dialog.dart';
 import 'package:cross_file/cross_file.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/send_file_dialog.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';

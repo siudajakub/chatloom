@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'dart:convert';
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/composer_keyboard.dart';
+import 'package:chatloom/personal/merged_chat_page.dart';
+import 'package:chatloom/personal/merged_media_dialog.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:cross_file/cross_file.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/composer_keyboard.dart';
-import 'package:fluffychat/personal/merged_chat_page.dart';
-import 'package:fluffychat/personal/merged_media_dialog.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'conversation_test_support.dart';
 
 class _DraftPersonal extends ConversationPersonal {

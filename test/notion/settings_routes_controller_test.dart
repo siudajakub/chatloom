@@ -2,17 +2,16 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/config/routes.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/ui/notion_settings_adapter.dart';
-import 'package:fluffychat/personal/ui/notion_settings_page.dart';
-import 'package:personal_core/personal_core.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/widgets/app_lock.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/theme_builder.dart';
+import 'package:chatloom/config/routes.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/notion_settings_adapter.dart';
+import 'package:chatloom/personal/ui/notion_settings_page.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/app_lock.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/theme_builder.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,6 +19,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:personal_core/personal_core.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

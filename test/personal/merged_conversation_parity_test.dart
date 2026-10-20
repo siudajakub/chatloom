@@ -2,24 +2,24 @@
 // Parity of the merged person chat with the ordinary chat: both render the
 // same timeline (ChatEventList/Message) and composer (ChatInputRow/InputBar).
 // Fictional offline fixtures only.
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat.dart';
+import 'package:chatloom/pages/chat/chat_event_list.dart';
+import 'package:chatloom/pages/chat/chat_input_row.dart';
+import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/input_bar.dart';
+import 'package:chatloom/pages/chat/undecryptable_chat_hint.dart';
+import 'package:chatloom/pages/chat/voice_record_button.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/merged_chat_page.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/date_time_extension.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/chat.dart';
-import 'package:fluffychat/pages/chat/chat_event_list.dart';
-import 'package:fluffychat/pages/chat/chat_input_row.dart';
-import 'package:fluffychat/pages/chat/events/message.dart';
-import 'package:fluffychat/pages/chat/input_bar.dart';
-import 'package:fluffychat/pages/chat/undecryptable_chat_hint.dart';
-import 'package:fluffychat/pages/chat/voice_record_button.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/merged_chat_page.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/date_time_extension.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

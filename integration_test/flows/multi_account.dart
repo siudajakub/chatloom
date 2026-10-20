@@ -7,14 +7,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../data/environment_constants.dart';
-import '../utils/fluffy_chat_tester.dart';
+import '../utils/chatloom_tester.dart';
 import 'auth_flows.dart';
 
 Future<void> multiAccount(WidgetTester widgetTester) => widgetTester
-    .startFluffyChatTest()
+    .startChatLoomTest()
     .then((tester) => tester._multiAccountAndNotifications());
 
-extension on FluffyChatTester {
+extension on ChatLoomTester {
   Future<void> _multiAccountAndNotifications() async {
     await ensureLoggedIn();
 

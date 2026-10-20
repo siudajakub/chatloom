@@ -4,9 +4,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:chatloom/personal/media/media_inflight.dart';
+import 'package:chatloom/personal/round_video/round_media_loader.dart';
 import 'package:fake_async/fake_async.dart';
-import 'package:fluffychat/personal/media/media_inflight.dart';
-import 'package:fluffychat/personal/round_video/round_media_loader.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 

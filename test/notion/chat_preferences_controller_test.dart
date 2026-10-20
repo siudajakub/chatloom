@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:io';
 import 'dart:ui' as ui;
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/conversation_classification.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/notification_eligibility.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
-import 'package:fluffychat/personal/ui/notion_network_adapter.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/notification_eligibility.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/chat_preferences_page.dart';
+import 'package:chatloom/personal/ui/notion_inbox_page.dart';
+import 'package:chatloom/personal/ui/notion_network_adapter.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -442,7 +443,7 @@ void main() {
       await tester.pumpAndSettle();
       final choice = find.widgetWithText(
         PreferenceChoice,
-        'Personal Chat notifications',
+        'ChatLoom notifications',
       );
       await tester.ensureVisible(choice);
       await tester.tap(

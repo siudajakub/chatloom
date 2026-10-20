@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/config/routes.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
+import 'package:chatloom/config/routes.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/widgets/layouts/two_column_layout.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -38,7 +38,7 @@ void main() {
                   AppRoutes.noTransitionPageBuilder(
                     context,
                     state,
-                    FluffyThemes.isColumnMode(context)
+                    ChatLoomThemes.isColumnMode(context)
                         ? TwoColumnLayout(
                             mainView: mainView(),
                             sideView: child,
@@ -52,7 +52,7 @@ void main() {
                   pageBuilder: (context, state) => AppRoutes.defaultPageBuilder(
                     context,
                     state,
-                    FluffyThemes.isColumnMode(context)
+                    ChatLoomThemes.isColumnMode(context)
                         ? const Scaffold(body: Text('Fixture empty pane'))
                         : mainView(),
                   ),
