@@ -6,10 +6,10 @@ Najpierw przeczytaj `../AGENTS.md` (granice produktu, `rtk`, izolowany toolchain
 
 Każda zmiana UI w `client/` przestrzega [`DESIGN.md`](DESIGN.md) (Notion dark v2).
 
-- Importuj `package:fluffychat/ui/notion/notion.dart`. Kolory i typografia z `context.notion`, odstępy/promienie/rozmiary z `NotionSpace`, `NotionRadius`, `NotionSize`, `NotionType`.
+- Importuj `package:chatloom/ui/notion/notion.dart`. Kolory i typografia z `context.notion`, odstępy/promienie/rozmiary z `NotionSpace`, `NotionRadius`, `NotionSize`, `NotionType`.
 - Nowe ekrany składaj z prymitywów: `NotionScaffold`, `NotionSectionHeader`, `NotionListRow`, `NotionButton`, `showNotionDialog`, `showNotionSheet`, `NotionEmptyState`, `NotionTextField`. Mapowanie "zamiast X użyj Y" jest w DESIGN.md.
 - Bez `Color(0x…)`, `Colors.*` (poza `transparent`), liczbowych `fontSize`/`EdgeInsets`/`circular()` poza `lib/ui/notion/`. Brakujący token albo prymityw dodaj w `lib/ui/notion/` z goldenem, nie lokalnie w ekranie.
-- Szkło (blur) tylko na nagłówku, pływającym docku i composerze, wyłącznie przez `NotionGlassSurface`/`NotionGlassBar`; nigdy surowy `BackdropFilter`, nigdy na wierszach, bąblach, kartach i dialogach.
+- Język docka (szkło, hairline, pigułki, zaokrąglenia) obowiązuje wszędzie; nic nie jest kwadratowe (`NotionRadius`/`NotionShapes`, lint `square-corner`). Blur tylko na stałych paskach (nagłówek, dock, composer) i ustalonych nakładkach (menu, popover, dialog, arkusz) przez `NotionGlassSurface`/`NotionGlassBar`/`NotionGlassPanel`/`NotionGlassPill`; nigdy surowy `BackdropFilter`, nigdy blur w przewijanej treści (wiersze, bąble, karty, kafelki) i nigdy animowany.
 - Brak stylu komponentu Material naprawiaj w `lib/ui/notion/notion_theme.dart`, nie inline.
 - Nie przepisuj masowo starych ekranów FluffyChat przy okazji innej zmiany.
 

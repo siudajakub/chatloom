@@ -8,14 +8,17 @@ golden) instead of writing a one-off in the screen.
 Import everything from one barrel:
 
 ```dart
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 ```
 
 ## Why it looks like this
 
-Personal Chat is a quiet, text-first messenger. The look follows Notion's dark
-mode (with glass only on the fixed bars, see Glass): warm near-black page, flat grey surfaces, one neutral text colour, no
-elevation, no gradients, small radii. Hierarchy comes from type weight and
+ChatLoom is a quiet, text-first messenger. The look follows Notion's dark
+mode: warm near-black page, flat grey surfaces, one neutral text colour, no
+elevation, no gradients. Since 19 October 2026 every surface speaks the
+language of the floating inbox dock (see Glass and Radius): translucent glass
+with a hairline on chrome and overlays, pills for controls, generous rounded
+corners everywhere. Nothing is square. Hierarchy comes from type weight and
 muted secondary text, not from colour or shadow. The user's accent
 preference changes only `colors.accent`; incoming messages and identity never
 depend on it. Light mode uses the same roles with a paper palette, so any
@@ -29,8 +32,8 @@ All tokens live in `lib/ui/notion/notion_tokens.dart`.
 
 | Role | Dark | Use for |
 |---|---|---|
-| `background` | `#191919` | page, app bar, dialogs, sheets |
-| `surface` | `#252525` | cards, menus, chips, input fill, snackbar |
+| `background` | `#191919` | page, app bar |
+| `surface` | `#252525` | cards, chips, input fill; the dock tone of menus, dialogs, sheets and snackbars |
 | `selected` | `#2F2F2F` | selected/pressed rows, highest container |
 | `border` | `#383838` | dividers, outlines, input borders |
 | `text` | `#E8E7E5` | primary text and icons |
@@ -99,13 +102,30 @@ scale (`bodyLarge` = body, `bodyMedium` = callout, `titleMedium` = headline,
 page gutter; `NotionSpace.page` is the horizontal page padding. Also
 `row`, `dialog`, `sheet` presets.
 
-### Radius: `NotionRadius.*` (const)
+### Radius: `NotionRadius.*` and `NotionShapes.*` (const)
 
-`sm 5` (avatars, icon buttons, chips) · `md 7` (cards, inputs, buttons,
-menus, dialogs) · `lg 12` (sheets, large media) · `field 26` (composer field; pill
-at one line, soft corners when multiline) · `pill` (badges, toggles).
-Use the `smAll` / `mdAll` / `lgAll` / `pillAll` / `sheetTop` `BorderRadius`
-constants. `AppConfig.borderRadius` is now `NotionRadius.md`.
+The rounded scale of the dock. The smallest radius in the app is `xs`;
+`BorderRadius.zero`, a bare `RoundedRectangleBorder()` or a radius below 6 is
+a lint error (`square-corner`).
+
+| Token | Value | Use for |
+|---|---|---|
+| `xs` | 6 | checkboxes, inline code, thin tracks |
+| `sm` | 10 | small thumbnails, tags, media grid tiles, quote thumbnails |
+| `md` | 16 | cards, callouts, multi-line inputs, media, `AppConfig.borderRadius` |
+| `rowAll` | = md | selected/pressed row highlight (inbox rows, settings categories, menu rows) |
+| `lg` | 20 | menus, popovers, snackbars, tooltips, pinned cards |
+| `xl` | 28 | dialogs, top corners of bottom sheets (`sheetTop`) |
+| `field` | 26 | every text input and the composer (a pill at one line) |
+| `pill` | 999 | buttons, chips, icon buttons (a circle), badges, toggles, the dock |
+| `avatar` | = pill | avatars are circles (`NotionTokens.avatarRadius`) |
+
+`BorderRadius` constants: `xsAll smAll mdAll lgAll xlAll pillAll avatarAll
+rowAll fieldAll sheetTop`. Shapes for `shape:` arguments: `NotionShapes.pill`
+(`StadiumBorder`), `.xs .sm .md .lg .xl .row .sheet`. Prefer a bounded radius
+(`lg`, `xl`, `field`) over `pill` for anything that can grow past one line: a
+radius larger than half the height is drawn as a pill anyway.
+Message bubbles keep their own geometry (`NotionBubble`).
 
 ### Sizes: `NotionSize.*` (const)
 
@@ -129,49 +149,88 @@ in new code; read `context.notion` instead.
 | `NotionPropertyRow(label:, value:, onTap:)` | label → value pair |
 | `NotionIconButton(icon:, label:, onPressed:)` | header and inline icon actions (label is the tooltip) |
 | `NotionButton(label:, onPressed:, variant:)` / `.primary` / `.ghost` / `.destructive` | every text button; `icon:`, `expand:`, `busy:` |
-| `NotionDialog` + `showNotionDialog(...)` / `showNotionConfirmDialog(...)` | modal questions and confirmations |
-| `NotionSheet` + `showNotionSheet(...)` | bottom sheets and pickers |
+| `NotionDialog` + `showNotionDialog(...)` / `showNotionConfirmDialog(...)` | modal questions and confirmations (glass panel, `xl` corners) |
+| `NotionSheet` + `showNotionSheet(...)` | bottom sheets and pickers (glass panel, `sheetTop` corners) |
 | `NotionEmptyState(icon:, title:, message:, action:)` | empty lists, soft errors |
 | `NotionCallout(icon:, title:, message:, actionLabel:, onAction:, onDismiss:, tone:)` | inline fixable status (inbox encryption/sync notice, connection retry); `tone` colours only the icon |
 | `ConversationBubble(quote:)`, `ConversationReplyQuote`, `ConversationReplyCaption`, `ConversationMetaChip` | message bubbles and Messenger-style replies (`lib/pages/chat/conversation_bubble.dart`, see Message bubbles) |
 | `NotionTextField(label:, hint:, helper:, error:, ...)` | text input with the label above |
 | `NotionCompactChatHeader`, `NotionInitialAvatar` | chat header, letter avatar |
-| `NotionGlassSurface`, `NotionGlassBar`, `NotionGlassScope` | glass chrome only (see Glass) |
+| `NotionGlassSurface`, `NotionGlassBar`, `NotionGlassScope` | glass chrome and overlays (see Glass) |
+| `NotionGlassPanel`, `NotionGlassMenuRow`, `NotionGlassDivider`, `NotionGlassPill` | the dock's language: glass menus, dialogs, sheets, pill buttons (see Glass) |
 | `NotionPressable`, `NotionEntrance`, `NotionSkeleton`, `NotionFadeThrough`, `NotionPop`, ... | motion (see Motion) |
 
 Each primitive has a golden in `test/notion/goldens/primitives/`.
 
-## Glass (direction B: Notion + glass on the bars)
+## Glass: the dock's surface language
 
-Glass is a translucent tint over a backdrop blur. It is allowed on exactly
-three fixed chrome surfaces that content scrolls under:
+Glass is a translucent tint over a backdrop blur, framed by a hairline and
+rounded corners. The floating inbox dock is the reference: its tint, hairline,
+pill shape and press motion are the standard for every surface. Colours stay
+the Notion roles; glass changes only translucency, corners and motion.
+
+### Where blur is allowed
+
+Real blur (`BackdropFilter`) is expensive on the Pixel. It is allowed only on
+surfaces that stay still while content moves beneath them:
 
 | Surface | Code |
 |---|---|
-| Top header (inbox title bar, conversation and merged chat `AppBar`) | `NotionGlassBar` (inbox: in a `PinnedHeaderSliver`; chat: `AppBar(backgroundColor: Colors.transparent, flexibleSpace: NotionGlassBar(...))` with `extendBodyBehindAppBar: true`) |
+| Top header (inbox, conversation, merged chat, every `NotionScaffold` list page) | `NotionGlassBar` (inbox in a `PinnedHeaderSliver`; `AppBar(backgroundColor: Colors.transparent, flexibleSpace: NotionGlassBar())` with `extendBodyBehindAppBar: true`) |
 | Floating bottom dock (inbox) | `NotionGlassSurface(dock: true, borderRadius: NotionGlass.dockRadius, border: ...)` inset from the edges |
-| Composer strip (conversation) | `NotionGlassBar` behind the input row, over the timeline |
+| Composer strip (conversation) | `NotionGlassBar` behind the input row |
+| Menus and popovers (network selector) | `NotionGlassPanel` inside `showNotionPopover` |
+| Dialogs | `NotionDialog` (a `NotionGlassPanel` with `NotionGlass.dialogRadius`) |
+| Bottom sheets and action sheets | `showNotionSheet`, `showModalActionPopup` (a `NotionGlassPanel` with `NotionGlass.sheetRadius`) |
+| Floating pills over content | `NotionGlassPill(blur: true)` |
 
-Never on list rows, message bubbles, cards, chips, dialogs, sheets or menus.
+Overlays (`overlay: true`, the default of `NotionGlassPanel`) blur only once
+their route has settled: while a dialog grows, a sheet slides or is dragged,
+or anything leaves, they paint the opaque tint. The blur is therefore never
+animated, never sits inside a route's fade and costs nothing per frame.
 
-Tokens: `context.notion.glass`:
+Never blur inside scrolling content (rows, bubbles, cards, chips, grid
+tiles): use the opaque roles plus the hairline, `NotionGlassPanel(blur:
+false)` or `NotionGlassPill(blur: false)` (the default). Theme-level Material
+overlays (`PopupMenuButton`, `MenuAnchor`, `AlertDialog`, `SnackBar`, legacy
+bottom sheets) cannot blur; the theme gives them the same radius, hairline and
+the dock's `surface` fill, opaque.
+
+### Tokens: `context.notion.glass`
 
 | Token | Dark | Light |
 |---|---|---|
 | `tint` (bars) | background at 60% | background at 72% |
-| `dockTint` | surface at 58% | surface at 72% |
+| `dockTint` (dock, pills) | surface at 58% | surface at 72% |
+| `overlayTint` (menus, dialogs, sheets) | surface at 84% | surface at 90% |
 | `border` (hairline) | white 10% | black 8% |
 | `blurSigma` | 18 | 18 |
-| `NotionGlass.dockRadius` | pill | pill |
+| `NotionGlass.dockRadius` / `panelRadius` / `dialogRadius` / `sheetRadius` | pill / lg / xl / sheetTop | |
+| `NotionGlass.floatingInset` | 16 (dock, snackbars) | |
+
+### Primitives
+
+| Widget | Use for |
+|---|---|
+| `NotionGlassSurface(tint:, dock:, overlay:, borderRadius:, border:)` | the only blur primitive; `RepaintBoundary` built in |
+| `NotionGlassBar(hairlineTop:, hairlineBottom:)` | full-width header and composer strip |
+| `NotionGlassPanel(child:, borderRadius:, padding:, overlay:, blur:)` | menus, popovers, dialogs, sheets: tint + hairline + ink-ready `Material` |
+| `NotionGlassMenuRow(leading:, title:, trailing:, selected:, onTap:)` | a 48 pt row in a glass menu with a rounded, inset highlight |
+| `NotionGlassDivider(vertical:)` | the dock's 1 × 36 separator; `vertical: false` is the inset hairline between menu sections |
+| `NotionGlassPill(icon:, label:, onPressed:, selected:, blur:)` | a dock-style pill button: content presses inside the ink, the pill never scales |
+| `NotionPillTabIndicator(color:)` | the theme's tab indicator: a pill behind the selected tab |
 
 Rules:
-- Use `NotionGlassSurface` / `NotionGlassBar`, never a raw `BackdropFilter`
-  (the lint reports `backdrop-filter` outside `lib/ui/notion/`).
+- Use the primitives, never a raw `BackdropFilter` (the lint reports
+  `backdrop-filter` outside `lib/ui/notion/`).
 - Put a `BackdropGroup` around a page with more than one glass bar so the
   bars share one backdrop read (`NotionInboxPage`, `ChatPageWithRoom`).
-- Content must scroll under the bar: add `MediaQuery.paddingOf(context).top`
+- Content must scroll under a bar: add `MediaQuery.paddingOf(context).top`
   (or the bar height) to the scroll view's top padding, and the measured
-  composer/dock height to its bottom padding.
+  composer/dock height to its bottom padding. `NotionScaffold(children:)`
+  does this itself; `NotionScaffold(body:)` keeps an opaque header.
+- Press motion: scale the content inside the ink (`NotionPressable` inside the
+  `InkWell`, as in the dock), never the blurred surface.
 - The fallback is automatic: when the renderer is not Impeller
   (`ImageFilter.isShaderFilterSupported` is false: Skia, web, tests), when
   high contrast or reduced motion is on, or with
@@ -183,10 +242,15 @@ Rules:
 
 | Instead of | Use |
 |---|---|
-| `BackdropFilter(filter: ImageFilter.blur(...))` | `NotionGlassSurface` |
+| `BackdropFilter(filter: ImageFilter.blur(...))` | `NotionGlassSurface` / `NotionGlassPanel` |
 | `AppBar(backgroundColor: color.withAlpha(...))` | `flexibleSpace: NotionGlassBar()` + transparent background |
 | a translucent `Container` behind the composer | `NotionGlassBar` |
 | `Material(elevation: 3)` floating dock | `NotionGlassSurface(dock: true, ...)` |
+| `Material(color: surface, shape: RoundedRectangleBorder(...))` popover | `NotionGlassPanel` |
+| `ListTile` rows with full-bleed highlights in a menu | `NotionGlassMenuRow` |
+| a `Container(width: 1, color: divider)` separator | `NotionGlassDivider` |
+| a floating `FloatingActionButton.small`/chip over content | `NotionGlassPill` |
+| `BorderRadius.zero`, `RoundedRectangleBorder()`, `BorderRadius.circular(4)` | `NotionRadius.*` / `NotionShapes.*` |
 
 ## Motion
 
@@ -204,12 +268,12 @@ dialogs and sheets never bounce.
 |---|---|---|
 | `instant` | 90 ms | press-down, exits of micro elements |
 | `quick` | 140 ms | icon swaps, colour/selection tweens |
-| `short` | 200 ms | fades, badges, small reveals (= `FluffyThemes.animationDuration`) |
+| `short` | 200 ms | fades, badges, small reveals (= `ChatLoomThemes.animationDuration`) |
 | `medium` | 260 ms | entrances, dialogs, size reveals |
 | `long` | 320 ms | sheets, page push (`forward`); pop is `reverse` 220 ms |
 | `stagger` / `staggerCap` | 28 ms / 10 | per-item delay, never more than 10 steps |
 | `loaderGrace` | 250 ms | a loader stays invisible this long |
-| `standard` | `Cubic(.2, 0, 0, 1)` | general tweens (= `FluffyThemes.animationCurve`) |
+| `standard` | `Cubic(.2, 0, 0, 1)` | general tweens (= `ChatLoomThemes.animationCurve`) |
 | `emphasized` | `Cubic(.05, .7, .1, 1)` | entrances, page enter |
 | `exitFast` | `Cubic(.3, 0, .8, .15)` | exits |
 | `snappy` / `smooth` / `bouncy` | `SpringDescription`s | press release and toggles / dialogs and sheets / reward pops only |
@@ -255,7 +319,7 @@ morphs its glyph; `NotionIconButton(selected:)` tweens its background;
 `showNotionDialog` uses the Notion dialog route; `showNotionSheet` uses
 `sheetStyleOf` and its title/content rise in; `NotionEmptyState` pops its
 icon and staggers its text; tab indicators move elastically.
-`FluffyThemes.animationDuration`/`animationCurve` point at `short`/`standard`,
+`ChatLoomThemes.animationDuration`/`animationCurve` point at `short`/`standard`,
 so the ~56 legacy `Animated*` widgets got the new timing for free.
 `PulsatingWidget` and `TypingAnimation` are shims over `NotionPulse` and
 `NotionTypingDots`.
@@ -323,6 +387,8 @@ so the ~56 legacy `Animated*` widgets got the new timing for free.
 | `TextStyle(fontSize: 13)` | `NotionType.footnote` / `context.notion.typography.footnoteMuted` |
 | `EdgeInsets.all(10)`, `SizedBox(height: 6)` | `NotionSpace.*` values |
 | `BorderRadius.circular(18)` | `NotionRadius.mdAll` |
+| `BorderRadius.zero`, `RoundedRectangleBorder()`, `const OutlineInputBorder()` | `NotionRadius.*`, `NotionShapes.*`, or drop the override (the theme is rounded) |
+| a square selection highlight on a row | `NotionRadius.rowAll` on the `InkWell`/decoration, or `NotionGlassMenuRow` |
 | a reply stripe (`Container(width: 5)` + "Name:") inside a bubble | `ConversationBubble(quote: ConversationReplyQuote(...))` |
 | `color: luminance > .179 ? Colors.black87 : Colors.white` | `NotionContrast.on(background)` |
 | `AppConfig.borderRadius / 2` | `NotionRadius.sm` |
@@ -339,7 +405,10 @@ Do:
 
 Don't:
 - Add shadows, gradients, coloured surfaces or elevation.
-- Use glass anywhere except the header, dock and composer.
+- Blur anything that scrolls (rows, bubbles, cards, chips, grid tiles) or
+  animate a blur; blur only fixed chrome and settled overlays (see Glass).
+- Leave a square corner: every shape takes a `NotionRadius`/`NotionShapes`
+  value.
 - Use status colours (`danger`, `success`, ...) as decoration.
 - Hard-code hex colours, font sizes, paddings or radii in screens.
 - Restyle a Material widget inline when the theme already covers it; fix
@@ -359,7 +428,13 @@ Don't:
   `motion-duration` (a literal `Duration` in a `duration:` argument),
   `legacy-material-import` (`package:flutter/material.dart`) and, inside
   `lib/ui/notion/` only, `motion-animate-widget` (mounting flutter_animate's
-  timer-based `Animate`).
+  timer-based `Animate`). `square-corner` runs everywhere, including
+  `lib/ui/notion/`: `BorderRadius.zero`, `Radius.zero`, a literal radius below
+  6, `RoundedRectangleBorder(...)`/`OutlineInputBorder(...)` without a
+  `borderRadius`, `ContinuousRectangleBorder`, `BeveledRectangleBorder`.
+  Intentional flush edges (full-bleed bars, an image joined to its caption, a
+  pill that is half its track height) end the line with
+  `// design-lint: allow <reason>`.
   Existing debt is frozen per file and rule in `scripts/design-baseline.json`.
   - Default (also run by `scripts/verify-personal.py`): report only. Lines
     marked `NEW` are code you added; fix them before you hand off.
@@ -371,8 +446,10 @@ Don't:
   Material component themes, dark and light) and the five main screens in
   `test/notion/capture_production_test.dart` (inbox, conversation, merged
   conversation, chat details, settings) plus scrolled inbox/conversation
-  captures with glass forced on. Glass has `glass-on-*` and
-  `glass-fallback-dark` goldens; `motion-dark` shows the motion primitives
+  captures with glass forced on. Glass has `glass-on-*`,
+  `glass-overlays-*` (panel, menu rows, pills) and `glass-fallback-dark`
+  goldens; the golden suite also checks that overlay glass blurs only after
+  its route settles and that no theme shape is square; `motion-dark` shows the motion primitives
   at rest. `test/notion/motion_primitives_test.dart` checks settle-to-
   identity, reduced motion, timers and loops for every motion primitive. Run them in the isolated harness:
 
@@ -381,5 +458,8 @@ Don't:
   rtk python3 scripts/verify-notion-ui.py --update-goldens --capture-dir /tmp/notion-captures
   ```
 
-  Goldens are rendered on the macOS host with the bundled Roboto. A changed
-  golden is a visual change: review the PNG diff before you commit it.
+  Goldens were rendered on the macOS host with the bundled Roboto; the
+  19 October glass wave regenerated them on the Linux devbox, where text
+  antialiasing differs by about 1–4 % of pixels. Regenerate on the host that
+  runs the gate. A changed golden is a visual change: review the PNG diff
+  before you commit it.
