@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-package chat.fluffy.fluffychat.round
+package pl.personal.chatloom.round
 
 import android.Manifest
 import android.app.Activity
@@ -19,6 +19,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
+import android.util.Log
 import android.util.Size
 import android.view.Surface
 import android.view.WindowManager
@@ -32,6 +34,7 @@ import io.flutter.view.TextureRegistry
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -57,6 +60,14 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     @Volatile private var attached = false
     /** Main thread only. */
     private val orientationLock = RoundOrientationLock<Activity>()
+    /**
+     * Static per-lens metadata. Each CameraManager lookup is a binder round trip; a
+     * flip used to make about a dozen of them on the critical path.
+     */
+    private val characteristics = ConcurrentHashMap<String, CameraCharacteristics>()
+
+    private fun characteristicsOf(id: String): CameraCharacteristics =
+        characteristics[id] ?: cameraManager().getCameraCharacteristics(id).also { characteristics[id] = it }
 
     /** All asynchronous cancel/failure/callback paths may complete a call only once. */
     private inner class OnceResult(private val delegate: MethodChannel.Result) : MethodChannel.Result {
@@ -106,6 +117,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         var pendingResult: MethodChannel.Result? = null
         var openingFailure: (() -> Unit)? = null
         var openingTimeout: Runnable? = null
+        var firstFrameTimeout: Runnable? = null
         var closingContinuation: (() -> Unit)? = null
         var closeTimeout: Runnable? = null
         var recording = false
@@ -118,7 +130,9 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         var preparationResult: MethodChannel.Result? = null
         val finishWaiters = mutableListOf<MethodChannel.Result>()
         var focusListener: AudioManager.OnAudioFocusChangeListener? = null
+        var stopMs = 0L
         val raw get() = File(directory, "capture.raw.mp4")
+        val liveThumbnail get() = File(directory, RoundVideoExporter.LIVE_THUMBNAIL)
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -403,7 +417,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         val lens = if (front) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
         return manager.cameraIdList.firstOrNull { id ->
             try {
-                val info = manager.getCameraCharacteristics(id)
+                val info = characteristicsOf(id)
                 info.get(CameraCharacteristics.LENS_FACING) == lens &&
                     !info.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                         ?.getOutputSizes(SurfaceTexture::class.java).isNullOrEmpty()
@@ -413,7 +427,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
 
     private fun controls(capture: Capture): Controls {
         val id = capture.cameraId ?: throw CaptureFailure("camera_unavailable")
-        val info = cameraManager().getCameraCharacteristics(id)
+        val info = characteristicsOf(id)
         val keys = info.availableCaptureRequestKeys ?: emptyList()
         val ratioRange = if (Build.VERSION.SDK_INT >= 30 && keys.contains(CaptureRequest.CONTROL_ZOOM_RATIO))
             info.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) else null
@@ -449,7 +463,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
             if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
                 throw CaptureFailure("permission_denied")
             val manager = cameraManager()
-            val info = manager.getCameraCharacteristics(cameraId)
+            val info = characteristicsOf(cameraId)
             val map = info.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
             val sizes = map.getOutputSizes(SurfaceTexture::class.java)
             capture.size = sizes[RoundStreamSize.select(sizes.map { it.width to it.height }, capture.profile.side) { index ->
@@ -481,10 +495,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
                                 try {
                                     capture.cameraSession = configured
                                     repeating(capture)
-                                    capture.cameraReady = true
-                                    ready()
-                                    capture.openingTimeout?.let { cameraHandler.removeCallbacks(it) }
-                                    capture.openingTimeout = null; capture.openingFailure = null
+                                    reportWhenVisible(capture, token, camera, input, ready)
                                 } catch (_: Exception) { failOpen(capture, token) }
                             }
                             override fun onConfigureFailed(configured: CameraCaptureSession) {
@@ -522,6 +533,33 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
                 }
             }, cameraHandler)
         } catch (_: Exception) { failOpen(capture, token) }
+    }
+
+    /**
+     * Open and flip complete when the new lens is visible (its first frame is in the
+     * GL cache), not merely configured: Dart ends the flip on the live image and a
+     * recording never starts on black frames. A slow first frame is bounded by
+     * [FIRST_FRAME_TIMEOUT_MS], after which the open completes as before.
+     */
+    private fun reportWhenVisible(capture: Capture, token: Long, camera: CameraDevice,
+                                  input: RoundCameraSurface.Input, ready: () -> Unit) {
+        var reported = false
+        val report = Runnable {
+            if (reported || !alive(capture, token) || capture.camera !== camera || capture.input !== input)
+                return@Runnable
+            reported = true
+            capture.firstFrameTimeout?.let { cameraHandler.removeCallbacks(it) }; capture.firstFrameTimeout = null
+            try {
+                capture.cameraReady = true
+                ready()
+                capture.openingTimeout?.let { cameraHandler.removeCallbacks(it) }
+                capture.openingTimeout = null; capture.openingFailure = null
+            } catch (_: Exception) { failOpen(capture, token) }
+        }
+        capture.firstFrameTimeout?.let { cameraHandler.removeCallbacks(it) }
+        capture.firstFrameTimeout = report
+        cameraHandler.postDelayed(report, FIRST_FRAME_TIMEOUT_MS)
+        capture.compositor?.whenFrame(input) { cameraHandler.post(report) }
     }
 
     private fun alive(capture: Capture, token: Long) = session === capture &&
@@ -564,8 +602,8 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     private fun repeating(capture: Capture, enhanced: Boolean) {
         val camera = capture.camera ?: throw CaptureFailure("camera_unavailable")
         val configured = capture.cameraSession ?: throw CaptureFailure("camera_unavailable")
-        val available = controls(capture) // Fresh hardware capabilities before EVERY operation.
-        val info = cameraManager().getCameraCharacteristics(capture.cameraId!!)
+        val available = controls(capture) // Capabilities (and disabled controls) before EVERY operation.
+        val info = characteristicsOf(capture.cameraId!!)
         val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
         request.addTarget(capture.input!!.surface)
         request.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
@@ -636,7 +674,12 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         capture.openingFailure = null
         capture.closeTimeout?.let { cameraHandler.removeCallbacks(it) }; capture.closeTimeout = null
         capture.closingContinuation = null
-        try { capture.cameraSession?.stopRepeating() } catch (_: Exception) { }
+        capture.firstFrameTimeout?.let { cameraHandler.removeCallbacks(it) }; capture.firstFrameTimeout = null
+        // abortCaptures (flush) instead of stopRepeating: in-flight requests are dropped
+        // rather than drained, so the device closes and a flip reopens sooner.
+        try { capture.cameraSession?.abortCaptures() } catch (_: Exception) {
+            try { capture.cameraSession?.stopRepeating() } catch (_: Exception) { }
+        }
         capture.cameraSession?.close(); capture.cameraSession = null
         val camera = capture.camera
         capture.camera = null; capture.input = null
@@ -800,7 +843,25 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         recorder.start()
         capture.recording = true
         capture.compositor!!.encoding(true)
+        requestLiveThumbnail(capture)
         success(result, null)
+    }
+
+    /** First recorded frame -> thumbnail, written off the GL/camera threads while recording. */
+    private fun requestLiveThumbnail(capture: Capture) {
+        val directory = capture.directory
+        val side = capture.profile.side
+        val canceled = capture.canceled
+        try {
+            capture.compositor?.snapshotNextRecordedFrame { pixels ->
+                try {
+                    exporter.execute {
+                        try { RoundVideoExporter.writeLiveThumbnail(pixels, side, directory, canceled) }
+                        catch (_: Exception) { File(directory, RoundVideoExporter.LIVE_THUMBNAIL).delete() }
+                    }
+                } catch (_: Exception) { /* exporter shut down: the finish path decodes a frame */ }
+            }
+        } catch (_: Exception) { /* the finish path decodes a frame instead */ }
     }
 
     private fun preview(capture: Capture): Map<String, Any> {
@@ -829,11 +890,13 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         closeCamera(capture)
         emit(capture, mapOf("type" to "preparing", "wasInterrupted" to capture.interrupted))
         try { capture.compositor?.encoding(false) } catch (_: Exception) { }
+        val stopping = SystemClock.elapsedRealtime()
         try { capture.recorder?.stop() } catch (_: RuntimeException) {
             // Some devices finalize the file before reporting a stop/hardware error.
             // Let the strict exporter validate existing bytes before rejecting them.
             capture.interrupted = true; capture.stopFailed = true
         }
+        capture.stopMs = SystemClock.elapsedRealtime() - stopping
         capture.recording = false
         capture.paused = false
         closeHardware(capture)
@@ -862,10 +925,20 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     private fun prepare(capture: Capture, source: File, startMs: Int, endMs: Int, result: MethodChannel.Result?,
                         transaction: RoundTrimTransaction? = null) {
         capture.preparationResult = result
+        val queued = SystemClock.elapsedRealtime()
         exporter.execute {
             try {
-                val descriptor = RoundVideoExporter.export(source, transaction?.candidate ?: capture.output,
+                val began = SystemClock.elapsedRealtime()
+                // Untrimmed: the recording already is the final file (no re-encode).
+                // Trim, or a recording that fails the final profile: transcode as before.
+                val descriptor = (if (transaction == null)
+                    RoundVideoExporter.finalizeRecording(source, capture.output, capture.profile, capture.canceled)
+                else null) ?: RoundVideoExporter.export(source, transaction?.candidate ?: capture.output,
                     capture.profile, capture.canceled, startMs, endMs)
+                // Phase timings only: no paths, identifiers or content.
+                Log.i(TAG, "Round prepared: pipeline=${descriptor["pipeline"]} stop_ms=${capture.stopMs} " +
+                    "queue_ms=${began - queued} prepare_ms=${SystemClock.elapsedRealtime() - began} " +
+                    "duration_ms=${descriptor["durationMs"]} size_kb=${(descriptor["sizeBytes"] as Number).toLong() / 1024}")
                 cameraHandler.post {
                     if (session === capture && !capture.canceled.get()) {
                         try {
@@ -884,6 +957,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
                     } else {
                         transaction?.discard()
                         source.delete(); capture.output.delete(); File(capture.directory, "thumb.jpg").delete()
+                        capture.liveThumbnail.delete()
                         if (result != null) failure(result, "canceled")
                     }
                 }
@@ -984,6 +1058,7 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         capture.releaseTextureWhenClosed = true
         closeHardware(capture)
         capture.raw.delete()
+        capture.liveThumbnail.delete()
         capture.trimTransaction?.discard(); capture.trimTransaction = null
         if (!keepPrepared) {
             capture.output.delete()
@@ -1036,5 +1111,10 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) { }
     override fun onActivityDestroyed(activity: Activity) { }
 
-    companion object { private const val PERMISSION_REQUEST = 7361 }
+    companion object {
+        private const val PERMISSION_REQUEST = 7361
+        private const val TAG = "PersonalRound"
+        /** Upper bound between a configured session and its first visible frame. */
+        private const val FIRST_FRAME_TIMEOUT_MS = 500L
+    }
 }

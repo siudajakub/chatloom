@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-package chat.fluffy.fluffychat.round
+package pl.personal.chatloom.round
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
@@ -29,24 +30,28 @@ data class RoundProfile(val side: Int, val maxBytes: Long, val maxDurationMs: In
         require(videoBitrate in 100000..MAX_VIDEO_BITRATE && audioBitrate in 16000..MAX_AUDIO_BITRATE)
     }
 
-    /** Raw recording is temporary and bounded, exactly as before. */
-    val rawCapBytes: Long get() = maxOf(maxBytes * 3, 4L * 1024 * 1024)
+    /**
+     * Telegram parity: the recorder encodes the final file once, during recording.
+     * Its size cap is the final budget, so a full take can never need a second pass.
+     */
+    val rawCapBytes: Long get() = maxBytes
 
     /**
-     * The raw MediaRecorder file is decoded and re-encoded once more, so it must be
-     * nearly transparent: about 4x the final bitrate (at least 4 Mbps for <= 480 px),
-     * but never so high that a full-length take would hit the raw size cap.
+     * Final video bitrate written by MediaRecorder: the profile bitrate, lowered only
+     * when a full-length take at that rate would not fit [maxBytes] (15 % headroom
+     * for container overhead and VBR overshoot, as in [RoundVideoExporter.export]).
      */
-    val recorderVideoBitrate: Int get() {
-        val legacy = maxOf(videoBitrate.toLong(), 1_500_000L)
-        val desired = minOf(maxOf(videoBitrate * 4L, if (side <= 480) 4_000_000L else 6_000_000L), 12_000_000L)
-        val fit = rawCapBytes * 8L * 1000L / maxDurationMs * 90L / 100L - recorderAudioBitrate
-        return maxOf(minOf(desired, fit), legacy).toInt()
+    val recorderVideoBitrate: Int get() = directVideoBitrate(maxDurationMs)
+
+    fun directVideoBitrate(durationMs: Int): Int {
+        val budget = maxBytes * 8L * 1000L / maxOf(durationMs, TELEGRAM_MIN_DURATION_MS) * 85L / 100L - audioBitrate
+        return maxOf(MIN_VIDEO_BITRATE.toLong(), minOf(videoBitrate.toLong(), budget)).toInt()
     }
 
     val recorderAudioBitrate: Int get() = audioBitrate
 
     companion object {
+        const val MIN_VIDEO_BITRATE = 100_000
         const val MAX_VIDEO_BITRATE = 8_000_000
         const val MAX_AUDIO_BITRATE = 256_000
         /** Telegram round audio: AAC-LC (MediaRecorder AAC), mono, 48 kHz. */
@@ -64,10 +69,90 @@ data class RoundProfile(val side: Int, val maxBytes: Long, val maxDurationMs: In
     }
 }
 
-/** Camera source is never exposed to Dart or uploaded. Every frame is decoded,
- * center-cropped, oriented and circle-masked on the encoder's actual surface. */
+/**
+ * Camera pixels are only ever encoded through the GL compositor, which crops, orients and
+ * circle-masks every frame before MediaRecorder sees it. The untrimmed recording is
+ * already the final file ([finalizeRecording]); [export] re-encodes only a trimmed span
+ * or a recording that fails the final-profile check.
+ */
 object RoundVideoExporter {
     private const val MAX_DURATION_US = 60000000L
+
+    /** Thumbnail the compositor writes from the first recorded frame (Telegram parity). */
+    const val LIVE_THUMBNAIL = "thumb.live.jpg"
+    private const val THUMBNAIL = "thumb.jpg"
+
+    /**
+     * Telegram fast path: no second encode. MediaRecorder wrote square H.264/AAC at the
+     * final bitrate, rotation 0, from the masked GL frames. The file is validated with
+     * one sync-frame decode (square, side, rotation, duration, size, black corners) and
+     * moved into place; the live thumbnail is reused. Returns null when the recording
+     * does not meet the final profile: the caller then transcodes it as before, from
+     * the untouched [source].
+     */
+    fun finalizeRecording(source: File, output: File, profile: RoundProfile, canceled: AtomicBoolean): Map<String, Any>? {
+        profile.validate()
+        val directory = output.parentFile ?: return null
+        val live = File(directory, LIVE_THUMBNAIL)
+        val thumb = File(directory, THUMBNAIL)
+        if (!source.isFile || source.length() !in 1..profile.maxBytes) return null
+        val useLive = live.isFile && live.length() > 0
+        val inspected = try { inspect(source, profile, keepFrame = !useLive) } catch (_: Exception) { return null }
+        try {
+            require(!canceled.get())
+            thumb.delete()
+            if (inspected.second != null) writeThumbnail(inspected.second!!, thumb)
+            else require(live.renameTo(thumb))
+        } catch (error: Exception) {
+            thumb.delete()
+            if (canceled.get()) throw error
+            return null
+        } finally { inspected.second?.recycle() }
+        try {
+            RoundMp4FastStart.finalize(source, output)
+        } catch (error: Exception) {
+            // The strict relocation never touches the source; transcode from it instead.
+            if (source.isFile) output.delete()
+            if (canceled.get() || !source.isFile) throw error
+            return null
+        }
+        require(!canceled.get())
+        return inspected.first + mapOf(
+            "path" to output.path,
+            "sizeBytes" to output.length(),
+            "thumbnailPath" to thumb.path,
+            "cornersSanitized" to true,
+            "fastStart" to true,
+            "pipeline" to "direct",
+        )
+    }
+
+    /**
+     * Compositor snapshot ([side]x[side] RGBA rows, bottom-up as glReadPixels returns
+     * them) to the live thumbnail. Runs off the GL and camera threads; the corners are
+     * checked on the encoded JPEG before it becomes visible under [LIVE_THUMBNAIL].
+     */
+    fun writeLiveThumbnail(pixels: ByteBuffer, side: Int, directory: File, canceled: AtomicBoolean) {
+        if (canceled.get() || !directory.isDirectory) return
+        val raw = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        try {
+            pixels.position(0)
+            raw.copyPixelsFromBuffer(pixels)
+            val upright = Bitmap.createBitmap(raw, 0, 0, side, side, Matrix().apply { preScale(1f, -1f) }, false)
+            val temporary = File(directory, "$LIVE_THUMBNAIL.tmp")
+            try {
+                writeThumbnail(upright, temporary)
+                if (canceled.get()) return
+                require(temporary.renameTo(File(directory, LIVE_THUMBNAIL)))
+            } finally {
+                temporary.delete()
+                if (upright !== raw) upright.recycle()
+            }
+        } finally {
+            raw.recycle()
+            if (canceled.get()) File(directory, LIVE_THUMBNAIL).delete()
+        }
+    }
 
     fun export(source: File, output: File, profile: RoundProfile, canceled: AtomicBoolean, startMs: Int, endMs: Int): Map<String, Any> {
         profile.validate()
@@ -96,6 +181,7 @@ object RoundVideoExporter {
                         "thumbnailPath" to thumbnail.path,
                         "cornersSanitized" to true,
                         "fastStart" to true,
+                        "pipeline" to "transcode",
                     )
                 }
                 bitrate = (bitrate * profile.maxBytes / output.length() * 80L / 100L).toInt()
@@ -338,26 +424,64 @@ object RoundVideoExporter {
         } finally { extractor.release(); retriever.release() }
     }
 
+    /**
+     * Fast-path probe: the same container/profile checks as [probe] and one sync-frame
+     * decode for the corner mask (every frame comes from the same masking shader).
+     * Returns the decoded frame only when [keepFrame] (no live thumbnail to reuse).
+     */
+    private fun inspect(file: File, profile: RoundProfile, keepFrame: Boolean): Pair<Map<String, Any>, Bitmap?> {
+        val extractor = MediaExtractor()
+        val retriever = MediaMetadataRetriever()
+        try {
+            extractor.setDataSource(file.path)
+            val formats = (0 until extractor.trackCount).map { extractor.getTrackFormat(it) }
+            require(formats.size == 2)
+            val video = formats.single { it.getString(MediaFormat.KEY_MIME) == "video/avc" }
+            formats.single { it.getString(MediaFormat.KEY_MIME) == "audio/mp4a-latm" }
+            val width = video.getInteger(MediaFormat.KEY_WIDTH)
+            val height = video.getInteger(MediaFormat.KEY_HEIGHT)
+            retriever.setDataSource(file.path)
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)!!.toInt()
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            require(width == height && width == profile.side && rotation == 0)
+            require(duration in RoundProfile.TELEGRAM_MIN_DURATION_MS..profile.maxDurationMs)
+            require(file.length() in 1..profile.maxBytes)
+            val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: error("decode")
+            try { requireSanitizedCorners(frame) } catch (error: Exception) { frame.recycle(); throw error }
+            val descriptor = mapOf<String, Any>("width" to width, "height" to height, "durationMs" to duration,
+                "sizeBytes" to file.length(), "videoCodec" to "h264", "audioCodec" to "aac")
+            if (keepFrame) return descriptor to frame
+            frame.recycle()
+            return descriptor to null
+        } finally { extractor.release(); retriever.release() }
+    }
+
     private fun thumbnail(file: File): File {
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(file.path)
             val decoded = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: error("thumbnail")
-            val bitmap = Bitmap.createBitmap(decoded.width, decoded.height, Bitmap.Config.ARGB_8888)
+            val thumb = File(file.parentFile, THUMBNAIL)
+            try { writeThumbnail(decoded, thumb) } finally { decoded.recycle() }
+            return thumb
+        } finally { retriever.release() }
+    }
+
+    /** Circle-masked JPEG of [frame]; the encoded file's corners are verified black. */
+    private fun writeThumbnail(frame: Bitmap, thumb: File) {
+        val bitmap = Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888)
+        try {
             val canvas = Canvas(bitmap)
             canvas.drawColor(Color.BLACK)
             val layer = canvas.saveLayer(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat(), null)
             canvas.drawCircle(bitmap.width / 2f, bitmap.height / 2f, bitmap.width / 2f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE })
             val mask = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN) }
-            canvas.drawBitmap(decoded, 0f, 0f, mask)
+            canvas.drawBitmap(frame, 0f, 0f, mask)
             canvas.restoreToCount(layer)
-            val thumb = File(file.parentFile, "thumb.jpg")
             thumb.outputStream().use { require(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it)) }
-            decoded.recycle(); bitmap.recycle()
-            val encodedThumb = BitmapFactory.decodeFile(thumb.path) ?: error("thumbnail")
-            try { requireSanitizedCorners(encodedThumb) } finally { encodedThumb.recycle() }
-            return thumb
-        } finally { retriever.release() }
+        } finally { bitmap.recycle() }
+        val encodedThumb = BitmapFactory.decodeFile(thumb.path) ?: error("thumbnail")
+        try { requireSanitizedCorners(encodedThumb) } finally { encodedThumb.recycle() }
     }
 
     private fun requireSanitizedCorners(bitmap: Bitmap) {

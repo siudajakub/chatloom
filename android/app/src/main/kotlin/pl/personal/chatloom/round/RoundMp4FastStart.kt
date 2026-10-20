@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-package chat.fluffy.fluffychat.round
+package pl.personal.chatloom.round
 
 import java.io.File
 import java.io.RandomAccessFile
@@ -12,20 +12,50 @@ object RoundMp4FastStart {
     private data class Box(val offset: Long, val size: Long, val type: String, val header: Int)
     private val containers = setOf("moov", "trak", "mdia", "minf", "stbl")
 
+    /**
+     * Moves a finished recording to [destination] as a streamable MP4. MediaRecorder
+     * usually writes its index into the reserved space at the front already: the
+     * file then only needs the same strict layout check and a rename (no copy). Any
+     * other layout goes through [relocate]. [source] no longer exists on success.
+     */
+    fun finalize(source: File, destination: File) {
+        val moovFirst = RandomAccessFile(source, "r").use { input ->
+            val (moov, mdat) = layout(input)
+            moov.offset < mdat.offset
+        }
+        if (moovFirst) {
+            destination.delete()
+            if (source.renameTo(destination)) return
+        }
+        relocate(source, destination)
+        source.delete()
+    }
+
+    /** Top-level boxes; exactly one moov and mdat, ftyp first, never fragmented. */
+    private fun layout(input: RandomAccessFile): Pair<Box, Box> = boxes(input).let { boxes ->
+        boxes.single { it.type == "moov" } to boxes.single { it.type == "mdat" }
+    }
+
+    private fun boxes(input: RandomAccessFile): List<Box> {
+        val boxes = mutableListOf<Box>()
+        var offset = 0L
+        while (offset < input.length()) {
+            val box = readBox(input, offset)
+            boxes += box
+            offset += box.size
+        }
+        require(offset == input.length())
+        require(boxes.first().type == "ftyp")
+        require(boxes.count { it.type == "moov" } == 1 && boxes.count { it.type == "mdat" } == 1)
+        require(boxes.none { it.type in setOf("moof", "sidx", "mfra") })
+        return boxes
+    }
+
     fun relocate(source: File, destination: File) {
         RandomAccessFile(source, "r").use { input ->
-            val boxes = mutableListOf<Box>()
-            var offset = 0L
-            while (offset < input.length()) {
-                val box = readBox(input, offset)
-                boxes += box
-                offset += box.size
-            }
-            require(offset == input.length())
-            require(boxes.first().type == "ftyp")
+            val boxes = boxes(input)
             val moov = boxes.single { it.type == "moov" }
             val mdat = boxes.single { it.type == "mdat" }
-            require(boxes.none { it.type in setOf("moof", "sidx", "mfra") })
             destination.outputStream().use { output ->
                 if (moov.offset < mdat.offset) {
                     copy(input, 0, input.length(), output)

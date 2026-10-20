@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-package chat.fluffy.fluffychat.round
+package pl.personal.chatloom.round
 
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
@@ -35,6 +35,10 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
         internal var coordinates = buffer(geometry.coordinates)
             private set
         internal var verified = false
+        /** GL thread only: a frame of this input reached the cache. */
+        internal var delivered = false
+        /** GL thread only: runs once, after the first cached frame ([whenFrame]). */
+        internal var firstFrame: (() -> Unit)? = null
     }
     private val thread = HandlerThread("PersonalRoundGL").apply { start() }
     private val handler = Handler(thread.looper)
@@ -55,6 +59,12 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
     private var failed = false
     private var retired = false
     private val clock = RoundFrameClock()
+    /**
+     * Receives the next recorded frame's pixels once ([snapshotNextRecordedFrame]).
+     * Written and read only on the GL thread (writers post through [handler]);
+     * volatile as well, so no other thread can ever observe a stale value.
+     */
+    @Volatile private var snapshot: ((ByteBuffer) -> Unit)? = null
     private val matrix = FloatArray(16)
     private val corners = buffer(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
     private val ordinary = buffer(floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f))
@@ -85,9 +95,38 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
                 source.getTransformMatrix(matrix)
                 verify(input)
                 cache(input)
+                if (!input.delivered) {
+                    input.delivered = true
+                    input.firstFrame?.let { action -> input.firstFrame = null; action() }
+                }
             } catch (_: Exception) { fail() }
         }, handler)
         input
+    }
+
+    /**
+     * Runs [action] on the GL thread once [input] has cached a frame (immediately when
+     * it already has). Camera opens and flips report "ready" when the new lens is
+     * visible, not merely configured. Never runs after [close].
+     */
+    fun whenFrame(input: Input, action: () -> Unit) {
+        if (closed) return
+        handler.post {
+            if (closed || failed) return@post
+            if (input.delivered) action() else input.firstFrame = action
+        }
+    }
+
+    /**
+     * Telegram takes the round thumbnail from the first camera frame. Hands the next
+     * frame that is sent to the recorder ([side]x[side] RGBA, rows bottom-up) to
+     * [consumer] once, on the GL thread; the consumer must hand heavy work off.
+     */
+    fun snapshotNextRecordedFrame(consumer: (ByteBuffer) -> Unit) {
+        if (closed) return
+        // Posted to the GL thread (the only reader) instead of a blocking hand-off:
+        // the camera thread never waits on GL work for a thumbnail.
+        handler.post { if (!closed && !failed && !retired) snapshot = consumer }
     }
 
     /**
@@ -139,7 +178,7 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
 
     /** Stop display/encoder work while terminal CameraDevice.onClosed retires inputs. */
     fun retire() = run {
-        encoding = false; retired = true; current = null
+        encoding = false; retired = true; current = null; snapshot = null
         handler.removeCallbacks(pump)
     }
 
@@ -149,6 +188,7 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
             try {
                 makePreviewCurrent()
                 if (encoding && recorderWindow != EGL14.EGL_NO_SURFACE) {
+                    if (hasImage) snapshot?.let { consumer -> snapshot = null; deliverSnapshot(consumer) }
                     copy(recorderWindow, clock.next(System.nanoTime()))
                 }
                 // Flutter consumes one preview buffer before another is submitted.
@@ -161,6 +201,27 @@ internal class RoundCameraSurface(private val preview: Surface, private val side
 
     // The pump must be initialized before initialize() can post it to its thread.
     init { try { run { initialize() } } catch (error: Exception) { close(); throw error } }
+
+    /** A failed thumbnail read never affects the recording: the exporter decodes one instead. */
+    private fun deliverSnapshot(consumer: (ByteBuffer) -> Unit) {
+        try {
+            val pixels = ByteBuffer.allocateDirect(side * side * 4).order(ByteOrder.nativeOrder())
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebuffer)
+            GLES20.glReadPixels(0, 0, side, side, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixels)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            val ok = GLES20.glGetError() == GLES20.GL_NO_ERROR
+            drainErrors()
+            if (ok) consumer(pixels)
+        } catch (_: Exception) {
+            try { GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0) } catch (_: Exception) { }
+            drainErrors()
+        }
+    }
+
+    private fun drainErrors() {
+        var remaining = 16
+        while (remaining-- > 0 && GLES20.glGetError() != GLES20.GL_NO_ERROR) { /* bounded */ }
+    }
 
     private fun fail() {
         if (!closed && !failed) { failed = true; encoding = false; handler.removeCallbacks(pump); onFailure() }

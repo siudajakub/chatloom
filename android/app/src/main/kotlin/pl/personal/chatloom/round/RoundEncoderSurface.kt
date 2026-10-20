@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-package chat.fluffy.fluffychat.round
+package pl.personal.chatloom.round
 
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
@@ -8,7 +8,7 @@ import android.opengl.EGLExt
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.os.Handler
-import android.os.Looper
+import android.os.HandlerThread
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -23,6 +23,7 @@ internal class RoundEncoderSurface(private val encoderSurface: Surface, private 
     private val program: Int
     private val texture: Int
     private val frameLock = Object()
+    private val callbacks: HandlerThread
     private var frameAvailable = false
     private val source: SurfaceTexture
     val decoderSurface: Surface
@@ -68,9 +69,12 @@ internal class RoundEncoderSurface(private val encoderSurface: Surface, private 
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
         source = SurfaceTexture(texture)
+        callbacks = HandlerThread("PersonalRoundExport").apply { start() }
+        // A private callback thread: trim/fallback exports never wait for a busy
+        // UI (main) looper between decoded frames.
         source.setOnFrameAvailableListener({
             synchronized(frameLock) { frameAvailable = true; frameLock.notifyAll() }
-        }, Handler(Looper.getMainLooper()))
+        }, Handler(callbacks.looper))
         decoderSurface = Surface(source)
     }
 
@@ -110,6 +114,7 @@ internal class RoundEncoderSurface(private val encoderSurface: Surface, private 
     }
 
     fun close() {
+        callbacks.quitSafely()
         decoderSurface.release(); source.release()
         GLES20.glDeleteProgram(program)
         GLES20.glDeleteTextures(1, intArrayOf(texture), 0)

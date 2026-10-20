@@ -1,10 +1,10 @@
-package chat.fluffy.fluffychat
+package pl.personal.chatloom
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 
 import android.content.Context
-import chat.fluffy.fluffychat.round.TelegramRoundPlugin
+import pl.personal.chatloom.round.TelegramRoundPlugin
 
 class MainActivity : FlutterFragmentActivity() {
 
