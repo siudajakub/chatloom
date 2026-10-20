@@ -5,8 +5,8 @@
 
 import 'dart:io';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
 import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -64,10 +64,11 @@ abstract class PlatformInfos {
       context: context,
       children: [
         Text(l10n.versionWithNumber(version)),
+        Text(AppConfig.upstreamCredit),
         TextButton.icon(
-          onPressed: () => launchUrlString(AppConfig.sourceCodeUrl),
+          onPressed: () => launchUrlString(AppConfig.upstreamSourceCodeUrl),
           icon: const Icon(Icons.source_outlined),
-          label: Text(l10n.sourceCode),
+          label: Text('${AppConfig.upstreamName} ${l10n.sourceCode}'),
         ),
         Builder(
           builder: (innerContext) {
@@ -103,6 +104,7 @@ abstract class PlatformInfos {
         ),
       ),
       applicationName: AppSettings.applicationName.value,
+      applicationLegalese: 'AGPL-3.0-or-later',
     );
   }
 }

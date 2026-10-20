@@ -7,27 +7,27 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/events/round_mini_player.dart';
+import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_capture_controller.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/init_with_restore.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
+import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/sync_network_recovery.dart';
+import 'package:chatloom/utils/uia_request_manager.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/chatloom_app.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/events/round_mini_player.dart';
-import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/personal/person_location.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/init_with_restore.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
-import 'package:fluffychat/utils/notification_background_handler.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/sync_network_recovery.dart';
-import 'package:fluffychat/utils/uia_request_manager.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/fluffy_chat_app.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
@@ -41,6 +41,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_html/html.dart' as html;
 import 'package:url_launcher/url_launcher_string.dart';
 
+import '../config/app_config.dart';
 import '../config/setting_keys.dart';
 import '../pages/key_verification/key_verification_dialog.dart';
 import '../utils/account_bundles.dart';
@@ -224,7 +225,7 @@ class MatrixState extends State<Matrix> {
     }
     final candidate = _loginClientCandidate ??=
         await ClientManager.createClient(
-            '${AppSettings.applicationName.value}-${DateTime.now().millisecondsSinceEpoch}',
+            '${AppConfig.legacyStorageAppName}-${DateTime.now().millisecondsSinceEpoch}',
             store,
           )
           ..onLoginStateChanged.stream
@@ -241,7 +242,7 @@ class MatrixState extends State<Matrix> {
                 _registerSubs(_loginClientCandidate!.clientName);
                 setActiveClient(_loginClientCandidate);
                 _loginClientCandidate = null;
-                FluffyChatApp.router.go('/backup');
+                ChatLoomApp.router.go('/backup');
               });
     if (widget.clients.isEmpty) widget.clients.add(candidate);
     return candidate;
@@ -273,7 +274,7 @@ class MatrixState extends State<Matrix> {
   }
 
   String? get activeRoomId {
-    final route = FluffyChatApp.router.routeInformationProvider.value.uri.path;
+    final route = ChatLoomApp.router.routeInformationProvider.value.uri.path;
     if (!route.startsWith('/rooms/')) return null;
     return route.split('/')[2];
   }
@@ -329,14 +330,14 @@ class MatrixState extends State<Matrix> {
                   KeyVerificationState.done,
                   KeyVerificationState.error,
                 }.contains(request.state)) {
-              FluffyChatApp.router.pop('dialog');
+              ChatLoomApp.router.pop('dialog');
             }
             hidPopup = true;
           };
           request.onUpdate = null;
           hidPopup = true;
           await KeyVerificationDialog(request: request).show(
-            FluffyChatApp.router.routerDelegate.navigatorKey.currentContext ??
+            ChatLoomApp.router.routerDelegate.navigatorKey.currentContext ??
                 context,
           );
         });
@@ -355,7 +356,7 @@ class MatrixState extends State<Matrix> {
 
           if (loggedInWithMultipleClients) {
             final snackbarContext =
-                FluffyChatApp
+                ChatLoomApp
                     .router
                     .routerDelegate
                     .navigatorKey
@@ -369,7 +370,7 @@ class MatrixState extends State<Matrix> {
             ).showSnackBar(SnackBar(content: Text(l10n.oneClientLoggedOut)));
             return;
           }
-          FluffyChatApp.router.go('/');
+          ChatLoomApp.router.go('/');
         });
     onUiaRequest[name] ??= c.onUiaRequest.stream.listen(uiaRequestHandler);
     if (!kIsWeb && c.isLogged()) {
@@ -386,7 +387,7 @@ class MatrixState extends State<Matrix> {
       FlutterLocalNotificationsPlugin().initialize(
         settings: InitializationSettings(
           linux: LinuxInitializationSettings(
-            defaultActionName: FluffyChatNotificationActions.open.name,
+            defaultActionName: ChatLoomNotificationActions.open.name,
           ),
           windows: ClientManager.windowsNotificationSettings,
           macOS: const DarwinInitializationSettings(),
@@ -394,7 +395,7 @@ class MatrixState extends State<Matrix> {
         onDidReceiveNotificationResponse: (response) => notificationTap(
           response,
           clients: widget.clients,
-          router: FluffyChatApp.router,
+          router: ChatLoomApp.router,
           l10n: null,
         ),
       );
@@ -442,7 +443,7 @@ class MatrixState extends State<Matrix> {
         this,
         onFcmError: (errorMsg, {Uri? link}) async {
           final context =
-              FluffyChatApp.router.routerDelegate.navigatorKey.currentContext ??
+              ChatLoomApp.router.routerDelegate.navigatorKey.currentContext ??
               this.context;
           if (!context.mounted) return;
           final result = await showOkCancelAlertDialog(
@@ -554,7 +555,7 @@ class MatrixState extends State<Matrix> {
                     if (client != event.room.client) {
                       setActiveClient(event.room.client);
                     }
-                    FluffyChatApp.router.go(
+                    ChatLoomApp.router.go(
                       conversationLocation(event.room, eventId: event.eventId),
                     );
                   },
@@ -589,7 +590,7 @@ class MatrixState extends State<Matrix> {
     final exportBytes = Uint8List.fromList(const Utf8Codec().encode(export));
 
     final exportFileName =
-        'fluffychat-export-${DateFormat(DateFormat.YEAR_MONTH_DAY).format(DateTime.now())}.fluffybackup';
+        'chatloom-export-${DateFormat(DateFormat.YEAR_MONTH_DAY).format(DateTime.now())}.fluffybackup';
 
     final file = MatrixFile(bytes: exportBytes, name: exportFileName);
     if (!context.mounted) return;

@@ -6,12 +6,11 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/performance_probe.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/performance_probe.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart';
 
@@ -102,7 +101,7 @@ extension InitWithRestoreExtension on Client {
     if (storage == null) return;
     await SessionBackupWriter.delete(
       storage,
-      '${AppSettings.applicationName.value}_session_backup_$clientName',
+      '${AppConfig.legacyStorageAppName}_session_backup_$clientName',
     );
   }
 
@@ -111,7 +110,7 @@ extension InitWithRestoreExtension on Client {
     bool allowSessionRestore = false,
   }) async {
     final storageKey =
-        '${AppSettings.applicationName.value}_session_backup_$clientName';
+        '${AppConfig.legacyStorageAppName}_session_backup_$clientName';
     final storage = PlatformInfos.isMobile || PlatformInfos.isLinux
         ? const FlutterSecureStorage()
         : null;
@@ -170,7 +169,7 @@ extension InitWithRestoreExtension on Client {
         ClientManager.sendInitNotification(
           l10n.initAppError,
           l10n.sessionLostBody(
-            AppConfig.newIssueUrl.toString(),
+            '',
             e.runtimeType.toString(),
           ),
         );
@@ -194,7 +193,7 @@ extension InitWithRestoreExtension on Client {
         ClientManager.sendInitNotification(
           l10n.initAppError,
           l10n.restoreSessionBody(
-            AppConfig.newIssueUrl.toString(),
+            '',
             e.runtimeType.toString(),
           ),
         );
@@ -203,7 +202,7 @@ extension InitWithRestoreExtension on Client {
         ClientManager.sendInitNotification(
           l10n.initAppError,
           l10n.sessionLostBody(
-            AppConfig.newIssueUrl.toString(),
+            '',
             e.runtimeType.toString(),
           ),
         );

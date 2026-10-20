@@ -5,9 +5,8 @@
 
 import 'dart:math';
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 Future<T?> showAdaptiveBottomSheet<T>({
@@ -17,7 +16,7 @@ Future<T?> showAdaptiveBottomSheet<T>({
   bool isScrollControlled = true,
   bool useRootNavigator = true,
 }) {
-  if (FluffyThemes.isColumnMode(context)) {
+  if (ChatLoomThemes.isColumnMode(context)) {
     return showNotionCustomDialog<T>(
       context: context,
       useRootNavigator: useRootNavigator,
@@ -30,7 +29,12 @@ Future<T?> showAdaptiveBottomSheet<T>({
           child: Material(
             elevation: Theme.of(context).dialogTheme.elevation ?? 4,
             shadowColor: Theme.of(context).dialogTheme.shadowColor,
-            borderRadius: BorderRadius.circular(AppConfig.borderRadius),
+            // Rounded like every dialog; the body is a full page, so the
+            // fill stays opaque (no blur behind an opaque scaffold).
+            shape: RoundedRectangleBorder(
+              borderRadius: NotionGlass.dialogRadius,
+              side: BorderSide(color: context.notion.glass.border),
+            ),
             color: Theme.of(context).scaffoldBackgroundColor,
             clipBehavior: Clip.hardEdge,
             child: builder(context),

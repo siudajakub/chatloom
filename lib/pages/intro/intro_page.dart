@@ -3,16 +3,15 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/intro/flows/restore_backup_flow.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/intro/flows/restore_backup_flow.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/layouts/login_scaffold.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 
 class IntroPage extends StatelessWidget {
   final bool isLoading, hasPresetHomeserver;
@@ -59,17 +58,6 @@ class IntroPage extends StatelessWidget {
                         overflow: .ellipsis,
                       ),
                     ),
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                onTap: () => launchUrlString(AppSettings.privacyPolicy.value),
-                child: Row(
-                  mainAxisSize: .min,
-                  spacing: 12,
-                  children: [
-                    const Icon(Icons.privacy_tip_outlined),
-                    Text(L10n.of(context).privacy),
                   ],
                 ),
               ),

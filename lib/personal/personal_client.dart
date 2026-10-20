@@ -3,18 +3,18 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/immediate_outbox.dart';
+import 'package:chatloom/personal/journal_replay_batch.dart';
+import 'package:chatloom/personal/journal_trust.dart';
+import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/performance_probe.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/personal/storage/personal_store.dart';
+import 'package:chatloom/personal/worker_readiness.dart';
 import 'package:crypto/crypto.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/immediate_outbox.dart';
-import 'package:fluffychat/personal/journal_replay_batch.dart';
-import 'package:fluffychat/personal/journal_trust.dart';
-import 'package:fluffychat/personal/own_sender.dart';
-import 'package:fluffychat/personal/performance_probe.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
-import 'package:fluffychat/personal/storage/personal_store.dart';
-import 'package:fluffychat/personal/worker_readiness.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
@@ -519,7 +519,7 @@ class PersonalClient extends ChangeNotifier {
     if (_store == null) throw StateError('Encrypted storage unavailable');
     if (journal == null) {
       final id = await client.createRoom(
-        name: 'Personal Chat — private sync',
+        name: 'ChatLoom — private sync',
         preset: CreateRoomPreset.privateChat,
         creationContent: {'m.federate': false},
         initialState: [
@@ -1220,23 +1220,35 @@ class PersonalClient extends ChangeNotifier {
   String? get transcriptionDefaultLanguage =>
       transcriptionPolicy.defaultLanguage;
 
-  /// Voice notes and Telegram round videos that may be sent for
-  /// transcription; null for anything else, including protected media.
+  /// Speech media that may be sent for transcription (voice notes, other
+  /// audio, rounds, videos, media files; see `transcribableMediaKind`);
+  /// null for anything else, including protected media and silent loops.
   static AutoTranscriptionKind? autoTranscriptionKind(Event e) {
     if (e.redacted ||
         e.type != EventTypes.Message ||
-        !e.eventId.startsWith(r'$') ||
-        !RoundMediaPolicy.fromContent(e.content).canTranscribe) {
+        !e.eventId.startsWith(r'$')) {
       return null;
     }
-    if (RoundVideoDescriptor.fromContent(e.content) != null) {
-      return AutoTranscriptionKind.round;
-    }
-    if (e.messageType == MessageTypes.Audio &&
-        e.content.containsKey('org.matrix.msc3245.voice')) {
-      return AutoTranscriptionKind.voice;
-    }
-    return null;
+    return transcribableMediaKind(e.content);
+  }
+
+  /// True when the worker transcribes every video and media file
+  /// (heartbeat `transcriptionMedia` >= 2). Older workers only accept
+  /// `m.audio` and strict rounds, and refuse videos with `not_audio`.
+  bool get workerTranscribesAllMedia =>
+      (workerReadiness?.transcriptionMedia ?? 0) >= 2;
+
+  /// The kind of [e] the paired worker can transcribe, or null. Panels use
+  /// it to decide whether to offer transcription at all.
+  AutoTranscriptionKind? transcribableKind(Event e) {
+    final kind = autoTranscriptionKind(e);
+    if (kind == null || workerTranscribesAllMedia) return kind;
+    return switch (kind) {
+      AutoTranscriptionKind.voice || AutoTranscriptionKind.round => kind,
+      AutoTranscriptionKind.audio when e.messageType == MessageTypes.Audio =>
+        kind,
+      _ => null,
+    };
   }
 
   /// Why [e] is not transcribed automatically (see autoTranscriptionBlock).
@@ -1245,6 +1257,14 @@ class PersonalClient extends ChangeNotifier {
   /// `before_enabled` while this device's window start is not known yet.
   String? autoTranscriptionBlockFor(Event e, DateTime now) {
     if (!autoTranscriptionAvailable) return 'worker_off';
+    final kind = autoTranscriptionKind(e);
+    // Older workers were only ever asked for voice notes and rounds.
+    if (kind != null &&
+        !workerTranscribesAllMedia &&
+        kind != AutoTranscriptionKind.voice &&
+        kind != AutoTranscriptionKind.round) {
+      return 'worker_off';
+    }
     final room = e.room;
     // Room state is the chat's current setting; fail closed on any value
     // other than an explicit "off".
@@ -1272,7 +1292,7 @@ class PersonalClient extends ChangeNotifier {
           ? policy.copyWith(enabledAt: () => enabledAt)
           : policy,
       AutoTranscriptionCandidate(
-        kind: autoTranscriptionKind(e),
+        kind: kind,
         network: network,
         roomId: room.id,
         outgoing: OwnSenderResolver.of(client).isOwnEvent(e),
@@ -1314,8 +1334,10 @@ class PersonalClient extends ChangeNotifier {
       e,
       id,
       // Give the scanning worker time to pick up local-bridge messages
-      // first; cloud rooms are asked for right away.
-      e.room.id.endsWith(':beeper.local')
+      // first (and cloud rooms too when it watches its own sync); older
+      // workers cannot see cloud rooms, so those are asked for right away.
+      e.room.id.endsWith(':beeper.local') ||
+              workerReadiness?.autoTranscriptionLive == true
           ? autoTranscriptCatchUpDelay - age
           : Duration.zero,
     );
@@ -1408,8 +1430,7 @@ class PersonalClient extends ChangeNotifier {
     final round = RoundVideoDescriptor.fromContent(e.content);
     if (e.redacted ||
         !e.eventId.startsWith(r'$') ||
-        (e.messageType != MessageTypes.Audio && round == null) ||
-        !RoundMediaPolicy.fromContent(e.content).canTranscribe ||
+        transcribableKind(e) == null ||
         (round != null &&
             (await TelegramRoundService.of(client).mediaState(e))?['expired'] ==
                 true)) {
@@ -1576,8 +1597,94 @@ class PersonalClient extends ChangeNotifier {
 
   PersonGroupCollection get _groupCollection =>
       parsePersonGroups(values, accountId: client.userID);
-  List<PersonGroup> get groups => _groupCollection.groups;
+
+  /// Saved person groups of this account, without groups that are being
+  /// unmerged: a staged `metadata.delete` (awaiting the worker) or a removal
+  /// that waits for an earlier change of the same group ([removeGroup]).
+  /// A rejected delete clears its pending operation, so the group returns.
+  List<PersonGroup> get groups {
+    final all = _groupCollection.groups;
+    if (_unmerging.isEmpty && pending.isEmpty) return all;
+    final deleting = <String>{
+      for (final op in pending.values)
+        if (op.kind == 'metadata.delete' && op.entityId.startsWith('person:'))
+          op.entityId,
+    };
+    if (_unmerging.isEmpty && deleting.isEmpty) return all;
+    return List.unmodifiable(
+      all.where(
+        (group) =>
+            !_unmerging.contains(group.id) &&
+            !deleting.contains('person:${group.id}'),
+      ),
+    );
+  }
+
   int get invalidGroupCount => _groupCollection.invalidCount;
+
+  // Group ids hidden while their delete waits for an earlier acknowledgement.
+  final _unmerging = <String>{};
+
+  /// Saves [group] (new or changed members). Cancels a removal of the same
+  /// group that is not staged yet, e.g. when a merge is undone. A change
+  /// while an earlier one awaits acknowledgement is coalesced by the replica.
+  Future<void> putGroup(PersonGroup group) async {
+    if (group.members.any((member) => member.accountId != client.userID)) {
+      throw ArgumentError('Invalid person group account');
+    }
+    final cancelled = _unmerging.remove(group.id);
+    try {
+      await put('person:${group.id}', group.toJson().cast<String, dynamic>());
+    } finally {
+      if (cancelled) notifyListeners();
+    }
+  }
+
+  /// Longest wait of [removeGroup] for the acknowledgement of an earlier
+  /// change of the same group (worker offline: the unmerge fails visibly).
+  @visibleForTesting
+  static Duration unmergeAcknowledgementWait = const Duration(seconds: 20);
+
+  /// Unmerges the person group [id]. Its source chats, messages and private
+  /// metadata (nickname, pins, rules) are kept. The group is hidden at once;
+  /// when an earlier change of it still awaits the worker's acknowledgement
+  /// (a merge that was just made), the delete is staged right after that
+  /// acknowledgement. The wait is memory-only and bounded by
+  /// [unmergeAcknowledgementWait]: without an acknowledgement the group is
+  /// shown again and this throws, so the user never believes an unmerge
+  /// happened that was not staged. Completes once the delete is staged or
+  /// the removal was cancelled by [putGroup].
+  Future<void> removeGroup(String id) async {
+    final key = 'person:$id';
+    if (!ready) throw StateError('Private encrypted sync is not connected');
+    if (!_unmerging.add(id)) return;
+    notifyListeners();
+    var staged = false;
+    final deadline = DateTime.now().add(unmergeAcknowledgementWait);
+    try {
+      while (pending.values.any((op) => op.entityId == key)) {
+        final remaining = deadline.difference(DateTime.now());
+        if (remaining <= Duration.zero) {
+          throw StateError('Unmerge awaits private sync; try again later');
+        }
+        try {
+          await changes.first.timeout(remaining);
+        } on TimeoutException {
+          throw StateError('Unmerge awaits private sync; try again later');
+        } on StateError {
+          return; // Disposed: nothing was staged.
+        }
+        if (_disposed || !_unmerging.contains(id)) return;
+      }
+      if (!values.containsKey(key)) return;
+      await delete(key);
+      staged = true;
+    } finally {
+      // A staged delete keeps the group hidden through its pending operation.
+      if (_unmerging.remove(id) && !staged) notifyListeners();
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;

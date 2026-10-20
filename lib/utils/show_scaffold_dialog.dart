@@ -3,9 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 Future<T?> showScaffoldDialog<T>({
@@ -19,11 +18,12 @@ Future<T?> showScaffoldDialog<T>({
   context: context,
   barrierColor: barrierColor,
   useSafeArea: false,
-  builder: FluffyThemes.isColumnMode(context)
+  builder: ChatLoomThemes.isColumnMode(context)
       ? (context) => Center(
           child: Container(
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(AppConfig.borderRadius),
+              borderRadius: NotionGlass.dialogRadius,
+              border: Border.all(color: context.notion.glass.border),
               color:
                   containerColor ?? Theme.of(context).scaffoldBackgroundColor,
             ),

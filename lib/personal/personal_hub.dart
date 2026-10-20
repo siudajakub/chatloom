@@ -3,27 +3,29 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/automatic_push.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/organization_page.dart';
+import 'package:chatloom/personal/person_merge.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/push_registration.dart';
+import 'package:chatloom/personal/scheduled_composer.dart';
+import 'package:chatloom/personal/storage/storage_failure.dart';
+import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/personal/ui/transcription_settings.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/background_push.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/notion_room_actions.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/automatic_push.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/organization_page.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/push_registration.dart';
-import 'package:fluffychat/personal/scheduled_composer.dart';
-import 'package:fluffychat/personal/storage/storage_failure.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_content.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/personal/ui/notion_settings_load.dart';
-import 'package:fluffychat/personal/ui/transcription_settings.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/background_push.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/notion_room_actions.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -536,65 +538,52 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
     }
   }
 
-  bool _canChange(String entity) =>
-      personal.ready &&
-      !personal.pending.values.any((op) => op.entityId == entity);
-
+  /// Merge from People settings: the picker needs at least two chats; the
+  /// first selected chat names the person (see [planMerge]).
   Future<void> merge() async {
     final owner = personal;
     if (!owner.ready) return;
-    final rooms = owner.client.rooms
-        .where(
-          (room) =>
-              room.membership == Membership.join &&
-              room.directChatMatrixID != null &&
-              !PersonalPrivacy.isJournal(room),
-        )
-        .toList();
-    final group = await Navigator.of(context).push<PersonGroup>(
-      MaterialPageRoute(
-        builder: (_) => _MergeSelectionPage(personal: owner, rooms: rooms),
-      ),
-    );
-    if (group == null ||
+    final picked = await showMergePicker(context, personal: owner);
+    if (picked == null ||
+        picked.length < 2 ||
         !mounted ||
         !identical(owner, personal) ||
         !identical(Matrix.of(context).client, owner.client))
       return;
-    await owner.put(
-      'person:${group.id}',
-      group.toJson().cast<String, dynamic>(),
-    );
+    final plan = planMerge(owner, [
+      for (final candidate in picked) ...candidate.sources,
+    ], anchor: picked.first.representative);
+    await applyMerge(owner, plan);
   }
 
   Future<void> _unmerge(PersonGroup group) async {
     final owner = personal;
-    final confirmed = await showNotionCustomDialog<bool>(
+    final confirmed = await showNotionConfirmDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Unmerge conversations?'),
-        content: const Text(
-          'The source conversations and their messages will be kept.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Unmerge'),
-          ),
-        ],
-      ),
+      title: 'Unmerge conversations?',
+      message:
+          'The source chats and their messages are kept and return to the inbox as separate chats.',
+      confirmLabel: 'Unmerge',
     );
-    if (confirmed != true ||
+    if (!confirmed ||
         !mounted ||
         !identical(owner, personal) ||
         !identical(Matrix.of(context).client, owner.client) ||
-        !_canChange('person:${group.id}'))
+        !owner.ready)
       return;
-    await owner.delete('person:${group.id}');
+    // Hidden at once; the delete may wait for a merge acknowledgement. If
+    // that never comes, the person returns and the user is told.
+    final messenger = ScaffoldMessenger.of(context);
+    unawaited(
+      owner.removeGroup(group.id).catchError((Object _) {
+        if (!mounted || !identical(owner, personal)) return;
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('The change was not saved. Check private sync.'),
+          ),
+        );
+      }),
+    );
   }
 
   @override
@@ -826,11 +815,7 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                       trailing: IconButton(
                         tooltip: 'Unmerge',
                         icon: const Icon(Icons.call_split),
-                        onPressed:
-                            personal.ready &&
-                                !personal.pending.values.any(
-                                  (op) => op.entityId == 'person:${group.id}',
-                                )
+                        onPressed: personal.ready
                             ? () => run(() => _unmerge(group))
                             : null,
                       ),
@@ -1001,101 +986,6 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
 /// Press feedback for a tappable Material [ListTile] row.
 Widget _pressable(Widget row) =>
     NotionPressable(scale: NotionMotion.pressRow, child: row);
-
-class _MergeSelectionPage extends StatefulWidget {
-  final PersonalClient personal;
-  final List<Room> rooms;
-  const _MergeSelectionPage({required this.personal, required this.rooms});
-  @override
-  State<_MergeSelectionPage> createState() => _MergeSelectionPageState();
-}
-
-class _MergeSelectionPageState extends State<_MergeSelectionPage> {
-  final _name = TextEditingController();
-  final _selected = <String>{};
-  @override
-  void dispose() {
-    _name.dispose();
-    super.dispose();
-  }
-
-  bool get _current =>
-      widget.personal.ready &&
-      identical(Matrix.of(context).client, widget.personal.client);
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      leading: const BackButton(),
-      title: const Text('Merge conversations'),
-      centerTitle: false,
-    ),
-    body: NotionSettingsBody(
-      withScrolling: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: _name,
-            decoration: const InputDecoration(labelText: 'Person name'),
-            onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Select at least two conversations. Each message keeps its original network.',
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: NotionEntranceScope(
-              child: ListView(
-                children: [
-                  for (final room in widget.rooms)
-                    NotionEntrance(
-                      key: ValueKey(room.id),
-                      playKey: room.id,
-                      rise: NotionMotion.riseList,
-                      child: CheckboxListTile(
-                        value: _selected.contains(room.id),
-                        title: Text(room.getLocalizedDisplayname()),
-                        subtitle: Text(PersonalClient.networkOf(room)),
-                        onChanged: !_current
-                            ? null
-                            : (value) => setState(() {
-                                value == true
-                                    ? _selected.add(room.id)
-                                    : _selected.remove(room.id);
-                              }),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: FilledButton(
-              onPressed:
-                  !_current || _selected.length < 2 || _name.text.trim().isEmpty
-                  ? null
-                  : () => Navigator.pop(
-                      context,
-                      PersonGroup(
-                        id: const Uuid().v4(),
-                        name: _name.text.trim(),
-                        members: widget.rooms
-                            .where((room) => _selected.contains(room.id))
-                            .map(widget.personal.ref)
-                            .toList(),
-                        defaultRoomId: _selected.first,
-                      ),
-                    ),
-              child: const Text('Merge conversations'),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
 
 class RoomPersonalButton extends StatelessWidget {
   final Room room;
