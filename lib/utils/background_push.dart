@@ -11,21 +11,21 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
 
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/main.dart';
+import 'package:chatloom/personal/automatic_push.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/personal/push_registration.dart';
+import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/widgets/chatloom_app.dart';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
 import 'package:fcm_shared_isolate/fcm_shared_isolate.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/main.dart';
-import 'package:fluffychat/personal/automatic_push.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/own_sender.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/push_diagnostics.dart';
-import 'package:fluffychat/personal/push_registration.dart';
-import 'package:fluffychat/utils/notification_background_handler.dart';
-import 'package:fluffychat/utils/push_helper.dart';
-import 'package:fluffychat/widgets/fluffy_chat_app.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -212,7 +212,7 @@ class BackgroundPush {
           await notificationTap(
             NotificationResponseJson.fromJsonString(message),
             clients: clients,
-            router: FluffyChatApp.router,
+            router: ChatLoomApp.router,
             l10n: l10n,
           );
         } catch (e, s) {
@@ -231,7 +231,7 @@ class BackgroundPush {
             await notificationTap(
               NotificationResponseJson.fromJsonString(message),
               clients: clients,
-              router: FluffyChatApp.router,
+              router: ChatLoomApp.router,
               l10n: l10n,
             );
           } catch (e, s) {
@@ -249,7 +249,7 @@ class BackgroundPush {
             await notificationTap(
               response,
               clients: clients,
-              router: FluffyChatApp.router,
+              router: ChatLoomApp.router,
               l10n: l10n,
             );
           } catch (_) {
@@ -343,7 +343,7 @@ class BackgroundPush {
       await notificationTap(
         response,
         clients: clients,
-        router: FluffyChatApp.router,
+        router: ChatLoomApp.router,
         l10n: l10n,
       );
     } catch (_) {
@@ -710,10 +710,7 @@ class BackgroundPush {
     await loadLocale();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (PlatformInfos.isAndroid) {
-        onFcmError?.call(
-          l10n!.noGoogleServicesWarning,
-          link: Uri.parse(AppConfig.enablePushTutorial),
-        );
+        onFcmError?.call(l10n!.noGoogleServicesWarning);
         return;
       }
       onFcmError?.call(l10n!.oopsPushError);

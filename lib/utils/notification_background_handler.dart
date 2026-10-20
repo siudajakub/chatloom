@@ -8,13 +8,13 @@ import 'dart:convert';
 import 'dart:isolate';
 import 'dart:ui';
 
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/notification_client_routing.dart';
+import 'package:chatloom/utils/push_helper.dart';
 import 'package:collection/collection.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/person_location.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/notification_client_routing.dart';
-import 'package:fluffychat/utils/push_helper.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:go_router/go_router.dart';
@@ -104,22 +104,22 @@ Future<void> notificationTapBackground(
       NotificationResponseType.selectedNotificationAction) {
     return;
   }
-  final action = FluffyChatNotificationActions.values.singleWhereOrNull(
+  final action = ChatLoomNotificationActions.values.singleWhereOrNull(
     (action) => action.name == notificationResponse.actionId,
   );
   // Dismiss needs no account; legacy mute never changes server push rules.
   if (action == null ||
-      action == FluffyChatNotificationActions.open ||
-      action == FluffyChatNotificationActions.enterCall ||
-      action == FluffyChatNotificationActions.dismiss ||
-      action == FluffyChatNotificationActions.mute) {
+      action == ChatLoomNotificationActions.open ||
+      action == ChatLoomNotificationActions.enterCall ||
+      action == ChatLoomNotificationActions.dismiss ||
+      action == ChatLoomNotificationActions.mute) {
     return;
   }
-  final payload = FluffyChatPushPayload.fromString(
+  final payload = ChatLoomPushPayload.fromString(
     notificationResponse.payload ?? '',
   );
   if (payload.roomId == null) return;
-  if (action == FluffyChatNotificationActions.reply &&
+  if (action == ChatLoomNotificationActions.reply &&
       (notificationResponse.input?.isEmpty ?? true)) {
     return;
   }
@@ -185,7 +185,7 @@ Future<void> notificationTap(
     'Notification action handler started',
     notificationResponse.notificationResponseType.name,
   );
-  final payload = FluffyChatPushPayload.fromString(
+  final payload = ChatLoomPushPayload.fromString(
     notificationResponse.payload ?? '',
   );
   if (payload.roomId == null) return;
@@ -233,15 +233,15 @@ Future<void> notificationTap(
         ),
       );
     case NotificationResponseType.selectedNotificationAction:
-      final actionType = FluffyChatNotificationActions.values.singleWhereOrNull(
+      final actionType = ChatLoomNotificationActions.values.singleWhereOrNull(
         (action) => action.name == notificationResponse.actionId,
       );
       if (actionType == null) {
         throw Exception('Selected notification with action but no action ID');
       }
       // The plugin already removed the notification; nothing is sent.
-      if (actionType == FluffyChatNotificationActions.dismiss ||
-          actionType == FluffyChatNotificationActions.mute) {
+      if (actionType == ChatLoomNotificationActions.dismiss ||
+          actionType == ChatLoomNotificationActions.mute) {
         return;
       }
       final roomId = payload.roomId;
@@ -258,12 +258,12 @@ Future<void> notificationTap(
         );
       }
       switch (actionType) {
-        case FluffyChatNotificationActions.markAsRead:
+        case ChatLoomNotificationActions.markAsRead:
           final readEvent = payload.eventId ?? room.lastEvent?.eventId;
           if (readEvent != null) {
             await PersonalPrivacy.markRead(room, readEvent, manual: true);
           }
-        case FluffyChatNotificationActions.reply:
+        case ChatLoomNotificationActions.reply:
           final input = notificationResponse.input;
           if (input == null || input.isEmpty) {
             throw Exception(
@@ -276,11 +276,11 @@ Future<void> notificationTap(
             parseCommands: false,
             displayPendingEvent: false,
           );
-        case FluffyChatNotificationActions.dismiss:
-        case FluffyChatNotificationActions.mute:
+        case ChatLoomNotificationActions.dismiss:
+        case ChatLoomNotificationActions.mute:
           // Handled above: never a receipt and never a server push rule.
           return;
-        case FluffyChatNotificationActions.open:
+        case ChatLoomNotificationActions.open:
           router?.go(
             notificationRoute(
               client,
@@ -289,7 +289,7 @@ Future<void> notificationTap(
               personGroupId: await personGroupIdForNotification(client, roomId),
             ),
           );
-        case FluffyChatNotificationActions.enterCall:
+        case ChatLoomNotificationActions.enterCall:
           router?.go('/rooms/$roomId?client=${client.clientName}&action=call');
       }
     case NotificationResponseType.notificationDismissed:
@@ -303,7 +303,7 @@ Future<void> notificationTap(
 String notificationRoute(
   Client client,
   String roomId,
-  FluffyChatPushPayload payload, {
+  ChatLoomPushPayload payload, {
   String? personGroupId,
 }) {
   if (client.getRoomById(roomId)?.membership == Membership.invite) {
@@ -324,7 +324,7 @@ String notificationRoute(
 
 /// `mute` is kept only so actions on old notifications parse; it no longer
 /// changes the account's server push rules (Personal Chat modes are private).
-enum FluffyChatNotificationActions {
+enum ChatLoomNotificationActions {
   markAsRead,
   reply,
   mute,

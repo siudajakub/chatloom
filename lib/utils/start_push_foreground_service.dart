@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:matrix/matrix_api_lite/utils/logs.dart';
@@ -92,7 +92,7 @@ abstract class ForegroundServices {
       }
       final result = await FlutterForegroundTask.startService(
         serviceTypes: [ForegroundServiceTypes.shortService],
-        notificationTitle: 'FluffyChat',
+        notificationTitle: AppConfig.appName,
         notificationText: l10n.loadingMessages,
         notificationIcon: NotificationIcon(metaDataName: 'ic_launcher'),
       );
