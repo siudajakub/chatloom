@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/personal/ui/notion_settings_adapter.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/personal/ui/notion_settings_adapter.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'settings.dart';
 

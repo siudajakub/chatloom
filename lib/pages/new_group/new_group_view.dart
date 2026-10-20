@@ -3,13 +3,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/new_group/new_group.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/new_group/new_group.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/layouts/login_scaffold.dart';
+import 'package:chatloom/widgets/layouts/max_width_body.dart';
 import 'package:material_ui/material_ui.dart';
 
 class NewGroupView extends StatelessWidget {

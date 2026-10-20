@@ -5,11 +5,11 @@
 
 import 'dart:math' as math;
 
-import 'package:fluffychat/pages/chat/chat_input_row.dart';
-import 'package:fluffychat/pages/chat/notion_conversation.dart';
-import 'package:fluffychat/pages/chat/recording_view_model.dart';
-import 'package:fluffychat/pages/chat/voice_record_button.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/pages/chat/chat_input_row.dart';
+import 'package:chatloom/pages/chat/notion_conversation.dart';
+import 'package:chatloom/pages/chat/recording_view_model.dart';
+import 'package:chatloom/pages/chat/voice_record_button.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Composer replacement while a voice message is being recorded.

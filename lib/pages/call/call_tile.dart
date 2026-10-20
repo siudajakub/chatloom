@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/avatar.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/avatar.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:convert';
 
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 

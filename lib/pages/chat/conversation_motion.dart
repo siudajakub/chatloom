@@ -1,4 +1,4 @@
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart' show kLongPressTimeout, kTouchSlop;
 import 'package:flutter/widgets.dart';
 

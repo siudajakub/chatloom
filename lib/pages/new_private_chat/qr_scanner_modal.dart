@@ -6,7 +6,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:fluffychat/l10n/l10n.dart';
+import 'package:chatloom/l10n/l10n.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:qr_code_scanner_plus/qr_code_scanner_plus.dart';
 

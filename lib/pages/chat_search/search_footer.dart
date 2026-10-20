@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/date_time_extension.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:material_ui/material_ui.dart';
 
 class SearchFooter extends StatelessWidget {

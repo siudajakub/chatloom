@@ -3,13 +3,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
-import 'package:fluffychat/personal/message_preview.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 

@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/pages/chat_search/chat_search_view.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/pages/chat_search/chat_search_view.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 

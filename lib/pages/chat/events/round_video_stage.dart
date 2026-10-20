@@ -3,8 +3,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:fluffychat/pages/chat/conversation_motion.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:video_player/video_player.dart';

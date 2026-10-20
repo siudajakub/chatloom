@@ -3,14 +3,14 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/ui/notion_settings_page.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
-import 'package:fluffychat/widgets/app_lock.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/ui/notion_settings_page.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:chatloom/widgets/app_lock.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

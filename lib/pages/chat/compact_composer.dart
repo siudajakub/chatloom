@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:math' as math;
 
-import 'package:fluffychat/personal/ui/notion_network_filter.dart';
-import 'package:fluffychat/personal/ui/notion_network_selector.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/personal/ui/notion_network_selector.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'composer_action_tray.dart';
 import 'conversation_motion.dart';

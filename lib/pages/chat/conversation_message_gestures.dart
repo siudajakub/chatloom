@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/semantics.dart';

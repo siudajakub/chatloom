@@ -3,16 +3,16 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/sign_in/view_model/model/public_homeserver_data.dart';
-import 'package:fluffychat/pages/sign_in/view_model/sign_in_view_model.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/utils/sign_in_flows/check_homeserver.dart';
-import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/view_model_builder.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/sign_in/view_model/model/public_homeserver_data.dart';
+import 'package:chatloom/pages/sign_in/view_model/sign_in_view_model.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/utils/sign_in_flows/check_homeserver.dart';
+import 'package:chatloom/widgets/layouts/login_scaffold.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/view_model_builder.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 

@@ -3,16 +3,16 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/bootstrap/view_model/bootstrap_view_model.dart';
-import 'package:fluffychat/pages/key_verification/key_verification_dialog.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/date_time_extension.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/device_extension.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/bootstrap/view_model/bootstrap_view_model.dart';
+import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/date_time_extension.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/device_extension.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/layouts/login_scaffold.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/encryption/utils/key_verification.dart';
 import 'package:matrix/matrix.dart';

@@ -3,12 +3,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/key_verification/key_verification_dialog.dart';
-import 'package:fluffychat/utils/beautify_string_extension.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/dialog_text_field.dart';
-import 'package:fluffychat/widgets/avatar.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
+import 'package:chatloom/utils/beautify_string_extension.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/dialog_text_field.dart';
+import 'package:chatloom/widgets/avatar.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 

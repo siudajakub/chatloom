@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:math' as math;
 
-import 'package:fluffychat/personal/encryption/key_recovery_stage.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/personal/encryption/key_recovery_stage.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Body of a bubble whose message this device cannot decrypt yet: what is

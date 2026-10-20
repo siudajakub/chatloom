@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Settings → Chats & organization → Voice messages & round videos.

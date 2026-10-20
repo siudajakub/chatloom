@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/pages/chat_details/chat_details.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_adapter.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/pages/chat_details/chat_details.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 
 class ChatDetailsView extends StatelessWidget {

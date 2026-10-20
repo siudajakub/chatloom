@@ -3,16 +3,16 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/bootstrap/view_model/bootstrap_view_model.dart';
-import 'package:fluffychat/pages/bootstrap/widgets/new_passphrase_view.dart';
-import 'package:fluffychat/pages/bootstrap/widgets/restore_bootstrap_view.dart';
-import 'package:fluffychat/pages/bootstrap/widgets/store_recovery_key_view.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/view_model_builder.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/bootstrap/view_model/bootstrap_view_model.dart';
+import 'package:chatloom/pages/bootstrap/widgets/new_passphrase_view.dart';
+import 'package:chatloom/pages/bootstrap/widgets/restore_bootstrap_view.dart';
+import 'package:chatloom/pages/bootstrap/widgets/store_recovery_key_view.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/layouts/login_scaffold.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/view_model_builder.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 

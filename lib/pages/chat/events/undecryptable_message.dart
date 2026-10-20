@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/pages/chat/events/waiting_message_view.dart';
-import 'package:fluffychat/personal/encryption/e2ee_health.dart';
-import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/pages/chat/events/waiting_message_view.dart';
+import 'package:chatloom/personal/encryption/e2ee_health.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:material_ui/material_ui.dart';

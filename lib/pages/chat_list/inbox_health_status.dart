@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/personal/encryption/e2ee_health.dart';
-import 'package:fluffychat/personal/ui/inbox_health_notice.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/personal/encryption/e2ee_health.dart';
+import 'package:chatloom/personal/ui/inbox_health_notice.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 

@@ -3,11 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/archive/archive.dart';
-import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/archive/archive.dart';
+import 'package:chatloom/pages/chat_list/chat_list_item.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/layouts/max_width_body.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
