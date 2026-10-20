@@ -55,9 +55,8 @@ class NotionIconButton extends StatelessWidget {
                 : scheme.surfaceContainerHighest.withValues(
                     alpha: scheme.surfaceContainerHighest.a * t,
                   ),
-            shape: const RoundedRectangleBorder(
-              borderRadius: NotionRadius.smAll,
-            ),
+            // A circle, like the dock's icons.
+            shape: NotionShapes.pill,
           ),
         ),
       ),
@@ -84,6 +83,7 @@ class NotionPropertyRow extends StatelessWidget {
 
   Widget _propertyRow(BuildContext context) => InkWell(
     onTap: onTap,
+    borderRadius: NotionRadius.rowAll,
     child: Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: LayoutBuilder(
@@ -153,6 +153,7 @@ class NotionListRow extends StatelessWidget {
 
   Widget _row(BuildContext context) => InkWell(
     onTap: onTap,
+    borderRadius: NotionRadius.rowAll,
     child: ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 52),
       child: Padding(
@@ -235,7 +236,7 @@ class NotionCompactChatHeader extends StatelessWidget {
     onTap: onDetails,
     child: InkWell(
       onTap: onDetails,
-      borderRadius: NotionRadius.smAll,
+      borderRadius: NotionRadius.pillAll,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 48),
         child: Row(

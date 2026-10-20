@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:material_ui/material_ui.dart';
 
+import 'notion_tokens.dart';
+
 /// Production fallback for absent/unavailable permitted photo avatars.
 class NotionInitialAvatar extends StatelessWidget {
   final String? name;
@@ -37,7 +39,7 @@ class NotionInitialAvatar extends StatelessWidget {
       color:
           backgroundColor ??
           Theme.of(context).colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(5),
+      borderRadius: NotionRadius.avatarAll,
     ),
     child: icon == null
         ? Text(

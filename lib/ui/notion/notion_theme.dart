@@ -82,11 +82,16 @@ abstract final class NotionTheme {
           scrim: c.scrim,
           shadow: c.scrim,
         );
-    const shape = RoundedRectangleBorder(borderRadius: NotionRadius.mdAll);
-    const smallShape = RoundedRectangleBorder(borderRadius: NotionRadius.smAll);
+    // The dock's language everywhere (DESIGN.md "Glass" and "Radius"):
+    // pills for controls, rounded blocks for content, larger radii and the
+    // glass hairline for floating overlays. Nothing is square.
+    const shape = NotionShapes.md;
+    const pill = NotionShapes.pill;
     final borderSide = BorderSide(color: border);
+    final hairline = BorderSide(color: tokens.glass.border);
+    final overlayShape = NotionShapes.lg.copyWith(side: hairline);
     OutlineInputBorder outline(Color color) => OutlineInputBorder(
-      borderRadius: NotionRadius.mdAll,
+      borderRadius: NotionRadius.fieldAll,
       borderSide: BorderSide(color: color),
     );
     final inputTheme = InputDecorationTheme(
@@ -98,7 +103,11 @@ abstract final class NotionTheme {
       errorStyle: t.caption.copyWith(color: c.danger),
       prefixIconColor: secondary,
       suffixIconColor: secondary,
-      contentPadding: const EdgeInsets.all(NotionSpace.sm),
+      // Wider than tall so text clears the pill ends.
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: NotionSpace.md,
+        vertical: NotionSpace.sm,
+      ),
       border: outline(border),
       enabledBorder: outline(border),
       disabledBorder: outline(border.withValues(alpha: .5)),
@@ -110,9 +119,10 @@ abstract final class NotionTheme {
       backgroundColor: WidgetStatePropertyAll(surface),
       surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
       elevation: const WidgetStatePropertyAll(2),
-      shape: WidgetStatePropertyAll(shape.copyWith(side: borderSide)),
+      shape: WidgetStatePropertyAll(overlayShape),
+      // Items sit inset so their rounded highlight clears the menu corners.
       padding: const WidgetStatePropertyAll(
-        EdgeInsets.symmetric(vertical: NotionSpace.xxs),
+        EdgeInsets.all(NotionSpace.xxs + 2),
       ),
     );
     WidgetStateProperty<Color?> selectedFill(Color on, Color off) =>
@@ -190,13 +200,15 @@ abstract final class NotionTheme {
         color: surface,
         elevation: 0,
         shape: shape,
+        clipBehavior: Clip.antiAlias,
         margin: EdgeInsets.zero,
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: background,
+        backgroundColor: surface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        shape: shape.copyWith(side: borderSide),
+        shape: NotionShapes.xl.copyWith(side: hairline),
+        clipBehavior: Clip.antiAlias,
         barrierColor: c.scrim,
         titleTextStyle: t.headline,
         contentTextStyle: t.callout,
@@ -208,23 +220,23 @@ abstract final class NotionTheme {
         ),
       ),
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: background,
-        modalBackgroundColor: background,
+        backgroundColor: surface,
+        modalBackgroundColor: surface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         modalElevation: 0,
         modalBarrierColor: c.scrim,
         dragHandleColor: border,
         dragHandleSize: const Size(36, 4),
-        shape: const RoundedRectangleBorder(
-          borderRadius: NotionRadius.sheetTop,
-        ),
+        shape: NotionShapes.sheet.copyWith(side: hairline),
+        clipBehavior: Clip.antiAlias,
       ),
       popupMenuTheme: PopupMenuThemeData(
         color: surface,
         surfaceTintColor: Colors.transparent,
         elevation: 2,
-        shape: shape.copyWith(side: borderSide),
+        shape: overlayShape,
+        menuPadding: const EdgeInsets.symmetric(vertical: NotionSpace.xxs + 2),
         textStyle: t.callout,
         labelTextStyle: WidgetStatePropertyAll(t.callout),
         iconColor: secondary,
@@ -239,6 +251,7 @@ abstract final class NotionTheme {
           textStyle: t.callout,
           minimumSize: const Size(0, 40),
           padding: const EdgeInsets.symmetric(horizontal: NotionSpace.sm),
+          shape: NotionShapes.row,
         ),
       ),
       dropdownMenuTheme: DropdownMenuThemeData(
@@ -261,7 +274,7 @@ abstract final class NotionTheme {
         selectedColor: text,
         selectedTileColor: selected,
         tileColor: Colors.transparent,
-        shape: const RoundedRectangleBorder(),
+        shape: NotionShapes.row,
         visualDensity: VisualDensity.standard,
       ),
       expansionTileTheme: ExpansionTileThemeData(
@@ -270,13 +283,11 @@ abstract final class NotionTheme {
         textColor: text,
         collapsedTextColor: text,
         tilePadding: NotionSpace.page,
-        shape: const RoundedRectangleBorder(),
-        collapsedShape: const RoundedRectangleBorder(),
+        shape: NotionShapes.row,
+        collapsedShape: NotionShapes.row,
       ),
       checkboxTheme: CheckboxThemeData(
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(3)),
-        ),
+        shape: NotionShapes.xs,
         side: BorderSide(color: secondary, width: 1.5),
         fillColor: selectedFill(text, Colors.transparent),
         checkColor: WidgetStatePropertyAll(background),
@@ -297,7 +308,8 @@ abstract final class NotionTheme {
           disabledForegroundColor: c.textTertiary,
           iconSize: NotionSize.iconMd,
           minimumSize: const Size.square(NotionSize.touchTarget),
-          shape: smallShape,
+          // A circle at the square touch target, like the dock's icons.
+          shape: pill,
         ),
       ),
       tabBarTheme: TabBarThemeData(
@@ -305,11 +317,14 @@ abstract final class NotionTheme {
         unselectedLabelColor: secondary,
         labelStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
         unselectedLabelStyle: t.callout,
-        indicatorColor: text,
-        indicatorSize: TabBarIndicatorSize.label,
+        // A pill behind the selected tab instead of an underline; it slides
+        // elastically between tabs.
+        indicator: NotionPillTabIndicator(color: selected),
+        indicatorSize: TabBarIndicatorSize.tab,
         indicatorAnimation: TabIndicatorAnimation.elastic,
-        dividerColor: border,
-        dividerHeight: NotionSize.border,
+        splashBorderRadius: NotionRadius.pillAll,
+        dividerColor: Colors.transparent,
+        dividerHeight: 0,
         overlayColor: WidgetStatePropertyAll(text.withValues(alpha: .04)),
       ),
       navigationBarTheme: NavigationBarThemeData(
@@ -318,7 +333,7 @@ abstract final class NotionTheme {
         elevation: 0,
         height: 64,
         indicatorColor: selected,
-        indicatorShape: shape,
+        indicatorShape: pill,
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => t.micro.copyWith(
             color: states.contains(WidgetState.selected) ? text : secondary,
@@ -335,7 +350,7 @@ abstract final class NotionTheme {
         backgroundColor: background,
         elevation: 0,
         indicatorColor: selected,
-        indicatorShape: shape,
+        indicatorShape: pill,
         selectedIconTheme: IconThemeData(color: text, size: NotionSize.iconMd),
         unselectedIconTheme: IconThemeData(
           color: secondary,
@@ -349,24 +364,28 @@ abstract final class NotionTheme {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         indicatorColor: selected,
-        indicatorShape: shape,
+        indicatorShape: pill,
       ),
       drawerTheme: DrawerThemeData(
         backgroundColor: background,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrimColor: c.scrim,
-        shape: const RoundedRectangleBorder(),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadiusDirectional.horizontal(
+            end: Radius.circular(NotionRadius.xl),
+          ),
+        ),
       ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
           color: c.text,
-          borderRadius: NotionRadius.smAll,
+          borderRadius: NotionRadius.lgAll,
         ),
         textStyle: t.caption.copyWith(color: background),
         padding: const EdgeInsets.symmetric(
-          horizontal: NotionSpace.xs,
-          vertical: NotionSpace.xxs,
+          horizontal: NotionSpace.sm,
+          vertical: NotionSpace.xxs + 1,
         ),
         waitDuration: const Duration(milliseconds: 500),
       ),
@@ -381,7 +400,7 @@ abstract final class NotionTheme {
           backgroundColor: selectedFill(selected, Colors.transparent),
           foregroundColor: selectedFill(text, secondary),
           side: WidgetStatePropertyAll(borderSide),
-          shape: const WidgetStatePropertyAll(shape),
+          shape: const WidgetStatePropertyAll(pill),
           textStyle: WidgetStatePropertyAll(t.callout),
           visualDensity: VisualDensity.standard,
         ),
@@ -393,7 +412,7 @@ abstract final class NotionTheme {
         focusElevation: 0,
         hoverElevation: 0,
         highlightElevation: 0,
-        shape: shape,
+        shape: pill,
         extendedTextStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
       ),
       sliderTheme: SliderThemeData(
@@ -408,7 +427,7 @@ abstract final class NotionTheme {
         backgroundColor: WidgetStatePropertyAll(surface),
         surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
         elevation: const WidgetStatePropertyAll(0),
-        shape: const WidgetStatePropertyAll(shape),
+        shape: const WidgetStatePropertyAll(pill),
         side: WidgetStatePropertyAll(borderSide),
         textStyle: WidgetStatePropertyAll(t.callout),
         hintStyle: WidgetStatePropertyAll(
@@ -416,7 +435,7 @@ abstract final class NotionTheme {
         ),
         constraints: const BoxConstraints(minHeight: 40),
         padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(horizontal: NotionSpace.sm),
+          EdgeInsets.symmetric(horizontal: NotionSpace.md),
         ),
       ),
       searchViewTheme: SearchViewThemeData(
@@ -426,6 +445,7 @@ abstract final class NotionTheme {
         dividerColor: border,
         headerTextStyle: t.callout,
         headerHintStyle: t.callout.copyWith(color: c.textTertiary),
+        shape: NotionShapes.xl,
       ),
       chipTheme: ChipThemeData(
         backgroundColor: surface,
@@ -434,8 +454,8 @@ abstract final class NotionTheme {
         labelStyle: t.footnote,
         showCheckmark: false,
         side: BorderSide.none,
-        shape: smallShape,
-        padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xxs),
+        shape: pill,
+        padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
       ),
       textSelectionTheme: TextSelectionThemeData(
         cursorColor: text,
@@ -450,7 +470,7 @@ abstract final class NotionTheme {
           disabledForegroundColor: c.textTertiary,
           textStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
           minimumSize: const Size(64, 40),
-          shape: shape,
+          shape: pill,
         ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
@@ -460,7 +480,7 @@ abstract final class NotionTheme {
           elevation: 0,
           textStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
           minimumSize: const Size(64, 40),
-          shape: shape,
+          shape: pill,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -469,20 +489,22 @@ abstract final class NotionTheme {
           side: borderSide,
           textStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
           minimumSize: const Size(64, 40),
-          shape: shape,
+          shape: pill,
         ),
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: text,
           textStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
-          shape: shape,
+          shape: pill,
         ),
       ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
         color: text,
         linearTrackColor: border,
         circularTrackColor: Colors.transparent,
+        borderRadius: NotionRadius.pillAll,
+        strokeCap: StrokeCap.round,
       ),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: surface,
@@ -490,8 +512,60 @@ abstract final class NotionTheme {
         actionTextColor: text,
         behavior: SnackBarBehavior.floating,
         elevation: 0,
-        shape: shape.copyWith(side: borderSide),
+        // A floating rounded block with the dock's hairline and inset.
+        shape: overlayShape,
+        insetPadding: const EdgeInsets.fromLTRB(
+          NotionGlass.floatingInset,
+          NotionSpace.xxs,
+          NotionGlass.floatingInset,
+          NotionSpace.sm,
+        ),
       ),
+    );
+  }
+}
+
+/// The selected-tab pill: a rounded fill inset from the tab bounds, so tabs
+/// read like the dock's segments instead of an underline.
+class NotionPillTabIndicator extends Decoration {
+  final Color color;
+  final EdgeInsets inset;
+
+  const NotionPillTabIndicator({
+    required this.color,
+    this.inset = const EdgeInsets.symmetric(
+      horizontal: NotionSpace.xxs,
+      vertical: NotionSpace.xxs + 2,
+    ),
+  });
+
+  @override
+  BoxPainter createBoxPainter([VoidCallback? onChanged]) =>
+      _PillTabPainter(this, onChanged);
+
+  @override
+  bool operator ==(Object other) =>
+      other is NotionPillTabIndicator &&
+      other.color == color &&
+      other.inset == inset;
+
+  @override
+  int get hashCode => Object.hash(color, inset);
+}
+
+class _PillTabPainter extends BoxPainter {
+  final NotionPillTabIndicator decoration;
+  _PillTabPainter(this.decoration, super.onChanged);
+
+  @override
+  void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
+    final size = configuration.size;
+    if (size == null || size.isEmpty) return;
+    final rect = decoration.inset.deflateRect(offset & size);
+    if (rect.isEmpty) return;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, Radius.circular(rect.shortestSide / 2)),
+      Paint()..color = decoration.color,
     );
   }
 }

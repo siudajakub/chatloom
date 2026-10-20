@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Golden references for the Notion design-system primitives (DESIGN.md).
 // Run and update through scripts/verify-notion-ui.py so fonts match.
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/pages/chat/conversation_grouping.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_grouping.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -136,11 +136,7 @@ Widget _bubbles({Color? page, Color? incoming, Color? outgoing}) => Builder(
                 caption: 'Replied to Anna',
               ),
             ),
-            msg(
-              'szkoda',
-              out: true,
-              position: ConversationGroupPosition.last,
-            ),
+            msg('szkoda', out: true, position: ConversationGroupPosition.last),
             msg(
               'spokojnie, wieczorem zrobimy kolację i obejrzymy ten film, '
               'o którym mówiłeś',
@@ -248,25 +244,20 @@ Widget _dialog() => const Scaffold(
   ),
 );
 
-Widget _sheet() => Builder(
-  builder: (context) => Scaffold(
-    body: Align(
-      alignment: Alignment.bottomCenter,
-      child: Material(
-        color: context.notion.colors.background,
-        shape: RoundedRectangleBorder(
-          borderRadius: NotionRadius.sheetTop,
-          side: BorderSide(color: context.notion.colors.border),
-        ),
-        child: const NotionSheet(
-          title: 'Send from',
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              NotionListRow(title: 'Signal', subtitle: '+48 ••• 21'),
-              NotionListRow(title: 'WhatsApp', subtitle: 'Unavailable'),
-            ],
-          ),
+Widget _sheet() => const Scaffold(
+  body: Align(
+    alignment: Alignment.bottomCenter,
+    // As showNotionSheet presents it: a glass panel (opaque here, no route).
+    child: NotionGlassPanel(
+      borderRadius: NotionGlass.sheetRadius,
+      child: NotionSheet(
+        title: 'Send from',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NotionListRow(title: 'Signal', subtitle: '+48 ••• 21'),
+            NotionListRow(title: 'WhatsApp', subtitle: 'Unavailable'),
+          ],
         ),
       ),
     ),
@@ -510,6 +501,94 @@ Widget _glass(NotionGlassMode mode) => NotionGlassScope(
   ),
 );
 
+/// The dock's language on overlays: a glass menu panel and glass pills over
+/// scrolled content, forced on.
+Widget _glassOverlays() => NotionGlassScope(
+  mode: NotionGlassMode.on,
+  child: Scaffold(
+    body: Stack(
+      children: [
+        ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            for (var i = 0; i < 10; i++)
+              NotionListRow(
+                leading: NotionInitialAvatar(name: 'Row $i', size: 24),
+                title: 'Conversation number $i',
+                subtitle: 'Content behind the glass overlays',
+              ),
+          ],
+        ),
+        Positioned(
+          right: NotionSpace.md,
+          bottom: 96,
+          width: 220,
+          child: NotionGlassPanel(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: NotionSpace.xxs + 2),
+                NotionGlassMenuRow(
+                  leading: const Icon(Icons.chat_bubble_outline),
+                  title: 'Main list',
+                  selected: true,
+                  trailing: const Icon(Icons.check, size: NotionSize.icon),
+                  onTap: _noop,
+                ),
+                const NotionGlassMenuRow(
+                  leading: Icon(Icons.group_outlined),
+                  title: 'Groups',
+                  onTap: _noop,
+                ),
+                const NotionGlassDivider(vertical: false),
+                const NotionGlassMenuRow(
+                  leading: Icon(Icons.tune),
+                  title: 'Manage networks',
+                  onTap: _noop,
+                ),
+                const SizedBox(height: NotionSpace.xxs + 2),
+              ],
+            ),
+          ),
+        ),
+        const Positioned(
+          left: NotionSpace.md,
+          right: NotionSpace.md,
+          bottom: NotionSpace.md,
+          child: Row(
+            children: [
+              NotionGlassPill(
+                icon: Icons.settings_outlined,
+                tooltip: 'Settings',
+                blur: true,
+                onPressed: _noop,
+              ),
+              SizedBox(width: NotionSpace.xs),
+              NotionGlassPill(
+                icon: Icons.search,
+                label: 'Search',
+                blur: true,
+                onPressed: _noop,
+              ),
+              SizedBox(width: NotionSpace.xs),
+              Expanded(
+                child: NotionGlassPill(
+                  icon: Icons.hub_outlined,
+                  label: 'All networks',
+                  selected: true,
+                  trailing: Icon(Icons.keyboard_arrow_down, size: 21),
+                  onPressed: _noop,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  ),
+);
+
 void main() {
   setUpAll(() async {
     final loader = FontLoader('Roboto');
@@ -676,6 +755,92 @@ void main() {
       size: const Size(390, 420),
     ),
   );
+  testWidgets(
+    'glass overlays',
+    (tester) => _golden(tester, 'glass-overlays-dark', _glassOverlays()),
+  );
+  testWidgets(
+    'glass overlays light',
+    (tester) => _golden(
+      tester,
+      'glass-overlays-light',
+      _glassOverlays(),
+      brightness: Brightness.light,
+    ),
+  );
+  testWidgets('overlay glass blurs only once its route settled', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      NotionGlassScope(
+        mode: NotionGlassMode.on,
+        child: MaterialApp(
+          theme: NotionTheme.build(Brightness.dark),
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showNotionDialog<void>(
+                  context: context,
+                  title: 'Glass dialog',
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    Finder blur() => find.descendant(
+      of: find.byType(NotionDialog),
+      matching: find.byType(BackdropFilter),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(find.byType(NotionDialog), findsOneWidget);
+    expect(blur(), findsNothing, reason: 'no blur while the dialog grows');
+    await tester.pumpAndSettle();
+    expect(blur(), findsOneWidget, reason: 'blur once settled');
+    Navigator.of(tester.element(find.byType(NotionDialog))).pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 30));
+    expect(blur(), findsNothing, reason: 'no blur while it leaves');
+    await tester.pumpAndSettle();
+    expect(find.byType(NotionDialog), findsNothing);
+  });
+  testWidgets('nothing in the theme is square', (tester) async {
+    for (final brightness in Brightness.values) {
+      final theme = NotionTheme.build(brightness);
+      bool rounded(ShapeBorder? shape) =>
+          shape is StadiumBorder ||
+          shape is CircleBorder ||
+          (shape is RoundedRectangleBorder &&
+              shape.borderRadius != BorderRadius.zero);
+      expect(rounded(theme.cardTheme.shape), isTrue);
+      expect(rounded(theme.dialogTheme.shape), isTrue);
+      expect(rounded(theme.popupMenuTheme.shape), isTrue);
+      expect(rounded(theme.snackBarTheme.shape), isTrue);
+      expect(rounded(theme.listTileTheme.shape), isTrue);
+      expect(rounded(theme.chipTheme.shape), isTrue);
+      expect(rounded(theme.floatingActionButtonTheme.shape), isTrue);
+      expect(rounded(theme.navigationBarTheme.indicatorShape), isTrue);
+      expect(rounded(theme.checkboxTheme.shape), isTrue);
+      for (final style in [
+        theme.filledButtonTheme.style,
+        theme.outlinedButtonTheme.style,
+        theme.textButtonTheme.style,
+        theme.elevatedButtonTheme.style,
+        theme.iconButtonTheme.style,
+      ]) {
+        expect(style!.shape!.resolve({}), isA<StadiumBorder>());
+      }
+      final input = theme.inputDecorationTheme.enabledBorder;
+      expect(
+        (input! as OutlineInputBorder).borderRadius,
+        NotionRadius.fieldAll,
+      );
+    }
+  });
   testWidgets('glass auto falls back without Impeller', (tester) async {
     late bool enabled;
     await tester.pumpWidget(

@@ -23,31 +23,81 @@ abstract final class NotionSpace {
   static const EdgeInsets sheet = EdgeInsets.fromLTRB(lg, xs, lg, xl);
 }
 
-/// Corner radius scale.
+/// Corner radius scale: the rounded language of the floating dock.
+///
+/// Nothing in the app is square: the smallest radius is [xs]. Prefer the
+/// bounded radii ([lg], [xl], [field]) over [pill] for anything that may grow
+/// taller than one line; a radius larger than half the height is drawn as a
+/// pill anyway, so a one-line control still reads as a capsule.
 abstract final class NotionRadius {
-  /// Avatars, icon buttons, inline chips.
-  static const double sm = 5;
+  /// Checkboxes, inline code, thin tracks. The minimum radius in the app.
+  static const double xs = 6;
 
-  /// Cards, inputs, buttons, menus, dialogs, snackbars.
-  static const double md = 7;
+  /// Small thumbnails, tags, quote thumbnails, inline media.
+  static const double sm = 10;
 
-  /// Bottom sheets and large media.
-  static const double lg = 12;
+  /// Cards, callouts, multi-line inputs, list selection highlights, media.
+  static const double md = 16;
 
-  /// Badges, toggles and fully rounded indicators.
+  /// Menus, popovers, snackbars, tooltips, large media.
+  static const double lg = 20;
+
+  /// Dialogs and the top corners of bottom sheets.
+  static const double xl = 28;
+
+  /// Badges, toggles, buttons, chips, the dock and fully rounded indicators.
   static const double pill = 999;
 
+  /// Avatars are circles.
+  static const double avatar = pill;
+
+  static const BorderRadius xsAll = BorderRadius.all(Radius.circular(xs));
   static const BorderRadius smAll = BorderRadius.all(Radius.circular(sm));
   static const BorderRadius mdAll = BorderRadius.all(Radius.circular(md));
   static const BorderRadius lgAll = BorderRadius.all(Radius.circular(lg));
+  static const BorderRadius xlAll = BorderRadius.all(Radius.circular(xl));
   static const BorderRadius pillAll = BorderRadius.all(Radius.circular(pill));
+  static const BorderRadius avatarAll = pillAll;
+
+  /// Selected/pressed row highlight (inbox rows, settings categories, menu
+  /// items): a rounded block, never a full-bleed rectangle.
+  static const BorderRadius rowAll = mdAll;
 
   /// Composer field: a pill at one line that keeps soft corners (instead of
-  /// round ends) when the editor grows to several lines.
+  /// round ends) when the editor grows to several lines. Also every text
+  /// input (theme `InputDecoration`).
   static const double field = 26;
   static const BorderRadius fieldAll = BorderRadius.all(Radius.circular(field));
   static const BorderRadius sheetTop = BorderRadius.vertical(
-    top: Radius.circular(lg),
+    top: Radius.circular(xl),
+  );
+}
+
+/// The shapes that go with [NotionRadius]; use them for `shape:` arguments
+/// instead of a bare `RoundedRectangleBorder()` (which is square).
+abstract final class NotionShapes {
+  /// Buttons, chips, icon buttons (a circle when square), segmented buttons.
+  static const OutlinedBorder pill = StadiumBorder();
+  static const OutlinedBorder xs = RoundedRectangleBorder(
+    borderRadius: NotionRadius.xsAll,
+  );
+  static const OutlinedBorder sm = RoundedRectangleBorder(
+    borderRadius: NotionRadius.smAll,
+  );
+  static const OutlinedBorder md = RoundedRectangleBorder(
+    borderRadius: NotionRadius.mdAll,
+  );
+  static const OutlinedBorder lg = RoundedRectangleBorder(
+    borderRadius: NotionRadius.lgAll,
+  );
+  static const OutlinedBorder xl = RoundedRectangleBorder(
+    borderRadius: NotionRadius.xlAll,
+  );
+  static const OutlinedBorder row = RoundedRectangleBorder(
+    borderRadius: NotionRadius.rowAll,
+  );
+  static const OutlinedBorder sheet = RoundedRectangleBorder(
+    borderRadius: NotionRadius.sheetTop,
   );
 }
 
@@ -412,8 +462,11 @@ class NotionTypography {
   }
 }
 
-/// Glass chrome values (DESIGN.md "Glass"). Only for the fixed bars:
-/// header, floating dock, composer. Never for rows, bubbles, cards, dialogs.
+/// Glass values (DESIGN.md "Glass"): the language of the floating dock.
+///
+/// Real blur is for fixed chrome (header, dock, composer) and settled
+/// overlays (menus, popovers, dialogs, sheets). Anything inside a scrolling
+/// list uses the opaque roles plus the [border] hairline instead.
 @immutable
 class NotionGlass {
   /// Translucent fill of header and composer bars (background ~60%).
@@ -422,26 +475,48 @@ class NotionGlass {
   /// Translucent fill of the floating dock (surface ~58%).
   final Color dockTint;
 
-  /// Hairline drawn around the dock and under translucent bars.
+  /// Hairline drawn around the dock, overlays and under translucent bars.
   final Color border;
 
   /// Gaussian blur applied to the content behind the bar.
   final double blurSigma;
+
+  final Color? _overlayTint;
 
   const NotionGlass({
     required this.tint,
     required this.dockTint,
     required this.border,
     this.blurSigma = 18,
-  });
+    // A named parameter cannot be private; the getter supplies the fallback.
+    Color? overlayTint,
+    // ignore: prefer_initializing_formals
+  }) : _overlayTint = overlayTint;
+
+  /// Fill of menus, popovers, dialogs and sheets: the dock tone, denser so
+  /// text stays readable over any content (surface ~84% dark, ~90% light).
+  Color get overlayTint => _overlayTint ?? dockTint.withValues(alpha: .86);
 
   /// Floating dock radius.
   static const BorderRadius dockRadius = NotionRadius.pillAll;
+
+  /// Menus and popovers (the network selector).
+  static const BorderRadius panelRadius = NotionRadius.lgAll;
+
+  /// Dialogs.
+  static const BorderRadius dialogRadius = NotionRadius.xlAll;
+
+  /// Bottom sheets (top corners only).
+  static const BorderRadius sheetRadius = NotionRadius.sheetTop;
+
+  /// Distance of floating glass (dock, snackbars, pills) from screen edges.
+  static const double floatingInset = NotionSpace.md;
 
   static const dark = NotionGlass(
     tint: Color(0x99191919),
     dockTint: Color(0x94252525),
     border: Color(0x1AFFFFFF),
+    overlayTint: Color(0xD6252525),
   );
 
   /// Light paper needs a denser fill (~72%) to keep text contrast.
@@ -449,6 +524,7 @@ class NotionGlass {
     tint: Color(0xB8FAF9F6),
     dockTint: Color(0xB8F0EFEB),
     border: Color(0x14000000),
+    overlayTint: Color(0xE6F0EFEB),
   );
 
   static NotionGlass lerp(NotionGlass a, NotionGlass b, double t) =>
@@ -457,6 +533,7 @@ class NotionGlass {
         dockTint: Color.lerp(a.dockTint, b.dockTint, t)!,
         border: Color.lerp(a.border, b.border, t)!,
         blurSigma: a.blurSigma + (b.blurSigma - a.blurSigma) * t,
+        overlayTint: Color.lerp(a.overlayTint, b.overlayTint, t),
       );
 }
 
@@ -494,11 +571,15 @@ class NotionTokens extends ThemeExtension<NotionTokens> {
   }
 
   @override
-  NotionTokens copyWith({NotionColors? colors, NotionTypography? typography}) =>
-      NotionTokens(
-        colors: colors ?? this.colors,
-        typography: typography ?? (colors == null ? this.typography : null),
-      );
+  NotionTokens copyWith({
+    NotionColors? colors,
+    NotionTypography? typography,
+    NotionGlass? glass,
+  }) => NotionTokens(
+    colors: colors ?? this.colors,
+    typography: typography ?? (colors == null ? this.typography : null),
+    glass: glass ?? this.glass,
+  );
 
   @override
   NotionTokens lerp(covariant NotionTokens? other, double t) {
@@ -519,7 +600,7 @@ class NotionTokens extends ThemeExtension<NotionTokens> {
   static const secondary = Color(0xFFAAAAA5);
   static const cover = Color(0xFF33312B);
   static const double inset = NotionSpace.inset;
-  static const double avatarRadius = NotionRadius.sm;
+  static const double avatarRadius = NotionRadius.avatar;
   static const double radius = NotionRadius.md;
   static const double headerHeight = NotionSize.headerHeight;
   static const double touchTarget = NotionSize.touchTarget;

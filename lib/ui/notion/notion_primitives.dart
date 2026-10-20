@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'notion_entrance.dart';
+import 'notion_glass.dart';
 import 'notion_modal_routes.dart';
 import 'notion_motion.dart';
 import 'notion_pressable.dart';
@@ -54,35 +55,44 @@ class NotionScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.notion;
+    // A list page scrolls under a glass header (DESIGN.md "Glass"); a custom
+    // [body] keeps the opaque header and is laid out below it.
+    final glassHeader = body == null;
     final content =
         body ??
-        ListView(
-          key: scrollKey,
-          padding: const EdgeInsets.fromLTRB(
-            NotionSpace.inset,
-            NotionSpace.xs,
-            NotionSpace.inset,
-            NotionSpace.xxl,
+        Builder(
+          // Inside the Scaffold the top padding includes the header.
+          builder: (context) => ListView(
+            key: scrollKey,
+            padding: EdgeInsets.fromLTRB(
+              NotionSpace.inset,
+              NotionSpace.xs + MediaQuery.paddingOf(context).top,
+              NotionSpace.inset,
+              NotionSpace.xxl,
+            ),
+            children: [
+              if (pageTitle != null)
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: NotionSpace.md,
+                    bottom: NotionSpace.xl,
+                  ),
+                  child: Semantics(
+                    header: true,
+                    child: Text(pageTitle!, style: tokens.typography.title),
+                  ),
+                ),
+              ...children!,
+            ],
           ),
-          children: [
-            if (pageTitle != null)
-              Padding(
-                padding: const EdgeInsets.only(
-                  top: NotionSpace.md,
-                  bottom: NotionSpace.xl,
-                ),
-                child: Semantics(
-                  header: true,
-                  child: Text(pageTitle!, style: tokens.typography.title),
-                ),
-              ),
-            ...children!,
-          ],
         );
     return Scaffold(
+      extendBodyBehindAppBar: glassHeader,
       appBar: AppBar(
         toolbarHeight: NotionSize.headerHeight,
         automaticallyImplyLeading: false,
+        backgroundColor: glassHeader ? Colors.transparent : null,
+        flexibleSpace: glassHeader ? const NotionGlassBar() : null,
         leading: onBack == null
             ? null
             : IconButton(
@@ -303,11 +313,19 @@ class NotionDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final typography = context.notion.typography;
+    // A glass panel (dock tint + hairline, blur once the route settles) in
+    // place of the opaque Material dialog surface.
     return Dialog(
       insetPadding: const EdgeInsets.all(NotionSpace.xl),
+      backgroundColor: Colors.transparent,
+      shape: const RoundedRectangleBorder(
+        borderRadius: NotionGlass.dialogRadius,
+      ),
+      clipBehavior: Clip.none,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: NotionSize.dialogMaxWidth),
-        child: Padding(
+        child: NotionGlassPanel(
+          borderRadius: NotionGlass.dialogRadius,
           padding: NotionSpace.dialog,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -462,7 +480,15 @@ Future<T?> showNotionSheet<T>({
   showDragHandle: false,
   sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
   constraints: const BoxConstraints(maxWidth: NotionSize.contentMaxWidth),
-  builder: (context) => NotionSheet(title: title, child: builder(context)),
+  // The sheet is a glass panel: it blurs once settled and paints the opaque
+  // tint while it slides or is dragged.
+  backgroundColor: Colors.transparent,
+  elevation: 0,
+  shape: NotionShapes.sheet,
+  builder: (context) => NotionGlassPanel(
+    borderRadius: NotionGlass.sheetRadius,
+    child: NotionSheet(title: title, child: builder(context)),
+  ),
 );
 
 /// Centred placeholder for empty lists, missing content and soft errors.

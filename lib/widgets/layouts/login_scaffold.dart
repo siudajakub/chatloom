@@ -3,15 +3,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:particles_network/particles_network.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 
 class LoginScaffold extends StatelessWidget {
   final Widget body;
@@ -31,7 +29,7 @@ class LoginScaffold extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isMobileMode = !FluffyThemes.isColumnModeByWidth(
+        final isMobileMode = !ChatLoomThemes.isColumnModeByWidth(
           constraints.maxWidth,
         );
         if (isMobileMode) {
@@ -128,18 +126,8 @@ class _PrivacyButtons extends StatelessWidget {
         child: Row(
           mainAxisAlignment: mainAxisAlignment,
           children: [
-            TextButton(
-              onPressed: () => launchUrlString(AppSettings.website.value),
-              child: Text(L10n.of(context).website, style: shadowTextStyle),
-            ),
-            TextButton(
-              onPressed: () => launchUrlString(AppConfig.supportUrl),
-              child: Text(L10n.of(context).help, style: shadowTextStyle),
-            ),
-            TextButton(
-              onPressed: () => launchUrlString(AppSettings.privacyPolicy.value),
-              child: Text(L10n.of(context).privacy, style: shadowTextStyle),
-            ),
+            // ChatLoom has no website, help desk or privacy page of its own;
+            // upstream FluffyChat links would be misleading here.
             TextButton(
               onPressed: () => PlatformInfos.showDialog(context),
               child: Text(L10n.of(context).about, style: shadowTextStyle),

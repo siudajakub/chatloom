@@ -3,19 +3,19 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/pages/chat/compact_composer.dart';
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/pages/chat/notion_conversation.dart';
-import 'package:fluffychat/pages/chat/voice_record_button.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_page.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_row.dart';
-import 'package:fluffychat/personal/ui/notion_settings_page.dart';
-import 'package:fluffychat/personal/ui/notion_transcribe_button.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
+import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/notion_conversation.dart';
+import 'package:chatloom/pages/chat/voice_record_button.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
+import 'package:chatloom/personal/ui/notion_inbox_page.dart';
+import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
+import 'package:chatloom/personal/ui/notion_inbox_row.dart';
+import 'package:chatloom/personal/ui/notion_settings_page.dart';
+import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/layouts/two_column_layout.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -42,15 +42,20 @@ Widget _avatar(String name, [double size = 40]) {
           ? const Rect.fromLTWH(101, 284, 68, 70)
           : const Rect.fromLTWH(102, 399, 67, 70),
       Size.square(size),
+      borderRadius: NotionRadius.avatarAll,
     );
   }
   return NotionInitialAvatar(name: name, size: size);
 }
 
-Widget _referencePhoto(Rect crop, Size size) {
+Widget _referencePhoto(
+  Rect crop,
+  Size size, {
+  BorderRadius borderRadius = NotionRadius.smAll,
+}) {
   final scale = math.max(size.width / crop.width, size.height / crop.height);
   return ClipRRect(
-    borderRadius: BorderRadius.circular(5),
+    borderRadius: borderRadius,
     child: SizedBox.fromSize(
       size: size,
       child: Stack(

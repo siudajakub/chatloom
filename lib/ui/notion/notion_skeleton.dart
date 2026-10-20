@@ -61,7 +61,7 @@ class NotionSkeleton extends StatelessWidget {
             highlightColor: colors.selected,
             duration: shimmerPeriod,
           );
-    const radius = TextBoneBorderRadius(NotionRadius.smAll);
+    const radius = TextBoneBorderRadius(NotionRadius.pillAll);
     if (_sliver) {
       return Skeletonizer.sliver(
         enabled: enabled,
