@@ -3,7 +3,7 @@
 // consults the app's own-sender resolver).
 import 'dart:async';
 
-import 'package:fluffychat/personal/notification_eligibility.dart';
+import 'package:chatloom/personal/notification_eligibility.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';

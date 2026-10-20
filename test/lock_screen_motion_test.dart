@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/widgets/app_lock.dart';
-import 'package:fluffychat/widgets/lock_screen.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/app_lock.dart';
+import 'package:chatloom/widgets/lock_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 

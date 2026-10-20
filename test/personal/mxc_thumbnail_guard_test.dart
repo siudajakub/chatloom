@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

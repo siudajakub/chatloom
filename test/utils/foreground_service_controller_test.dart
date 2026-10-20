@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/utils/foreground_service_controller.dart';
+import 'package:chatloom/utils/foreground_service_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
-import 'package:fluffychat/personal/ui/notion_chat_details_notifications.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 enum FixtureNotification { notify, mentionsOnly, dontNotify }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Fictional offline fixtures; no account, storage or network.
-import 'package:fluffychat/personal/message_preview.dart';
-import 'package:fluffychat/personal/own_sender.dart';
+import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/personal/own_sender.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show roundMessageMarker;

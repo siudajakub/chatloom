@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Golden references for undecryptable messages and the inbox encryption
 // notice (fictional data). Run and update through scripts/verify-notion-ui.py.
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/pages/chat/conversation_grouping.dart';
-import 'package:fluffychat/pages/chat/events/waiting_message_view.dart';
-import 'package:fluffychat/pages/chat/undecryptable_chat_hint.dart';
-import 'package:fluffychat/personal/encryption/key_recovery_stage.dart';
-import 'package:fluffychat/personal/ui/inbox_health_notice.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_grouping.dart';
+import 'package:chatloom/pages/chat/events/waiting_message_view.dart';
+import 'package:chatloom/pages/chat/undecryptable_chat_hint.dart';
+import 'package:chatloom/personal/encryption/key_recovery_stage.dart';
+import 'package:chatloom/personal/ui/inbox_health_notice.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';

@@ -2,9 +2,9 @@
 // Golden references for the inline round video states (fictional data).
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/pages/chat/events/round_video_view.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
+import 'package:chatloom/pages/chat/events/round_video_view.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';

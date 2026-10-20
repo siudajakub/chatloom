@@ -2,9 +2,9 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/storage/personal_store.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/storage/personal_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 import 'package:matrix/src/utils/cached_stream_controller.dart';

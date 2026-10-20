@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

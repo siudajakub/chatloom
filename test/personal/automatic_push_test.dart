@@ -2,8 +2,8 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:fluffychat/personal/automatic_push.dart';
-import 'package:fluffychat/personal/push_registration.dart';
+import 'package:chatloom/personal/automatic_push.dart';
+import 'package:chatloom/personal/push_registration.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';

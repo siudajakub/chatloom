@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:fluffychat/pages/chat/events/round_video_view.dart';
+import 'package:chatloom/pages/chat/events/round_video_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 

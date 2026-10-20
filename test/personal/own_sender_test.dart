@@ -4,8 +4,8 @@
 // Own-ghost hardening: bridge declarations count only when sent by the joined
 // bridge bot in a joined room, weak (DM-structure) evidence stays in its room
 // and never suppresses a notification or a mention.
-import 'package:fluffychat/personal/notification_eligibility.dart';
-import 'package:fluffychat/personal/own_sender.dart';
+import 'package:chatloom/personal/notification_eligibility.dart';
+import 'package:chatloom/personal/own_sender.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';

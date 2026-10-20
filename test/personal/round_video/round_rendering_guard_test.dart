@@ -1,9 +1,9 @@
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/pages/chat/events/message_content.dart';
-import 'package:fluffychat/pages/chat/events/round_video_bridge_message.dart';
-import 'package:fluffychat/pages/chat/events/round_video_message.dart';
-import 'package:fluffychat/pages/chat/events/video_player.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/events/message_content.dart';
+import 'package:chatloom/pages/chat/events/round_video_bridge_message.dart';
+import 'package:chatloom/pages/chat/events/round_video_message.dart';
+import 'package:chatloom/pages/chat/events/video_player.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

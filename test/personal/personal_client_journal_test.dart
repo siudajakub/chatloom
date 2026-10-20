@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:math';
 
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/storage/personal_store.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/storage/personal_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/encryption.dart';
 import 'package:matrix/encryption/utils/session_key.dart';

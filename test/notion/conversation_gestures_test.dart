@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:fluffychat/pages/chat/conversation_message_gestures.dart';
-import 'package:fluffychat/pages/chat/conversation_motion.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

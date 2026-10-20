@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/personal/push_diagnostics.dart';
-import 'package:fluffychat/personal/ui/push_diagnostics_page.dart';
-import 'package:fluffychat/utils/background_push.dart';
+import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/personal/ui/push_diagnostics_page.dart';
+import 'package:chatloom/utils/background_push.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/personal_client.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/personal_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart'

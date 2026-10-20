@@ -4,9 +4,9 @@
 // source releases the lease. Fictional offline fixtures; no platform player.
 import 'dart:async';
 
-import 'package:fluffychat/pages/chat/events/round_video_message.dart';
-import 'package:fluffychat/personal/round_video/round_media_loader.dart';
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/pages/chat/events/round_video_message.dart';
+import 'package:chatloom/personal/round_video/round_media_loader.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

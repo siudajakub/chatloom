@@ -1,4 +1,4 @@
-import 'package:fluffychat/pages/chat/chat_view.dart';
+import 'package:chatloom/pages/chat/chat_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 

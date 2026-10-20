@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // "Waiting for this message": one renderer for ordinary and merged chats.
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/pages/chat/events/message_content.dart';
-import 'package:fluffychat/pages/chat/events/undecryptable_message.dart';
-import 'package:fluffychat/pages/chat/events/waiting_message_view.dart';
-import 'package:fluffychat/pages/chat/matrix_conversation_grouping.dart';
-import 'package:fluffychat/pages/chat/undecryptable_chat_hint.dart';
-import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/events/message_content.dart';
+import 'package:chatloom/pages/chat/events/undecryptable_message.dart';
+import 'package:chatloom/pages/chat/events/waiting_message_view.dart';
+import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
+import 'package:chatloom/pages/chat/undecryptable_chat_hint.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/encryption.dart' show DecryptException;

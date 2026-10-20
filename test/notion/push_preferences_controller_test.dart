@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/storage/personal_store.dart';
-import 'package:fluffychat/utils/push_helper.dart';
-import 'package:fluffychat/utils/start_push_foreground_service.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/storage/personal_store.dart';
+import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';

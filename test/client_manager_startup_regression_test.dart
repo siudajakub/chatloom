@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/storage/storage_failure.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/init_with_restore.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/storage/storage_failure.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/init_with_restore.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';

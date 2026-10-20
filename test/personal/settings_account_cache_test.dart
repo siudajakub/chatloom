@@ -3,7 +3,7 @@
 // Fictional offline fixtures only.
 import 'dart:async';
 
-import 'package:fluffychat/pages/settings/settings_account_cache.dart';
+import 'package:chatloom/pages/settings/settings_account_cache.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 

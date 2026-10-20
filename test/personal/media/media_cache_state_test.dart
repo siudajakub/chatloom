@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:fluffychat/personal/media/encrypted_media_cache.dart';
-import 'package:fluffychat/personal/media/pending_media_store.dart';
+import 'package:chatloom/personal/media/encrypted_media_cache.dart';
+import 'package:chatloom/personal/media/pending_media_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 

@@ -4,11 +4,11 @@
 // throws, which a release build renders as a grey ErrorWidget.
 import 'dart:async';
 
-import 'package:fluffychat/pages/chat/events/round_mini_player.dart';
-import 'package:fluffychat/pages/chat/events/round_video_message.dart';
-import 'package:fluffychat/pages/chat/events/round_video_stage.dart';
-import 'package:fluffychat/personal/round_video/round_media_loader.dart';
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/pages/chat/events/round_mini_player.dart';
+import 'package:chatloom/pages/chat/events/round_video_message.dart';
+import 'package:chatloom/pages/chat/events/round_video_stage.dart';
+import 'package:chatloom/personal/round_video/round_media_loader.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';

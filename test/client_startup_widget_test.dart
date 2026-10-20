@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/widgets/client_startup.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/widgets/client_startup.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

@@ -2,8 +2,8 @@
 
 import 'dart:io';
 
-import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/personal/round_video/round_capture_backend.dart';
+import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/round_video/round_capture_backend.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

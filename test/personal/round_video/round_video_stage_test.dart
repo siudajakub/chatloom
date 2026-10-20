@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:fluffychat/pages/chat/events/round_video_stage.dart';
+import 'package:chatloom/pages/chat/events/round_video_stage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:video_player/video_player.dart';

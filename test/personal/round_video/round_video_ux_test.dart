@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // UX contracts from the 17 Oct review: glyphs, speed cycle, seek-once,
 // record button tooltip.
-import 'package:fluffychat/pages/chat/events/round_video_stage.dart';
-import 'package:fluffychat/pages/chat/events/round_video_view.dart';
-import 'package:fluffychat/personal/round_video/round_record_button.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
+import 'package:chatloom/pages/chat/events/round_video_stage.dart';
+import 'package:chatloom/pages/chat/events/round_video_view.dart';
+import 'package:chatloom/personal/round_video/round_record_button.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:video_player/video_player.dart';

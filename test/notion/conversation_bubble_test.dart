@@ -1,6 +1,6 @@
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/pages/chat/conversation_grouping.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_grouping.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 

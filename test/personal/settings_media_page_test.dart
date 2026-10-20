@@ -1,7 +1,7 @@
 // Offline: SharedPreferences mock only, no account or platform plugins.
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/pages/settings_chat/settings_media_view.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/settings_chat/settings_media_view.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';

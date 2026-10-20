@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:convert';
-import 'package:fluffychat/personal/ui/conversation_content_controller.dart';
+import 'package:chatloom/personal/ui/conversation_content_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/personal_hub.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/personal_hub.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/pages/chat/notion_conversation.dart';
-import 'package:fluffychat/pages/chat/voice_record_button.dart';
+import 'package:chatloom/pages/chat/notion_conversation.dart';
+import 'package:chatloom/pages/chat/voice_record_button.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 

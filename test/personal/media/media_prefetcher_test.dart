@@ -4,9 +4,9 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:fluffychat/personal/media/media_inflight.dart';
-import 'package:fluffychat/personal/media/media_prefetcher.dart';
-import 'package:fluffychat/personal/round_video/round_media_loader.dart';
+import 'package:chatloom/personal/media/media_inflight.dart';
+import 'package:chatloom/personal/media/media_prefetcher.dart';
+import 'package:chatloom/personal/round_video/round_media_loader.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';

@@ -2,7 +2,7 @@
 // Key recovery stages for undecryptable messages (fictional ids, fake SDK).
 import 'dart:async';
 
-import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/encryption.dart' show DecryptException;
 import 'package:matrix/matrix.dart';

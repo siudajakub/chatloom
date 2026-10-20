@@ -1,4 +1,4 @@
-import 'package:fluffychat/pages/chat/conversation_grouping.dart';
+import 'package:chatloom/pages/chat/conversation_grouping.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 ConversationGroupingItem item({

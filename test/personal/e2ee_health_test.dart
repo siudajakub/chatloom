@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Inbox encryption health: issue priority, one-tap fixes and dismissal.
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/pages/chat_list/inbox_health_status.dart';
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/encryption/e2ee_health.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat_list/inbox_health_status.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/encryption/e2ee_health.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

@@ -2,9 +2,9 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/privacy_transport.dart';
-import 'package:fluffychat/utils/error_reporter.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/privacy_transport.dart';
+import 'package:chatloom/utils/error_reporter.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';

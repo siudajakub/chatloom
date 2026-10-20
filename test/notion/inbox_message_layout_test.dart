@@ -2,11 +2,11 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/personal/ui/notion_inbox_dock.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
-import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
+import 'package:chatloom/personal/ui/notion_inbox_dock.dart';
+import 'package:chatloom/personal/ui/notion_inbox_page.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/layouts/two_column_layout.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -1,6 +1,6 @@
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/pages/chat/conversation_source_picker.dart';
+import 'package:chatloom/pages/chat/conversation_source_picker.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
