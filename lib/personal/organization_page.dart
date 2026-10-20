@@ -4,14 +4,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/merged_chat_page.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/private_avatar.dart';
+import 'package:chatloom/personal/ui/chat_preferences_page.dart';
+import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/merged_chat_page.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/private_avatar.dart';
-import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
-import 'package:fluffychat/personal/ui/notion_settings_load.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';
@@ -1005,7 +1005,6 @@ class _DraftConflictPageState extends State<DraftConflictPage> {
                   maxLines: 12,
                   decoration: const InputDecoration(
                     labelText: 'Combine or edit text',
-                    border: OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1187,7 +1186,6 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
                     decoration: const InputDecoration(
                       prefixIcon: Icon(Icons.search),
                       hintText: 'Search text, transcripts or filenames',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                 ),

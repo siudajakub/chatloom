@@ -5,37 +5,39 @@
 
 import 'dart:async';
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
+import 'package:chatloom/pages/chat_list/chat_list_item.dart'
+    show notionInboxAvatar;
+import 'package:chatloom/pages/chat_list/chat_list_view.dart';
+import 'package:chatloom/pages/chat_list/inbox_controller.dart';
+import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/person_merge.dart';
+import 'package:chatloom/personal/person_route.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/ui/chat_preferences_page.dart';
+import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
+import 'package:chatloom/personal/ui/notion_network_adapter.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/ui/notion/metadata_actions.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/error_reporter.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart'
+    show ExceptionContext;
+import 'package:chatloom/utils/owned_async_wait.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/show_scaffold_dialog.dart';
+import 'package:chatloom/utils/show_update_snackbar.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_modal_action_popup.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:cross_file/cross_file.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
-import 'package:fluffychat/pages/chat_list/inbox_controller.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/conversation_classification.dart';
-import 'package:fluffychat/personal/person_route.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
-import 'package:personal_core/personal_core.dart' show ChatPlacement;
-import 'package:fluffychat/personal/ui/notion_network_filter.dart';
-import 'package:fluffychat/personal/ui/notion_network_adapter.dart';
-import 'package:fluffychat/ui/notion/metadata_actions.dart';
-import 'package:fluffychat/utils/error_reporter.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart'
-    show ExceptionContext;
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/utils/owned_async_wait.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/show_scaffold_dialog.dart';
-import 'package:fluffychat/utils/show_update_snackbar.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
@@ -44,6 +46,8 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart' as sdk;
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart'
+    show ChatPlacement, PersonGroup;
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../../../utils/account_bundles.dart';
@@ -68,6 +72,58 @@ extension LocalizedActiveFilter on ActiveFilter {
         throw 'Tags should not directly be displayed!';
     }
   }
+}
+
+/// The long-press menu of an inbox row, in order: Pin/Unpin, Merge… (or
+/// Unmerge on a merged person), Notifications, Ignore/Restore. Disabled
+/// entries explain themselves by staying visible (private sync not ready,
+/// a change awaiting acknowledgement, a network group that cannot merge).
+List<ChatMenuItem> chatMenuItems(
+  PersonalClient owner,
+  Room room, {
+  required String pinLabel,
+  required String unpinLabel,
+}) {
+  final projection = InboxProjection(owner);
+  final entity = projection.entityFor(room);
+  final group = projection.groupFor(room);
+  final joined = room.membership == Membership.join;
+  final pinned = projection.metadataFor(room).isPinned;
+  final ignored = projection.placementFor(room) == ChatPlacement.ignored;
+  return [
+    ChatMenuItem(
+      ChatMenuAction.pin,
+      pinned ? Icons.push_pin : Icons.push_pin_outlined,
+      pinned ? unpinLabel : pinLabel,
+      enabled: joined && NotionMetadataActions.canEdit(owner, entity),
+    ),
+    if (group != null)
+      ChatMenuItem(
+        ChatMenuAction.unmerge,
+        Icons.call_split,
+        'Unmerge',
+        enabled: owner.ready,
+      )
+    else
+      ChatMenuItem(
+        ChatMenuAction.merge,
+        Icons.call_merge,
+        'Merge…',
+        enabled: owner.ready && InboxProjection.mergeable(room),
+      ),
+    ChatMenuItem(
+      ChatMenuAction.notifications,
+      Icons.notifications_outlined,
+      'Notifications',
+      enabled: joined,
+    ),
+    ChatMenuItem(
+      ChatMenuAction.ignore,
+      ignored ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+      ignored ? 'Restore chat' : 'Ignore chat',
+      enabled: joined && canEditChatPreferences(owner, 'org:$entity'),
+    ),
+  ];
 }
 
 class ChatList extends StatefulWidget {
@@ -112,7 +168,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   Future<void> setActiveSpace(String spaceId) async {
     await Matrix.of(context).client.getRoomById(spaceId)!.postLoad();
     if (!mounted) return;
-    if (!FluffyThemes.isColumnMode(context) &&
+    if (!ChatLoomThemes.isColumnMode(context) &&
         !AppSettings.displayNavigationRail.value) {
       await AppSettings.displayNavigationRail.setItem(true);
     }
@@ -631,25 +687,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     }
   }
 
-  StreamSubscription? _onRoomTagUpdate;
-
-  void _listenRoomTags(Client client) {
-    _onRoomTagUpdate?.cancel();
-    _onRoomTagUpdate = client.onSync.stream
-        .where(
-          (syncUpdate) =>
-              syncUpdate.rooms?.join?.values.any(
-                (roomUpdate) =>
-                    roomUpdate.accountData?.any(
-                      (accountData) => accountData.type == 'm.tag',
-                    ) ??
-                    false,
-              ) ??
-              false,
-        )
-        .listen(_updateRoomTags);
-  }
-
   void _loadAccountInbox(Client client) {
     PersonalClient.of(client)
         .load()
@@ -700,19 +737,15 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       );
     });
 
-    _updateRoomTags();
-    _listenRoomTags(Matrix.of(context).client);
-
-    if (roomTags.containsKey(AppSettings.chatFilter.value)) {
-      activeFilter = ActiveFilter.tag;
-      activeTag = AppSettings.chatFilter.value;
-    } else {
-      activeFilter =
-          ActiveFilter.values.singleWhereOrNull(
-            (filter) => AppSettings.chatFilter.value == filter.name,
-          ) ??
-          ActiveFilter.allChats;
-    }
+    // Tags are not shown in the inbox; a saved tag filter falls back to all
+    // chats. Room tags themselves are never changed here.
+    activeFilter =
+        ActiveFilter.values
+            .where((filter) => filter != ActiveFilter.tag)
+            .singleWhereOrNull(
+              (filter) => AppSettings.chatFilter.value == filter.name,
+            ) ??
+        ActiveFilter.allChats;
 
     _processPushHelperCrashReport();
 
@@ -729,7 +762,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     _intentDataStreamSubscription?.cancel();
     _intentFileStreamSubscription?.cancel();
     _callEventSubscription?.cancel();
-    _onRoomTagUpdate?.cancel();
     scrollController.removeListener(_onScroll);
     searchController.dispose();
     searchFocusNode.dispose();
@@ -753,6 +785,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     ).onErrorCallback(report.first, StackTrace.fromString(report.last));
   }
 
+  /// Long-press menu of an inbox row: Pin, Merge… (Unmerge on a merged
+  /// person), Notifications and Ignore/Restore. Leave, block, tags, spaces
+  /// and low priority are intentionally not offered here.
   Future<void> chatContextAction(
     Room room,
     BuildContext posContext, [
@@ -760,235 +795,28 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   ]) async {
     final owner = personal;
     final account = inboxAccountKey;
-    final overlay =
-        Overlay.of(posContext).context.findRenderObject() as RenderBox;
-
-    final button = posContext.findRenderObject() as RenderBox;
-
-    final position = RelativeRect.fromRect(
-      Rect.fromPoints(
-        button.localToGlobal(const Offset(0, -65), ancestor: overlay),
-        button.localToGlobal(
-          button.size.bottomRight(Offset.zero) + const Offset(-50, 0),
-          ancestor: overlay,
-        ),
+    final box = posContext.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final anchor = box.localToGlobal(Offset.zero) & box.size;
+    final projection = InboxProjection(owner);
+    final l10n = L10n.of(context);
+    final action = await showChatActionsMenu(
+      posContext,
+      anchor: anchor,
+      title: projection.displayName(room),
+      avatar: notionInboxAvatar(
+        owner,
+        projection,
+        room,
+        size: NotionSize.avatarSm,
       ),
-      Offset.zero & overlay.size,
+      items: chatMenuItems(
+        owner,
+        room,
+        pinLabel: l10n.pin,
+        unpinLabel: l10n.unpin,
+      ),
     );
-
-    final spacesWithPowerLevels = room.client.rooms
-        .where(
-          (space) =>
-              space.isSpace &&
-              space.canChangeStateEvent(EventTypes.SpaceChild) &&
-              !space.spaceChildren.any((c) => c.roomId == room.id),
-        )
-        .toList();
-
-    var action = await showMenu<ChatContextAction>(
-      context: posContext,
-      position: position,
-      items: [
-        if (space != null)
-          PopupMenuItem(
-            value: ChatContextAction.goToSpace,
-            child: Row(
-              mainAxisSize: .min,
-              children: [
-                Avatar(
-                  mxContent: space.avatar,
-                  size: Avatar.defaultSize / 2,
-                  name: space.getLocalizedDisplayname(),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  L10n.of(context).goToSpace(space.getLocalizedDisplayname()),
-                ),
-              ],
-            ),
-          ),
-        if (room.membership == Membership.join) ...[
-          PopupMenuItem(
-            value: ChatContextAction.mute,
-            child: const Text('Visibility & notifications'),
-          ),
-          PopupMenuItem(
-            value: ChatContextAction.ignore,
-            enabled: canEditChatPreferences(
-              personal,
-              'org:${InboxProjection(personal).entityFor(room)}',
-            ),
-            child: Text(
-              InboxProjection(personal).placementFor(room) ==
-                      ChatPlacement.ignored
-                  ? 'Restore chat'
-                  : 'Ignore chat',
-            ),
-          ),
-          PopupMenuItem(
-            value: ChatContextAction.markUnread,
-            child: Row(
-              mainAxisSize: .min,
-              children: [
-                Icon(
-                  room.markedUnread
-                      ? Icons.mark_as_unread
-                      : Icons.mark_as_unread_outlined,
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  room.markedUnread
-                      ? L10n.of(context).markAsRead
-                      : L10n.of(context).markAsUnread,
-                ),
-              ],
-            ),
-          ),
-          if (NotionMetadataActions.canEdit(
-            personal,
-            InboxProjection(personal).entityFor(room),
-          ))
-            PopupMenuItem(
-              value: ChatContextAction.favorite,
-              child: Row(
-                mainAxisSize: .min,
-                children: [
-                  Icon(
-                    InboxProjection(personal).metadataFor(room).isPinned
-                        ? Icons.push_pin
-                        : Icons.push_pin_outlined,
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    InboxProjection(personal).metadataFor(room).isPinned
-                        ? L10n.of(context).unpin
-                        : L10n.of(context).pin,
-                  ),
-                ],
-              ),
-            ),
-        ],
-        PopupMenuItem(
-          value: ChatContextAction.leave,
-          child: Row(
-            mainAxisSize: .min,
-            children: [
-              Icon(
-                Icons.delete_outlined,
-                color: Theme.of(context).colorScheme.onErrorContainer,
-              ),
-              const SizedBox(width: 12),
-              Text(
-                room.membership == Membership.invite
-                    ? L10n.of(context).delete
-                    : L10n.of(context).leave,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onErrorContainer,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (room.membership == Membership.invite)
-          PopupMenuItem(
-            value: ChatContextAction.block,
-            child: Row(
-              mainAxisSize: .min,
-              children: [
-                Icon(
-                  Icons.block_outlined,
-                  color: Theme.of(context).colorScheme.onErrorContainer,
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  L10n.of(context).block,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onErrorContainer,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        if (room.membership == Membership.join)
-          PopupMenuItem(
-            value: ChatContextAction.showMore,
-            child: Row(
-              mainAxisSize: .min,
-              children: [
-                Icon(Icons.adaptive.more_outlined),
-                const SizedBox(width: 12),
-                Text(L10n.of(context).more),
-              ],
-            ),
-          ),
-      ],
-    );
-    if (!posContext.mounted || !mounted) return;
-    if (action == ChatContextAction.showMore) {
-      action = await showMenu<ChatContextAction>(
-        context: posContext,
-        position: position,
-        items: [
-          if (!room.isFavourite)
-            PopupMenuItem(
-              value: ChatContextAction.lowPriority,
-              child: Row(
-                mainAxisSize: .min,
-                children: [
-                  Icon(
-                    room.isLowPriority
-                        ? Icons.low_priority
-                        : Icons.low_priority_outlined,
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    room.isLowPriority
-                        ? L10n.of(context).unsetLowPriority
-                        : L10n.of(context).setLowPriority,
-                  ),
-                ],
-              ),
-            ),
-          if (activeTag == null)
-            PopupMenuItem(
-              value: ChatContextAction.addTag,
-              child: Row(
-                mainAxisSize: .min,
-                children: [
-                  Icon(Icons.bookmark_add_outlined),
-                  const SizedBox(width: 12),
-                  Text(L10n.of(context).addTag),
-                ],
-              ),
-            )
-          else
-            PopupMenuItem(
-              value: ChatContextAction.removeTag,
-              child: Row(
-                mainAxisSize: .min,
-                children: [
-                  Icon(Icons.bookmark_remove_outlined),
-                  const SizedBox(width: 12),
-                  Text(L10n.of(context).removeTag),
-                ],
-              ),
-            ),
-          if (spacesWithPowerLevels.isNotEmpty)
-            PopupMenuItem(
-              value: ChatContextAction.addToSpace,
-              child: Row(
-                mainAxisSize: .min,
-                children: [
-                  const Icon(Icons.group_work_outlined),
-                  const SizedBox(width: 12),
-                  Text(L10n.of(context).addToSpace),
-                ],
-              ),
-            ),
-        ],
-      );
-    }
-
     if (action == null) return;
     if (!mounted ||
         inboxAccountKey != account ||
@@ -997,39 +825,37 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       return;
 
     switch (action) {
-      case ChatContextAction.goToSpace:
-        setActiveSpace(space!.id);
-        return;
-      case ChatContextAction.favorite:
+      case ChatMenuAction.pin:
         await showFutureLoadingDialog(
           context: context,
           future: () => NotionMetadataActions.setPinned(
-            personal,
-            InboxProjection(personal).entityFor(room),
-            !InboxProjection(personal).metadataFor(room).isPinned,
+            owner,
+            InboxProjection(owner).entityFor(room),
+            !InboxProjection(owner).metadataFor(room).isPinned,
           ),
         );
         return;
-      case ChatContextAction.markUnread:
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => room.markUnread(!room.markedUnread),
-        );
+      case ChatMenuAction.merge:
+        await mergeFrom(room);
         return;
-      case ChatContextAction.mute:
+      case ChatMenuAction.unmerge:
+        final current = InboxProjection(owner).groupFor(room);
+        if (current != null) await _unmerge(current);
+        return;
+      case ChatMenuAction.notifications:
         await Navigator.of(context).push<void>(
           MaterialPageRoute(
-            builder: (_) => ChatPreferencesPage(personal: personal, room: room),
+            builder: (_) => ChatPreferencesPage(personal: owner, room: room),
           ),
         );
         return;
-      case ChatContextAction.ignore:
+      case ChatMenuAction.ignore:
         if (!canEditChatPreferences(
           owner,
           'org:${InboxProjection(owner).entityFor(room)}',
         ))
           return;
-        final projection = InboxProjection(personal);
+        final projection = InboxProjection(owner);
         final metadata = projection.metadataFor(room);
         final ignored = projection.placementFor(room) == ChatPlacement.ignored;
         final kind = projection.classifier.classify(room);
@@ -1045,128 +871,127 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
             : metadata.setIgnored(true);
         await showFutureLoadingDialog(
           context: context,
-          future: () => personal.put(
+          future: () => owner.put(
             'org:${metadata.entityId}',
             {
-              ...?personal.values['org:${metadata.entityId}'],
+              ...?owner.values['org:${metadata.entityId}'],
               ...updated.toJson(),
             }.cast<String, dynamic>(),
           ),
         );
         return;
-      case ChatContextAction.block:
-        final inviteEvent = room.getState(
-          EventTypes.RoomMember,
-          room.client.userID!,
-        );
-        context.go(
-          '/rooms/settings/security/ignorelist',
-          extra: inviteEvent?.senderId,
-        );
-      case ChatContextAction.leave:
-        final confirmed = await showOkCancelAlertDialog(
-          context: context,
-          title: L10n.of(context).areYouSure,
-          message: L10n.of(context).archiveRoomDescription,
-          okLabel: L10n.of(context).leave,
-          cancelLabel: L10n.of(context).cancel,
-          isDestructive: true,
-        );
-        if (confirmed == OkCancelResult.cancel) return;
-        if (!mounted) return;
-
-        await showFutureLoadingDialog(context: context, future: room.leave);
-
-        return;
-      case ChatContextAction.addToSpace:
-        final space = await showModalActionPopup(
-          context: context,
-          title: L10n.of(context).space,
-          actions: spacesWithPowerLevels
-              .map(
-                (space) => AdaptiveModalAction(
-                  value: space,
-                  label: space.getLocalizedDisplayname(
-                    MatrixLocals(L10n.of(context)),
-                  ),
-                ),
-              )
-              .toList(),
-        );
-        if (space == null) return;
-        if (!mounted) return;
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => space.setSpaceChild(room.id),
-        );
-      case ChatContextAction.lowPriority:
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => room.setLowPriority(!room.isLowPriority),
-        );
-        return;
-      case ChatContextAction.addTag:
-        final existingTags = List.of(roomTags.keys);
-        existingTags.removeWhere(room.tags.containsKey);
-        String? tag;
-        if (existingTags.isNotEmpty) {
-          tag = await showModalActionPopup<String?>(
-            context: context,
-            actions: [
-              ...existingTags.map((tag) {
-                final displayTag = tag.replaceFirst('u.', '');
-                return AdaptiveModalAction(
-                  label: displayTag,
-                  value: displayTag,
-                );
-              }),
-              AdaptiveModalAction(
-                label: L10n.of(context).createNewTag,
-                value: null,
-              ),
-            ],
-          );
-          if (!mounted) return;
-        }
-        tag ??= await showTextInputDialog(
-          context: context,
-          title: L10n.of(context).addTag,
-          hintText: L10n.of(context).tagName,
-        );
-        final newTag = tag;
-        if (!mounted) return;
-        if (newTag == null) return;
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => room.addTag('u.$newTag'),
-        );
-        return;
-      case ChatContextAction.removeTag:
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => room.removeTag(activeTag!),
-        );
-        return;
-      case ChatContextAction.showMore:
-        throw ('Should not be handled!');
     }
   }
 
-  Map<String, int> roomTags = {};
+  bool _sameInbox(PersonalClient owner, String account) =>
+      mounted && inboxAccountKey == account && identical(personal, owner);
 
-  void _updateRoomTags([_]) {
-    roomTags.clear();
-    for (final room in Matrix.of(context).client.rooms) {
-      for (final tag in room.tags.keys) {
-        if (tag.startsWith('u.')) roomTags[tag] = (roomTags[tag] ?? 0) + 1;
-      }
+  /// Shows a private group change at once instead of after the debounce.
+  void _refreshInbox() => inbox
+    ..markChanged(all: true)
+    ..refresh();
+
+  /// Runs a person group change without blocking the UI (an unmerge may
+  /// wait for the acknowledgement of a merge made moments ago).
+  void _runGroupChange(
+    PersonalClient owner,
+    String account,
+    Future<void> Function() change,
+  ) {
+    if (!_sameInbox(owner, account) || !owner.ready) return;
+    final messenger = ScaffoldMessenger.of(context);
+    change().then(
+      (_) {
+        if (_sameInbox(owner, account)) _refreshInbox();
+      },
+      onError: (Object _) {
+        if (!_sameInbox(owner, account)) return;
+        _refreshInbox();
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('The change was not saved. Check private sync.'),
+          ),
+        );
+      },
+    );
+    _refreshInbox();
+  }
+
+  /// Opens the merge picker for [room]; the merged person replaces the
+  /// source rows at once, with Undo in a snackbar.
+  Future<void> mergeFrom(Room room) async {
+    final owner = personal;
+    final account = inboxAccountKey;
+    if (!owner.ready || !InboxProjection.mergeable(room)) return;
+    final picked = await showMergePicker(
+      context,
+      personal: owner,
+      anchor: room,
+    );
+    if (picked == null ||
+        picked.isEmpty ||
+        !_sameInbox(owner, account) ||
+        !owner.ready ||
+        !identical(room.client, owner.client))
+      return;
+    final MergePlan plan;
+    try {
+      plan = planMerge(owner, [
+        room,
+        for (final candidate in picked) ...candidate.sources,
+      ], anchor: room);
+      await applyMerge(owner, plan);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The chats could not be merged. Check private sync.'),
+        ),
+      );
+      return;
     }
-    setState(() {
-      if (activeTag != null && !roomTags.keys.contains(activeTag)) {
-        activeTag = null;
-        activeFilter = ActiveFilter.allChats;
-      }
-    });
+    if (!mounted || !_sameInbox(owner, account)) return;
+    _refreshInbox();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            plan.createsGroup ? 'Chats merged' : 'Added to the merged chat',
+          ),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () =>
+                _runGroupChange(owner, account, () => undoMerge(owner, plan)),
+          ),
+        ),
+      );
+  }
+
+  Future<void> _unmerge(PersonGroup group) async {
+    final owner = personal;
+    final account = inboxAccountKey;
+    final confirmed = await showNotionConfirmDialog(
+      context: context,
+      title: 'Unmerge conversations?',
+      message:
+          'The source chats and their messages are kept and return to the inbox as separate chats.',
+      confirmLabel: 'Unmerge',
+    );
+    if (!confirmed || !mounted || !_sameInbox(owner, account)) return;
+    _runGroupChange(owner, account, () => owner.removeGroup(group.id));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Chats unmerged'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () =>
+                _runGroupChange(owner, account, () => owner.putGroup(group)),
+          ),
+        ),
+      );
   }
 
   Future<void> setStatus() async {
@@ -1286,8 +1111,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       Matrix.of(context).setActiveClient(client);
     });
     _clientStream.add(client);
-    _listenRoomTags(client);
-    _updateRoomTags();
     _loadAccountInbox(client);
     waitForInitialSync();
   }
@@ -1318,8 +1141,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       }
     });
     final client = Matrix.of(context).client;
-    _listenRoomTags(client);
-    _updateRoomTags();
     _loadAccountInbox(client);
     waitForInitialSync();
   }
@@ -1389,17 +1210,5 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
 enum EditBundleAction { addToBundle, removeFromBundle }
 
-enum ChatContextAction {
-  goToSpace,
-  favorite,
-  lowPriority,
-  addTag,
-  removeTag,
-  markUnread,
-  mute,
-  ignore,
-  leave,
-  addToSpace,
-  block,
-  showMore,
-}
+/// Long-press actions of an inbox row ([ChatListController.chatContextAction]).
+typedef ChatContextAction = ChatMenuAction;

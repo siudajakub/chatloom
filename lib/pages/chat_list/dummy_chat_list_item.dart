@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 class DummyChatListItem extends StatelessWidget {
@@ -39,7 +40,7 @@ class DummyChatListItem extends StatelessWidget {
                 height: 14,
                 decoration: BoxDecoration(
                   color: titleColor,
-                  borderRadius: BorderRadius.circular(3),
+                  borderRadius: NotionRadius.pillAll,
                 ),
               ),
             ),
@@ -66,7 +67,7 @@ class DummyChatListItem extends StatelessWidget {
         subtitle: Container(
           decoration: BoxDecoration(
             color: subtitleColor,
-            borderRadius: BorderRadius.circular(3),
+            borderRadius: NotionRadius.pillAll,
           ),
           height: 12,
           margin: const EdgeInsets.only(right: 22),

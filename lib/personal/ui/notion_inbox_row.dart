@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Diameter of the manual-unread dot.
@@ -75,7 +75,7 @@ class NotionInboxRow extends StatelessWidget {
       onLongPress: onLongPress,
       child: NotionRowHighlight(
         trigger: highlight,
-        borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+        borderRadius: NotionRadius.rowAll,
         child: NotionPressable(
           scale: NotionMotion.pressRow,
           child: AnimatedContainer(
@@ -86,16 +86,16 @@ class NotionInboxRow extends StatelessWidget {
               color: selected
                   ? Theme.of(context).colorScheme.surfaceContainerHighest
                   : Colors.transparent,
-              borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+              borderRadius: NotionRadius.rowAll,
             ),
             child: Material(
               type: MaterialType.transparency,
-              borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+              borderRadius: NotionRadius.rowAll,
               child: InkWell(
                 onTap: onTap,
                 onLongPress: onLongPress,
                 onSecondaryTap: onLongPress,
-                borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+                borderRadius: NotionRadius.rowAll,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 9),
                   child: Row(

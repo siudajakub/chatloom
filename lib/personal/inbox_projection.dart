@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/personal/own_sender.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/conversation_classification.dart';
+import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -59,6 +59,56 @@ class InboxProjection {
 
   static String? _text(Object? value) => value is String ? value : null;
 
+  /// Whether [room] can be a source of a merged person: a joined one-to-one
+  /// chat that is either a native `m.direct` chat or a chat its own bridge
+  /// declares a DM. Beeper bridges usually do not write `m.direct`, so
+  /// requiring it hid every saved merge of bridged chats. Bridge metadata
+  /// alone grants nothing (any member may send state): the declaration
+  /// counts only as an explicit `com.beeper.room_type.v2: dm` sent by the
+  /// room's joined bridge bot, and no bridge state may declare another type.
+  /// A network group (also a 2-member one) therefore never merges, so the
+  /// person's composer can never send into a group.
+  /// Merging is presentation only; sending still targets a source room.
+  static bool mergeable(Room? room) =>
+      room != null &&
+      room.membership == Membership.join &&
+      !room.isSpace &&
+      !PersonalPrivacy.isJournal(room) &&
+      room.isDirectChatForDisplay &&
+      (room.isDirectChat || _botDeclaredDirect(room));
+
+  static const _bridgeStateTypes = [
+    'm.bridge',
+    'uk.half-shot.bridge',
+    'com.beeper.bridge',
+  ];
+
+  static bool _botDeclaredDirect(Room room) {
+    var declared = false;
+    for (final type in _bridgeStateTypes) {
+      for (final event in room.states[type]?.values ?? <StrippedStateEvent>[]) {
+        final content = event.content;
+        final kind = content['com.beeper.room_type.v2'];
+        final legacy = content['com.beeper.room_type'];
+        // Any declaration of another kind, by anyone, rules a merge out.
+        if ((kind != null && kind != 'dm') ||
+            (legacy != null && legacy != 'dm')) {
+          return false;
+        }
+        final bot = content['bridgebot'];
+        if (kind != 'dm' ||
+            bot is! String ||
+            event.senderId != bot ||
+            room.getState(EventTypes.RoomMember, bot)?.content['membership'] !=
+                'join') {
+          continue;
+        }
+        declared = true;
+      }
+    }
+    return declared;
+  }
+
   List<PersonGroup> get _validGroups =>
       _snapshot ? (_groups ??= _parseValidGroups()) : _parseValidGroups();
 
@@ -68,11 +118,7 @@ class InboxProjection {
       if (group.members.every(
         (m) =>
             m.accountId == personal.client.userID &&
-            personal.client.getRoomById(m.roomId)?.isDirectChat == true &&
-            personal.client.getRoomById(m.roomId)?.isDirectChatForDisplay ==
-                true &&
-            personal.client.getRoomById(m.roomId)?.membership ==
-                Membership.join,
+            mergeable(personal.client.getRoomById(m.roomId)),
       )) {
         parsed.add(group);
       }
@@ -287,11 +333,7 @@ class InboxProjection {
     final members = <String, PersonGroup>{};
     for (final group in groups) {
       // A network group room can never be hidden by an invalid DM merge.
-      if (group.members.every(
-        (m) =>
-            available[m.roomId]?.isDirectChat == true &&
-            available[m.roomId]?.isDirectChatForDisplay == true,
-      )) {
+      if (group.members.every((m) => mergeable(available[m.roomId]))) {
         for (final member in group.members) {
           members[member.roomId] = group;
         }

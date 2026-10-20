@@ -1,26 +1,26 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat_list/chat_list.dart';
-import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
-import 'package:fluffychat/pages/chat_list/client_chooser_button.dart';
-import 'package:fluffychat/pages/chat_list/inbox_health_status.dart';
-import 'package:fluffychat/pages/chat_list/space_view.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/ui/notion_network_filter.dart';
-import 'package:fluffychat/personal/organization_page.dart';
-import 'package:fluffychat/personal/personal_search_page.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_page.dart';
-import 'package:fluffychat/personal/ui/notion_inbox_pins.dart';
-import 'package:fluffychat/personal/ui/notion_search_controls.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/sync_status_localization.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/public_room_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/user_dialog.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat_list/chat_list.dart';
+import 'package:chatloom/pages/chat_list/chat_list_item.dart';
+import 'package:chatloom/pages/chat_list/client_chooser_button.dart';
+import 'package:chatloom/pages/chat_list/inbox_health_status.dart';
+import 'package:chatloom/pages/chat_list/space_view.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/organization_page.dart';
+import 'package:chatloom/personal/personal_search_page.dart';
+import 'package:chatloom/personal/ui/notion_inbox_page.dart';
+import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/personal/ui/notion_search_controls.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/sync_status_localization.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/public_room_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -229,14 +229,6 @@ class ChatListViewBody extends StatelessWidget {
                       },
                       child: Text(filter.toLocalizedString(context)),
                     ),
-                  for (final tag in controller.roomTags.keys)
-                    TextButton(
-                      onPressed: () {
-                        controller.setActiveFilter(ActiveFilter.tag, tag);
-                        Navigator.of(context).pop();
-                      },
-                      child: Text(tag.replaceFirst('u.', '')),
-                    ),
                 ],
               ),
               if (controller.spaces.isNotEmpty) ...[
@@ -349,8 +341,8 @@ class PublicRoomsHorizontalList extends StatelessWidget {
       clipBehavior: Clip.hardEdge,
       decoration: const BoxDecoration(),
       height: publicRooms == null || publicRooms.isEmpty ? 0 : 106,
-      duration: FluffyThemes.animationDuration,
-      curve: FluffyThemes.animationCurve,
+      duration: ChatLoomThemes.animationDuration,
+      curve: ChatLoomThemes.animationCurve,
       child: publicRooms == null
           ? null
           : ListView.builder(

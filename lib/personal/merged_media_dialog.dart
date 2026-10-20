@@ -1,14 +1,14 @@
 import 'dart:ui' as ui;
 
+import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart'
+    show notionNetworkLabel;
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/file_selector.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:file_picker/file_picker.dart' show FileType;
-import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/ui/notion_network_filter.dart'
-    show notionNetworkLabel;
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/file_selector.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:light_compressor_v2/light_compressor_v2.dart';
 import 'package:material_ui/material_ui.dart';

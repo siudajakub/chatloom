@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:math' as math;
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -86,7 +86,7 @@ class _PinnedCard extends StatelessWidget {
       child: Material(
         color: Theme.of(context).colorScheme.surfaceContainer,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: NotionRadius.lgAll,
           side: BorderSide(color: Theme.of(context).dividerColor),
         ),
         clipBehavior: Clip.antiAlias,

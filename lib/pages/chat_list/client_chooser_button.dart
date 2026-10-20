@@ -4,15 +4,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:async/async.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart' hide Result;
-import 'package:url_launcher/url_launcher_string.dart';
 
-import '../../utils/fluffy_share.dart';
+import '../../utils/chatloom_share.dart';
 import 'chat_list.dart';
 
 class ClientChooserButton extends StatelessWidget {
@@ -78,16 +77,6 @@ class ClientChooserButton extends StatelessWidget {
             const Icon(Icons.settings_outlined),
             const SizedBox(width: 18),
             Text(L10n.of(context).settings),
-          ],
-        ),
-      ),
-      PopupMenuItem(
-        value: SettingsAction.support,
-        child: Row(
-          children: [
-            Icon(Icons.favorite, color: Colors.red),
-            const SizedBox(width: 18),
-            Text(L10n.of(context).supportFluffyChat),
           ],
         ),
       ),
@@ -209,12 +198,10 @@ class ClientChooserButton extends StatelessWidget {
           context.go('/rooms/newgroup');
           break;
         case SettingsAction.invite:
-          FluffyShare.shareInviteLink(context);
+          ChatLoomShare.shareInviteLink(context);
           break;
         case SettingsAction.support:
-          launchUrlString(
-            'https://ko-fi.com/post/How-can-I-support-FluffyChat-J2G325WE6I',
-          );
+          // ChatLoom has no donation page; the menu entry is not shown.
           break;
         case SettingsAction.settings:
           context.go('/rooms/settings');

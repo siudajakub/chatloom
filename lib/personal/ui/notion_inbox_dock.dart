@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/personal/ui/notion_network_filter.dart';
-import 'package:fluffychat/personal/ui/notion_network_selector.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/personal/ui/notion_network_selector.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -100,7 +100,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
                   Expanded(child: _settings(context, large: true))
                 else
                   _settings(context, large: false),
-                _divider(context),
+                const NotionGlassDivider(),
                 Expanded(
                   flex: large ? 1 : 4,
                   child: _action(
@@ -111,7 +111,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
                     large: large,
                   ),
                 ),
-                _divider(context),
+                const NotionGlassDivider(),
                 Expanded(
                   flex: large ? 1 : 5,
                   child: Semantics(
@@ -123,6 +123,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
                       key: _networkAnchor,
                       focusNode: _networkFocus,
                       onTap: _showNetworks,
+                      customBorder: NotionShapes.pill,
                       // The content presses inside the ink, so the anchor
                       // rect of the popover never reads a scaled box.
                       child: NotionPressable(
@@ -228,6 +229,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
       message: 'Settings',
       child: InkWell(
         onTap: widget.onSettings,
+        customBorder: NotionShapes.pill,
         child: SizedBox(
           width: large ? double.infinity : 64,
           child: const NotionPressable(
@@ -239,14 +241,6 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
     ),
   );
 
-  Widget _divider(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 12),
-    child: SizedBox(
-      width: 1,
-      height: 36,
-      child: ColoredBox(color: Theme.of(context).dividerColor),
-    ),
-  );
   Widget _action(
     BuildContext context, {
     required IconData icon,
@@ -259,6 +253,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
     label: label,
     child: InkWell(
       onTap: onTap,
+      customBorder: NotionShapes.pill,
       child: NotionPressable(
         child: Padding(
           padding: EdgeInsets.symmetric(
