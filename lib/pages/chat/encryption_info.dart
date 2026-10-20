@@ -3,10 +3,10 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/person_location.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/person_location.dart';
 import 'package:flutter/gestures.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -45,8 +45,8 @@ class EncryptionInfo extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AnimatedSize(
-      duration: FluffyThemes.animationDuration,
-      curve: FluffyThemes.animationCurve,
+      duration: ChatLoomThemes.animationDuration,
+      curve: ChatLoomThemes.animationCurve,
       child: FutureBuilder(
         future: _unverifiedDevices(),
         builder: (context, asyncSnapshot) {

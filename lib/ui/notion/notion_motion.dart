@@ -26,7 +26,7 @@ abstract final class NotionMotion {
   /// Icon swaps, colour tweens, selection.
   static const Duration quick = Duration(milliseconds: 140);
 
-  /// Fades, badges, small reveals. `FluffyThemes.animationDuration`.
+  /// Fades, badges, small reveals. `ChatLoomThemes.animationDuration`.
   static const Duration short = Duration(milliseconds: 200);
 
   /// Entrances, dialogs, size reveals.
@@ -55,7 +55,7 @@ abstract final class NotionMotion {
 
   // ------------------------------------------------------------------- curves
 
-  /// General UI tweens (colour, size, opacity). `FluffyThemes.animationCurve`.
+  /// General UI tweens (colour, size, opacity). `ChatLoomThemes.animationCurve`.
   static const Curve standard = Cubic(0.2, 0.0, 0.0, 1.0);
 
   /// Entrances, dialogs, sheets, page enter: very fast start, long landing.

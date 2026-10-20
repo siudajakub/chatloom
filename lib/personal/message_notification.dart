@@ -13,14 +13,14 @@ library;
 
 import 'dart:async';
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart';
 
-const genericNotificationTitle = 'Personal Chat';
+const genericNotificationTitle = 'ChatLoom';
 const genericNotificationBody = 'Open the app to read your message.';
 
 /// Body of every notification while the app lock is configured.

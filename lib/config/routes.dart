@@ -5,48 +5,48 @@
 
 import 'dart:async';
 
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/pages/archive/archive.dart';
-import 'package:fluffychat/pages/bootstrap/bootstrap_page.dart';
-import 'package:fluffychat/pages/chat/chat.dart';
-import 'package:fluffychat/pages/chat_access_settings/chat_access_settings_controller.dart';
-import 'package:fluffychat/pages/chat_details/chat_details.dart';
-import 'package:fluffychat/pages/chat_encryption_settings/chat_encryption_settings.dart';
-import 'package:fluffychat/pages/chat_list/chat_list.dart';
-import 'package:fluffychat/pages/chat_members/chat_members.dart';
-import 'package:fluffychat/pages/chat_permissions_settings/chat_permissions_settings.dart';
-import 'package:fluffychat/pages/chat_search/chat_search_page.dart';
-import 'package:fluffychat/pages/device_settings/device_settings.dart';
-import 'package:fluffychat/pages/intro/intro_page_presenter.dart';
-import 'package:fluffychat/pages/invitation_selection/invitation_selection.dart';
-import 'package:fluffychat/pages/login/login.dart';
-import 'package:fluffychat/pages/new_group/new_group.dart';
-import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
-import 'package:fluffychat/pages/settings/settings.dart';
-import 'package:fluffychat/pages/settings_3pid/settings_3pid.dart';
-import 'package:fluffychat/pages/settings_chat/settings_chat.dart';
-import 'package:fluffychat/pages/settings_chat/settings_media_view.dart';
-import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
-import 'package:fluffychat/pages/settings_homeserver/settings_homeserver.dart';
-import 'package:fluffychat/pages/settings_ignore_list/settings_ignore_list.dart';
-import 'package:fluffychat/pages/settings_notifications/settings_notifications.dart';
-import 'package:fluffychat/pages/settings_password/settings_password.dart';
-import 'package:fluffychat/pages/settings_security/settings_security.dart';
-import 'package:fluffychat/pages/settings_style/settings_style.dart';
-import 'package:fluffychat/pages/sign_in/sign_in_page.dart';
-import 'package:fluffychat/personal/organization_page.dart';
-import 'package:fluffychat/personal/ui/chat_preferences_page.dart';
-import 'package:fluffychat/personal/person_route.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/personal_hub.dart';
-import 'package:fluffychat/personal/ui/push_diagnostics_page.dart';
-import 'package:fluffychat/ui/notion/notion_motion.dart';
-import 'package:fluffychat/widgets/config_viewer.dart';
-import 'package:fluffychat/widgets/layouts/empty_page.dart';
-import 'package:fluffychat/widgets/layouts/two_column_layout.dart';
-import 'package:fluffychat/widgets/log_view.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/pages/archive/archive.dart';
+import 'package:chatloom/pages/bootstrap/bootstrap_page.dart';
+import 'package:chatloom/pages/chat/chat.dart';
+import 'package:chatloom/pages/chat_access_settings/chat_access_settings_controller.dart';
+import 'package:chatloom/pages/chat_details/chat_details.dart';
+import 'package:chatloom/pages/chat_encryption_settings/chat_encryption_settings.dart';
+import 'package:chatloom/pages/chat_list/chat_list.dart';
+import 'package:chatloom/pages/chat_members/chat_members.dart';
+import 'package:chatloom/pages/chat_permissions_settings/chat_permissions_settings.dart';
+import 'package:chatloom/pages/chat_search/chat_search_page.dart';
+import 'package:chatloom/pages/device_settings/device_settings.dart';
+import 'package:chatloom/pages/intro/intro_page_presenter.dart';
+import 'package:chatloom/pages/invitation_selection/invitation_selection.dart';
+import 'package:chatloom/pages/login/login.dart';
+import 'package:chatloom/pages/new_group/new_group.dart';
+import 'package:chatloom/pages/new_private_chat/new_private_chat.dart';
+import 'package:chatloom/pages/settings/settings.dart';
+import 'package:chatloom/pages/settings_3pid/settings_3pid.dart';
+import 'package:chatloom/pages/settings_chat/settings_chat.dart';
+import 'package:chatloom/pages/settings_chat/settings_media_view.dart';
+import 'package:chatloom/pages/settings_emotes/settings_emotes.dart';
+import 'package:chatloom/pages/settings_homeserver/settings_homeserver.dart';
+import 'package:chatloom/pages/settings_ignore_list/settings_ignore_list.dart';
+import 'package:chatloom/pages/settings_notifications/settings_notifications.dart';
+import 'package:chatloom/pages/settings_password/settings_password.dart';
+import 'package:chatloom/pages/settings_security/settings_security.dart';
+import 'package:chatloom/pages/settings_style/settings_style.dart';
+import 'package:chatloom/pages/sign_in/sign_in_page.dart';
+import 'package:chatloom/personal/organization_page.dart';
+import 'package:chatloom/personal/person_route.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/personal_hub.dart';
+import 'package:chatloom/personal/ui/chat_preferences_page.dart';
+import 'package:chatloom/personal/ui/push_diagnostics_page.dart';
+import 'package:chatloom/ui/notion/notion_motion.dart';
+import 'package:chatloom/widgets/config_viewer.dart';
+import 'package:chatloom/widgets/layouts/empty_page.dart';
+import 'package:chatloom/widgets/layouts/two_column_layout.dart';
+import 'package:chatloom/widgets/log_view.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -133,7 +133,7 @@ abstract class AppRoutes {
       pageBuilder: (context, state, child) => noTransitionPageBuilder(
         context,
         state,
-        FluffyThemes.isColumnMode(context) &&
+        ChatLoomThemes.isColumnMode(context) &&
                 state.fullPath?.startsWith('/rooms/settings') == false
             ? TwoColumnLayout(
                 mainView: ChatList(
@@ -154,7 +154,7 @@ abstract class AppRoutes {
           pageBuilder: (context, state) => defaultPageBuilder(
             context,
             state,
-            FluffyThemes.isColumnMode(context)
+            ChatLoomThemes.isColumnMode(context)
                 ? const EmptyPage()
                 // On phones the inbox is hidden under every child page, so it
                 // has no selected row; keep it identical while children
@@ -251,7 +251,7 @@ abstract class AppRoutes {
                   },
                   child: Focus(
                     autofocus: true,
-                    child: FluffyThemes.isColumnMode(context)
+                    child: ChatLoomThemes.isColumnMode(context)
                         ? TwoColumnLayout(
                             mainView: const Settings(
                               key: ValueKey('settings-index'),
@@ -270,14 +270,14 @@ abstract class AppRoutes {
                   pageBuilder: (context, state) => defaultPageBuilder(
                     context,
                     state,
-                    FluffyThemes.isColumnMode(context)
+                    ChatLoomThemes.isColumnMode(context)
                         ? state.uri.path == '/rooms/settings'
                               ? const Settings(surface: SettingsSurface.account)
                               : const EmptyPage()
                         : const Settings(),
                     memo: (
                       'settings',
-                      FluffyThemes.isColumnMode(context) &&
+                      ChatLoomThemes.isColumnMode(context) &&
                           state.uri.path == '/rooms/settings',
                     ),
                   ),
@@ -763,7 +763,7 @@ class _AppPageRoute<T> extends PageRoute<T>
     final navigator = this.navigator;
     if (navigator == null) return true;
     final context = navigator.context;
-    return FluffyThemes.isColumnMode(context) || NotionMotion.reduced(context);
+    return ChatLoomThemes.isColumnMode(context) || NotionMotion.reduced(context);
   }
 
   @override
@@ -826,7 +826,7 @@ final class _PageMemo {
             uri.fragment,
             _Identity(state.extra),
           ),
-      columns: FluffyThemes.isColumnMode(context),
+      columns: ChatLoomThemes.isColumnMode(context),
       client: _Identity(_activeClient(context)),
       type: child.runtimeType,
     );

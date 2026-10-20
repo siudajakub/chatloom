@@ -3,15 +3,15 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat_list/navi_rail_item.dart';
-import 'package:fluffychat/pages/chat_list/start_chat_fab.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/utils/stream_extension.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat_list/navi_rail_item.dart';
+import 'package:chatloom/pages/chat_list/start_chat_fab.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:chatloom/utils/stream_extension.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -31,7 +31,7 @@ class SpacesNavigationRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final client = Matrix.of(context).client;
-    final coloredMode = !FluffyThemes.isColumnMode(context);
+    final coloredMode = !ChatLoomThemes.isColumnMode(context);
     final theme = Theme.of(context);
     return Material(
       color: coloredMode ? theme.colorScheme.surfaceContainer : null,
@@ -47,9 +47,9 @@ class SpacesNavigationRail extends StatelessWidget {
                 .toList();
 
             return SizedBox(
-              width: FluffyThemes.isColumnMode(context)
-                  ? FluffyThemes.navRailWidth
-                  : FluffyThemes.navRailWidth - 8,
+              width: ChatLoomThemes.isColumnMode(context)
+                  ? ChatLoomThemes.navRailWidth
+                  : ChatLoomThemes.navRailWidth - 8,
               child: Column(
                 children: [
                   Expanded(
@@ -121,7 +121,7 @@ class SpacesNavigationRail extends StatelessWidget {
                       },
                     ),
                   ),
-                  if (FluffyThemes.isColumnMode(context))
+                  if (ChatLoomThemes.isColumnMode(context))
                     Padding(
                       padding: const EdgeInsets.all(12.0),
                       child: StartChatFab(),

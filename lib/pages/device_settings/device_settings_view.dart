@@ -3,11 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/device_settings/device_settings.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/device_settings/device_settings.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'user_device_list_item.dart';
@@ -21,7 +21,7 @@ class DevicesSettingsView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        automaticallyImplyLeading: !FluffyThemes.isColumnMode(context),
+        automaticallyImplyLeading: !ChatLoomThemes.isColumnMode(context),
         centerTitle: false,
         title: Text(L10n.of(context).devices),
       ),

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:typed_data';
 
+import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:crypto/crypto.dart';
-import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

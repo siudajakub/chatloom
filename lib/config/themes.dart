@@ -3,11 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/ui/notion/notion_motion.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
+import 'package:chatloom/ui/notion/notion_motion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:material_ui/material_ui.dart';
 
-abstract class FluffyThemes {
+abstract class ChatLoomThemes {
   static const double columnWidth = 380.0;
 
   static const double maxTimelineWidth = columnWidth * 2;
@@ -21,7 +21,7 @@ abstract class FluffyThemes {
       isColumnModeByWidth(MediaQuery.sizeOf(context).width);
 
   static bool isThreeColumnMode(BuildContext context) =>
-      MediaQuery.sizeOf(context).width > FluffyThemes.columnWidth * 3.5;
+      MediaQuery.sizeOf(context).width > ChatLoomThemes.columnWidth * 3.5;
 
   static LinearGradient backgroundGradient(BuildContext context, int alpha) {
     final colorScheme = Theme.of(context).colorScheme;

@@ -3,10 +3,10 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -46,7 +46,7 @@ class SeenByRow extends StatelessWidget {
           alignment: Alignment.center,
           child: ConstrainedBox(
             constraints: const BoxConstraints(
-              maxWidth: FluffyThemes.maxTimelineWidth,
+              maxWidth: ChatLoomThemes.maxTimelineWidth,
             ),
             child: NotionSizeReveal(
               // Per message: the next newest message starts collapsed.

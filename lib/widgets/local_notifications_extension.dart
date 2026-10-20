@@ -3,25 +3,25 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/message_notification.dart';
-import 'package:fluffychat/personal/message_preview.dart';
-import 'package:fluffychat/personal/notification_eligibility.dart';
-import 'package:fluffychat/personal/own_sender.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/reminder_notification.dart';
-import 'package:fluffychat/personal/round_video/telegram_media_protocol.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/notification_background_handler.dart';
-import 'package:fluffychat/utils/notification_client_routing.dart';
-import 'package:fluffychat/utils/push_helper.dart';
-import 'package:fluffychat/widgets/fluffy_chat_app.dart';
-import 'package:fluffychat/widgets/incoming_call_dialog.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/message_notification.dart';
+import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/personal/notification_eligibility.dart';
+import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/reminder_notification.dart';
+import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/notification_client_routing.dart';
+import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/widgets/chatloom_app.dart';
+import 'package:chatloom/widgets/incoming_call_dialog.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:material_ui/material_ui.dart';
@@ -73,7 +73,7 @@ extension LocalNotificationsExtension on MatrixState {
     if (event.type == RtcNotificationContent.eventType &&
         event.tryParseRtcNotificationContent()?.notificationType == .ring) {
       final context =
-          FluffyChatApp.router.routerDelegate.navigatorKey.currentContext ??
+          ChatLoomApp.router.routerDelegate.navigatorKey.currentContext ??
           this.context;
       if (!context.mounted) return;
       showNotionCustomDialog<bool>(
@@ -83,7 +83,7 @@ extension LocalNotificationsExtension on MatrixState {
         if (joinCall != true) return;
         if (!context.mounted) return;
         setActiveClient(event.room.client);
-        FluffyChatApp.router.go('/rooms/${event.room.id}?action=call');
+        ChatLoomApp.router.go('/rooms/${event.room.id}?action=call');
       });
     }
 
@@ -131,13 +131,13 @@ extension LocalNotificationsExtension on MatrixState {
             EventTypes.Sticker => [
               if (!AppSettings.personalIncognito.value)
                 LinuxNotificationAction(
-                  key: FluffyChatNotificationActions.markAsRead.name,
+                  key: ChatLoomNotificationActions.markAsRead.name,
                   label: l10n.markAsRead,
                 ),
             ],
             RtcNotificationContent.eventType => [
               LinuxNotificationAction(
-                key: FluffyChatNotificationActions.enterCall.name,
+                key: ChatLoomNotificationActions.enterCall.name,
                 label: l10n.enterCall,
               ),
             ],
@@ -149,7 +149,7 @@ extension LocalNotificationsExtension on MatrixState {
           threadIdentifier: '${client.clientName}_${event.room.id}',
         ),
       ),
-      payload: FluffyChatPushPayload(
+      payload: ChatLoomPushPayload(
         client.clientName,
         event.room.id,
         event.eventId,

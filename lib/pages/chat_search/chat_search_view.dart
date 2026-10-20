@@ -3,14 +3,14 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat_search/chat_search_files_tab.dart';
-import 'package:fluffychat/pages/chat_search/chat_search_images_tab.dart';
-import 'package:fluffychat/pages/chat_search/chat_search_message_tab.dart';
-import 'package:fluffychat/pages/chat_search/chat_search_page.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat_search/chat_search_files_tab.dart';
+import 'package:chatloom/pages/chat_search/chat_search_images_tab.dart';
+import 'package:chatloom/pages/chat_search/chat_search_message_tab.dart';
+import 'package:chatloom/pages/chat_search/chat_search_page.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:chatloom/widgets/layouts/max_width_body.dart';
 import 'package:material_ui/material_ui.dart';
 
 class ChatSearchView extends StatelessWidget {
@@ -49,7 +49,7 @@ class ChatSearchView extends StatelessWidget {
         withScrolling: false,
         child: Column(
           children: [
-            if (FluffyThemes.isThreeColumnMode(context))
+            if (ChatLoomThemes.isThreeColumnMode(context))
               const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),

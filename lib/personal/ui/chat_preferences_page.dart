@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/ui/notion_network_filter.dart';
-import 'package:fluffychat/personal/ui/notion_settings_load.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -236,7 +236,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
         ),
         if (sources.length > 1) Text(source.getLocalizedDisplayname()),
         PreferenceChoice(
-          title: 'Personal Chat notifications',
+          title: 'ChatLoom notifications',
           value:
               projection.metadataForEntity(source.id).notificationMode?.name ??
               'inherit',
@@ -335,7 +335,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
                 padding: const EdgeInsets.all(20),
                 children: NotionEntrance.stagger([
                   const Text(
-                    'Private settings for Personal Chat. Other Beeper and Matrix clients are unchanged.',
+                    'Private settings for ChatLoom. Other Beeper and Matrix clients are unchanged.',
                   ),
                   if (kIsWeb)
                     const Padding(

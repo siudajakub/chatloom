@@ -12,17 +12,17 @@ library;
 
 import 'dart:async';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/message_notification.dart';
-import 'package:fluffychat/personal/message_preview.dart';
-import 'package:fluffychat/personal/own_sender.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/push_diagnostics.dart';
-import 'package:fluffychat/utils/notification_client_routing.dart';
-import 'package:fluffychat/utils/push_helper.dart';
-import 'package:fluffychat/utils/push_work_policy.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/message_notification.dart';
+import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/utils/notification_client_routing.dart';
+import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/utils/push_work_policy.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show PersonalOperation;
@@ -200,7 +200,7 @@ Future<PushOutcome> presentDueReminder(
             ),
             macOS: const DarwinNotificationDetails(),
           ),
-          payload: FluffyChatPushPayload(
+          payload: ChatLoomPushPayload(
             client.clientName,
             target.id,
             message?.eventId,

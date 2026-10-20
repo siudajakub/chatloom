@@ -49,10 +49,10 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';

@@ -5,10 +5,10 @@
 
 import 'dart:io';
 
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/utils/size_string.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/utils/size_string.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

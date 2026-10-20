@@ -3,11 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/bootstrap/view_model/bootstrap_view_model.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/fluffy_share.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/bootstrap/view_model/bootstrap_view_model.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/chatloom_share.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:material_ui/material_ui.dart';
 
 class StoreRecoveryKeyView extends StatelessWidget {
@@ -31,7 +31,7 @@ class StoreRecoveryKeyView extends StatelessWidget {
             suffixIcon: IconButton(
               icon: Icon(Icons.copy_outlined),
               onPressed: () =>
-                  FluffyShare.share(viewModel.value.recoveryKey!, context),
+                  ChatLoomShare.share(viewModel.value.recoveryKey!, context),
             ),
           ),
         ),

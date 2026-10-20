@@ -3,16 +3,16 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/events/round_video_message.dart';
-import 'package:fluffychat/pages/chat/events/round_video_bridge_message.dart';
-import 'package:fluffychat/pages/image_viewer/pointers_listener.dart';
-import 'package:fluffychat/pages/image_viewer/video_player.dart';
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/hover_builder.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/events/round_video_bridge_message.dart';
+import 'package:chatloom/pages/chat/events/round_video_message.dart';
+import 'package:chatloom/pages/image_viewer/pointers_listener.dart';
+import 'package:chatloom/pages/image_viewer/video_player.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/hover_builder.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';

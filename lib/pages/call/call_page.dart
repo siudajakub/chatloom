@@ -5,22 +5,22 @@
 
 import 'dart:math';
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/call/call_tile.dart';
+import 'package:chatloom/pages/call/call_view_model.dart';
+import 'package:chatloom/pages/call/start_time.dart';
+import 'package:chatloom/pages/call/utils/get_call_tiles.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/view_model_builder.dart';
 import 'package:collection/collection.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/call/call_tile.dart';
-import 'package:fluffychat/pages/call/call_view_model.dart';
-import 'package:fluffychat/pages/call/start_time.dart';
-import 'package:fluffychat/pages/call/utils/get_call_tiles.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/view_model_builder.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -33,7 +33,7 @@ class CallPage extends StatelessWidget {
     final theme = Theme.of(context);
     final room = Matrix.of(context).client.getRoomById(roomId)!;
     final mini = Matrix.of(context).callPosition.value != .fullScreen;
-    final tileSize = FluffyThemes.isColumnMode(context) ? 256.0 : 128.0;
+    final tileSize = ChatLoomThemes.isColumnMode(context) ? 256.0 : 128.0;
     return ViewModelBuilder(
       create: () => CallViewModel(room: room),
       builder: (context, viewModel, _) {

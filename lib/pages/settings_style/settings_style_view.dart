@@ -5,20 +5,20 @@
 
 import 'dart:ui';
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_grouping.dart';
+import 'package:chatloom/pages/chat/events/state_message.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/account_config.dart';
+import 'package:chatloom/utils/color_value.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:dynamic_color/dynamic_color.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/pages/chat/conversation_grouping.dart';
-import 'package:fluffychat/pages/chat/events/state_message.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/account_config.dart';
-import 'package:fluffychat/utils/color_value.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -39,7 +39,7 @@ class SettingsStyleView extends StatelessWidget {
     final client = Matrix.of(context).client;
     return Scaffold(
       appBar: AppBar(
-        automaticallyImplyLeading: !FluffyThemes.isColumnMode(context),
+        automaticallyImplyLeading: !ChatLoomThemes.isColumnMode(context),
         centerTitle: false,
         title: const Text('Appearance'),
       ),
@@ -127,8 +127,8 @@ class SettingsStyleView extends StatelessWidget {
                             ),
                           ),
                           child: AnimatedContainer(
-                            duration: FluffyThemes.animationDuration,
-                            curve: FluffyThemes.animationCurve,
+                            duration: ChatLoomThemes.animationDuration,
+                            curve: ChatLoomThemes.animationCurve,
                             decoration: const BoxDecoration(),
                             clipBehavior: Clip.hardEdge,
                             child: Stack(
@@ -150,7 +150,7 @@ class SettingsStyleView extends StatelessWidget {
                                           uri: accountConfig.wallpaperUrl,
                                           fit: BoxFit.cover,
                                           isThumbnail: true,
-                                          width: FluffyThemes.columnWidth * 2,
+                                          width: ChatLoomThemes.columnWidth * 2,
                                           height: _previewMinHeight,
                                         ),
                                       ),

@@ -5,24 +5,24 @@
 
 import 'dart:async';
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_grouping.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/pages/chat/conversation_source.dart';
+import 'package:chatloom/pages/chat/encryption_info.dart';
+import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/seen_by_row.dart';
+import 'package:chatloom/pages/chat/typing_indicators.dart';
+import 'package:chatloom/personal/media/media_prefetcher.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/account_config.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:collection/collection.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/pages/chat/conversation_grouping.dart';
-import 'package:fluffychat/pages/chat/conversation_motion.dart';
-import 'package:fluffychat/pages/chat/conversation_source.dart';
-import 'package:fluffychat/pages/chat/encryption_info.dart';
-import 'package:fluffychat/pages/chat/events/message.dart';
-import 'package:fluffychat/pages/chat/seen_by_row.dart';
-import 'package:fluffychat/pages/chat/typing_indicators.dart';
-import 'package:fluffychat/personal/media/media_prefetcher.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/account_config.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -116,14 +116,14 @@ class _ChatEventListState extends State<ChatEventList> {
       return ConversationTimelineSkeleton(
         bottomInset:
             controller.inputBarHeight ??
-            (72 + (FluffyThemes.isColumnMode(context) ? 16 : 0)),
+            (72 + (ChatLoomThemes.isColumnMode(context) ? 16 : 0)),
       );
     }
     final theme = Theme.of(context);
 
     final colors = [theme.secondaryBubbleColor, theme.bubbleColor];
 
-    final horizontalPadding = FluffyThemes.isColumnMode(context) ? 8.0 : 0.0;
+    final horizontalPadding = ChatLoomThemes.isColumnMode(context) ? 8.0 : 0.0;
 
     // Map row key --> index so ListView's findChildIndexCallback is O(1). The
     // key must match the AutoScrollTag key below (transaction id first), or
@@ -160,7 +160,7 @@ class _ChatEventListState extends State<ChatEventList> {
               bottom:
                   8 +
                   (controller.inputBarHeight ??
-                      (72 + (FluffyThemes.isColumnMode(context) ? 16 : 0))),
+                      (72 + (ChatLoomThemes.isColumnMode(context) ? 16 : 0))),
               left: horizontalPadding,
               right: horizontalPadding,
             ),
@@ -403,7 +403,7 @@ class ConversationTimelineSkeleton extends StatelessWidget {
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(
-                    maxWidth: FluffyThemes.maxTimelineWidth,
+                    maxWidth: ChatLoomThemes.maxTimelineWidth,
                   ),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(

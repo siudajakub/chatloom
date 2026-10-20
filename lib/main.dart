@@ -8,17 +8,17 @@ import 'dart:io' show Directory;
 import 'dart:isolate';
 import 'dart:ui';
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/performance_probe.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/utils/background_startup_recovery.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/error_reporter.dart';
+import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:collection/collection.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/personal/performance_probe.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/utils/background_startup_recovery.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/error_reporter.dart';
-import 'package:fluffychat/utils/notification_background_handler.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/start_push_foreground_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
@@ -31,8 +31,8 @@ import 'package:universal_html/universal_html.dart' as web;
 
 import 'config/setting_keys.dart';
 import 'utils/background_push.dart';
+import 'widgets/chatloom_app.dart';
 import 'widgets/client_startup.dart';
-import 'widgets/fluffy_chat_app.dart';
 
 ReceivePort? mainIsolateReceivePort;
 
@@ -323,7 +323,7 @@ Future<void> startGui(
             startup: startup,
             appLockSettings: (pincode: pin, useBiometrics: useBiometrics),
           )
-        : FluffyChatApp(
+        : ChatLoomApp(
             clients: clients,
             appLockSettings: (pincode: pin, useBiometrics: useBiometrics),
             store: store,

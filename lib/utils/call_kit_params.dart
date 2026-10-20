@@ -4,16 +4,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:fluffychat/utils/notification_avatar_extension.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
+import 'package:chatloom/utils/notification_avatar_extension.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:matrix/matrix.dart';
 import 'package:uuid/uuid.dart';
 
-Future<CallKitParams> buildFluffyChatCallKitParams(
+Future<CallKitParams> buildChatLoomCallKitParams(
   Room room, {
   L10n? l10n,
   MatrixRtcCallIntent intent = .video,

@@ -3,12 +3,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/fluffy_share.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/chatloom_share.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart';
 import 'package:material_ui/material_ui.dart';
@@ -75,7 +75,7 @@ class QrCodeViewer extends StatelessWidget {
               backgroundColor: Colors.black.withAlpha(128),
             ),
             icon: Icon(Icons.adaptive.share_outlined),
-            onPressed: () => FluffyShare.share(inviteLink, context),
+            onPressed: () => ChatLoomShare.share(inviteLink, context),
             color: Colors.white,
             tooltip: L10n.of(context).share,
           ),
@@ -113,7 +113,7 @@ class QrCodeViewer extends StatelessWidget {
                 children: [
                   ConstrainedBox(
                     constraints: const BoxConstraints(
-                      maxWidth: FluffyThemes.columnWidth,
+                      maxWidth: ChatLoomThemes.columnWidth,
                     ),
                     child: PrettyQrView.data(
                       data: inviteLink,

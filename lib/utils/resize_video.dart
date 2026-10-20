@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:cross_file/cross_file.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:light_compressor_v2/light_compressor_v2.dart';
 import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';

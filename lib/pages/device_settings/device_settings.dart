@@ -4,13 +4,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:async/async.dart' show Result;
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/device_settings/device_settings_view.dart';
+import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:collection/collection.dart' show IterableExtension;
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/device_settings/device_settings_view.dart';
-import 'package:fluffychat/pages/key_verification/key_verification_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart' hide Result;

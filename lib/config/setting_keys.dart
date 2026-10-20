@@ -6,7 +6,7 @@
 import 'dart:convert';
 
 import 'package:async/async.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:managed_configurations/managed_configurations.dart';
@@ -86,7 +86,7 @@ enum AppSettings<T> {
   ),
   displayChatDetailsColumn('chat.fluffy.display_chat_details_column', false),
   // AppConfig-mirrored settings
-  applicationName<String>('chat.fluffy.application_name', 'Personal Chat'),
+  applicationName<String>('chat.fluffy.application_name', 'ChatLoom'),
   defaultHomeserver<String>(
     'chat.fluffy.default_homeserver',
     'matrix.beeper.com',

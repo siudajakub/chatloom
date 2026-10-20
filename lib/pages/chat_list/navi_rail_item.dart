@@ -4,10 +4,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:badges/badges.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/hover_builder.dart';
-import 'package:fluffychat/widgets/unread_rooms_badge.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/hover_builder.dart';
+import 'package:chatloom/widgets/unread_rooms_badge.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -41,7 +41,7 @@ class NaviRailItem extends StatelessWidget {
       builder: (context, hovered) {
         return SizedBox(
           height: 64,
-          width: FluffyThemes.navRailWidth,
+          width: ChatLoomThemes.navRailWidth,
           child: Stack(
             children: [
               Positioned(
@@ -50,12 +50,12 @@ class NaviRailItem extends StatelessWidget {
                 left: 0,
                 child: AnimatedContainer(
                   width: isSelected
-                      ? FluffyThemes.isColumnMode(context)
+                      ? ChatLoomThemes.isColumnMode(context)
                             ? 8
                             : 4
                       : 0,
-                  duration: FluffyThemes.animationDuration,
-                  curve: FluffyThemes.animationCurve,
+                  duration: ChatLoomThemes.animationDuration,
+                  curve: ChatLoomThemes.animationCurve,
                   decoration: BoxDecoration(
                     color: theme.colorScheme.primary,
                     borderRadius: const BorderRadius.only(
@@ -70,8 +70,8 @@ class NaviRailItem extends StatelessWidget {
                   scale: NotionMotion.pressIcon,
                   child: AnimatedScale(
                     scale: hovered ? 1.1 : 1.0,
-                    duration: FluffyThemes.animationDuration,
-                    curve: FluffyThemes.animationCurve,
+                    duration: ChatLoomThemes.animationDuration,
+                    curve: ChatLoomThemes.animationCurve,
                     child: Material(
                       borderRadius: borderRadius,
                       color: isSelected

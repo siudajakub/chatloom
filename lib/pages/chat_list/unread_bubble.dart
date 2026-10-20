@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -31,8 +31,8 @@ class UnreadBubble extends StatelessWidget {
               : 14.0
         : 0.0;
     return AnimatedContainer(
-      duration: FluffyThemes.animationDuration,
-      curve: FluffyThemes.animationCurve,
+      duration: ChatLoomThemes.animationDuration,
+      curve: ChatLoomThemes.animationCurve,
       alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 7),
       height: unreadBubbleSize,

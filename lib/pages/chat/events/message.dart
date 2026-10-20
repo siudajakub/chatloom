@@ -1,32 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_grouping.dart';
+import 'package:chatloom/pages/chat/conversation_message_actions.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
+import 'package:chatloom/utils/date_time_extension.dart';
+import 'package:chatloom/utils/file_description.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/member_actions_popup_menu_button.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/conversation_bubble.dart';
-import 'package:fluffychat/pages/chat/conversation_grouping.dart';
-import 'package:fluffychat/pages/chat/conversation_message_actions.dart';
-import 'package:fluffychat/pages/chat/conversation_message_gestures.dart';
-import 'package:fluffychat/pages/chat/conversation_motion.dart';
-import 'package:fluffychat/pages/chat/matrix_conversation_grouping.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/message_preview.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
-import 'package:fluffychat/utils/date_time_extension.dart';
-import 'package:fluffychat/utils/file_description.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/member_actions_popup_menu_button.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show ChatTheme;
+
 import '../sticker_picker_dialog.dart';
 import 'message_content.dart';
 import 'message_reactions.dart';
@@ -367,7 +368,7 @@ class Message extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12),
         child: ConstrainedBox(
           constraints: const BoxConstraints(
-            maxWidth: FluffyThemes.maxTimelineWidth,
+            maxWidth: ChatLoomThemes.maxTimelineWidth,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,

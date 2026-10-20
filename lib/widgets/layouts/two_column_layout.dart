@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/ui/notion/notion_motion.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Inbox (or settings index) beside the selected page. The side pane fades
@@ -87,8 +87,8 @@ class _TwoColumnLayoutState extends State<TwoColumnLayout>
               clipBehavior: Clip.antiAlias,
               decoration: const BoxDecoration(),
               width:
-                  FluffyThemes.columnWidth +
-                  (widget.hasNavigationRail ? FluffyThemes.navRailWidth : 0),
+                  ChatLoomThemes.columnWidth +
+                  (widget.hasNavigationRail ? ChatLoomThemes.navRailWidth : 0),
               // Each column owns its transient messages. In particular the
               // inbox Scaffold must place them above its floating dock.
               child: ScaffoldMessenger(child: widget.mainView),

@@ -3,13 +3,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/ui/notion_settings_page.dart';
+import 'package:chatloom/utils/account_config.dart';
+import 'package:chatloom/utils/file_selector.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/theme_builder.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/ui/notion_settings_page.dart';
-import 'package:fluffychat/utils/account_config.dart';
-import 'package:fluffychat/utils/file_selector.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/theme_builder.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../widgets/matrix.dart';

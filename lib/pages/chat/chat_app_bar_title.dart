@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/pages/chat/chat.dart';
-import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/person_location.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/pages/chat/chat.dart';
+import 'package:chatloom/pages/chat_list/chat_list_item.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -52,7 +52,7 @@ class ChatAppBarTitle extends StatelessWidget {
         ),
       ),
       name: name,
-      onDetails: () => FluffyThemes.isThreeColumnMode(context)
+      onDetails: () => ChatLoomThemes.isThreeColumnMode(context)
           ? controller.toggleDisplayChatDetailsColumn()
           : context.go('${chatLocation(context, room.id)}/details'),
     );

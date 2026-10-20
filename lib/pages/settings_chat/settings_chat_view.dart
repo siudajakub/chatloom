@@ -3,15 +3,15 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/settings_switch_list_tile.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -28,7 +28,7 @@ class SettingsChatView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chats & organization'),
-        automaticallyImplyLeading: !FluffyThemes.isColumnMode(context),
+        automaticallyImplyLeading: !ChatLoomThemes.isColumnMode(context),
         centerTitle: false,
       ),
       body: ListTileTheme(

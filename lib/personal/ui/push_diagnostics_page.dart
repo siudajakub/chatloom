@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/personal/message_notification.dart';
-import 'package:fluffychat/personal/push_diagnostics.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/background_push.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/personal/message_notification.dart';
+import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/background_push.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -563,7 +563,7 @@ class BatteryOptimizationRow extends StatelessWidget {
       true => 'Not restricted. Notifications can arrive in the background.',
       false =>
         'Restricted. Android may delay notifications. Tap and choose '
-            '"Don\'t optimize" or "Unrestricted" for Personal Chat.',
+            '"Don\'t optimize" or "Unrestricted" for ChatLoom.',
       null => 'Status unavailable.',
     },
     trailing: Text(

@@ -3,13 +3,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat_access_settings/chat_access_settings_controller.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/fluffy_share.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat_access_settings/chat_access_settings_controller.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/chatloom_share.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:chatloom/widgets/layouts/max_width_body.dart';
 import 'package:material_ui/material_ui.dart' hide Visibility;
 import 'package:matrix/matrix.dart';
 
@@ -236,7 +236,7 @@ class ChatAccessSettingsPageView extends StatelessWidget {
                     subtitle: SelectableText(room.id),
                     trailing: IconButton(
                       icon: const Icon(Icons.copy_outlined),
-                      onPressed: () => FluffyShare.share(room.id, context),
+                      onPressed: () => ChatLoomShare.share(room.id, context),
                     ),
                   ),
                   ListTile(
@@ -287,7 +287,7 @@ class _AliasListTile extends StatelessWidget {
           ? const Icon(Icons.star)
           : const Icon(Icons.link_outlined),
       title: InkWell(
-        onTap: () => FluffyShare.share('https://matrix.to/#/$alias', context),
+        onTap: () => ChatLoomShare.share('https://matrix.to/#/$alias', context),
         child: SelectableText(
           alias,
           style: TextStyle(

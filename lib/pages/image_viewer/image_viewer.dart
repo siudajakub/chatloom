@@ -3,16 +3,16 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/pages/image_viewer/image_viewer_view.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/show_scaffold_dialog.dart';
-import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
+import 'package:chatloom/pages/image_viewer/image_viewer_view.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/show_scaffold_dialog.dart';
+import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
 
 import '../../utils/matrix_sdk_extensions/event_extension.dart';
 

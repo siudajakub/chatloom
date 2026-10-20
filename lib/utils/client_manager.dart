@@ -3,20 +3,20 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/performance_probe.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/privacy_transport.dart';
+import 'package:chatloom/utils/custom_http_client.dart';
+import 'package:chatloom/utils/custom_image_resizer.dart';
+import 'package:chatloom/utils/init_with_restore.dart';
+import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call_member.dart';
+import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:collection/collection.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/performance_probe.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/privacy_transport.dart';
-import 'package:fluffychat/utils/custom_http_client.dart';
-import 'package:fluffychat/utils/custom_image_resizer.dart';
-import 'package:fluffychat/utils/init_with_restore.dart';
-import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call_member.dart';
-import 'package:fluffychat/utils/notification_background_handler.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
@@ -172,7 +172,7 @@ abstract class ClientManager {
         android: const AndroidInitializationSettings('notifications_icon'),
         iOS: const DarwinInitializationSettings(),
         linux: LinuxInitializationSettings(
-          defaultActionName: FluffyChatNotificationActions.open.name,
+          defaultActionName: ChatLoomNotificationActions.open.name,
         ),
         windows: windowsNotificationSettings,
         macOS: const DarwinInitializationSettings(),

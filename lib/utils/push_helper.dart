@@ -8,31 +8,31 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/message_notification.dart';
+import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/personal/notification_eligibility.dart';
+import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/private_avatar.dart';
+import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/personal/reminder_notification.dart';
+import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
+import 'package:chatloom/utils/call_kit_params.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
+import 'package:chatloom/utils/notification_avatar_extension.dart';
+import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/notification_client_routing.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/push_work_policy.dart';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/personal/diagnostics.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/message_notification.dart';
-import 'package:fluffychat/personal/message_preview.dart';
-import 'package:fluffychat/personal/notification_eligibility.dart';
-import 'package:fluffychat/personal/own_sender.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/private_avatar.dart';
-import 'package:fluffychat/personal/push_diagnostics.dart';
-import 'package:fluffychat/personal/reminder_notification.dart';
-import 'package:fluffychat/personal/round_video/telegram_media_protocol.dart';
-import 'package:fluffychat/utils/call_kit_params.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:fluffychat/utils/notification_avatar_extension.dart';
-import 'package:fluffychat/utils/notification_background_handler.dart';
-import 'package:fluffychat/utils/notification_client_routing.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/push_work_policy.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_new_badger/flutter_new_badger.dart';
@@ -451,14 +451,14 @@ List<AndroidNotificationAction> _messageActions() =>
     // Incognito never sends a read receipt from a notification.
     ? [
         AndroidNotificationAction(
-          FluffyChatNotificationActions.dismiss.name,
+          ChatLoomNotificationActions.dismiss.name,
           'Dismiss',
           cancelNotification: true,
         ),
       ]
     : [
         AndroidNotificationAction(
-          FluffyChatNotificationActions.markAsRead.name,
+          ChatLoomNotificationActions.markAsRead.name,
           'Mark as read',
           cancelNotification: true,
         ),
@@ -688,7 +688,7 @@ Future<void> _showMessageNotification({
           threadIdentifier: '${client.clientName}_${room.id}',
         ),
       ),
-      payload: FluffyChatPushPayload(
+      payload: ChatLoomPushPayload(
         client.clientName,
         room.id,
         event.eventId,
@@ -739,7 +739,7 @@ Future<void> _showFallback(
           threadIdentifier: '${target.client.clientName}_${target.roomId}',
         ),
       ),
-      payload: FluffyChatPushPayload(
+      payload: ChatLoomPushPayload(
         target.client.clientName,
         target.roomId,
         null,
@@ -909,26 +909,26 @@ Future<void> updateSummaryNotification({
   );
 }
 
-class FluffyChatPushPayload {
+class ChatLoomPushPayload {
   final String? clientName, roomId, eventId;
 
   /// Opens the reminder's message ([eventId]) instead of the chat bottom.
   final bool reminder;
 
-  FluffyChatPushPayload(
+  ChatLoomPushPayload(
     this.clientName,
     this.roomId,
     this.eventId, {
     this.reminder = false,
   });
 
-  factory FluffyChatPushPayload.fromString(String payload) {
+  factory ChatLoomPushPayload.fromString(String payload) {
     final parts = payload.split('|');
     if (parts.length != 3 && !(parts.length == 4 && parts[3] == 'reminder')) {
-      return FluffyChatPushPayload(null, null, null);
+      return ChatLoomPushPayload(null, null, null);
     }
     String? value(String part) => part.isEmpty || part == 'null' ? null : part;
-    return FluffyChatPushPayload(
+    return ChatLoomPushPayload(
       value(parts.first),
       value(parts[1]),
       value(parts[2]),
@@ -970,7 +970,7 @@ Future<void> _showIncomingCall(
       event.tryParseRtcNotificationContent()?.lifetime ??
       RtcNotificationContent.defaultLifetime;
   final params = await work.wait(
-    () => buildFluffyChatCallKitParams(
+    () => buildChatLoomCallKitParams(
       event.room,
       l10n: l10n,
       intent: intent,

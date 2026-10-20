@@ -122,9 +122,9 @@ String roundGateTitle(RoundGateCode code) => switch (code) {
 
 String? roundGateHint(RoundGateCode code) => switch (code) {
   RoundGateCode.bridgeLacksRoundSupport =>
-    'It needs the Personal Chat round bridge.',
+    'It needs the ChatLoom round bridge.',
   RoundGateCode.extensionVersion ||
-  RoundGateCode.profileIncomplete => 'Update the Personal Chat round bridge.',
+  RoundGateCode.profileIncomplete => 'Update the ChatLoom round bridge.',
   RoundGateCode.missingLegacyBridgeInfo ||
   RoundGateCode.missingRoomFeatures => 'Try again after the chat syncs.',
   RoundGateCode.uploadLimitUnknown => 'Check your connection and try again.',

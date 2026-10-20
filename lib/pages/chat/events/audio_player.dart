@@ -7,15 +7,15 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:async/async.dart';
-import 'package:fluffychat/pages/chat/notion_conversation.dart';
-import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/personal/media/media_inflight.dart';
-import 'package:fluffychat/personal/person_location.dart';
-import 'package:fluffychat/personal/transcript_panel.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/file_description.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/utils/url_launcher.dart';
+import 'package:chatloom/pages/chat/notion_conversation.dart';
+import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/media/media_inflight.dart';
+import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/personal/transcript_panel.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/file_description.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/utils/url_launcher.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:just_audio/just_audio.dart';
@@ -24,7 +24,7 @@ import 'package:matrix/matrix.dart';
 import 'package:ogg_caf_converter/ogg_caf_converter.dart';
 
 import '../../../utils/matrix_sdk_extensions/event_extension.dart';
-import '../../../widgets/fluffy_chat_app.dart';
+import '../../../widgets/chatloom_app.dart';
 import '../../../widgets/matrix.dart';
 
 class AudioPlayerWidget extends StatefulWidget {
@@ -138,7 +138,7 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
               content: StreamBuilder(
                 stream: audioPlayer.positionStream.asBroadcastStream(),
                 builder: (context, _) => GestureDetector(
-                  onTap: () => FluffyChatApp.router.go(
+                  onTap: () => ChatLoomApp.router.go(
                     conversationLocation(event.room, eventId: event.eventId),
                   ),
                   child: Text(

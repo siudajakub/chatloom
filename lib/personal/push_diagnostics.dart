@@ -41,7 +41,7 @@ String pushOutcomeLabel(PushOutcome outcome) => switch (outcome) {
   PushOutcome.own => 'Own message, no alert',
   PushOutcome.pushRules => 'Silenced by account notification rules',
   PushOutcome.activeRoom => 'Chat was open on screen',
-  PushOutcome.muted => 'Chat is muted in Personal Chat',
+  PushOutcome.muted => 'Chat is muted in ChatLoom',
   PushOutcome.mentionsOnly => 'Mentions only, not mentioned',
   PushOutcome.ignored => 'Chat is ignored',
   PushOutcome.journal => 'Private journal update',
@@ -302,7 +302,7 @@ abstract final class PushDiagnostics {
     Map<String, String> checks = const {},
     DateTime? now,
   }) {
-    final buffer = StringBuffer('Personal Chat notification diagnostics\n');
+    final buffer = StringBuffer('ChatLoom notification diagnostics\n');
     buffer.writeln(
       'Generated: ${(now ?? DateTime.now()).toUtc().toIso8601String()}',
     );

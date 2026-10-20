@@ -6,13 +6,13 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/blur_hash.dart';
 import 'package:chewie/chewie.dart';
-import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
-import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/blur_hash.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';

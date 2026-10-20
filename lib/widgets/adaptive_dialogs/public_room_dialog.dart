@@ -3,11 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/fluffy_share.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/chatloom_share.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:go_router/go_router.dart';
@@ -283,7 +283,7 @@ class PublicRoomDialog extends StatelessWidget {
                       AdaptiveIconTextButton(
                         label: L10n.of(context).share,
                         icon: Icons.adaptive.share,
-                        onTap: () => FluffyShare.share(
+                        onTap: () => ChatLoomShare.share(
                           'https://matrix.to/#/$roomLink',
                           context,
                         ),

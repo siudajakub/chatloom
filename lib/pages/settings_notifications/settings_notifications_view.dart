@@ -3,17 +3,17 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/settings_notifications/push_rule_extensions.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/personal/ui/push_diagnostics_page.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/background_push.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/push_helper.dart';
-import 'package:fluffychat/widgets/settings_switch_list_tile.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/settings_notifications/push_rule_extensions.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/personal/ui/push_diagnostics_page.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/background_push.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -45,7 +45,7 @@ class SettingsNotificationsView extends StatelessWidget {
     final pushService = Matrix.of(context).backgroundPush;
     return Scaffold(
       appBar: AppBar(
-        automaticallyImplyLeading: !FluffyThemes.isColumnMode(context),
+        automaticallyImplyLeading: !ChatLoomThemes.isColumnMode(context),
         centerTitle: false,
         title: Text(
           controller.widget.registrationDetails

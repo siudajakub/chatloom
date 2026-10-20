@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/themes.dart';
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/themes.dart';
 import 'package:material_ui/material_ui.dart';
 
 class MaxWidthBody extends StatelessWidget {
@@ -27,7 +27,7 @@ class MaxWidthBody extends StatelessWidget {
         builder: (context, constraints) {
           final theme = Theme.of(context);
 
-          const desiredWidth = FluffyThemes.columnWidth * 1.5;
+          const desiredWidth = ChatLoomThemes.columnWidth * 1.5;
           final body = constraints.maxWidth <= desiredWidth
               ? child
               : Container(
@@ -35,7 +35,7 @@ class MaxWidthBody extends StatelessWidget {
                   padding: const EdgeInsets.all(32),
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(
-                      maxWidth: FluffyThemes.columnWidth * 1.5,
+                      maxWidth: ChatLoomThemes.columnWidth * 1.5,
                     ),
                     child: Material(
                       shape: RoundedRectangleBorder(

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:typed_data';
 
+import 'package:chatloom/personal/round_video/round_availability.dart';
+import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
-import 'package:fluffychat/personal/round_video/round_availability.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show ChatTheme;

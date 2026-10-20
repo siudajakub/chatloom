@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/widgets/app_lock.dart';
-import 'package:fluffychat/widgets/fluffy_chat_app.dart';
-import 'package:fluffychat/widgets/theme_builder.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/widgets/app_lock.dart';
+import 'package:chatloom/widgets/chatloom_app.dart';
+import 'package:chatloom/widgets/theme_builder.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Startup surfaces render with the stored Notion theme on their first frame,
-/// so the hand-off to [FluffyChatApp] does not flash an unthemed Material app.
+/// so the hand-off to [ChatLoomApp] does not flash an unthemed Material app.
 class _StartupApp extends StatelessWidget {
   final SharedPreferences store;
   final Widget home;
@@ -22,8 +22,8 @@ class _StartupApp extends StatelessWidget {
     preferences: store,
     builder: (context, themeMode, primaryColor) => MaterialApp(
       themeMode: themeMode,
-      theme: FluffyThemes.buildTheme(context, Brightness.light, primaryColor),
-      darkTheme: FluffyThemes.buildTheme(
+      theme: ChatLoomThemes.buildTheme(context, Brightness.light, primaryColor),
+      darkTheme: ChatLoomThemes.buildTheme(
         context,
         Brightness.dark,
         primaryColor,
@@ -92,7 +92,7 @@ class ClientStartupView extends StatelessWidget {
     listenable: startup,
     builder: (context, _) {
       if (startup.clients.isNotEmpty) {
-        return FluffyChatApp(
+        return ChatLoomApp(
           clients: startup.clients,
           store: startup.store,
           appLockSettings: appLockSettings,

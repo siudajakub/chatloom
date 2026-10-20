@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/personal/privacy_transport.dart';
-import 'package:fluffychat/personal/storage/storage_failure.dart';
+import 'package:chatloom/personal/privacy_transport.dart';
+import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:http/http.dart' as http;
 
 import 'network_failure_stub.dart'
@@ -82,7 +82,7 @@ class PersonalDiagnostic {
     // Compiled stack coordinates are already one-based. Only the two fixed
     // asset names may survive a bare or HTTP(S) frame; never its URL or symbol.
     final locations = RegExp(
-      r'package:fluffychat/([a-zA-Z0-9_/]+\.dart):(\d+)(?::(\d+))?\)'
+      r'package:chatloom/([a-zA-Z0-9_/]+\.dart):(\d+)(?::(\d+))?\)'
       r'|(?:^|[\s(])(?:https?://[^\s()?#]+/)?'
       r'(main\.dart\.js|native_executor\.js):(\d+):(\d+)(?=$|[\s)])',
       multiLine: true,
@@ -97,7 +97,7 @@ class PersonalDiagnostic {
       if (frames.length == 8) break;
     }
     final sourceLocations = frames.join('\n');
-    return 'Personal Chat: $code [${phase.name}]'
+    return 'ChatLoom: $code [${phase.name}]'
         '${sourceLocations.isEmpty ? '' : '\n$sourceLocations'}';
   }
 }

@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -25,8 +25,8 @@ class StartChatFab extends StatelessWidget {
           : const EdgeInsets.symmetric(horizontal: 16),
       label: AnimatedSize(
         alignment: Alignment.centerLeft,
-        duration: FluffyThemes.animationDuration,
-        curve: FluffyThemes.animationCurve,
+        duration: ChatLoomThemes.animationDuration,
+        curve: ChatLoomThemes.animationCurve,
         child: extended ? Text(L10n.of(context).newChat) : SizedBox.shrink(),
       ),
       icon: const Icon(Icons.edit_square),

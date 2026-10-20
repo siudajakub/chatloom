@@ -2,66 +2,66 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:collection/collection.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat/chat.dart';
-import 'package:fluffychat/pages/chat/chat_app_bar_list_tile.dart';
-import 'package:fluffychat/pages/chat/chat_emoji_picker.dart';
-import 'package:fluffychat/pages/chat/chat_event_list.dart';
-import 'package:fluffychat/pages/chat/chat_input_row.dart';
-import 'package:fluffychat/pages/chat/compact_composer.dart';
-import 'package:fluffychat/pages/chat/conversation_source.dart';
-import 'package:fluffychat/pages/chat/composer_keyboard.dart';
-import 'package:fluffychat/pages/chat/conversation_source_picker.dart';
-import 'package:fluffychat/pages/chat/event_info_dialog.dart';
-import 'package:fluffychat/pages/chat/notion_conversation.dart';
-import 'package:fluffychat/pages/chat/reply_display.dart';
-import 'package:fluffychat/pages/chat/send_file_dialog.dart';
-import 'package:fluffychat/pages/chat/send_location_dialog.dart';
-import 'package:fluffychat/pages/chat/start_poll_bottom_sheet.dart';
-import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
-import 'package:fluffychat/pages/chat/undecryptable_chat_hint.dart';
-import 'package:fluffychat/pages/chat/undecryptable_fix_sheet.dart';
-import 'package:fluffychat/pages/chat/voice_message_sender.dart';
-import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/encryption/undecryptable_messages.dart';
-import 'package:fluffychat/personal/immediate_outbox.dart';
-import 'package:fluffychat/personal/inbox_projection.dart';
-import 'package:fluffychat/personal/media/immediate_media_outbox.dart';
-import 'package:fluffychat/personal/person_location.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/personal_hub.dart'
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat.dart';
+import 'package:chatloom/pages/chat/chat_app_bar_list_tile.dart';
+import 'package:chatloom/pages/chat/chat_emoji_picker.dart';
+import 'package:chatloom/pages/chat/chat_event_list.dart';
+import 'package:chatloom/pages/chat/chat_input_row.dart';
+import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/pages/chat/composer_keyboard.dart';
+import 'package:chatloom/pages/chat/conversation_source.dart';
+import 'package:chatloom/pages/chat/conversation_source_picker.dart';
+import 'package:chatloom/pages/chat/event_info_dialog.dart';
+import 'package:chatloom/pages/chat/notion_conversation.dart';
+import 'package:chatloom/pages/chat/reply_display.dart';
+import 'package:chatloom/pages/chat/send_file_dialog.dart';
+import 'package:chatloom/pages/chat/send_location_dialog.dart';
+import 'package:chatloom/pages/chat/start_poll_bottom_sheet.dart';
+import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/pages/chat/undecryptable_chat_hint.dart';
+import 'package:chatloom/pages/chat/undecryptable_fix_sheet.dart';
+import 'package:chatloom/pages/chat/voice_message_sender.dart';
+import 'package:chatloom/pages/chat_list/chat_list_item.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/personal/immediate_outbox.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/media/immediate_media_outbox.dart';
+import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/personal_hub.dart'
     show
         conversationQuickActions,
         personalDate,
         requestConversationReminder,
         schedulePersonalAttachment;
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/round_video/round_availability.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
-import 'package:fluffychat/personal/round_video/telegram_room_binding.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
-import 'package:fluffychat/personal/scheduled_composer.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_adapter.dart';
-import 'package:fluffychat/personal/ui/notion_chat_details_content.dart';
-import 'package:fluffychat/personal/ui/notion_network_filter.dart'
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_availability.dart';
+import 'package:chatloom/personal/round_video/round_capture_controller.dart';
+import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/personal/scheduled_composer.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
+import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/account_config.dart';
-import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/show_scaffold_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
-import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/account_config.dart';
+import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/show_scaffold_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:chatloom/widgets/share_scaffold_dialog.dart';
+import 'package:collection/collection.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -1090,7 +1090,7 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
     await scrollController.scrollToIndex(
       index + 1,
-      duration: FluffyThemes.animationDuration,
+      duration: ChatLoomThemes.animationDuration,
       preferPosition: AutoScrollPosition.middle,
     );
   }
@@ -2266,7 +2266,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final columns = FluffyThemes.isColumnMode(context);
+    final columns = ChatLoomThemes.isColumnMode(context);
     final projection = InboxProjection.snapshot(personal);
     final person = projection.metadataForEntity('person:${group.id}');
     final displayName = person.nickname ?? group.name;
@@ -2496,7 +2496,7 @@ class _MergedChatPageState extends State<_MergedChatView>
                                 columns ? NotionSpace.lg : NotionSpace.md,
                               ),
                               constraints: const BoxConstraints(
-                                maxWidth: FluffyThemes.maxTimelineWidth,
+                                maxWidth: ChatLoomThemes.maxTimelineWidth,
                               ),
                               child: ConversationTint(
                                 color: selecting

@@ -5,15 +5,15 @@
 
 import 'dart:async';
 
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/new_private_chat/new_private_chat_view.dart';
+import 'package:chatloom/pages/new_private_chat/qr_scanner_modal.dart';
+import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
+import 'package:chatloom/utils/chatloom_share.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/url_launcher.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/new_private_chat/new_private_chat_view.dart';
-import 'package:fluffychat/pages/new_private_chat/qr_scanner_modal.dart';
-import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
-import 'package:fluffychat/utils/fluffy_share.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/url_launcher.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -83,7 +83,7 @@ class NewPrivateChatController extends State<NewPrivateChat> {
     return profiles;
   }
 
-  void inviteAction() => FluffyShare.shareInviteLink(context);
+  void inviteAction() => ChatLoomShare.shareInviteLink(context);
 
   Future<void> openScannerAction() async {
     final l10n = L10n.of(context);

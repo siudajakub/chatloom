@@ -7,17 +7,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion_motion.dart';
+import 'package:chatloom/utils/file_selector.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_modal_action_popup.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/ui/notion/notion_motion.dart';
-import 'package:fluffychat/utils/file_selector.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:material_ui/material_ui.dart';
@@ -329,7 +329,7 @@ class SettingsController extends State<Settings> {
     final date = DateTime.now().toIso8601String().substring(0, 10);
     await MatrixFile(
       bytes: Uint8List.fromList(utf8.encode(export)),
-      name: 'personal-chat-export-$date.fluffybackup',
+      name: 'chatloom-export-$date.fluffybackup',
     ).save(context);
   }
 
