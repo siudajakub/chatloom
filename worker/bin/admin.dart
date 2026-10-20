@@ -94,7 +94,7 @@ Future<void> pair(Client client, WorkerConfig config, String configFile) async {
   final existed = room != null;
   if (room == null) {
     final id = await client.createRoom(
-      name: 'Personal Chat — private sync',
+      name: 'ChatLoom — private sync',
       preset: CreateRoomPreset.privateChat,
       creationContent: {'m.federate': false},
       initialState: [
