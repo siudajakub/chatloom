@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
 final notionSettingsRevision = ValueNotifier<int>(0);
@@ -148,7 +148,7 @@ class NotionSettingsPage extends StatelessWidget {
                     ? SizedBox.square(
                         dimension: 24,
                         child: ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: NotionRadius.avatarAll,
                           child: FittedBox(
                             fit: BoxFit.cover,
                             child: SizedBox.square(

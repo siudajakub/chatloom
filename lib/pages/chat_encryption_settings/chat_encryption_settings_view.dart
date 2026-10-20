@@ -3,17 +3,15 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/chat_encryption_settings/chat_encryption_settings.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/beautify_string_extension.dart';
-import 'package:fluffychat/utils/date_time_extension.dart';
-import 'package:fluffychat/widgets/layouts/max_width_body.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat_encryption_settings/chat_encryption_settings.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/beautify_string_extension.dart';
+import 'package:chatloom/utils/date_time_extension.dart';
+import 'package:chatloom/widgets/layouts/max_width_body.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 
 class ChatEncryptionSettingsView extends StatelessWidget {
   final ChatEncryptionSettingsController controller;
@@ -36,12 +34,6 @@ class ChatEncryptionSettingsView extends StatelessWidget {
             onPressed: () => context.go('/rooms/${controller.roomId!}'),
           ),
           title: Text(L10n.of(context).encryption),
-          actions: [
-            TextButton(
-              onPressed: () => launchUrlString(AppConfig.encryptionTutorial),
-              child: Text(L10n.of(context).help),
-            ),
-          ],
         ),
         body: MaxWidthBody(
           child: NotionSettingsBody.staggered(

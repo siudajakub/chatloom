@@ -5,7 +5,7 @@
 
 import 'dart:ui';
 
-import 'package:fluffychat/ui/notion/notion_tokens.dart';
+import 'package:chatloom/ui/notion/notion_tokens.dart';
 
 abstract class AppConfig {
   static const Color primaryColor = Color(0xFF261386);
@@ -33,12 +33,6 @@ abstract class AppConfig {
   static const double spaceBorderRadius = 11.0;
   static const double columnWidth = 360.0;
 
-  static const String enablePushTutorial =
-      'https://ko-fi.com/post/How-can-I-get-Push-Notifications-without-Google-N7Q825URG6?fromEditor=true';
-  static const String encryptionTutorial =
-      'https://ko-fi.com/post/How-to-use-end-to-end-encryption-in-FluffyChat-A5O725WDR5';
-  static const String howDoIGetStickersTutorial =
-      'https://ko-fi.com/post/How-to-add-a-sticker-pack-to-FluffyChat-N4N01OXATI';
   static const String appId = 'pl.personal.chat';
   static const String appOpenUrlScheme = 'pl.personal.chat';
   static const String appSsoUrlScheme = 'pl.personal.chat.auth';
@@ -46,33 +40,30 @@ abstract class AppConfig {
   static const String windowsNotificationGuid =
       '4894dfda-c70a-4ebc-b139-acae55f3988d';
 
-  static const String sourceCodeUrl =
+  /// User-visible product name. Never use it in storage keys or other
+  /// persisted identifiers; see [legacyStorageAppName].
+  static const String appName = 'ChatLoom';
+
+  /// The name the app had when existing installs created persisted data
+  /// (secure-storage session backups, login client names). It must never
+  /// change, otherwise existing installs lose access to that data.
+  static const String legacyStorageAppName = 'Personal Chat';
+
+  /// ChatLoom is based on FluffyChat; its AGPL source and credits stay linked.
+  static const String upstreamName = 'FluffyChat';
+  static const String upstreamSourceCodeUrl =
       'https://github.com/krille-chan/fluffychat';
-  static const String supportUrl =
-      'https://github.com/krille-chan/fluffychat/issues';
-  static const String changelogUrl = 'https://fluffychat.im/changelog/';
-  static const String latestReleaseApiUrl =
-      'https://api.github.com/repos/krille-chan/fluffychat/releases/latest';
-  static const String helpUrl =
-      'https://ko-fi.com/post/How-can-I-support-FluffyChat-J2G325WE6I';
+  static const String upstreamCredit =
+      'ChatLoom is based on FluffyChat by Christian Kußowski and the '
+      'FluffyChat contributors, licensed under the GNU Affero General Public '
+      'License v3.0 or later.';
 
   static const Set<String> defaultReactions = {'👍', '❤️', '😂', '😮', '😢'};
-
-  static final Uri newIssueUrl = Uri(
-    scheme: 'https',
-    host: 'github.com',
-    path: '/krille-chan/fluffychat/issues/new',
-  );
 
   static final Uri homeserverList = Uri(
     scheme: 'https',
     host: 'raw.githubusercontent.com',
     path: 'krille-chan/fluffychat/refs/heads/main/recommended_homeservers.json',
-  );
-
-  static final Uri crashReportEndpoint = Uri(
-    scheme: 'https',
-    host: 'crash.fluffy.chat',
   );
 
   static const String mainIsolatePortName = 'main_isolate';

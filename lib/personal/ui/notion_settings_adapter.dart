@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/pages/settings/settings.dart';
-import 'package:fluffychat/personal/personal_client.dart';
-import 'package:fluffychat/personal/ui/notion_settings_body.dart';
-import 'package:fluffychat/personal/ui/notion_settings_load.dart';
-import 'package:fluffychat/personal/ui/notion_settings_page.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/fluffy_share.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/matrix.dart';
-import 'package:fluffychat/widgets/theme_builder.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/pages/settings/settings.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/notion_settings_body.dart';
+import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/personal/ui/notion_settings_page.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/chatloom_share.dart';
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/matrix.dart';
+import 'package:chatloom/widgets/theme_builder.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -63,7 +63,7 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
   /// transition and predictive back); in two-column mode, or when settings
   /// was opened without a page below, it navigates to the chats.
   void _back() {
-    if (!FluffyThemes.isColumnMode(context) && context.canPop()) {
+    if (!ChatLoomThemes.isColumnMode(context) && context.canPop()) {
       context.pop();
     } else {
       context.go('/rooms');
@@ -115,11 +115,6 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
               title: 'App information',
               subtitle: 'Version and licenses',
               onTap: () => PlatformInfos.showDialog(context),
-            ),
-            NotionListRow(
-              leading: const Icon(Icons.privacy_tip_outlined),
-              title: 'Privacy policy',
-              onTap: () => launchUrlString(AppSettings.privacyPolicy.value),
             ),
             NotionListRow(
               leading: const Icon(Icons.dns_outlined),
@@ -219,7 +214,7 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                   title: 'Share account address',
                   onTap: () {
                     final id = client.userID;
-                    if (id != null) FluffyShare.share(id, context);
+                    if (id != null) ChatLoomShare.share(id, context);
                   },
                 ),
                 const NotionSettingsSection('Account management'),
