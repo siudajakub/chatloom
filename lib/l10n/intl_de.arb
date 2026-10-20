@@ -809,7 +809,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} hat Dich zu FluffyChat eingeladen. \n1. Gehe auf fluffychat.im und installiere die App \n2. Melde Dich in der App an \n3. Öffne den Einladungslink: \n {link}",
+    "inviteText": "{username} hat Dich zu ChatLoom eingeladen. \n1. Gehe auf https://matrix.org/ecosystem/clients/ und installiere die App \n2. Melde Dich in der App an \n3. Öffne den Einladungslink: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -966,7 +966,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Neue Nachricht in FluffyChat",
+    "newMessageInFluffyChat": "💬 Neue Nachricht in ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2482,7 +2482,7 @@
     "advancedConfigurations": "Erweiterte Konfigurationen",
     "signIn": "Anmelden",
     "createNewAccount": "Neues Konto erstellen",
-    "signUpGreeting": "FluffyChat ist dezentral! Wähle einen Server, auf dem du dein Konto erstellen möchtest, und los geht's!",
+    "signUpGreeting": "ChatLoom ist dezentral! Wähle einen Server, auf dem du dein Konto erstellen möchtest, und los geht's!",
     "signInGreeting": "Du hast bereits ein Konto bei Matrix? Willkommen zurück! Wähle deinen Homeserver aus und melde dich an.",
     "theProcessWasCanceled": "Der Vorgang wurde abgebrochen.",
     "federationBaseUrl": "Basis-URL der Föderation",
@@ -2504,7 +2504,7 @@
         "description": "This should be a very short string because there is not much space in the button!"
     },
     "createNewChat": "Neuen Chat erstellen",
-    "supportFluffyChat": "FluffyChat unterstützen",
+    "supportFluffyChat": "ChatLoom unterstützen",
     "support": "Unterstützen",
     "createNewTag": "Neuen tag erstellen",
     "tagName": "Tag-Name",
@@ -2522,7 +2522,7 @@
     "showMore": "Mehr anzeigen",
     "showLess": "Weniger anzeigen",
     "hideRoomsInSpaces": "Räume ausblenden, die sich in einem space befinden",
-    "possibleByYou": "Diese Veröffentlichung war nur dank eurer Unterstützung möglich. FluffyChat bleibt kostenlos, Open-Source und vollständig von der Community getragen.",
+    "possibleByYou": "Diese Veröffentlichung war nur dank eurer Unterstützung möglich. ChatLoom bleibt kostenlos, Open-Source und vollständig von der Community getragen.",
     "showThumbnailsInTimeline": "Thumbnails von Bildern und Videos anzeigen",
     "appSubtitle": "Sichere [matrix]-Kommunikation",
     "interactiveVerification": "Interaktive Verifikation",
@@ -2605,7 +2605,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat verwendet Ende-zu-Ende-Verschlüsselung. Um deine Nachrichten nicht zu verlieren, wähle bitte eine starke Passphrase, um deine Krypto-Identität und dein verschlüsseltes Nachrichten-Backup zu sichern.",
+    "newPassphraseDescription": "ChatLoom verwendet Ende-zu-Ende-Verschlüsselung. Um deine Nachrichten nicht zu verlieren, wähle bitte eine starke Passphrase, um deine Krypto-Identität und dein verschlüsseltes Nachrichten-Backup zu sichern.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

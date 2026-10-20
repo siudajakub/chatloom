@@ -786,7 +786,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} 邀请你使用 FluffyChat。 \n1. 安装 FluffyChat：https://fluffychat.im \n2. 注册或登录 \n3. 打开邀请链接：\n {link}",
+    "inviteText": "{username} 邀请你使用 ChatLoom。 \n1. 安装 ChatLoom：https://matrix.org/ecosystem/clients/ \n2. 注册或登录 \n3. 打开邀请链接：\n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -933,7 +933,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 FluffyChat 新消息",
+    "newMessageInFluffyChat": "💬 ChatLoom 新消息",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -968,7 +968,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "noGoogleServicesWarning": "看起来你手机上没有 Firebase Cloud Messaging。如果仍希望接收 FluffyChat 的推送通知，推荐安装 ntfy。借助 ntfy 或另一个 Unified Push 程序，你可以以一种数据安全的方式接收推送通知。你可以从 PlayStore 或 F-Droid 商店下载 ntfy。",
+    "noGoogleServicesWarning": "看起来你手机上没有 Firebase Cloud Messaging。如果仍希望接收 ChatLoom 的推送通知，推荐安装 ntfy。借助 ntfy 或另一个 Unified Push 程序，你可以以一种数据安全的方式接收推送通知。你可以从 PlayStore 或 F-Droid 商店下载 ntfy。",
     "@noGoogleServicesWarning": {
         "type": "String",
         "placeholders": {}
@@ -2107,7 +2107,7 @@
             }
         }
     },
-    "appLockDescription": "用 pin 码在不用 FluffyChat 时锁定它",
+    "appLockDescription": "用 pin 码在不用 ChatLoom 时锁定它",
     "globalChatId": "全局聊天 ID",
     "accessAndVisibility": "访问和可见性",
     "accessAndVisibilityDescription": "谁可以加入此聊天以及怎样发现该聊天。",
@@ -2476,7 +2476,7 @@
     "advancedConfigurations": "高级配置",
     "signIn": "登录",
     "createNewAccount": "创建新账户",
-    "signUpGreeting": "FluffyChat 是去中心化的！选择您希望创建账户的服务器！",
+    "signUpGreeting": "ChatLoom 是去中心化的！选择您希望创建账户的服务器！",
     "signInGreeting": "已经有 Matrix 账户了？欢迎回来！选择 homeserver 登录。",
     "theProcessWasCanceled": "过程被取消。",
     "join": "加入",
@@ -2496,7 +2496,7 @@
     },
     "createNewChat": "新建聊天",
     "reset": "重置",
-    "supportFluffyChat": "支持 FluffyChat",
+    "supportFluffyChat": "支持 ChatLoom",
     "support": "支持",
     "setLowPriority": "设置低优先级",
     "unsetLowPriority": "取消设置低优先级",
@@ -2511,7 +2511,7 @@
         "placeholders": {}
     },
     "hideRoomsInSpaces": "隐藏位于空间中的聊天室",
-    "possibleByYou": "没有您的支持不会有这个版本。FluffyChat 依旧免费、开源、完全由社区驱动。",
+    "possibleByYou": "没有您的支持不会有这个版本。ChatLoom 依旧免费、开源、完全由社区驱动。",
     "showThumbnailsInTimeline": "显示图片和视频的缩略图",
     "appSubtitle": "安全的 [matrix] 通信",
     "appDescription": "以对所有人简单易得的方式通过去中心化 [matrix] 网络加密通信。",
@@ -2595,7 +2595,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat 使用端到端加密。为了不丢失消息，请选择强密码短语来保护加密身份和加密的消息备份。",
+    "newPassphraseDescription": "ChatLoom 使用端到端加密。为了不丢失消息，请选择强密码短语来保护加密身份和加密的消息备份。",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

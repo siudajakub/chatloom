@@ -690,7 +690,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} ti ha invitato/a a FluffyChat.\n1. Visita fluffychat.im e installa l'applicazione\n2. Iscriviti o accedi\n3. Apri il collegamento di invito: \n {link}",
+    "inviteText": "{username} ti ha invitato/a a ChatLoom.\n1. Visita https://matrix.org/ecosystem/clients/ e installa l'applicazione\n2. Iscriviti o accedi\n3. Apri il collegamento di invito: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -837,7 +837,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Nuovo messaggio in FluffyChat",
+    "newMessageInFluffyChat": "💬 Nuovo messaggio in ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2541,7 +2541,7 @@
         "description": "This should be a very short string because there is not much space in the button!"
     },
     "createNewChat": "Crea una nuova chat",
-    "supportFluffyChat": "Supporta FluffyChat",
+    "supportFluffyChat": "Supporta ChatLoom",
     "setLowPriority": "Imposta priorità bassa",
     "unsetLowPriority": "Rimuovi priorità bassa",
     "playSoundOnNotification": "Riproduci suono per le notifiche",

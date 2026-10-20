@@ -625,7 +625,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} t'ha convidat a FluffyChat.\n1. Visita fluffychat.im i instaŀla l'app\n2. Registra't o inicia sessió\n3. Obre l'enllaç d'invitació:\n{link}",
+    "inviteText": "{username} t'ha convidat a ChatLoom.\n1. Visita https://matrix.org/ecosystem/clients/ i instaŀla l'app\n2. Registra't o inicia sessió\n3. Obre l'enllaç d'invitació:\n{link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -772,7 +772,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Missatge nou al FluffyChat",
+    "newMessageInFluffyChat": "💬 Missatge nou al ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -797,7 +797,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "noGoogleServicesWarning": "Sembla que no teniu els Serveis de Google al telèfon. Això és una bona decisió respecte a la vostra privadesa! Per a rebre notificacions automàtiques del FluffyChat, us recomanem instaŀlar ntfy. Amb ntfy o qualsevol altre proveïdor de Unified Push, pots rebre notificacions de forma segura i lliure. Pots instaŀlar ntfy des de la PlayStore o des de F-Droid.",
+    "noGoogleServicesWarning": "Sembla que no teniu els Serveis de Google al telèfon. Això és una bona decisió respecte a la vostra privadesa! Per a rebre notificacions automàtiques del ChatLoom, us recomanem instaŀlar ntfy. Amb ntfy o qualsevol altre proveïdor de Unified Push, pots rebre notificacions de forma segura i lliure. Pots instaŀlar ntfy des de la PlayStore o des de F-Droid.",
     "@noGoogleServicesWarning": {
         "type": "String",
         "placeholders": {}
@@ -2475,7 +2475,7 @@
     "advancedConfigurations": "Configuracions avançades",
     "signIn": "Obre sessió",
     "createNewAccount": "Crea un compte nou",
-    "signUpGreeting": "El FluffyChat és descentralitzat! Tria un servidor on vulguis crear-t'hi un compte, i som-hi!",
+    "signUpGreeting": "El ChatLoom és descentralitzat! Tria un servidor on vulguis crear-t'hi un compte, i som-hi!",
     "signInGreeting": "Si ja tens un compte a Matrix, benvingudi! Tria el teu servidor i inicia-hi sessió.",
     "theProcessWasCanceled": "S'ha canceŀlat el procés.",
     "join": "Entra",
@@ -2495,7 +2495,7 @@
     },
     "createNewChat": "Crea un nou xat",
     "reset": "Reseteja",
-    "supportFluffyChat": "Dona suport a FluffyChat",
+    "supportFluffyChat": "Dona suport a ChatLoom",
     "support": "Aporta",
     "setLowPriority": "Estableix una prioritat baixa",
     "unsetLowPriority": "Restableix la prioritat",

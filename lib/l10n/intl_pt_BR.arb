@@ -813,7 +813,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} convidou você para o FluffyChat.\n1. Visite fluffychat.im e instale o aplicativo\n2. Entre ou crie uma conta\n3. Abra o link do convite:\n{link}",
+    "inviteText": "{username} convidou você para o ChatLoom.\n1. Visite https://matrix.org/ecosystem/clients/ e instale o aplicativo\n2. Entre ou crie uma conta\n3. Abra o link do convite:\n{link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -970,7 +970,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Nova mensagem no FluffyChat",
+    "newMessageInFluffyChat": "💬 Nova mensagem no ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}

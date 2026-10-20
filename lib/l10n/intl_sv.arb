@@ -648,7 +648,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} bjöd in dig till FluffyChat.\n1. Besök fluffychat.im och installera appen\n2. Registrera dig eller logga in\n3. Öppna inbjudningslänk:\n {link}",
+    "inviteText": "{username} bjöd in dig till ChatLoom.\n1. Besök https://matrix.org/ecosystem/clients/ och installera appen\n2. Registrera dig eller logga in\n3. Öppna inbjudningslänk:\n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -795,7 +795,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Nya meddelanden i FluffyChat",
+    "newMessageInFluffyChat": "💬 Nya meddelanden i ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -825,7 +825,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "noGoogleServicesWarning": "De ser ut som att du inte har google-tjänster på din telefon. Det är ett bra beslut för din integritet! För att få aviseringar i FluffyChat rekommenderar vi att använda https://microg.org/ eller https://unifiedpush.org/ .",
+    "noGoogleServicesWarning": "De ser ut som att du inte har google-tjänster på din telefon. Det är ett bra beslut för din integritet! För att få aviseringar i ChatLoom rekommenderar vi att använda https://microg.org/ eller https://unifiedpush.org/ .",
     "@noGoogleServicesWarning": {
         "type": "String",
         "placeholders": {}
@@ -2464,7 +2464,7 @@
     "identityServer": "Identitetsserver:",
     "advancedConfigs": "Avancerad konfiguration",
     "advancedConfigurations": "Avancerade konfigurationer",
-    "signUpGreeting": "FluffyChat är decentraliserad! Välj en server där du vill skapa ditt konto och kom igång!",
+    "signUpGreeting": "ChatLoom är decentraliserad! Välj en server där du vill skapa ditt konto och kom igång!",
     "signInGreeting": "Har du redan ett konto i Matrix? Välkommen tillbaka! Välj din hemserver och logga in.",
     "theProcessWasCanceled": "Processen blev avbruten.",
     "join": "Gå med",
@@ -2484,7 +2484,7 @@
     },
     "createNewChat": "Skapa ny chatt",
     "reset": "Återställ",
-    "supportFluffyChat": "Stöd FluffyChat",
+    "supportFluffyChat": "Stöd ChatLoom",
     "support": "Stöd",
     "setLowPriority": "Sätt låg prioritet",
     "unsetLowPriority": "Ta bort låg prioritet",
@@ -2494,7 +2494,7 @@
     "tagName": "Taggnamn",
     "createNewTag": "Skapa ny tagg",
     "hideRoomsInSpaces": "Dölj rum som är i en plats",
-    "possibleByYou": "Denna utgåva var endast möjlig tack vare ditt stöd. FluffyChat behålls gratis, öppen källkod, och helt gemenskapsdriven.",
+    "possibleByYou": "Denna utgåva var endast möjlig tack vare ditt stöd. ChatLoom behålls gratis, öppen källkod, och helt gemenskapsdriven.",
     "showThumbnailsInTimeline": "Visa förhandsvisning av bilder och videor",
     "appSubtitle": "Säker [matrix]-kommunikation",
     "appDescription": "Kommunicera krypterat över det decentraliserade [matrix]-nätverket på ett enkelt och tillgängligt sätt för alla.",
@@ -2578,7 +2578,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat använder helsträckskryptering. För att inte bli av med dina meddelanden, vänligen välj en stark lösenfras för att säkra din krypto-identitet och din krypterade säkerhetskopiering av meddelanden.",
+    "newPassphraseDescription": "ChatLoom använder helsträckskryptering. För att inte bli av med dina meddelanden, vänligen välj en stark lösenfras för att säkra din krypto-identitet och din krypterade säkerhetskopiering av meddelanden.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

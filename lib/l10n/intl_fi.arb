@@ -1,6 +1,6 @@
 {
     "repeatPassword": "Salasana uudelleen",
-    "about": "Tietoa FluffyChatista",
+    "about": "Tietoa ChatLoomista",
     "@about": {
         "type": "String",
         "placeholders": {}
@@ -638,7 +638,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} kutsui sinut FluffyChattiin.\n1. Viereaile sivulla: https://fluffychat.im ja asenna sovellus\n2. Rekisteröidy tai kirjaudu sisään\n3. Avaa kutsulinkki:\n{link}",
+    "inviteText": "{username} kutsui sinut ChatLoomtiin.\n1. Viereaile sivulla: https://matrix.org/ecosystem/clients/ ja asenna sovellus\n2. Rekisteröidy tai kirjaudu sisään\n3. Avaa kutsulinkki:\n{link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -776,7 +776,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Uusi viesti FluffyChätissä",
+    "newMessageInFluffyChat": "💬 Uusi viesti ChatLoomissä",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}

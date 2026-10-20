@@ -569,7 +569,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} meghívta a FluffyChat-be.\n1. Keresse fel a fluffychat.im oldalt, és telepítse az alkalmazást \n2. Regisztráljon vagy jelentkezzen be \n3. Nyissa meg a meghívó linket: \n {link}",
+    "inviteText": "{username} meghívta a ChatLoom-be.\n1. Keresse fel a https://matrix.org/ecosystem/clients/ oldalt, és telepítse az alkalmazást \n2. Regisztráljon vagy jelentkezzen be \n3. Nyissa meg a meghívó linket: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -706,7 +706,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Új FluffyChat üzenet",
+    "newMessageInFluffyChat": "💬 Új ChatLoom üzenet",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}

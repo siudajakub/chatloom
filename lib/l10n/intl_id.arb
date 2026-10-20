@@ -88,7 +88,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} mengundang kamu ke FluffyChat. \n1. Kunjungi fluffychat.im dan instal aplikasi\n2. Daftar atau masuk \n3. Buka tautan undangan: \n {link}",
+    "inviteText": "{username} mengundang kamu ke ChatLoom. \n1. Kunjungi https://matrix.org/ecosystem/clients/ dan instal aplikasi\n2. Daftar atau masuk \n3. Buka tautan undangan: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -805,7 +805,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Pesan baru di FluffyChat",
+    "newMessageInFluffyChat": "💬 Pesan baru di ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2475,7 +2475,7 @@
     "advancedConfigurations": "Konfigurasi lanjutan",
     "signIn": "Masuk",
     "createNewAccount": "Buat akun baru",
-    "signUpGreeting": "FluffyChat terdesentralisasi! Pilih server tempat Anda ingin membuat akun dan mari kita mulai!",
+    "signUpGreeting": "ChatLoom terdesentralisasi! Pilih server tempat Anda ingin membuat akun dan mari kita mulai!",
     "signInGreeting": "Anda sudah memiliki akun di Matrix? Selamat datang kembali! Pilih homeserver Anda dan masuk.",
     "theProcessWasCanceled": "Proses dibatalkan.",
     "join": "Bergabung",
@@ -2495,7 +2495,7 @@
     },
     "createNewChat": "Buat obrolan baru",
     "reset": "Atur ulang",
-    "supportFluffyChat": "Dukung FluffyChat",
+    "supportFluffyChat": "Dukung ChatLoom",
     "support": "Dukungan",
     "setLowPriority": "Atur prioritas rendah",
     "unsetLowPriority": "Batalkan prioritas rendah",
@@ -2512,7 +2512,7 @@
     "showMore": "Tampilkan lebih banyak",
     "showLess": "Tampilkan lebih sedikit",
     "hideRoomsInSpaces": "Sembunyikan room yang berada dalam sebuah space",
-    "possibleByYou": "Rilis ini hanya dapat terwujud berkat dukungan Anda. FluffyChat tetap gratis, open-source, dan sepenuhnya digerakkan oleh komunitas.",
+    "possibleByYou": "Rilis ini hanya dapat terwujud berkat dukungan Anda. ChatLoom tetap gratis, open-source, dan sepenuhnya digerakkan oleh komunitas.",
     "showThumbnailsInTimeline": "Tampilkan thumbnail gambar dan video",
     "appSubtitle": "Komunikasi [matrix] yang aman",
     "appDescription": "Berkomunikasi secara terenkripsi melalui jaringan [matrix] terdesentralisasi dengan cara yang mudah dan dapat diakses oleh semua orang.",
@@ -2596,7 +2596,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat menggunakan enkripsi end-to-end. Agar tidak kehilangan pesan Anda, silakan pilih passphrase yang kuat untuk mengamankan identitas kripto Anda dan cadangan pesan terenkripsi Anda.",
+    "newPassphraseDescription": "ChatLoom menggunakan enkripsi end-to-end. Agar tidak kehilangan pesan Anda, silakan pilih passphrase yang kuat untuk mengamankan identitas kripto Anda dan cadangan pesan terenkripsi Anda.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

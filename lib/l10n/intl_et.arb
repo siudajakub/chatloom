@@ -814,7 +814,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} kutsus sind kasutama Matrix'i-põhist suhtlusrakendust FluffyChat. \n1. Ava fluffychat.im ja paigalda FluffyChat'i rakendus \n2. Liitu kasutajaks või logi sisse olemasoleva Matrix'i kasutajakontoga\n3. Ava kutse link: \n {link}",
+    "inviteText": "{username} kutsus sind kasutama Matrix'i-põhist suhtlusrakendust ChatLoom. \n1. Ava https://matrix.org/ecosystem/clients/ ja paigalda ChatLoom'i rakendus \n2. Liitu kasutajaks või logi sisse olemasoleva Matrix'i kasutajakontoga\n3. Ava kutse link: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -971,7 +971,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Uus sõnum FluffyChati vahendusel",
+    "newMessageInFluffyChat": "💬 Uus sõnum ChatLoomi vahendusel",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -1006,7 +1006,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "noGoogleServicesWarning": "Tundub, et sinu nutiseadmes pole Firebase Cloud Messaging teenuseid. Sinu privaatsuse mõttes on see kindlasti hea otsus! Kui sa soovid FluffyChatis näha tõuketeavitusi, siis soovitame, et selle jaoks kasutad ntfy liidestust. Kasutades ntfyd või mõnda muud Unified Push standardil põhinevat liidestust saad tõuketeavitusi turvalisel moel. Ntfy rakendus on saadaval nii PlayStore kui F-Droidi rakendusepoodides.",
+    "noGoogleServicesWarning": "Tundub, et sinu nutiseadmes pole Firebase Cloud Messaging teenuseid. Sinu privaatsuse mõttes on see kindlasti hea otsus! Kui sa soovid ChatLoomis näha tõuketeavitusi, siis soovitame, et selle jaoks kasutad ntfy liidestust. Kasutades ntfyd või mõnda muud Unified Push standardil põhinevat liidestust saad tõuketeavitusi turvalisel moel. Ntfy rakendus on saadaval nii PlayStore kui F-Droidi rakendusepoodides.",
     "@noGoogleServicesWarning": {
         "type": "String",
         "placeholders": {}
@@ -2479,7 +2479,7 @@
     "advancedConfigurations": "Täiendavad seadistused",
     "signIn": "Logi sisse",
     "createNewAccount": "Loo uus kasutajakonto",
-    "signUpGreeting": "FluffyChat kasutab hajutatud võrku! Vali server, kuhu tahad oma kasutajakonto lisada ning alustame!",
+    "signUpGreeting": "ChatLoom kasutab hajutatud võrku! Vali server, kuhu tahad oma kasutajakonto lisada ning alustame!",
     "signInGreeting": "Sul juba on Matrixi kasutajakonto olemas? Tere tulemast tagasi! Vali oma koduserver ja logi sisse.",
     "theProcessWasCanceled": "Protsess on katkestatud.",
     "join": "Liitu",
@@ -2499,7 +2499,7 @@
     },
     "createNewChat": "Loo uus vestlus",
     "reset": "Lähtesta",
-    "supportFluffyChat": "Toeta FluffyChati",
+    "supportFluffyChat": "Toeta ChatLoomi",
     "support": "Toeta meid",
     "setLowPriority": "Märgi vähetähtsaks",
     "unsetLowPriority": "Eemalda märkimine vähetähtsaks",
@@ -2514,7 +2514,7 @@
         "placeholders": {}
     },
     "hideRoomsInSpaces": "Peida jututoad, mis on osa kogukonnast",
-    "possibleByYou": "Selle versiooni väljaandmine oli võimalik vaid sinu toetusele. FluffyChat jääb vabaks, avatud lähtekoodi põhiseks ja kogukonnakeskseks.",
+    "possibleByYou": "Selle versiooni väljaandmine oli võimalik vaid sinu toetusele. ChatLoom jääb vabaks, avatud lähtekoodi põhiseks ja kogukonnakeskseks.",
     "showThumbnailsInTimeline": "Näita piltide ja videote pisipilte",
     "appSubtitle": "Turvaline suhtlus [matrix]'i võrgus",
     "appDescription": "Suhtle krüptitult hajutatud [matrix] võrgustikus viisil, mis on lihtne ja kõigile kättesaadav.",
@@ -2616,7 +2616,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat kasutab läbivat krüptimist. Et sa ei kaotaks oma sõnumeid, turvaks oma krüptidentitedi ja krüptiks sõnumite varunduse, siis palun sisesta korralik ja tugev salafraas.",
+    "newPassphraseDescription": "ChatLoom kasutab läbivat krüptimist. Et sa ei kaotaks oma sõnumeid, turvaks oma krüptidentitedi ja krüptiks sõnumite varunduse, siis palun sisesta korralik ja tugev salafraas.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

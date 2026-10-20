@@ -697,7 +697,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username}があなたをFluffyChatに招待しました。\n1. FluffyChatをインストール:　fluffychat.im \n2. アカウントの作成、またはサインインを行う\n3. 招待リンクを開く\n {link}",
+    "inviteText": "{username}があなたをChatLoomに招待しました。\n1. ChatLoomをインストール:　https://matrix.org/ecosystem/clients/ \n2. アカウントの作成、またはサインインを行う\n3. 招待リンクを開く\n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -844,7 +844,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 FluffyChatに新しいメッセージがあります",
+    "newMessageInFluffyChat": "💬 ChatLoomに新しいメッセージがあります",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2240,6 +2240,6 @@
     "report": "レポート",
     "signIn": "ログイン",
     "createNewAccount": "アカウントを作成",
-    "signUpGreeting": "FluffyChatは分散型です！アカウントを作成したいサーバーを選択して、さあ始めましょう！",
+    "signUpGreeting": "ChatLoomは分散型です！アカウントを作成したいサーバーを選択して、さあ始めましょう！",
     "sendReadReceipts": "既読通知を送信"
 }

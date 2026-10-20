@@ -1057,7 +1057,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 FluffyChat에서 새로운 메시지",
+    "newMessageInFluffyChat": "💬 ChatLoom에서 새로운 메시지",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -1278,7 +1278,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "noGoogleServicesWarning": "이 휴대폰에 Firebase Cloud Messaging 서비스가 없는 것 같습니다. FluffyChat에서 푸시 알림을 받으려면 ntfy 사용을 추천합니다. ntfy 혹은 다른 푸시 알림 제공자를 사용하면 알림을 보안적인 방법으로 받을 수 있습니다. ntfy는 PlayStore와 F-Droid에서 설치 가능합니다.",
+    "noGoogleServicesWarning": "이 휴대폰에 Firebase Cloud Messaging 서비스가 없는 것 같습니다. ChatLoom에서 푸시 알림을 받으려면 ntfy 사용을 추천합니다. ntfy 혹은 다른 푸시 알림 제공자를 사용하면 알림을 보안적인 방법으로 받을 수 있습니다. ntfy는 PlayStore와 F-Droid에서 설치 가능합니다.",
     "@noGoogleServicesWarning": {
         "type": "String",
         "placeholders": {}
@@ -1493,7 +1493,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username}님이 당신을 FluffyChat에 초대했습니다.\n1. FluffyChat 설치: https://fluffychat.im \n2. 가입하거나 로그인 \n3. 초대 링크 열기: \n {link}",
+    "inviteText": "{username}님이 당신을 ChatLoom에 초대했습니다.\n1. ChatLoom 설치: https://matrix.org/ecosystem/clients/ \n2. 가입하거나 로그인 \n3. 초대 링크 열기: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {

@@ -534,7 +534,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username}(e)k FluffyChatera gonbidatu zaitu.\n1. Bisitatu https://fluffychat.im eta instalatu aplikazioa\n2. Eman izena edo hasi saioa\n3. Ireki gonbidapen-esteka:\n{link}",
+    "inviteText": "{username}(e)k ChatLoomera gonbidatu zaitu.\n1. Bisitatu https://matrix.org/ecosystem/clients/ eta instalatu aplikazioa\n2. Eman izena edo hasi saioa\n3. Ireki gonbidapen-esteka:\n{link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -666,7 +666,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Mezu berria FluffyChaten",
+    "newMessageInFluffyChat": "💬 Mezu berria ChatLoomen",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2476,7 +2476,7 @@
     "identityServer": "Identitate-zerbitzaria:",
     "signIn": "Hasi saioa",
     "createNewAccount": "Sortu kontu berria",
-    "signUpGreeting": "FluffyChat deszentralizatua da! Hautatu zure kontua zein zerbitzaritan sortu nahi duzun, eta hasi erabiltzen!",
+    "signUpGreeting": "ChatLoom deszentralizatua da! Hautatu zure kontua zein zerbitzaritan sortu nahi duzun, eta hasi erabiltzen!",
     "signInGreeting": "Baduzu dagoeneko Matrix kontu bat? Ongi etorri berriro ere! Hautatu zure zerbitzaria eta hasi saioa.",
     "theProcessWasCanceled": "Eragiketa bertan behera utzi da.",
     "join": "Batu",
@@ -2496,7 +2496,7 @@
     },
     "createNewChat": "Sortu txat berria",
     "reset": "Berrezarri",
-    "supportFluffyChat": "Eman babesa FluffyChat-i",
+    "supportFluffyChat": "Eman babesa ChatLoom-i",
     "support": "Lagundu",
     "setLowPriority": "Ezarri lehentasun baxua",
     "unsetLowPriority": "Kendu lehentasun baxua",
@@ -2513,7 +2513,7 @@
     "showMore": "Erakutsi gehiago",
     "showLess": "Erakutsi gutxiago",
     "hideRoomsInSpaces": "Ezkutatu gune batean dauden gelak",
-    "possibleByYou": "Bertsio hau zure laguntzari esker izan da posible. FluffyChat-ek doakoa, kode irekikoa eta guztiz komunitarioa izaten jarraitzen du.",
+    "possibleByYou": "Bertsio hau zure laguntzari esker izan da posible. ChatLoom-ek doakoa, kode irekikoa eta guztiz komunitarioa izaten jarraitzen du.",
     "showThumbnailsInTimeline": "Erakutsi irudi eta bideoen iruditxoa",
     "appSubtitle": "[matrix] komunikazio segurua",
     "appDescription": "Komunikatu [matrix] sare deszentralizatuaren bidez, era zifratuan, mundu guztiarentzat modu erraz eta eskuragarrian.",

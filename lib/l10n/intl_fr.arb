@@ -815,7 +815,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} vous a invité·e sur FluffyChat.\n1. Visiter fluffychat.im et installer l'application\n2. Inscrivez-vous ou connectez-vous\n3. Ouvrez le lien d'invitation :\n{link}",
+    "inviteText": "{username} vous a invité·e sur ChatLoom.\n1. Visiter https://matrix.org/ecosystem/clients/ et installer l'application\n2. Inscrivez-vous ou connectez-vous\n3. Ouvrez le lien d'invitation :\n{link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -972,7 +972,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Nouveau message dans FluffyChat",
+    "newMessageInFluffyChat": "💬 Nouveau message dans ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2316,7 +2316,7 @@
     "notificationRuleIsUserMentionDescription": "Notifie l'utilisateur/trice lorsqu'il est mentionné directement dans un message.",
     "notificationRuleServerAcl": "Retire les Évènements ACL du Serveur",
     "advancedConfigurations": "Configurations avancées",
-    "signUpGreeting": "FluffyChat est décentralisé ! Selectionnez un hôte sur lequel vous voulez créer un compte et c'est parti !",
+    "signUpGreeting": "ChatLoom est décentralisé ! Selectionnez un hôte sur lequel vous voulez créer un compte et c'est parti !",
     "notificationRuleCall": "Appeler",
     "baseUrl": "URL racine",
     "pause": "Pause",
@@ -2486,7 +2486,7 @@
     "approve": "Approuver",
     "notificationRuleRoomnotifDescription": "Notifie l'utilisateur/trice lorsqu'un message contient '@room'.",
     "generalNotificationSettings": "Réglages généraux des notifications",
-    "supportFluffyChat": "Soutenir FluffyChat",
+    "supportFluffyChat": "Soutenir ChatLoom",
     "notificationRuleEncrypted": "Chiffré",
     "pleaseFillOut": "Veuillez remplir",
     "changedTheChatName": "{username} a changé le nom de la discussion",
@@ -2507,7 +2507,7 @@
     "showMore": "Voir plus",
     "showLess": "Voir moins",
     "hideRoomsInSpaces": "Cacher les salons qui sont dans un espace",
-    "possibleByYou": "Cette mise à jour a été possible uniquement grâce à votre support. FluffyChat restera gratuit, open-source et entièrement communautaire.",
+    "possibleByYou": "Cette mise à jour a été possible uniquement grâce à votre support. ChatLoom restera gratuit, open-source et entièrement communautaire.",
     "showThumbnailsInTimeline": "Afficher les apperçus des images et vidéos",
     "appSubtitle": "Communication [matrix] Sécurisée",
     "appDescription": "Communiquez de façon chiffrée sur le réseau décentralisé [matrix] de façon aisée et accessible pour tous.",
@@ -2589,7 +2589,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat utilise le chiffrement de bout en bout. Pour ne pas perdre vos messages, veuillez choisir une phrase de passe forte pour sécuriser votre profile crypto et votre sauvegarde chiffrée des messages.",
+    "newPassphraseDescription": "ChatLoom utilise le chiffrement de bout en bout. Pour ne pas perdre vos messages, veuillez choisir une phrase de passe forte pour sécuriser votre profile crypto et votre sauvegarde chiffrée des messages.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

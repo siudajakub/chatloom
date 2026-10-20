@@ -999,7 +999,7 @@
         "placeholders": {}
     },
     "scanQrCode": "Scan cód QR",
-    "inviteText": "Thug {username} cuireadh duit chuig FluffyChat.\n1. Tabhair cuairt ar fluffychat.im agus a shuiteáil an app\n2. Cláraigh nó sínigh isteach\n3. Oscail an nasc cuirí:\n {link}",
+    "inviteText": "Thug {username} cuireadh duit chuig ChatLoom.\n1. Tabhair cuairt ar https://matrix.org/ecosystem/clients/ agus a shuiteáil an app\n2. Cláraigh nó sínigh isteach\n3. Oscail an nasc cuirí:\n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -1048,7 +1048,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Teachtaireacht nua in FluffyChat",
+    "newMessageInFluffyChat": "💬 Teachtaireacht nua in ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2482,7 +2482,7 @@
     "advancedConfigurations": "Cumraíochtaí ardleibhéil",
     "signIn": "Sínigh isteach",
     "createNewAccount": "Cruthaigh cuntas nua",
-    "signUpGreeting": "Tá FluffyChat díláraithe! Roghnaigh freastalaí inar mian leat do chuntas a chruthú agus déanaimis é!",
+    "signUpGreeting": "Tá ChatLoom díláraithe! Roghnaigh freastalaí inar mian leat do chuntas a chruthú agus déanaimis é!",
     "signInGreeting": "An bhfuil cuntas agat i Matrix cheana féin? Fáilte ar ais! Roghnaigh do fhreastalaí baile agus sínigh isteach.",
     "theProcessWasCanceled": "Cuireadh an próiseas ar ceal.",
     "join": "Téigh i",
@@ -2502,7 +2502,7 @@
     },
     "createNewChat": "Cruthaigh comhrá nua",
     "reset": "Athshocraigh",
-    "supportFluffyChat": "Tacaigh le FluffyChat",
+    "supportFluffyChat": "Tacaigh le ChatLoom",
     "support": "Tacaíocht",
     "setLowPriority": "Socraigh tosaíocht íseal",
     "unsetLowPriority": "Díshuiteáil tosaíocht íseal",
@@ -2519,7 +2519,7 @@
     "showMore": "Taispeáin níos mó",
     "showLess": "Taispeáin níos lú",
     "hideRoomsInSpaces": "Folaigh seomraí atá i spás",
-    "possibleByYou": "Níorbh fhéidir an scaoileadh seo a dhéanamh ach amháin a bhuíochas le do thacaíocht. Tá FluffyChat fós saor in aisce, foinse oscailte, agus dírithe go hiomlán ar an bpobal.",
+    "possibleByYou": "Níorbh fhéidir an scaoileadh seo a dhéanamh ach amháin a bhuíochas le do thacaíocht. Tá ChatLoom fós saor in aisce, foinse oscailte, agus dírithe go hiomlán ar an bpobal.",
     "showThumbnailsInTimeline": "Taispeáin mionsamhlacha d'íomhánna agus físeáin",
     "appSubtitle": "Cumarsáid [maitrís] Shlán",
     "appDescription": "Cumarsáid chriptithe thar an líonra díláraithe [maitrís] ar bhealach éasca agus inrochtana do gach duine.",
@@ -2603,7 +2603,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "Úsáideann FluffyChat criptiú ó cheann ceann go ceann. Chun nach gcaillfidh tú do theachtaireachtaí, roghnaigh frása faire láidir le do chéannacht chripte agus cúltaca do theachtaireachta criptithe a dhaingniú.",
+    "newPassphraseDescription": "Úsáideann ChatLoom criptiú ó cheann ceann go ceann. Chun nach gcaillfidh tú do theachtaireachtaí, roghnaigh frása faire láidir le do chéannacht chripte agus cúltaca do theachtaireachta criptithe a dhaingniú.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

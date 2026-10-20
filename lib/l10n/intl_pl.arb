@@ -726,7 +726,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} zaprosił/-a Cię do FluffyChat.\n1. Odwiedź fluffychat.im i zainstaluj aplikację\n2. Zarejestuj się lub zaloguj\n3. Otwórz link zaproszenia:\n{link}",
+    "inviteText": "{username} zaprosił/-a Cię do ChatLoom.\n1. Odwiedź https://matrix.org/ecosystem/clients/ i zainstaluj aplikację\n2. Zarejestuj się lub zaloguj\n3. Otwórz link zaproszenia:\n{link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -868,7 +868,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Nowa wiadomość we FluffyChat",
+    "newMessageInFluffyChat": "💬 Nowa wiadomość we ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2440,7 +2440,7 @@
     "advancedConfigurations": "Zaawansowane konfiguracje",
     "signIn": "Zaloguj się",
     "createNewAccount": "Utwórz nowe konto",
-    "signUpGreeting": "FluffyChat jest zdecentralizowany! Wybierz serwer, na którym chcesz utworzyć konto i zaczynamy!",
+    "signUpGreeting": "ChatLoom jest zdecentralizowany! Wybierz serwer, na którym chcesz utworzyć konto i zaczynamy!",
     "signInGreeting": "Masz już konto w sieci Matrix? Witaj z powrotem! Wybierz swój serwer macierzysty i zaloguj się.",
     "theProcessWasCanceled": "Proces został anulowany.",
     "join": "Dołącz",
@@ -2460,7 +2460,7 @@
     },
     "createNewChat": "Utwórz nowy czat",
     "reset": "Resetuj",
-    "supportFluffyChat": "Wesprzyj FluffyChat",
+    "supportFluffyChat": "Wesprzyj ChatLoom",
     "support": "Wsparcie",
     "setLowPriority": "Ustaw niski priorytet",
     "unsetLowPriority": "Cofnij niski priorytet",
@@ -2513,7 +2513,7 @@
     "showMore": "Pokaż wiecej",
     "showLess": "Pokaż mniej",
     "hideRoomsInSpaces": "Ukryj pokoje, które są w przestrzeni",
-    "possibleByYou": "To wydanie było tylko możliwe dzięki twojemu wsparciu. FluffyChat pozostaje darmowe, otwartoźródłowe i w całości oparty na inicjatywie społeczności.",
+    "possibleByYou": "To wydanie było tylko możliwe dzięki twojemu wsparciu. ChatLoom pozostaje darmowe, otwartoźródłowe i w całości oparty na inicjatywie społeczności.",
     "showThumbnailsInTimeline": "Wyświetl miniatury zdjęć i filmów",
     "appSubtitle": "Bezpieczna komunikacja [matrix]",
     "appDescription": "Komunikuj się w sposób zaszyfrowany za pośrednictwem zdecentralizowanej sieci [matrix] – w łatwy i dostępny dla wszystkich sposób.",
@@ -2597,7 +2597,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat korzysta z szyfrowania od końca do końca. Aby nie utracić swoich wiadomości, wybierz silne hasło, które zabezpieczy Twoją tożsamość kryptograficzną oraz zaszyfrowaną kopię zapasową wiadomości.",
+    "newPassphraseDescription": "ChatLoom korzysta z szyfrowania od końca do końca. Aby nie utracić swoich wiadomości, wybierz silne hasło, które zabezpieczy Twoją tożsamość kryptograficzną oraz zaszyfrowaną kopię zapasową wiadomości.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

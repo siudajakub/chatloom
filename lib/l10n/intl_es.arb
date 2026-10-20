@@ -622,7 +622,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} te invitó a FluffyChat.\n1.Visita fluffychat.im e instala la app\n2. Regístrate o inicia sesión\n3. Abre el enlace de invitación:\n{link}",
+    "inviteText": "{username} te invitó a ChatLoom.\n1.Visita https://matrix.org/ecosystem/clients/ e instala la app\n2. Regístrate o inicia sesión\n3. Abre el enlace de invitación:\n{link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -759,7 +759,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "Nuevo mensaje en FluffyChat",
+    "newMessageInFluffyChat": "Nuevo mensaje en ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2484,7 +2484,7 @@
     "advancedConfigurations": "Configuraciones Avanzadas",
     "signIn": "Iniciar sesión",
     "createNewAccount": "Crear nueva cuenta",
-    "signUpGreeting": "¡FluffyChat está descentralizado! ¡Selecciona un servidor donde quieres crear tu cuenta y sigamos!",
+    "signUpGreeting": "¡ChatLoom está descentralizado! ¡Selecciona un servidor donde quieres crear tu cuenta y sigamos!",
     "signInGreeting": "¿Ya tienes una cuenta en Matrix? ¡Bienvenido de nuevo! Selecciona tu servidor e inicia sesión.",
     "theProcessWasCanceled": "El proceso se ha cancelado.",
     "join": "Unirse",
@@ -2504,7 +2504,7 @@
     },
     "createNewChat": "Crear nuevo chat",
     "reset": "Resetear",
-    "supportFluffyChat": "Apoyar FluffyChat",
+    "supportFluffyChat": "Apoyar ChatLoom",
     "support": "Apoyar",
     "setLowPriority": "Colocar baja prioridad",
     "unsetLowPriority": "Desactivar baja prioridad",
@@ -2521,7 +2521,7 @@
     "showMore": "Mostrar más",
     "showLess": "Mostrar menos",
     "hideRoomsInSpaces": "Esconder salas que estén en un espacio",
-    "possibleByYou": "Esta versión sólo fue posible gracias a tu apoyo. FluffyChat sigue siendo gratis, de código abierto y totalmente impulsado por la comunidad.",
+    "possibleByYou": "Esta versión sólo fue posible gracias a tu apoyo. ChatLoom sigue siendo gratis, de código abierto y totalmente impulsado por la comunidad.",
     "showThumbnailsInTimeline": "Mostrar miniaturas de imágenes y videos",
     "appSubtitle": "Comunicación [matrix] Segura",
     "appDescription": "Comunicación cifrada a través de la red descentralizada [matrix] de una manera fácil y accesible para todos.",

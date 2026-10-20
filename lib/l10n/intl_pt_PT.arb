@@ -761,7 +761,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} convidou-te para o FluffyChat.\n1. Instala o FluffyChat: https://fluffychat.im\n2. Regista-te ou inicia sessão.\n3. Abre a ligação de convite: {link}",
+    "inviteText": "{username} convidou-te para o ChatLoom.\n1. Instala o ChatLoom: https://matrix.org/ecosystem/clients/\n2. Regista-te ou inicia sessão.\n3. Abre a ligação de convite: {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -918,7 +918,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "Nova mensagem no FluffyChat",
+    "newMessageInFluffyChat": "Nova mensagem no ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -953,7 +953,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "noGoogleServicesWarning": "Parece que não tens nenhuns serviços da Google no seu telemóvel. É uma boa decisão para a sua privacidade! Para receber notificações instantâneas no FluffyChat, recomendamos que uses https://microg.org/ ou https://unifiedpush.org/.",
+    "noGoogleServicesWarning": "Parece que não tens nenhuns serviços da Google no seu telemóvel. É uma boa decisão para a sua privacidade! Para receber notificações instantâneas no ChatLoom, recomendamos que uses https://microg.org/ ou https://unifiedpush.org/.",
     "@noGoogleServicesWarning": {
         "type": "String",
         "placeholders": {}

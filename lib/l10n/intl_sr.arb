@@ -766,7 +766,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} вас позива у FluffyChat. \n1. Инсталирајте FluffyChat: https://fluffychat.im \n2. Региструјте се или пријавите \n3. Отворите везу позивнице: {link}",
+    "inviteText": "{username} вас позива у ChatLoom. \n1. Инсталирајте ChatLoom: https://matrix.org/ecosystem/clients/ \n2. Региструјте се или пријавите \n3. Отворите везу позивнице: {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -913,7 +913,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "Нова порука — FluffyChat",
+    "newMessageInFluffyChat": "Нова порука — ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -948,7 +948,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "noGoogleServicesWarning": "Чини се да немате Гугл услуге на телефону. То је добра одлука за вашу приватност! Да би се протурале нотификације у FluffyChat, препоручујемо коришћење https://microg.org/ или https://unifiedpush.org/",
+    "noGoogleServicesWarning": "Чини се да немате Гугл услуге на телефону. То је добра одлука за вашу приватност! Да би се протурале нотификације у ChatLoom, препоручујемо коришћење https://microg.org/ или https://unifiedpush.org/",
     "@noGoogleServicesWarning": {
         "type": "String",
         "placeholders": {}

@@ -986,7 +986,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} invited you to FluffyChat.\n1. Visit fluffychat.im and install the app \n2. Sign up or sign in \n3. Open the invite link: \n {link}",
+    "inviteText": "{username} invited you to chat on Matrix.\n1. Install a Matrix client, for example from https://matrix.org/ecosystem/clients/\n2. Sign up or sign in\n3. Open the invite link: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -1147,7 +1147,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 New message in FluffyChat",
+    "newMessageInFluffyChat": "💬 New message in ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2144,7 +2144,7 @@
     "searchMore": "Search more...",
     "gallery": "Gallery",
     "files": "Files",
-    "sessionLostBody": "Your session is lost. Please report this error to the developers at {url}. The error message is: {error}",
+    "sessionLostBody": "Your session is lost. The error message is: {error}",
     "@sessionLostBody": {
         "type": "String",
         "placeholders": {
@@ -2156,7 +2156,7 @@
             }
         }
     },
-    "restoreSessionBody": "The app now tries to restore your session from the backup. Please report this error to the developers at {url}. The error message is: {error}",
+    "restoreSessionBody": "The app now tries to restore your session from the backup. The error message is: {error}",
     "@restoreSessionBody": {
         "type": "String",
         "placeholders": {
@@ -2547,7 +2547,7 @@
     "advancedConfigurations": "Advanced configurations",
     "signIn": "Sign in",
     "createNewAccount": "Create new account",
-    "signUpGreeting": "FluffyChat is decentralized! Select a server where you want to create your account and let's go!",
+    "signUpGreeting": "Matrix is decentralized! Select a server where you want to create your account and let's go!",
     "signInGreeting": "You already have an account in Matrix? Welcome back! Select your homeserver and sign in.",
     "theProcessWasCanceled": "The process was canceled.",
     "join": "Join",
@@ -2567,7 +2567,7 @@
     },
     "createNewChat": "Create new chat",
     "reset": "Reset",
-    "supportFluffyChat": "Support FluffyChat",
+    "supportFluffyChat": "Support ChatLoom",
     "support": "Support",
     "setLowPriority": "Set low priority",
     "unsetLowPriority": "Unset low priority",
@@ -2577,7 +2577,7 @@
     "tagName": "Tag name",
     "createNewTag": "Create new tag",
     "hideRoomsInSpaces": "Hide rooms that are in a space",
-    "possibleByYou": "This release was only possible thanks to your support. FluffyChat remains free, open-source, and entirely community-driven.",
+    "possibleByYou": "ChatLoom is based on FluffyChat, which remains free, open-source and community-driven.",
     "showThumbnailsInTimeline": "Show thumbnails of images and videos",
     "appSubtitle": "Secure [matrix] Communication",
     "appDescription": "Communicate encrypted over the decentralized [matrix] network in an easy and accessible way for everyone.",
@@ -2661,7 +2661,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat uses end to end encryption. To not lose your messages, please choose a strong passphrase to secure your crypto identity and your encrypted message backup.",
+    "newPassphraseDescription": "ChatLoom uses end to end encryption. To not lose your messages, please choose a strong passphrase to secure your crypto identity and your encrypted message backup.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

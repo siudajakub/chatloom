@@ -923,7 +923,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} запрасіў вас у FluffyChat.\n1. Перайдзіце на fluffychat.im і ўстанавіце праграму\n2. Зарэгестрыруйцесь альбо ўвайдзіце\n3. Перайдзіце па запрашальнай спасылцы:\n{link}",
+    "inviteText": "{username} запрасіў вас у ChatLoom.\n1. Перайдзіце на https://matrix.org/ecosystem/clients/ і ўстанавіце праграму\n2. Зарэгестрыруйцесь альбо ўвайдзіце\n3. Перайдзіце па запрашальнай спасылцы:\n{link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -1084,7 +1084,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Новае паведамленне ў FluffyChat",
+    "newMessageInFluffyChat": "💬 Новае паведамленне ў ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2463,7 +2463,7 @@
     "advancedConfigurations": "Пашыраная канфігурацыя",
     "signIn": "Увайсці",
     "createNewAccount": "Стварыць новы ўліковы запіс",
-    "signUpGreeting": "FluffyChat дэцэнтралізаваны! Выберыце свой сервер, дзе вы хаціце стварыць уліковы запіс і прайягвайце!",
+    "signUpGreeting": "ChatLoom дэцэнтралізаваны! Выберыце свой сервер, дзе вы хаціце стварыць уліковы запіс і прайягвайце!",
     "signInGreeting": "Вы ўжо маеце ўліковы запіс у Matrix? З вяртаннем! Выберыце свой хатні сервер і аўтарызуйцеся.",
     "theProcessWasCanceled": "Працэс быў скасаваны.",
     "join": "Далучыцца",
@@ -2483,7 +2483,7 @@
     },
     "createNewChat": "Стварыць новы чат",
     "reset": "Скінуць",
-    "supportFluffyChat": "Падтрымаць FluffyChat",
+    "supportFluffyChat": "Падтрымаць ChatLoom",
     "support": "Падтрымаць",
     "setLowPriority": "Прызначыць нізкі прыярытэт",
     "unsetLowPriority": "Скасаваць нізкі прыярытэт",
@@ -2573,7 +2573,7 @@
     "showMore": "Паказаць больш",
     "showLess": "Паказаць меньш",
     "hideRoomsInSpaces": "Схаваць пакоі, што знаходзяцца ў прасторы",
-    "possibleByYou": "Гэты рэліз стаў магчымым толькі дзякуючы вашай падтрымцы. FluffyChat застаецца бясплатным, з адкрытым зыходным кодам і цалкам пад кіраўніцтвам супольнасці.",
+    "possibleByYou": "Гэты рэліз стаў магчымым толькі дзякуючы вашай падтрымцы. ChatLoom застаецца бясплатным, з адкрытым зыходным кодам і цалкам пад кіраўніцтвам супольнасці.",
     "showThumbnailsInTimeline": "Паказваць мініяцюры выяў і відэа",
     "appSubtitle": "Бяспечныя чаты [matrix]",
     "appDescription": "Перапісвайцеся зашыфравана і дэцэнтралізавана праз сетку [matrix], што лёгкадаступная ўсюды і для ўсіх.",
@@ -2657,7 +2657,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat выкарыстоўвае скразное шыфраванне. Каб не згубіць вашыя паведамленні, выберыце моцную фразу-пароль для абароны вашай крыпта-ідэнтычнасці і лёгкага аднаўлення рэзервовай копіі.",
+    "newPassphraseDescription": "ChatLoom выкарыстоўвае скразное шыфраванне. Каб не згубіць вашыя паведамленні, выберыце моцную фразу-пароль для абароны вашай крыпта-ідэнтычнасці і лёгкага аднаўлення рэзервовай копіі.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

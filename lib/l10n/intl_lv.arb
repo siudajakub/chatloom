@@ -515,7 +515,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} uzaicināja pievienoties FluffyChat.\n1. Jāapmeklē fluffychat.im un jāuzstāda lietotne \n2. Jāizveido konts vai jāpiesakās \n3. Jāatver uzaicinājuma saite: \n {link}",
+    "inviteText": "{username} uzaicināja pievienoties ChatLoom.\n1. Jāapmeklē https://matrix.org/ecosystem/clients/ un jāuzstāda lietotne \n2. Jāizveido konts vai jāpiesakās \n3. Jāatver uzaicinājuma saite: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -840,7 +840,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Jauna ziņa FluffyChat",
+    "newMessageInFluffyChat": "💬 Jauna ziņa ChatLoom",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2460,7 +2460,7 @@
     "theProcessWasCanceled": "Darbība tika atcelta.",
     "signIn": "Pieteikties",
     "createNewAccount": "Izveidot jaunu kontu",
-    "signUpGreeting": "FluffyChat ir decentralizēta. Jāatlasa serveris, kurā ir vēlēšanās izveidot savu kontu, un aiziet!",
+    "signUpGreeting": "ChatLoom ir decentralizēta. Jāatlasa serveris, kurā ir vēlēšanās izveidot savu kontu, un aiziet!",
     "signInGreeting": "Jau ir Matrix konts? Laipni lūdzam atpakaļ! Jāatlasa savs mājasserveris un jāpiesakās.",
     "reset": "Atiestatīt",
     "createNewTag": "Izveidot jaunu birku",
@@ -2487,13 +2487,13 @@
     "unsetLowPriority": "Noņemt zemu svatīgumu",
     "setLowPriority": "Iestatīt zemu svarīgumu",
     "removeTag": "Noņemt birku",
-    "supportFluffyChat": "Atbalstīt FluffyChat",
+    "supportFluffyChat": "Atbalstīt ChatLoom",
     "discardEdits": "Ir nesaglabātas izmaiņas. Atmest labojumus?",
     "@discardEdits": {
         "type": "String",
         "placeholders": {}
     },
-    "possibleByYou": "Šis laidiens bija iespējams pateicoties Tavam atbalstam. FluffyChat joprojām ir brīva, atvērta pirmkoda un pilnībā kopienas virzīta.",
+    "possibleByYou": "Šis laidiens bija iespējams pateicoties Tavam atbalstam. ChatLoom joprojām ir brīva, atvērta pirmkoda un pilnībā kopienas virzīta.",
     "hideRoomsInSpaces": "Paslēpt istabas, kas ir vietā",
     "showThumbnailsInTimeline": "Rādīt attēlu un video sīktēlus",
     "appSubtitle": "Droša [matrix] saziņa",
@@ -2695,7 +2695,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat izmanto pilnīgu šifrēšanu. Lai nezaudētu savas ziņas, lūgums izvēlēties drošu paroles vārdkopu, lai aizsargātu savu kripto identitāti un šifrēto ziņu rezerves kopiju.",
+    "newPassphraseDescription": "ChatLoom izmanto pilnīgu šifrēšanu. Lai nezaudētu savas ziņas, lūgums izvēlēties drošu paroles vārdkopu, lai aizsargātu savu kripto identitāti un šifrēto ziņu rezerves kopiju.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}
