@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-name: fluffychat
+name: chatloom
 description: Chat with your friends.
 publish_to: none
 # On version bump please also increase:
@@ -109,7 +109,9 @@ dependencies:
 dev_dependencies:
   fake_async: 1.3.3
   dart_code_linter: ^4.4.0
-  flutter_launcher_icons: ^0.14.4
+  flutter_launcher_icons:
+  # ChatLoom icons are rendered by scripts/render-chatloom-logo.py; do not
+  # regenerate them with flutter_launcher_icons. ^0.14.4
   flutter_lints: ^6.0.0
   flutter_test:
     sdk: flutter
@@ -118,6 +120,9 @@ dev_dependencies:
   license_checker: ^1.6.2
   path_provider_platform_interface: 2.1.3
 
+  test: any
+  video_player_platform_interface: any
+  wakelock_plus_platform_interface: any
 flutter:
   generate: true
   uses-material-design: true
@@ -144,6 +149,8 @@ hooks:
       source: sqlcipher
 
 flutter_launcher_icons:
+  # ChatLoom icons are rendered by scripts/render-chatloom-logo.py; do not
+  # regenerate them with flutter_launcher_icons.
   image_path: assets/logo/img/logo.png
   android: true
   adaptive_icon_foreground: assets/logo/img/logo_foreground.png
@@ -157,8 +164,8 @@ flutter_launcher_icons:
   web:
     generate: true
     image_path: assets/logo/img/logo_standalone.png
-    background_color: "#FFFFFF"
-    theme_color: "#41a2bc"
+    background_color: "#191919"
+    theme_color: "#191919"
 
 # Guidelines for adding a dependency override:
 # 1. Don't do it if you can avoid it or fix it upstream in a manageable time
