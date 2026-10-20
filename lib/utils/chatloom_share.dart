@@ -3,15 +3,15 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../widgets/matrix.dart';
 
-abstract class FluffyShare {
+abstract class ChatLoomShare {
   static Future<void> share(
     String text,
     BuildContext context, {
@@ -43,10 +43,10 @@ abstract class FluffyShare {
     final client = Matrix.of(context).client;
     final ownProfile = await client.fetchOwnProfile();
     if (!context.mounted) return;
-    await FluffyShare.share(
+    await ChatLoomShare.share(
       l10n.inviteText(
         ownProfile.displayName ?? client.userID!,
-        'https://matrix.to/#/${client.userID}?client=im.fluffychat',
+        'https://matrix.to/#/${client.userID}',
       ),
       context,
     );

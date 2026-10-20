@@ -3,17 +3,17 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/config/routes.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/widgets/app_lock.dart';
+import 'package:chatloom/widgets/client_startup.dart';
+import 'package:chatloom/widgets/layouts/call_overlay.dart';
+import 'package:chatloom/widgets/theme_builder.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
-import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/routes.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/config/themes.dart';
-import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/widgets/app_lock.dart';
-import 'package:fluffychat/widgets/client_startup.dart';
-import 'package:fluffychat/widgets/layouts/call_overlay.dart';
-import 'package:fluffychat/widgets/theme_builder.dart';
 import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -23,14 +23,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/custom_scroll_behaviour.dart';
 import 'matrix.dart';
 
-class FluffyChatApp extends StatelessWidget {
+class ChatLoomApp extends StatelessWidget {
   final Widget? testWidget;
   final List<Client> clients;
   final ({String? pincode, bool useBiometrics}) appLockSettings;
   final SharedPreferences store;
   final ClientStartup? startup;
 
-  const FluffyChatApp({
+  const ChatLoomApp({
     super.key,
     this.testWidget,
     required this.clients,
@@ -74,8 +74,8 @@ class FluffyChatApp extends StatelessWidget {
       builder: (context, themeMode, primaryColor) => MaterialApp.router(
         title: AppSettings.applicationName.value,
         themeMode: themeMode,
-        theme: FluffyThemes.buildTheme(context, Brightness.light, primaryColor),
-        darkTheme: FluffyThemes.buildTheme(
+        theme: ChatLoomThemes.buildTheme(context, Brightness.light, primaryColor),
+        darkTheme: ChatLoomThemes.buildTheme(
           context,
           Brightness.dark,
           primaryColor,

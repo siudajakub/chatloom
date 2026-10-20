@@ -3,11 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:fluffychat/main.dart' as app;
+import 'package:chatloom/main.dart' as app;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-extension type FluffyChatTester(WidgetTester tester) {
+extension type ChatLoomTester(WidgetTester tester) {
   static int _printCounter = 1;
 
   void _print(String message) {
@@ -120,9 +120,9 @@ extension on Object {
 }
 
 extension StartTest on WidgetTester {
-  Future<FluffyChatTester> startFluffyChatTest() async {
+  Future<ChatLoomTester> startChatLoomTest() async {
     app.main(['integration_test']);
 
-    return FluffyChatTester(this);
+    return ChatLoomTester(this);
   }
 }
