@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-package chat.fluffy.fluffychat.round
+package pl.personal.chatloom.round
 
 import kotlin.math.abs
 
@@ -55,18 +55,20 @@ fun main() {
     val legacy = RoundProfile(384, 25_000_000, 60000, 1_000_000, 64000)
     legacy.validate()
     verify(!legacy.stabilize && !legacy.noiseReduction && !legacy.highQuality, "missing flags default to old behaviour")
-    verify(legacy.recorderVideoBitrate == 4_000_000, "intermediate 4x / 4 Mbps: ${legacy.recorderVideoBitrate}")
+    // Telegram parity: the recorder writes the final bitrate once (no 4x intermediate).
+    verify(legacy.recorderVideoBitrate == 1_000_000, "direct final bitrate: ${legacy.recorderVideoBitrate}")
     val hq = RoundProfile(480, 25_000_000, 60000, 2_000_000, 96000, stabilize = true, noiseReduction = true, highQuality = true)
     hq.validate()
-    verify(hq.recorderVideoBitrate == 8_000_000, "HQ intermediate 4x: ${hq.recorderVideoBitrate}")
-    verify(RoundProfile(640, 50_000_000, 60000, 3_500_000, 64000).recorderVideoBitrate == 12_000_000, "intermediate capped")
-    // A small budget keeps the raw recording within its unchanged size cap for a full take.
+    verify(hq.recorderVideoBitrate == 2_000_000, "HQ direct bitrate: ${hq.recorderVideoBitrate}")
+    // A small budget lowers the direct bitrate so a full take fits the final cap.
     val small = RoundProfile(384, 5_000_000, 60000, 1_000_000, 64000)
     val rawBytes = (small.recorderVideoBitrate.toLong() + small.recorderAudioBitrate) * 60 / 8
-    verify(rawBytes <= small.rawCapBytes, "full take fits the raw cap: $rawBytes / ${small.rawCapBytes}")
-    verify(RoundProfile(384, 100_000, 60000, 1_000_000, 64000).recorderVideoBitrate == 1_500_000,
-        "never below the previous recorder floor")
-    verify(RoundProfile(384, 25_000_000, 60000, 1_000_000, 64000).rawCapBytes == 75_000_000L, "raw cap unchanged")
+    verify(small.recorderVideoBitrate < 1_000_000, "budget lowers the direct bitrate: ${small.recorderVideoBitrate}")
+    verify(rawBytes <= small.rawCapBytes * 90 / 100, "full take fits the final cap: $rawBytes / ${small.rawCapBytes}")
+    verify(RoundProfile(384, 100_000, 60000, 1_000_000, 64000).recorderVideoBitrate == RoundProfile.MIN_VIDEO_BITRATE,
+        "never below the validated minimum")
+    verify(RoundProfile(384, 25_000_000, 60000, 1_000_000, 64000).rawCapBytes == 25_000_000L, "recorder cap = final budget")
+    verify(small.directVideoBitrate(10_000) == 1_000_000, "short trims keep the profile bitrate")
     rejected("excessive video bitrate") { RoundProfile(384, 25_000_000, 60000, 8_000_001, 64000).validate() }
     rejected("excessive audio bitrate") { RoundProfile(384, 25_000_000, 60000, 1_000_000, 256_001).validate() }
     rejected("odd side even in HQ") { RoundProfile(481, 25_000_000, 60000, 2_000_000, 96000, highQuality = true).validate() }

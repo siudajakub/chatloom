@@ -3,20 +3,20 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/round_video_recorder.dart';
+import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/journal_trust.dart';
+import 'package:chatloom/personal/media/immediate_media_outbox.dart';
+import 'package:chatloom/personal/media/pending_media_store.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/privacy_transport.dart';
+import 'package:chatloom/personal/storage/personal_store.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:crypto/crypto.dart';
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/pages/chat/round_video_recorder.dart';
-import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
-import 'package:fluffychat/personal/capabilities.dart';
-import 'package:fluffychat/personal/journal_trust.dart';
-import 'package:fluffychat/personal/media/immediate_media_outbox.dart';
-import 'package:fluffychat/personal/media/pending_media_store.dart';
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/privacy_transport.dart';
-import 'package:fluffychat/personal/storage/personal_store.dart';
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
@@ -41,6 +41,10 @@ class TelegramRoundService extends ChangeNotifier
     _subscriptions.add(client.onHistoryEvent.stream.listen(_receive));
   }
   final _subscriptions = <StreamSubscription<Event>>[];
+
+  /// Drops the outbox's in-memory draft copies when the app is hidden (lock
+  /// screen, background): the drafts stay durable in protected storage.
+  AppLifecycleListener? _lifecycle;
   static final _dispatchEligibilityKey = Object();
   bool get _dispatchEligible {
     final test = Zone.current[_dispatchEligibilityKey];
@@ -66,6 +70,28 @@ class TelegramRoundService extends ChangeNotifier
   bool isMediaStateKnown(Event event) => _states.containsKey(_stateKey(event));
   final _unstaged =
       <String, (RoundSendTarget, RoundEncodingProfile, PreparedRoundMedia)>{};
+
+  /// Rooms whose just-recorded round is being committed to protected storage
+  /// (before its durable record exists). In memory only, for the outbox row.
+  final _saving = <String, int>{};
+
+  /// Live dispatch phase per action, for the optimistic outbox row only.
+  final _phases = <String, RoundSendPhase>{};
+
+  /// One dispatch at a time per room keeps rounds in recording order while the
+  /// composer is already free for the next recording.
+  final _roomDispatch = <String, Future<void>>{};
+
+  /// When a room's upload limit was last measured by a passing preflight.
+  final _preflightAt = <String, DateTime>{};
+
+  /// A media-config measurement this recent is reused by the dispatch guards
+  /// instead of another `/media/config` round trip on the send path. Room
+  /// state, trust and capability are still evaluated at every guard.
+  static const preflightReuse = Duration(seconds: 30);
+
+  bool isSaving(String roomId) => (_saving[roomId] ?? 0) > 0;
+  RoundSendPhase? phaseOf(String actionId) => _phases[actionId];
 
   Future<void> initialize() async {
     if (_closed) throw const ImmediateMediaRejected('sessionClosed');
@@ -133,6 +159,14 @@ class TelegramRoundService extends ChangeNotifier
       deviceId: device,
       store: _store!,
       guard: _guard,
+      onPhase: (actionId, phase) {
+        if (phase == null) {
+          _phases.remove(actionId);
+        } else {
+          _phases[actionId] = phase;
+        }
+        if (!_closed) notifyListeners();
+      },
       encrypt: (bytes, thumbnail) async {
         final video = await MatrixFile(
           bytes: bytes,
@@ -210,6 +244,13 @@ class TelegramRoundService extends ChangeNotifier
         }
       },
     );
+    try {
+      _lifecycle ??= AppLifecycleListener(
+        onHide: () => _outbox?.releaseStaged(),
+      );
+    } catch (_) {
+      /* no widgets binding: the outbox's own TTL still bounds the copies */
+    }
   }
 
   Room _sourceRoom(RoundSendTarget target) {
@@ -279,7 +320,7 @@ class TelegramRoundService extends ChangeNotifier
         !client.fileEncryptionEnabled) {
       throw const ImmediateMediaRejected('encryptionOrSurfaceUnavailable');
     }
-    final caps = await TelegramRoomBinding.preflight(room);
+    final caps = await _preflight(room);
     if (caps?.result.allowed != true ||
         caps?.profile == null ||
         (target.silent &&
@@ -300,6 +341,25 @@ class TelegramRoundService extends ChangeNotifier
         throw const ImmediateMediaRejected('frozenRelationUnavailable');
       }
     }
+  }
+
+  /// [TelegramRoomBinding.preflight], reusing a passing upload-limit
+  /// measurement younger than [preflightReuse]: capabilities are always
+  /// re-evaluated from current room state, only the network fetch is skipped.
+  Future<RoundBridgeCapabilities?> _preflight(Room room) async {
+    final measured = _preflightAt[room.id];
+    if (measured != null &&
+        DateTime.now().difference(measured) < preflightReuse) {
+      final caps = TelegramRoomBinding.of(room)?.capabilities(room);
+      if (caps?.result.allowed == true && caps?.profile != null) return caps;
+    }
+    final caps = await TelegramRoomBinding.preflight(room);
+    if (caps?.result.allowed == true && caps?.profile != null) {
+      _preflightAt[room.id] = DateTime.now();
+    } else {
+      _preflightAt.remove(room.id);
+    }
+    return caps;
   }
 
   /// Precise, content-free reason (`round:<RoundGateCode>`) for a refused gate.
@@ -359,6 +419,9 @@ class TelegramRoundService extends ChangeNotifier
       if (!context.mounted || !stillCurrent()) return null;
       final caps = await TelegramRoomBinding.preflight(room);
       final profile = caps?.profile;
+      if (caps?.result.allowed == true && profile != null) {
+        _preflightAt[room.id] = DateTime.now();
+      }
       if (caps?.result.allowed != true ||
           (silent &&
               caps?.extension.operation('silent_send').allowed != true) ||
@@ -415,7 +478,19 @@ class TelegramRoundService extends ChangeNotifier
       );
       if (prepared == null) return null;
       _unstaged[frozen.roomId] = (frozen, profile, prepared);
-      final staged = await _stage(frozen, profile, prepared);
+      _saving.update(frozen.roomId, (n) => n + 1, ifAbsent: () => 1);
+      notifyListeners();
+      final ImmediateMediaResult staged;
+      try {
+        staged = await _stage(frozen, profile, prepared);
+      } finally {
+        final left = (_saving[frozen.roomId] ?? 1) - 1;
+        if (left > 0) {
+          _saving[frozen.roomId] = left;
+        } else {
+          _saving.remove(frozen.roomId);
+        }
+      }
       if (staged.state == ImmediateMediaState.failed) {
         _unstaged[frozen.roomId] = (frozen, profile, prepared);
         notifyListeners();
@@ -423,16 +498,25 @@ class TelegramRoundService extends ChangeNotifier
       }
       _unstaged.remove(frozen.roomId);
       await prepared.close();
+      // The protected draft is durable: the composer may record the next round
+      // while this one uploads (Telegram parity). Sends stay ordered per room.
+      capturing = false;
+      notifyListeners();
       if (!context.mounted ||
           !stillCurrent() ||
           !PersonalPrivacy.surfaceUnlocked ||
           !PersonalPrivacy.surfaceForeground) {
-        notifyListeners();
+        // Locked, backgrounded or left: the durable draft waits for an
+        // explicit retry; do not keep its multi-megabyte copy in memory.
+        _outbox!.releaseStaged(staged.actionId);
         return staged;
       }
-      final result = await runZoned(
-        () => _outbox!.dispatch(staged.actionId),
-        zoneValues: {_dispatchEligibilityKey: stillCurrent},
+      final result = await _inRoomOrder(
+        frozen.roomId,
+        () => runZoned(
+          () => _outbox!.dispatch(staged.actionId),
+          zoneValues: {_dispatchEligibilityKey: stillCurrent},
+        ),
       );
       notifyListeners();
       return result;
@@ -440,6 +524,16 @@ class TelegramRoundService extends ChangeNotifier
       capturing = false;
       if (!_closed) notifyListeners();
     }
+  }
+
+  Future<T> _inRoomOrder<T>(String roomId, Future<T> Function() action) {
+    final previous = _roomDispatch[roomId] ?? Future<void>.value();
+    final future = previous.then((_) => action());
+    final tail = future.then<void>((_) {}, onError: (Object _) {});
+    _roomDispatch[roomId] = tail;
+    return future.whenComplete(() {
+      if (identical(_roomDispatch[roomId], tail)) _roomDispatch.remove(roomId);
+    });
   }
 
   Future<ImmediateMediaResult> _stage(
@@ -451,6 +545,9 @@ class TelegramRoundService extends ChangeNotifier
     profile: profile,
     bytes: await media.readBytes(),
     thumbnailBytes: await media.readThumbnailBytes(),
+    // The plaintext draft commits first; SDK encryption runs alongside it and
+    // its ciphertext is committed by dispatch while the upload runs.
+    encryptWhileStaging: true,
     descriptor: RoundVideoDescriptor(
       sizeBytes: media.sizeBytes,
       width: media.width,
@@ -977,6 +1074,9 @@ class TelegramRoundService extends ChangeNotifier
     final service = _instances.remove(client);
     if (service == null) return;
     service._closed = true;
+    service._lifecycle?.dispose();
+    service._lifecycle = null;
+    service._outbox?.releaseStaged();
     for (final sub in service._subscriptions) {
       await sub.cancel();
     }

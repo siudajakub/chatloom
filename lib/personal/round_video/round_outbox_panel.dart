@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:fluffychat/ui/notion/notion.dart';
-import 'package:fluffychat/widgets/matrix.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
+import '../media/immediate_media_outbox.dart';
 import '../media/pending_media_store.dart';
 import 'telegram_round_service.dart';
 
@@ -26,7 +27,8 @@ class RoundOutboxPanel extends StatelessWidget {
               ),
             );
           final records = snapshot.data ?? const <PendingMediaSummary>[];
-          if (records.isEmpty && !service.hasUnstaged(room.id)) {
+          final saving = service.isSaving(room.id);
+          if (records.isEmpty && !service.hasUnstaged(room.id) && !saving) {
             return const SizedBox.shrink();
           }
           return ConstrainedBox(
@@ -35,7 +37,16 @@ class RoundOutboxPanel extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (service.hasUnstaged(room.id))
+                  // Optimistic row: shown from the moment the recorder closes,
+                  // before the protected draft exists.
+                  if (saving)
+                    const ListTile(
+                      key: Key('round_outbox_saving'),
+                      dense: true,
+                      leading: NotionDelayedSpinner(),
+                      title: Text('Saving round video…'),
+                    ),
+                  if (service.hasUnstaged(room.id) && !saving)
                     ListTile(
                       title: const Text('Recording awaiting protected storage'),
                       subtitle: const Text(
@@ -62,64 +73,82 @@ class RoundOutboxPanel extends StatelessWidget {
                       ),
                     ),
                   for (final record in records)
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.video_file_outlined),
-                      title: Text(switch (record.metadata['state']) {
-                        'matrixAccepted' => 'Matrix accepted the round video',
-                        'inFlight' || 'unknown' => 'Send outcome unknown',
-                        'failed' => 'Round video awaiting retry',
-                        _ => 'Round video saved locally',
-                      }),
-                      subtitle: Text(
-                        record.metadata['bridgeDelivery'] == 'delivered'
-                            ? 'Telegram confirmed delivery'
-                            : 'Telegram delivery not confirmed',
-                      ),
-                      trailing: Wrap(
-                        children: [
-                          if (record.metadata['state'] != 'matrixAccepted')
-                            IconButton(
-                              tooltip: 'Retry the same send attempt',
-                              icon: const Icon(Icons.send_outlined),
-                              onPressed: () => _act(context, () async {
-                                await service.retry(
-                                  record.actionId,
-                                  stillCurrent: () =>
-                                      context.mounted &&
-                                      identical(
-                                        Matrix.of(context).client,
-                                        room.client,
-                                      ),
-                                );
-                              }),
-                            ),
-                          if (!{
-                            'unknown',
-                            'inFlight',
-                            'matrixAccepted',
-                          }.contains(record.metadata['state']))
-                            IconButton(
-                              tooltip: 'Delete local round video draft',
-                              icon: const Icon(Icons.delete_outline),
-                              onPressed: () => _act(
-                                context,
-                                () => service.cancel(record.actionId),
+                    if (service.phaseOf(record.actionId) case final phase?)
+                      ListTile(
+                        key: ValueKey(
+                          'round_outbox_progress_${record.actionId}',
+                        ),
+                        dense: true,
+                        leading: const NotionDelayedSpinner(),
+                        title: Text(switch (phase) {
+                          RoundSendPhase.encrypting =>
+                            'Encrypting round video…',
+                          RoundSendPhase.uploading => 'Uploading round video…',
+                          RoundSendPhase.sending => 'Sending round video…',
+                        }),
+                        subtitle: const Text(
+                          'Keep this chat open until it is sent',
+                        ),
+                      )
+                    else
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.video_file_outlined),
+                        title: Text(switch (record.metadata['state']) {
+                          'matrixAccepted' => 'Matrix accepted the round video',
+                          'inFlight' || 'unknown' => 'Send outcome unknown',
+                          'failed' => 'Round video awaiting retry',
+                          _ => 'Round video saved locally',
+                        }),
+                        subtitle: Text(
+                          record.metadata['bridgeDelivery'] == 'delivered'
+                              ? 'Telegram confirmed delivery'
+                              : 'Telegram delivery not confirmed',
+                        ),
+                        trailing: Wrap(
+                          children: [
+                            if (record.metadata['state'] != 'matrixAccepted')
+                              IconButton(
+                                tooltip: 'Retry the same send attempt',
+                                icon: const Icon(Icons.send_outlined),
+                                onPressed: () => _act(context, () async {
+                                  await service.retry(
+                                    record.actionId,
+                                    stillCurrent: () =>
+                                        context.mounted &&
+                                        identical(
+                                          Matrix.of(context).client,
+                                          room.client,
+                                        ),
+                                  );
+                                }),
                               ),
-                            ),
-                          if (record.metadata['state'] == 'matrixAccepted')
-                            IconButton(
-                              tooltip:
-                                  'Delete local copy of accepted recording',
-                              icon: const Icon(Icons.delete_outline),
-                              onPressed: () => _discard(
-                                context,
-                                () => service.retainAccepted(record.actionId),
+                            if (!{
+                              'unknown',
+                              'inFlight',
+                              'matrixAccepted',
+                            }.contains(record.metadata['state']))
+                              IconButton(
+                                tooltip: 'Delete local round video draft',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () => _act(
+                                  context,
+                                  () => service.cancel(record.actionId),
+                                ),
                               ),
-                            ),
-                        ],
+                            if (record.metadata['state'] == 'matrixAccepted')
+                              IconButton(
+                                tooltip:
+                                    'Delete local copy of accepted recording',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () => _discard(
+                                  context,
+                                  () => service.retainAccepted(record.actionId),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
                 ],
               ),
             ),

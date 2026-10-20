@@ -5,7 +5,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
-import 'package:fluffychat/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:video_player/video_player.dart';
 
@@ -43,10 +43,11 @@ Future<PreparedRoundMedia?> showRoundVideoRecorder(
   );
 }
 
-/// Transparent and modal, like Telegram's InstantCameraView: the chat stays
-/// visible around the camera circle, and the pointer that opened it keeps
-/// driving the composer button underneath. The recorder animates its own
-/// open/close from [animation].
+/// Modal over the chat, like Telegram's InstantCameraView: the conversation
+/// stays visible but dimmed and blurred behind the camera circle
+/// ([RoundRecorderBackdrop]), and the pointer that opened it keeps driving the
+/// composer button underneath. The recorder animates its own open/close (and
+/// the backdrop's fade) from [animation].
 class RoundRecorderRoute extends PopupRoute<PreparedRoundMedia> {
   final WidgetBuilder builder;
   RoundRecorderRoute({required this.builder});
@@ -83,8 +84,10 @@ abstract final class RoundRecorderLayout {
   /// Shortest trim span in review.
   static const int minTrimMs = 1000;
 
-  /// Camera flip: two quarter turns around the vertical axis (580 ms).
-  static final Duration flip = NotionMotion.long + NotionMotion.medium;
+  /// Camera flip: two quarter turns around the vertical axis. The lens switch
+  /// starts with the turn (not at its half-way point), so the new camera is
+  /// usually live when the turn ends; Telegram turns for 580 ms.
+  static final Duration flip = NotionMotion.short * 2;
 
   /// min(screen) − 28 dp on a tall screen, otherwise 0.6 × min(screen).
   static double circleSize(Size screen) {
@@ -133,12 +136,11 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
   int? _pinchRevision;
   double _zoomBackFrom = 1;
   double _zoomBackTo = 1;
-  bool _flipSwapped = true;
 
   late final AnimationController _flip = AnimationController(
     vsync: this,
     duration: RoundRecorderLayout.flip,
-  )..addListener(_flipTick);
+  )..addStatusListener(_flipStatus);
 
   /// Zoom springs back to none when the pinch ends (Telegram: 350 ms).
   late final AnimationController _zoomBack = AnimationController(
@@ -364,23 +366,24 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
     _setZoom(lerpDouble(_zoomBackFrom, _zoomBackTo, t)!);
   }
 
-  /// Telegram flips the circle around its vertical axis and swaps lenses at
-  /// the half-way point, when the circle is edge-on.
+  /// Telegram flips the circle around its vertical axis. The native lens
+  /// switch starts at once, overlapping the turn instead of waiting for its
+  /// half-way point; a lens that is still opening when the turn ends shows
+  /// its last frame under a scrim until the first new frame arrives.
   void _switchCamera() {
     if (!_controller.canSwitchCamera || _flip.isAnimating) return;
-    if (NotionMotion.reduced(context)) {
-      unawaited(_controller.switchCamera());
-      return;
-    }
-    _flipSwapped = false;
-    _flip.forward(from: 0);
+    unawaited(_controller.switchCamera());
+    if (!NotionMotion.reduced(context)) _flip.forward(from: 0);
   }
 
-  void _flipTick() {
-    if (_flipSwapped || _flip.value < 0.5) return;
-    _flipSwapped = true;
-    if (!_closing) unawaited(_controller.switchCamera());
+  void _flipStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed && mounted && !_closing) {
+      setState(() {});
+    }
   }
+
+  /// The turn is over but the new lens has not delivered a frame yet.
+  bool get _awaitingLens => _controller.switchingCamera && !_flip.isAnimating;
 
   Future<void> _discard() async {
     if (_closing) return;
@@ -571,6 +574,11 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
         _controller.state == RoundCaptureState.recording;
     final body = Stack(
       children: [
+        // Dim everything behind the recorder; the flat dim fades with the
+        // route and is blurred only once the route has settled.
+        Positioned.fill(
+          child: _fade(context, route, const RoundRecorderBackdrop()),
+        ),
         // Front camera "flash": the screen lights the face while recording.
         Positioned.fill(
           child: IgnorePointer(
@@ -699,6 +707,7 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
     final zoomable =
         state == RoundCaptureState.recording && _controller.canZoom;
     final zoom = _zoom;
+    final awaitingLens = _awaitingLens;
     Widget circle = SizedBox.square(
       dimension: size,
       child: ClipOval(
@@ -707,7 +716,28 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
           child: Stack(
             fit: StackFit.expand,
             children: [
-              content,
+              // The live texture repaints on its own layer; the ring, clock and
+              // panel ticks never re-record it.
+              RepaintBoundary(child: content),
+              IgnorePointer(
+                child: AnimatedOpacity(
+                  key: const Key('round_flip_waiting'),
+                  opacity: awaitingLens ? 1 : 0,
+                  duration: NotionMotion.of(context, NotionMotion.quick),
+                  curve: NotionMotion.standard,
+                  child: ColoredBox(
+                    color: NotionMediaColors.scrim,
+                    child: awaitingLens
+                        ? const Center(
+                            child: NotionDelayedSpinner(
+                              size: NotionSize.iconLg,
+                              color: NotionMediaColors.onScrim,
+                            ),
+                          )
+                        : const SizedBox.expand(),
+                  ),
+                ),
+              ),
               if (state == RoundCaptureState.paused)
                 const ColoredBox(
                   color: NotionMediaColors.scrim,
@@ -1308,6 +1338,75 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
           ),
         ),
     ];
+  }
+}
+
+/// Dims and blurs the conversation behind the round recorder (Telegram keeps
+/// the chat visible behind its camera circle; ours is calmer). One backdrop
+/// read covers the whole screen, behind every recorder layer, inside its own
+/// repaint boundary, so recorder ticks never re-record it.
+///
+/// The blur is never animated and never sits inside the route's fade: while
+/// the route opens or closes this is a flat scrim of the same darkness (the
+/// fade animates only that), and the glass appears once the route has
+/// settled. Without glass support (Skia, reduced motion, high contrast) it is
+/// a plain, darker scrim throughout. Listens to route status, never to ticks.
+class RoundRecorderBackdrop extends StatefulWidget {
+  const RoundRecorderBackdrop({super.key});
+
+  @override
+  State<RoundRecorderBackdrop> createState() => _RoundRecorderBackdropState();
+}
+
+class _RoundRecorderBackdropState extends State<RoundRecorderBackdrop> {
+  Animation<double>? _route;
+  bool _settled = true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context)?.animation;
+    if (identical(route, _route)) return;
+    _route?.removeStatusListener(_status);
+    _route = route?..addStatusListener(_status);
+    _settled = route == null || route.isCompleted;
+  }
+
+  void _status(AnimationStatus status) {
+    final settled = status == AnimationStatus.completed;
+    if (settled != _settled && mounted) setState(() => _settled = settled);
+  }
+
+  @override
+  void dispose() {
+    _route?.removeStatusListener(_status);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget fill;
+    if (!notionGlassEnabled(context)) {
+      fill = const ColoredBox(
+        key: Key('round_recorder_scrim'),
+        color: NotionMediaColors.stageScrim,
+        child: SizedBox.expand(),
+      );
+    } else if (_settled) {
+      fill = const NotionGlassSurface(
+        key: Key('round_recorder_glass'),
+        tint: NotionMediaColors.scrim,
+        repaintBoundary: false,
+        child: SizedBox.expand(),
+      );
+    } else {
+      fill = const ColoredBox(
+        key: Key('round_recorder_dim'),
+        color: NotionMediaColors.scrim,
+        child: SizedBox.expand(),
+      );
+    }
+    return IgnorePointer(child: RepaintBoundary(child: fill));
   }
 }
 

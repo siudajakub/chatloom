@@ -2,11 +2,13 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:fluffychat/personal/privacy.dart';
-import 'package:fluffychat/personal/round_video/round_media_loader.dart';
-import 'package:fluffychat/personal/round_video/round_playback_coordinator.dart';
-import 'package:fluffychat/personal/round_video/round_playback_receipts.dart';
-import 'package:fluffychat/utils/bounded_byte_cache.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_media_loader.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/personal/round_video/round_playback_queue.dart';
+import 'package:chatloom/personal/round_video/round_playback_receipts.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/bounded_byte_cache.dart';
 import 'package:flutter/rendering.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -31,6 +33,11 @@ class RoundVideoMessage extends StatefulWidget {
 
   /// Evaluated only when the user starts playback (never per build).
   final List<Event> Function()? continuationQueue;
+
+  /// Verified unread state of a later message, null when unknown. When the
+  /// played round is itself unread, autoplay continues only through incoming
+  /// messages not known to be played (Telegram's unread playlist).
+  final bool? Function(Event event)? continuationUnread;
   final Future<void> Function(Event)? onForward, onExport, onTranscribe;
 
   /// Side of the conversation; the action column faces the screen centre.
@@ -60,6 +67,7 @@ class RoundVideoMessage extends StatefulWidget {
     this.sourceStateUnavailable = false,
     this.sourceAvailable,
     this.continuationQueue,
+    this.continuationUnread,
     this.onForward,
     this.onExport,
     this.onTranscribe,
@@ -100,7 +108,8 @@ class RoundVideoMessage extends StatefulWidget {
 }
 
 class _RoundVideoMessageState extends State<RoundVideoMessage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver
+    implements RoundContinuationTarget {
   late RoundPlaybackCoordinator _coordinator;
   late RoundPlaybackHandle _handle;
   late RoundMediaLoader _loader;
@@ -117,8 +126,19 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
   double _speed = 1;
   RoundPlaybackIntent _playIntent = RoundPlaybackIntent();
   List<Event> _queue = const [];
-  bool _continuing = false;
+
+  /// The controller whose end was handled; duplicate end events (completed,
+  /// isPlaying false, the final position tick) continue the queue once.
+  VideoPlayerController? _finishedPlayer;
+
+  /// Set while this row prepares an autoplay continuation, so a row disposed
+  /// meanwhile hands it to the detached player instead of dropping it.
+  RoundContinuationToken? _continuation;
   bool _starting = false;
+
+  /// Completes when a running start (for example a muted preview) settles,
+  /// so a continuation waits for it instead of giving up on this round.
+  Completer<void>? _idle;
   bool _staged = false;
   final _circleKey = GlobalKey();
   static _RoundVideoMessageState? _previewOwner;
@@ -156,6 +176,9 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
   /// A codec that never reports `initialized` must not spin forever.
   static const _initializeTimeout = Duration(seconds: 20);
 
+  /// Longest a continuation waits for this row to finish another start.
+  static const _continuationBusyWait = Duration(seconds: 3);
+
   @override
   void initState() {
     super.initState();
@@ -164,6 +187,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
     _coordinator = widget.coordinator ?? RoundPlaybackCoordinator.shared;
     _handle = _coordinator.register(pause: _pause, stop: _stop);
     RoundStageController.shared.addListener(_onStageChanged);
+    _registerTarget();
     if (_available) {
       _restoreMini();
     }
@@ -245,7 +269,9 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
     );
   }
 
-  void _stopOtherPlayers() {
+  /// Idle rows release their decoders before this row opens one.
+  Future<void> _stopOtherPlayers() async {
+    final stopping = <Future<void>>[];
     for (final other in _withPlayer.toList()) {
       if (identical(other, this) ||
           other._player == null ||
@@ -253,9 +279,20 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
           RoundStageController.shared.isStaged(other._player)) {
         continue;
       }
-      unawaited(other._stop());
+      stopping.add(other._stop().catchError((Object _) {}));
+    }
+    await Future.wait(stopping);
+  }
+
+  /// Timeline rows (they get a continuation queue) can take over autoplay.
+  void _registerTarget() {
+    if (widget.continuationQueue != null) {
+      RoundContinuationTargets.shared.register(widget.event, this);
     }
   }
+
+  void _unregisterTarget(Event event) =>
+      RoundContinuationTargets.shared.unregister(event, this);
 
   void _maybeThumbnail() {
     if (_player != null ||
@@ -335,6 +372,8 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       userInitiated: _userStarted,
       locallyPlayed: _locallyPlayed,
       receiptAttempted: _receiptAttempted,
+      enlarge: _staged || RoundStageController.shared.isStaged(player),
+      loader: _loader,
     );
     _player = null;
     _media = null;
@@ -347,15 +386,110 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
     }
   }
 
-  Future<void> _continueAfterCompletion() async {
-    if (_continuing) return;
-    _continuing = true;
-    _transferToMini();
-    if (mounted) setState(() {});
+  /// A real end: a ready controller that played to its duration. Players
+  /// report buffering (and other changes) before `initialized`, with a zero
+  /// position and duration, which must never count as finished.
+  static bool _ended(VideoPlayerValue value) =>
+      value.isInitialized &&
+      !value.hasError &&
+      value.duration > Duration.zero &&
+      (value.isCompleted ||
+          (!value.isPlaying && value.position >= value.duration));
+
+  /// Playback of [player] ended, or failed while audible. With a queue the
+  /// continuation is reserved now, while this row still holds audio, then
+  /// this decoder is released before the next item opens its own.
+  void _finish(VideoPlayerController player) {
+    if (identical(_finishedPlayer, player)) return;
+    _finishedPlayer = player;
+    _userStarted = false;
+    _playIntent.pause();
+    final queue = _queue;
+    if (queue.isEmpty || !_handle.isCurrent || !_available) {
+      _handle.releaseAudible();
+      return;
+    }
+    _queue = const [];
+    final token = _coordinator.beginContinuation();
+    final enlarge = _staged || RoundStageController.shared.isStaged(player);
+    unawaited(_handOff(player, queue, token, speed: _speed, enlarge: enlarge));
+  }
+
+  Future<void> _handOff(
+    VideoPlayerController player,
+    List<Event> queue,
+    RoundContinuationToken token, {
+    required double speed,
+    required bool enlarge,
+  }) async {
+    if (identical(player, _player)) {
+      final disposing = _disposePlayer();
+      if (mounted) setState(() {});
+      await disposing;
+    }
+    _handle.releaseAudible();
+    await RoundMiniPlayerController.shared.continueQueue(
+      queue,
+      token: token,
+      speed: speed,
+      enlarge: enlarge,
+      loader: _loader,
+    );
+  }
+
+  /// Autoplay reached this round: scroll it into view and play it here.
+  @override
+  Future<RoundStartResult> startContinuation(
+    List<Event> rest, {
+    required RoundContinuationToken token,
+    required double speed,
+    required bool enlarge,
+  }) async {
+    if (!_available || !token.active) return RoundStartResult.failed;
+    // Kept while waiting too: a row disposed meanwhile hands this round and
+    // the rest to the detached player.
+    _queue = List.unmodifiable(rest);
+    _continuation = token;
+    if (_loading || _starting) {
+      // Another start (a muted preview, a mixing-to-audible switch) is
+      // settling: wait for it, bounded, instead of dropping the queue.
+      final idle = _idle ??= Completer<void>();
+      await idle.future.timeout(_continuationBusyWait, onTimeout: () {});
+      if (!mounted) return RoundStartResult.aborted;
+      if (!identical(_continuation, token)) _continuation = token;
+      if (!_available || !token.active || _loading || _starting) {
+        if (identical(_continuation, token)) _continuation = null;
+        _queue = const [];
+        return RoundStartResult.failed;
+      }
+    }
+    _speed = speed.clamp(.2, 3.0);
+    _reveal();
+    final result = await _start(
+      userInitiated: false,
+      continuation: token,
+      enlarge: enlarge,
+    );
+    if (result != RoundStartResult.started && mounted) _queue = const [];
+    return result;
+  }
+
+  /// Telegram scrolls the list to the round that starts playing.
+  void _reveal() {
+    if (!mounted) return;
     try {
-      await RoundMiniPlayerController.shared.advance();
-    } finally {
-      _continuing = false;
+      unawaited(
+        Scrollable.ensureVisible(
+          context,
+          alignment: .5,
+          duration: NotionMotion.reduced(context)
+              ? Duration.zero
+              : NotionMotion.medium,
+          curve: NotionMotion.standard,
+        ).catchError((Object _) {}),
+      );
+    } catch (_) {
+      /* Not in a scrollable (or not laid out yet): play in place. */
     }
   }
 
@@ -496,6 +630,12 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         !identical(oldWidget.event.room.client, widget.event.room.client) ||
         oldWidget.event.room.id != widget.event.room.id ||
         oldWidget.event.attachmentMxcUrl != widget.event.attachmentMxcUrl;
+    if (sourceChanged ||
+        (oldWidget.continuationQueue == null) !=
+            (widget.continuationQueue == null)) {
+      _unregisterTarget(oldWidget.event);
+      _registerTarget();
+    }
     if (sourceChanged || !_available) {
       if (sourceChanged) _thumbnail = null;
       // Pending/unavailable rows rebuild often; only stop real work.
@@ -538,30 +678,52 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
     await _start(userInitiated: true);
   }
 
-  Future<void> _start({required bool userInitiated}) async {
-    if (!_available || _loading || _starting) return;
+  /// Later rounds and voice messages to autoplay after this one. Starting
+  /// from an unread round, Telegram plays only the unread incoming ones.
+  List<Event> _continuationFromHere() {
+    final queue = widget.continuationQueue?.call() ?? const <Event>[];
+    if (!widget.mediaUnread || _locallyPlayed) return List.unmodifiable(queue);
+    final own = widget.event.room.client.userID;
+    final unread = widget.continuationUnread;
+    return List.unmodifiable(
+      queue.where((e) => e.senderId != own && unread?.call(e) != false),
+    );
+  }
+
+  /// [userInitiated] is an explicit tap (audible, may create played intent).
+  /// A [continuation] is audible autoplay of a following item: it never
+  /// creates played intent. Neither is a muted preview.
+  Future<RoundStartResult> _start({
+    required bool userInitiated,
+    RoundContinuationToken? continuation,
+    bool enlarge = true,
+  }) async {
+    final audible = userInitiated || continuation != null;
+    if (!_available) return RoundStartResult.failed;
+    if (_loading || _starting) return RoundStartResult.aborted;
     // Scrolling may preview an already opened clip, but must never fetch its
     // full encrypted attachment or initialize a codec just to show the row.
-    if (!userInitiated && (!_viewportVisible || _player == null)) return;
-    if (userInitiated && _previewOwner == this) _previewOwner = null;
-    if (userInitiated) {
-      _queue = List.unmodifiable(
-        widget.continuationQueue?.call() ?? const <Event>[],
-      );
+    if (!audible && (!_viewportVisible || _player == null)) {
+      return RoundStartResult.aborted;
     }
+    if (userInitiated && _previewOwner == this) _previewOwner = null;
+    if (userInitiated) _queue = _continuationFromHere();
     _starting = true;
+    _continuation = continuation;
     final generation = _generation;
     final event = widget.event;
     try {
-      if (userInitiated && !await _handle.acquireAudible()) return;
+      if (audible &&
+          !await _handle.acquireAudible(continuation: continuation)) {
+        return RoundStartResult.aborted;
+      }
       if (!_available ||
           generation != _generation ||
-          (userInitiated && !_handle.isCurrent)) {
-        return;
+          (audible && !_handle.isCurrent)) {
+        return RoundStartResult.aborted;
       }
       var player = _player;
       if (player == null) {
-        if (userInitiated) _stopOtherPlayers();
         setState(() {
           _loading = true;
           _error = null;
@@ -570,8 +732,8 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         final request = _request = RoundMediaCancellation(
           sourceValid: () =>
               _available &&
-              (userInitiated || _viewportVisible) &&
-              (!userInitiated || _handle.isCurrent) &&
+              (audible || _viewportVisible) &&
+              (!audible || _handle.isCurrent) &&
               generation == _generation &&
               _sameSource(event, widget.event),
         );
@@ -583,24 +745,26 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
             setState(() => _downloadProgress = progress);
           },
         );
+        // One decoder at a time: idle rows release theirs first.
+        if (request.valid && audible) await _stopOtherPlayers();
         if (!request.valid) {
           await media.close();
-          return;
+          return RoundStartResult.aborted;
         }
         _media = media;
-        player = _newPlayer(media, muted: !userInitiated);
+        player = _newPlayer(media, muted: !audible);
         _player = player;
         _withPlayer.add(this);
         player.addListener(_onPlayerChanged);
         await player.initialize().timeout(_initializeTimeout);
         if (!request.valid || !identical(player, _player)) {
           if (identical(player, _player)) await _disposePlayer();
-          return;
+          return RoundStartResult.aborted;
         }
         await player.setLooping(false);
         await player.setPlaybackSpeed(_speed);
       }
-      if (userInitiated && _controllerMixes && _media != null) {
+      if (audible && _controllerMixes && _media != null) {
         setState(() => _loading = true);
         final position = player.value.position;
         final mixing = player;
@@ -618,63 +782,70 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
           await mixing.dispose();
         }
         // A stop in between bumped the generation and released the lease.
-        if (generation != _generation) return;
+        if (generation != _generation) return RoundStartResult.aborted;
         final media = _media;
         if (!_available || media == null) {
           await _disposePlayer();
-          return;
+          return RoundStartResult.aborted;
         }
-        final audible = _newPlayer(media, muted: false);
-        player = _player = audible;
-        audible.addListener(_onPlayerChanged);
-        await audible.initialize().timeout(_initializeTimeout);
-        if (!identical(audible, _player)) return;
+        final audibleMedia = _newPlayer(media, muted: false);
+        player = _player = audibleMedia;
+        audibleMedia.addListener(_onPlayerChanged);
+        await audibleMedia.initialize().timeout(_initializeTimeout);
+        if (!identical(audibleMedia, _player)) return RoundStartResult.aborted;
         if (!_available || generation != _generation) {
           if (generation == _generation) await _disposePlayer();
-          return;
+          return RoundStartResult.aborted;
         }
-        await audible.setPlaybackSpeed(_speed);
-        await audible.seekTo(position);
+        await audibleMedia.setPlaybackSpeed(_speed);
+        await audibleMedia.seekTo(position);
       }
-      if (!_available || generation != _generation) return;
       if (!_available ||
           generation != _generation ||
-          (!userInitiated && !_viewportVisible) ||
-          (userInitiated && !_handle.isCurrent)) {
-        return;
+          (!audible && !_viewportVisible) ||
+          (audible && !_handle.isCurrent)) {
+        return RoundStartResult.aborted;
       }
       if (player.value.position >= player.value.duration) {
         await player.seekTo(Duration.zero);
       }
-      await player.setVolume(userInitiated ? 1 : 0);
+      await player.setVolume(audible ? 1 : 0);
       if (!_available ||
           generation != _generation ||
-          (userInitiated && !_handle.isCurrent)) {
-        return;
+          (audible && !_handle.isCurrent)) {
+        return RoundStartResult.aborted;
       }
       _userStarted = userInitiated;
+      _finishedPlayer = null;
       _playIntent.begin(
         position: player.value.position,
         userInitiated: userInitiated,
       );
       await player.play();
-      if (userInitiated &&
+      if (audible &&
+          enlarge &&
           mounted &&
           identical(player, _player) &&
           _handle.isCurrent &&
           generation == _generation) {
         _present();
       }
+      return RoundStartResult.started;
     } catch (_) {
-      if (generation != _generation) return;
+      if (generation != _generation) return RoundStartResult.aborted;
+      // Superseded (another play took audio): quiet, no error state.
+      final superseded = audible && !_handle.isCurrent;
       // Show the retry state now; a native dispose may take a while.
-      unawaited(_disposePlayer().catchError((Object _) {}));
+      unawaited(_disposePlayer());
       _handle.releaseAudible();
+      if (superseded) return RoundStartResult.aborted;
       if (mounted) {
         setState(() => _error = 'Playback failed. Try again.');
       }
+      return RoundStartResult.failed;
     } finally {
-      if (!userInitiated &&
+      if (identical(_continuation, continuation)) _continuation = null;
+      if (!audible &&
           _player?.value.isPlaying != true &&
           _previewOwner == this) {
         _previewOwner = null;
@@ -683,7 +854,23 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         _starting = false;
         if (mounted) setState(() => _loading = false);
       }
+      _settled();
     }
+  }
+
+  void _settled() {
+    final idle = _idle;
+    if (idle == null || _loading || _starting) return;
+    _idle = null;
+    idle.complete();
+  }
+
+  /// The row's own "cancel download": the user stops this playback, which
+  /// also ends a continuation preparing it (the queue does not skip on).
+  Future<void> _cancel() async {
+    _continuation?.end();
+    _continuation = null;
+    await _stop();
   }
 
   void _onPlayerChanged() {
@@ -694,8 +881,16 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       return;
     }
     if (player.value.hasError) {
+      // While starting, [_start] reports the failure (and skips it in a
+      // continuation); a decoder error during playback skips to the next.
+      if (_starting) return;
+      final continues = _queue.isNotEmpty && _handle.isCurrent;
       setState(() => _error = 'Playback was interrupted. Try again.');
-      unawaited(_stop());
+      if (continues) {
+        _finish(player);
+      } else {
+        unawaited(_stop());
+      }
       return;
     }
     // Playing state alone can precede decoding the first frame. Position must
@@ -714,22 +909,19 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         );
       }
     }
-    if (player.value.isCompleted ||
-        (!player.value.isPlaying &&
-            player.value.position >= player.value.duration)) {
-      if (_queue.isNotEmpty && _handle.isCurrent && !_continuing) {
-        unawaited(_continueAfterCompletion());
-        return;
-      }
-      _handle.releaseAudible();
-    }
-    setState(() {});
+    if (!_starting && _ended(player.value)) _finish(player);
+    if (mounted) setState(() {});
   }
 
   Future<void> _pause() async {
     _userStarted = false;
     _playIntent.pause();
-    await _player?.pause();
+    try {
+      await _player?.pause();
+    } catch (_) {
+      // A player that cannot pause is released; it never keeps playing.
+      await _stop();
+    }
     if (mounted) setState(() {});
   }
 
@@ -745,10 +937,16 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       RoundStageController.shared.release(player);
       player.removeListener(_onPlayerChanged);
     }
+    // Never throws: callers are listeners, lifecycle hooks and unawaited.
     try {
       await player?.dispose();
-    } finally {
+    } catch (_) {
+      /* The native player is released either way. */
+    }
+    try {
       await media?.close();
+    } catch (_) {
+      /* Startup cleanup removes a lease left behind. */
     }
   }
 
@@ -773,6 +971,8 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         _downloadProgress = null;
       });
     }
+    _loading = false;
+    _settled();
     await disposing;
   }
 
@@ -830,9 +1030,25 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
     WidgetsBinding.instance.removeObserver(this);
     RoundStageController.shared.removeListener(_onStageChanged);
     _scrollPosition?.removeListener(_scheduleViewport);
+    _unregisterTarget(widget.event);
     if (_previewOwner == this) _previewOwner = null;
+    final continuation = _continuation;
     if (_player?.value.isPlaying == true && _handle.isCurrent && _available) {
       _transferToMini(replaceHandle: false);
+    } else if (continuation != null && continuation.active && _available) {
+      // Recycled or closed while preparing a continuation: the detached
+      // player takes it over (this round first) instead of dropping it.
+      final queue = [widget.event, ..._queue];
+      _continuation = null;
+      _handle.dispose();
+      unawaited(
+        RoundMiniPlayerController.shared.continueQueue(
+          queue,
+          token: continuation,
+          speed: _speed,
+          loader: _loader,
+        ),
+      );
     } else {
       _handle.dispose();
     }
@@ -841,6 +1057,10 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
     _thumbnailRequest?.cancel();
     _thumbnail = null;
     _withPlayer.remove(this);
+    // A continuation waiting for this row wakes up and sees it is gone.
+    final idle = _idle;
+    _idle = null;
+    idle?.complete();
     unawaited(_disposePlayer().catchError((Object _) {}));
     super.dispose();
   }
@@ -911,7 +1131,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       mediaUnread: widget.mediaUnread && !_locallyPlayed,
       error: _error,
       onToggle: _toggle,
-      onCancel: _stop,
+      onCancel: _cancel,
       onReportPlayed: _canReportPlayed ? _reportPlayed : null,
       actions: [
         if (policy.canExport && widget.onExport != null)

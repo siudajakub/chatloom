@@ -19,6 +19,36 @@ class RoundPlaybackIntent {
   }) => _userInitiated && isPlaying && audiblePermit && position > _start;
 }
 
+/// Permission for an autoplay continuation (the next round or voice message
+/// after one finished) to become audible. Any explicit play, app lock,
+/// background or account switch cancels it, so a slow download of the next
+/// item never steals audio from what the user chose meanwhile.
+class RoundContinuationToken {
+  final RoundPlaybackCoordinator _coordinator;
+  bool _cancelled = false;
+  int _claims = 0;
+  RoundContinuationToken._(this._coordinator);
+
+  bool get active => !_cancelled && identical(_coordinator._continuation, this);
+
+  /// A driver walking the queue claims the token. A newer claim (a row
+  /// disposed while preparing hands its item to the detached player) takes
+  /// over, and only the current claimant ends the token.
+  int claim() => ++_claims;
+  bool isClaimedBy(int claim) => _claims == claim;
+
+  /// Ends the continuation (started, exhausted or abandoned).
+  void end() {
+    _cancelled = true;
+    if (identical(_coordinator._continuation, this)) {
+      _coordinator._continuation = null;
+    }
+  }
+
+  @override
+  String toString() => 'RoundContinuationToken(${active ? 'active' : 'ended'})';
+}
+
 /// Serializes audible playback across round, voice and ordinary video players.
 /// A permit must be checked after asynchronous preparation and before play().
 class RoundPlaybackCoordinator {
@@ -26,11 +56,45 @@ class RoundPlaybackCoordinator {
   final Set<RoundPlaybackHandle> _players = {};
   Future<void> _queue = Future<void>.value();
   RoundPlaybackHandle? _audible;
+  RoundContinuationToken? _continuation;
   int _generation = 0;
   bool _suspended = false;
   bool _stopFailed = false;
 
   bool get suspended => _suspended;
+
+  /// Whether an autoplay continuation is reserved (for tests and diagnostics).
+  bool get continuing => _continuation != null;
+
+  /// Starts a continuation and cancels any previous one. Call it while the
+  /// finished item still holds the audible permit, before releasing it.
+  RoundContinuationToken beginContinuation() {
+    _cancelContinuation();
+    final token = RoundContinuationToken._(this);
+    if (_suspended) {
+      token._cancelled = true;
+    } else {
+      _continuation = token;
+    }
+    return token;
+  }
+
+  void _cancelContinuation() {
+    _continuation?._cancelled = true;
+    _continuation = null;
+  }
+
+  /// Tests share [shared] with the mini player. A completed serial future
+  /// created in an earlier test's fake-async zone never runs callbacks in the
+  /// next one, so each test starts from a fresh chain.
+  void debugReset() {
+    ++_generation;
+    _queue = Future<void>.value();
+    _audible = null;
+    _cancelContinuation();
+    _suspended = false;
+    _stopFailed = false;
+  }
 
   RoundPlaybackHandle register({
     required Future<void> Function() pause,
@@ -47,7 +111,17 @@ class RoundPlaybackCoordinator {
     return result;
   }
 
-  Future<bool> _activate(RoundPlaybackHandle handle) {
+  Future<bool> _activate(
+    RoundPlaybackHandle handle, {
+    RoundContinuationToken? continuation,
+  }) {
+    // Only the continuation itself may proceed; anything else is a user
+    // choice that ends it.
+    if (continuation == null) {
+      _cancelContinuation();
+    } else if (!continuation.active) {
+      return Future.value(false);
+    }
     final generation = ++_generation;
     return _serial(() async {
       if (_suspended || handle._closed || generation != _generation) {
@@ -59,7 +133,10 @@ class RoundPlaybackCoordinator {
         await previous._pause();
       }
       _audible = null;
-      if (_suspended || handle._closed || generation != _generation) {
+      if (_suspended ||
+          handle._closed ||
+          generation != _generation ||
+          (continuation != null && !continuation.active)) {
         return false;
       }
       _audible = handle;
@@ -74,6 +151,7 @@ class RoundPlaybackCoordinator {
     ++_generation;
     _suspended = suspend;
     _audible = null;
+    _cancelContinuation();
     return _serial(() async {
       Object? firstError;
       StackTrace? firstStack;
@@ -115,7 +193,9 @@ class RoundPlaybackHandle {
   bool _closed = false;
   RoundPlaybackHandle._(this._coordinator, this._pause, this._stop);
 
-  Future<bool> acquireAudible() => _coordinator._activate(this);
+  /// Pass [continuation] only for autoplay of a following item.
+  Future<bool> acquireAudible({RoundContinuationToken? continuation}) =>
+      _coordinator._activate(this, continuation: continuation);
 
   /// Transfer a live player between its timeline row and the mini-player.
   /// Its audible permit remains the same, so no second native player starts.

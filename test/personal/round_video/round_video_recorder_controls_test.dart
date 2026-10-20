@@ -4,12 +4,13 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:fluffychat/pages/chat/round_video_recorder.dart';
-import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/personal/round_video/round_capture_backend.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
-import 'package:fluffychat/personal/round_video/round_media_preparer.dart';
-import 'package:fluffychat/ui/notion/notion_theme.dart';
+import 'package:chatloom/pages/chat/round_video_recorder.dart';
+import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/round_video/round_capture_backend.dart';
+import 'package:chatloom/personal/round_video/round_capture_controller.dart';
+import 'package:chatloom/personal/round_video/round_media_preparer.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -29,6 +30,9 @@ class RecorderFixture {
   bool switched = false;
   String? captureId;
   String? outputPath;
+
+  /// Holds the native switch reply (the new lens "opening") while set.
+  Completer<void>? switchHold;
   final initialized = Completer<void>();
   final disposed = Completer<void>();
   RecorderFixture({required this.controlsAvailable});
@@ -78,6 +82,7 @@ class RecorderFixture {
         if (!disposed.isCompleted) disposed.complete();
         return null;
       case 'switchCamera':
+        await switchHold?.future;
         revision++;
         switched = true;
         zoom = 1;
@@ -158,6 +163,7 @@ void main() {
     double width = 390,
     double textScale = 1,
     Widget Function(MediaAccess access)? recorder,
+    NotionGlassMode glass = NotionGlassMode.auto,
   }) async {
     tester.view.physicalSize = Size(width, 844);
     tester.view.devicePixelRatio = 1;
@@ -175,7 +181,10 @@ void main() {
           data: MediaQuery.of(
             context,
           ).copyWith(textScaler: TextScaler.linear(textScale)),
-          child: RepaintBoundary(key: boundaryKey, child: child),
+          child: NotionGlassScope(
+            mode: glass,
+            child: RepaintBoundary(key: boundaryKey, child: child),
+          ),
         ),
         home: Scaffold(
           key: hostKey,
@@ -221,9 +230,10 @@ void main() {
   Future<Outcome> openHeld(
     WidgetTester tester,
     RecorderFixture fixture,
-    RoundCaptureGestureController gesture,
-  ) async {
-    final access = await mount(tester, fixture);
+    RoundCaptureGestureController gesture, {
+    NotionGlassMode glass = NotionGlassMode.auto,
+  }) async {
+    final access = await mount(tester, fixture, glass: glass);
     final outcome = Outcome();
     unawaited(
       showRoundVideoRecorder(
@@ -377,12 +387,15 @@ void main() {
         await evidence(tester, 'recorder-paused-390');
         await tester.tap(button('Switch camera'));
         await tester.pump();
-        expect(fixture.methods, isNot(contains('switchCamera')));
-        // Lenses swap half-way through the 580 ms flip.
+        // The native lens switch starts with the turn, not half-way through.
+        expect(fixture.methods, contains('switchCamera'));
+        expect(
+          RoundRecorderLayout.flip,
+          lessThan(const Duration(milliseconds: 580)),
+        );
         await tester.pump(RoundRecorderLayout.flip);
         await tester.pump();
         await tester.pump(RoundRecorderLayout.flip);
-        expect(fixture.methods, contains('switchCamera'));
         expect(
           tester
               .widget<IconButton>(button('Light unavailable on this camera'))
@@ -404,6 +417,104 @@ void main() {
         ]);
         expect(fixture.revisions.toSet(), {1});
       } finally {
+        await close(tester, fixture);
+      }
+    },
+  );
+
+  testWidgets(
+    'flip: the lens switch overlaps the turn; a slow lens shows the waiting scrim until it is live',
+    (tester) async {
+      final fixture = RecorderFixture(controlsAvailable: true);
+      double waitingOpacity() => tester
+          .widget<AnimatedOpacity>(find.byKey(const Key('round_flip_waiting')))
+          .opacity;
+      try {
+        await open(tester, fixture);
+        await tester.tap(find.byKey(const Key('round_record_start')));
+        await tester.pump();
+        await tester.pump();
+        fixture.switchHold = Completer<void>();
+        await tester.tap(button('Switch camera'));
+        await tester.pump();
+        expect(fixture.methods.where((m) => m == 'switchCamera'), hasLength(1));
+        // Mid-turn: no waiting scrim yet, and a second tap is ignored.
+        await tester.pump(RoundRecorderLayout.flip ~/ 2);
+        expect(waitingOpacity(), 0);
+        await tester.tap(button('Switch camera'), warnIfMissed: false);
+        await tester.pump();
+        expect(fixture.methods.where((m) => m == 'switchCamera'), hasLength(1));
+        // The turn ended before the lens: last frame under the scrim.
+        await tester.pump(RoundRecorderLayout.flip);
+        await tester.pump();
+        expect(waitingOpacity(), 1);
+        fixture.switchHold!.complete();
+        fixture.switchHold = null;
+        await settle(tester, () => waitingOpacity() == 0);
+        expect(waitingOpacity(), 0);
+        expect(fixture.mismatches, isEmpty);
+      } finally {
+        fixture.switchHold?.complete();
+        await close(tester, fixture);
+      }
+    },
+  );
+
+  testWidgets(
+    'the conversation behind the recorder is dimmed: the backdrop fades in with the route and out on cancel',
+    (tester) async {
+      final fixture = RecorderFixture(controlsAvailable: true);
+      final gesture = RoundCaptureGestureController(held: true);
+      double backdropOpacity() => tester
+          .widget<FadeTransition>(
+            find
+                .ancestor(
+                  of: find.byType(RoundRecorderBackdrop),
+                  matching: find.byType(FadeTransition),
+                )
+                .first,
+          )
+          .opacity
+          .value;
+      final glass = find.byKey(const Key('round_recorder_glass'));
+      final dim = find.byKey(const Key('round_recorder_dim'));
+      try {
+        final result = await openHeld(
+          tester,
+          fixture,
+          gesture,
+          glass: NotionGlassMode.on,
+        );
+        expect(find.byType(RoundRecorderBackdrop), findsOneWidget);
+        // Exactly one backdrop layer, and it never takes the pointer.
+        expect(
+          find.descendant(
+            of: find.byType(RoundRecorderBackdrop),
+            matching: find.byType(IgnorePointer),
+          ),
+          findsWidgets,
+        );
+        // Fades in with the opening route as a flat dim: glass never sits
+        // inside the route's fade (DESIGN.md), it appears once settled.
+        expect(backdropOpacity(), lessThan(1));
+        expect(dim, findsOneWidget);
+        expect(glass, findsNothing);
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(backdropOpacity(), 1);
+        expect(glass, findsOneWidget);
+        expect(dim, findsNothing);
+        gesture.move(dx: -140, dy: 0);
+        await settle(tester, () => result.done);
+        // Fading out with the closing route as the flat dim, then gone.
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(RoundRecorderBackdrop), findsOneWidget);
+        expect(backdropOpacity(), inExclusiveRange(0.0, 1.0));
+        expect(glass, findsNothing);
+        expect(dim, findsOneWidget);
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byType(RoundRecorderBackdrop), findsNothing);
+      } finally {
+        gesture.dispose();
         await close(tester, fixture);
       }
     },

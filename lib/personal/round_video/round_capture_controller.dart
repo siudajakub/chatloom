@@ -202,6 +202,9 @@ class RoundCaptureController extends ChangeNotifier {
       state == RoundCaptureState.recording || state == RoundCaptureState.paused;
   bool get isFinalizing => _finishing != null || _nativePreparing;
   bool get controlsBusy => _controlOperation != null || _transitionPending;
+
+  /// A lens switch is in flight (until the new lens shows its first frame).
+  bool get switchingCamera => _controlOperation == 'switch';
   bool get _interactive =>
       !_closed && (state == RoundCaptureState.ready || active);
   bool get canSwitchCamera =>

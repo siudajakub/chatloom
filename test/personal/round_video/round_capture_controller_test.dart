@@ -3,10 +3,10 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:fluffychat/personal/media/media_access.dart';
-import 'package:fluffychat/personal/round_video/round_capture_backend.dart';
-import 'package:fluffychat/personal/round_video/round_capture_controller.dart';
-import 'package:fluffychat/personal/round_video/round_media_preparer.dart';
+import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/round_video/round_capture_backend.dart';
+import 'package:chatloom/personal/round_video/round_capture_controller.dart';
+import 'package:chatloom/personal/round_video/round_media_preparer.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -235,6 +235,8 @@ void main() {
       );
       await controller.initialize();
       final switching = controller.switchCamera();
+      // The recorder keeps its waiting scrim up exactly while this is true.
+      expect(controller.switchingCamera, isTrue);
       await controller.start();
       expect(controller.state, RoundCaptureState.ready);
       expect(backend.operations, ['switch']);
@@ -242,6 +244,7 @@ void main() {
         capturePreview(available: true, revision: 2),
       );
       await switching;
+      expect(controller.switchingCamera, isFalse);
       await controller.start();
       expect(controller.state, RoundCaptureState.recording);
       expect(controller.preview!.cameraRevision, 2);

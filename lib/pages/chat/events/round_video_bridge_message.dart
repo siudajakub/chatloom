@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/personal/round_video/telegram_round_service.dart';
-import 'package:fluffychat/personal/transcript_panel.dart';
-import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/personal/transcript_panel.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -148,6 +148,12 @@ class _RoundVideoBridgeMessageState extends State<RoundVideoBridgeMessage> {
       sourceAvailable: () =>
           _service.verifiedMediaStateSnapshot(event)?['expired'] != true,
       continuationQueue: widget.continuationQueue,
+      continuationUnread: (source) {
+        final unread = _service.verifiedMediaStateSnapshot(
+          source,
+        )?['media_unread'];
+        return unread is bool ? unread : null;
+      },
       onForward: ready && policy.canForward && _service.canNativeForward(event)
           ? (source) => _service.showForwardPicker(context, source)
           : null,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-package chat.fluffy.fluffychat.round
+package pl.personal.chatloom.round
 
 import java.io.File
 import java.nio.ByteBuffer
@@ -60,6 +60,29 @@ fun main() {
         rejected { RoundProfile(641, 25000000, 60000, 1000000, 64000).validate() }
         rejected { RoundProfile(384, 25000000, 60001, 1000000, 64000).validate() }
         rejected { RoundProfile(384, 0, 60000, 1000000, 64000).validate() }
-        println("PASS native round: stco/co64 relocation, preserved sample offsets, faststart identity, malformed/outside/fragment rejection, profile limits")
+
+        // Direct recording finalize: MediaRecorder's reserved-header layout (moov, free,
+        // mdat) is moved by rename, byte for byte; a trailing index is relocated; any
+        // malformed or fragmented layout is rejected without touching the source.
+        val headerFirst = ftyp + index(ftyp.size + 24L) + atom("free", ByteArray(8)) + mdat
+        source.writeBytes(headerFirst)
+        output.writeBytes("stale".toByteArray())
+        RoundMp4FastStart.finalize(source, output)
+        check(!source.exists() && output.readBytes().contentEquals(headerFirst)) { "moov-first finalize must rename unchanged" }
+        val trailing = ftyp + mdat + index(ftyp.size + 8L)
+        source.writeBytes(trailing)
+        RoundMp4FastStart.finalize(source, output)
+        val finalized = output.readBytes()
+        check(!source.exists() && finalized.size == trailing.size && String(finalized, ftyp.size + 4, 4) == "moov") {
+            "trailing index must be relocated"
+        }
+        val fragmented = ftyp + atom("moof", byteArrayOf()) + mdat + index(ftyp.size + 16L)
+        source.writeBytes(fragmented)
+        output.delete()
+        rejected { RoundMp4FastStart.finalize(source, output) }
+        check(source.readBytes().contentEquals(fragmented) && !output.exists()) { "rejected finalize keeps the source" }
+        source.writeBytes(ftyp + index(ftyp.size + 8L) + mdat + index(ftyp.size + 8L))
+        rejected { RoundMp4FastStart.finalize(source, output) }
+        println("PASS native round: stco/co64 relocation, preserved sample offsets, faststart identity, malformed/outside/fragment rejection, profile limits, direct finalize rename/relocate/reject")
     } finally { root.deleteRecursively() }
 }
