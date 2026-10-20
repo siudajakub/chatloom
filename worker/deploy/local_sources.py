@@ -3,10 +3,10 @@
 
 No OpenAI key or new Matrix session is configured here. The existing Beeper
 target authenticates under its own account. The only allowed API write is the
-server's asset-download/cache operation for a selected voice note or Telegram
-round video. `POST /recent` lists identifiers of newly indexed incoming voice
-and round messages for opt-in automatic transcription; it returns no sender,
-text, media or paths.
+server's asset-download/cache operation for a selected voice note, Telegram
+round video, other video or audio attachment. `POST /recent` lists identifiers
+of newly indexed incoming speech media for opt-in automatic transcription; it
+returns no sender, text, media or paths.
 """
 from datetime import datetime
 import json
@@ -39,6 +39,14 @@ ROUND_MAX_BYTES = 64 * 1024 * 1024
 ROUND_MAX_MS = 61_500  # 60 s plus container rounding tolerance
 ROUND_MAX_SIDE = 640
 ROUND_SQUARE_TOLERANCE = 2
+# Media kinds. `video` and `audio` are only listed by /recent when the
+# worker asks for them (`kinds`), so a worker that predates them never
+# receives an item kind it would refuse as an invalid page.
+KINDS = ('voice', 'round', 'video', 'audio')
+LEGACY_KINDS = ('voice', 'round')
+# Containers the worker's FFmpeg whitelist reads (mov/mp4/3gp, matroska/webm, avi).
+VIDEO_MIMES = frozenset({'video/mp4', 'video/webm', 'video/quicktime', 'video/3gpp', 'video/3gpp2',
+                         'video/x-matroska', 'video/x-m4v', 'video/x-msvideo'})
 RECENT_MAX_LIMIT = 200
 MAX_RECENT_BYTES = 256 * 1024
 MAX_ID_LENGTH = 255
@@ -194,6 +202,41 @@ def ordinary_voice(message):
     return attachment
 
 
+def _plain(attachment):
+    """Not a GIF, sticker or voice note (those have their own rules)."""
+    return not (attachment.get('isGif') or attachment.get('isSticker') or attachment.get('isVoiceNote'))
+
+
+def ordinary_video(message):
+    """Any other single video attachment (also a file with a video type).
+
+    Videos without an audio stream are detected by the worker's ffprobe
+    before any provider request; GIF-style clips are refused here already."""
+    attachment = single_attachment(message)
+    if attachment is None or not _plain(attachment):
+        return None
+    if (attachment.get('type') not in ('video', 'unknown', 'file', None)
+            or attachment.get('mimeType') not in VIDEO_MIMES):
+        return None
+    if not _size(attachment, MAX_BYTES):
+        return None
+    return attachment
+
+
+def ordinary_audio(message):
+    """A single non-voice audio attachment, e.g. a recording sent as a file."""
+    attachment = single_attachment(message)
+    if attachment is None or not _plain(attachment):
+        return None
+    mime = str(attachment.get('mimeType', ''))
+    if (attachment.get('type') not in ('audio', 'unknown', 'file', None)
+            or not mime.startswith('audio/') or 'mpegurl' in mime or 'scpls' in mime):
+        return None
+    if not _size(attachment, MAX_BYTES):
+        return None
+    return attachment
+
+
 def _number(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -336,15 +379,32 @@ def ordinary_round(message, telegram=False):
     return attachment
 
 
-def exportable_media(message, telegram=False):
-    """(attachment, kind) for an exportable voice note or round, else (None, None)."""
+def exportable_media(message, telegram=False, kinds=KINDS):
+    """(attachment, kind) for exportable speech media, else (None, None).
+
+    Rounds are classified before other videos, voice notes before other audio."""
     voice = ordinary_voice(message)
     if voice is not None:
-        return voice, 'voice'
+        return (voice, 'voice') if 'voice' in kinds else (None, None)
     video = ordinary_round(message, telegram)
     if video is not None:
-        return video, 'round'
+        return (video, 'round') if 'round' in kinds else (None, None)
+    if 'video' in kinds:
+        video = ordinary_video(message)
+        if video is not None:
+            return video, 'video'
+    if 'audio' in kinds:
+        audio = ordinary_audio(message)
+        if audio is not None:
+            return audio, 'audio'
     return None, None
+
+
+def _declared_duration(attachment):
+    if not attachment:
+        return None
+    duration = duration_ms(attachment)
+    return duration if duration is not None and duration >= 0 else None
 
 
 def selected_source(source):
@@ -371,7 +431,9 @@ def selected_source(source):
     if rows[0][1]:
         return {'isDeleted': True}, None
     canonical = json.loads(rows[0][3])
-    original, kind = exportable_media(canonical, telegram)
+    # Voice notes and rounds first (including the API-completed round below),
+    # so a Telegram round is never mislabelled as an ordinary video.
+    original, kind = exportable_media(canonical, telegram, LEGACY_KINDS)
     # A Telegram round whose canonical row lacks both an explicit flag and
     # measured size/duration may still be completed by the API's documented
     # size/duration fields. Every restriction was already checked above.
@@ -380,6 +442,8 @@ def selected_source(source):
         candidate = round_candidate(canonical)
         if candidate is not None and round_flag(canonical, candidate) is None:
             pending = candidate
+    if original is None and pending is None:
+        original, kind = exportable_media(canonical, telegram, ('video', 'audio'))
     # The public message API omits some behavior/timer fields. The canonical
     # stored model must approve export before the API is used to resolve bytes.
     if rows[0][2] or (original is None and pending is None):
@@ -390,6 +454,10 @@ def selected_source(source):
         raise SourceFailure()
     if kind == 'voice':
         attachment = ordinary_voice(message)
+    elif kind == 'video':
+        attachment = ordinary_video(message)
+    elif kind == 'audio':
+        attachment = ordinary_audio(message)
     else:
         attachment = round_candidate(message)
         if attachment is not None:
@@ -400,6 +468,13 @@ def selected_source(source):
             # An explicit negative or malformed flag in the API copy refuses.
             elif round_flag(message, attachment) is False:
                 attachment = None
+        if attachment is None and pending is not None:
+            # Not a round after all: an ordinary video, if the canonical
+            # model allows that on its own (every restriction applies).
+            video = ordinary_video(canonical)
+            if video is not None:
+                original, kind = video, 'video'
+                attachment = ordinary_video(message)
     if attachment is not None:
         if any(attachment.get(k) != original.get(k) for k in ('id', 'mimeType', 'fileSize')):
             raise SourceFailure()
@@ -442,7 +517,7 @@ def timestamp_ms(value):
     return None
 
 
-def _recent_item(account, row_id, room, event, deleted, edited, raw, since):
+def _recent_item(account, row_id, room, event, deleted, edited, raw, since, kinds=LEGACY_KINDS):
     if (not isinstance(room, str) or not room.startswith('!') or not room.endswith(':beeper.local')
             or len(room) > MAX_ID_LENGTH or not isinstance(event, str)
             or not event.startswith('$') or len(event) > MAX_ID_LENGTH or deleted or edited):
@@ -453,7 +528,7 @@ def _recent_item(account, row_id, room, event, deleted, edited, raw, since):
         return None
     if not isinstance(message, dict) or message.get('isSender') or message.get('senderID') == account:
         return None
-    attachment, kind = exportable_media(message)
+    attachment, kind = exportable_media(message, kinds=kinds)
     if attachment is None:
         return None
     when = timestamp_ms(message.get('timestamp'))
@@ -474,6 +549,10 @@ def recent_media(request):
     first scan never sweeps history. Read-only; nothing is downloaded."""
     account, cursor = request.get('accountId'), request.get('cursor')
     limit, since = request.get('limit', 100), request.get('sinceMs')
+    kinds = request.get('kinds', list(LEGACY_KINDS))
+    if (not isinstance(kinds, list) or not 0 < len(kinds) <= len(KINDS)
+            or any(not isinstance(k, str) or k not in KINDS for k in kinds)):
+        raise SourceFailure()
     if (not isinstance(account, str) or not account.startswith('@')
             or (cursor is not None and (not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0))
             or not isinstance(limit, int) or isinstance(limit, bool) or not 0 < limit <= RECENT_MAX_LIMIT
@@ -495,7 +574,7 @@ def recent_media(request):
         if not isinstance(row[0], int) or isinstance(row[0], bool):
             raise SourceFailure()
         position = max(position, row[0])
-        item = _recent_item(account, *row, since)
+        item = _recent_item(account, *row, since, kinds=tuple(kinds))
         if item is not None:
             items.append(item)
     return {'cursor': position, 'items': items}
@@ -534,7 +613,11 @@ class Handler(BaseHTTPRequestHandler):
                     separators=(',', ':'), ensure_ascii=False),
                     'redacted': bool(message.get('isDeleted')), 'transcriptionAllowed': attachment is not None,
                     'mimeType': attachment['mimeType'] if attachment else None,
-                    'kind': attachment.get('_kind', 'voice') if attachment else None}).encode(), 'application/json')
+                    'kind': attachment.get('_kind', 'voice') if attachment else None,
+                    # Declared values let the worker skip over-limit media
+                    # before any export; its own measurement stays final.
+                    'durationMs': _declared_duration(attachment),
+                    'fileSize': attachment.get('fileSize') if attachment else None}).encode(), 'application/json')
                 return
             if attachment is None:
                 self.reply(403, b'{}', 'application/json')

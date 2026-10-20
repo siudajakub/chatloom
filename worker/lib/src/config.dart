@@ -19,8 +19,13 @@ class WorkerConfig {
   final String? localSourceSocket;
 
   /// Operator opt-in for worker-side automatic transcription. Only effective
-  /// together with [localSourceSocket] and the synced user policy.
+  /// together with the synced user policy. Sources: [localSourceSocket]
+  /// (local bridge rooms) and, unless [autoTranscriptionMatrix] is false,
+  /// the worker's own Matrix sync (cloud rooms).
   final bool autoTranscription;
+
+  /// Lets the operator keep automatic work to local sources only.
+  final bool autoTranscriptionMatrix;
   WorkerConfig({
     required this.stateDirectory,
     required this.temporaryDirectory,
@@ -33,6 +38,7 @@ class WorkerConfig {
     this.allowConversationSends = true,
     this.localSourceSocket,
     this.autoTranscription = false,
+    this.autoTranscriptionMatrix = true,
   });
   factory WorkerConfig.read(String filename) {
     final value =
@@ -67,6 +73,8 @@ class WorkerConfig {
       allowConversationSends: value['allowConversationSends'] as bool? ?? true,
       localSourceSocket: sourceSocket,
       autoTranscription: value['autoTranscription'] as bool? ?? false,
+      autoTranscriptionMatrix:
+          value['autoTranscriptionMatrix'] as bool? ?? true,
       journalRoomId: value['journalRoomId'] as String? ?? '',
       trustedDeviceIds: (value['trustedDeviceIds'] as List? ?? [])
           .cast<String>(),

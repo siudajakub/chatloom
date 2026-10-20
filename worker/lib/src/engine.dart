@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:personal_core/personal_core.dart';
 import 'ports.dart';
@@ -10,40 +11,90 @@ String stableId(String namespace, String id) =>
     '$namespace-${sha256.convert(utf8.encode(id))}';
 
 class WorkerEngine {
-  static const autoScanInterval = Duration(seconds: 10);
+  /// The local index query is cheap (one read-only SQLite range scan), so a
+  /// short interval keeps a fresh message's transcript a few seconds away.
+  static const autoScanInterval = Duration(seconds: 3);
   static const autoScanPageLimit = 100;
   static const autoScanCheckpoint = 'auto-scan';
+
+  /// Start of the live (Matrix sync) feed's window; cleared while off.
+  static const autoLiveCheckpoint = 'auto-live-since';
   static const autoBudgetWindow = Duration(hours: 24);
+
+  /// Transient failures (source busy, provider overloaded, keys missing) are
+  /// retried with exponential backoff. Provider retries are only for answers
+  /// that prove no charge; paid uncertainty is never retried.
+  static const transientRetryLimit = 4;
+  static const transientRetryCodes = {
+    'local_source_unavailable',
+    'local_source_busy',
+    'source_unavailable',
+    'room_unavailable',
+    'openai_rate_limited',
+    'openai_unavailable',
+    'openai_unreachable',
+  };
   final WorkerStore store;
   final FeatureTransport transport;
   final Transcriber transcriber;
   final DateTime Function() clock;
 
-  /// Read-only scan of newly indexed local voice/round messages.
+  /// Read-only scan of newly indexed local voice/round/video messages.
   final RecentSourceScanner? recentSources;
+
+  /// Push feed of messages received by the worker's own Matrix sync (cloud
+  /// rooms that the local scan cannot see).
+  final LiveSourceFeed? liveSources;
+
+  /// Bounded parallelism: provider round trips dominate, so two jobs keep a
+  /// burst moving while FFmpeg (one thread each) stays within the unit's
+  /// single-CPU quota. The local adapter still serializes its exports.
+  final int maxConcurrentTranscripts;
 
   /// Private operator switch (`autoTranscription` in the worker config).
   /// Off by default: the synced user policy alone never starts a scan.
   final bool autoTranscription;
   final Map<String, Cancellation> _cancellations = {};
   bool _running = false;
-  bool _transcriptBusy = false;
   bool _sourceAuditBusy = false;
   DateTime? _sourceAuditAt;
   bool _autoScanBusy = false;
   DateTime? _autoScanAt;
-  Future<void>? _activeTranscript;
+  final Map<String, Future<void>> _activeTranscripts = {};
+  Future<void> _largeSlot = Future<void>.value();
+  DateTime? _mediaPrunedAt;
+  Completer<void>? _wake;
   WorkerEngine(
     this.store,
     this.transport,
     this.transcriber, {
     DateTime Function()? clock,
     this.recentSources,
+    this.liveSources,
     this.autoTranscription = false,
+    this.maxConcurrentTranscripts = 2,
   }) : clock = clock ?? DateTime.now;
 
   /// True when this worker creates automatic jobs itself.
-  bool get autoScanActive => autoTranscription && recentSources != null;
+  bool get autoScanActive =>
+      autoTranscription && (recentSources != null || liveSources != null);
+
+  /// True when automatic jobs also come from the worker's own Matrix sync.
+  bool get liveScanActive => autoTranscription && liveSources != null;
+
+  /// Completes when a transcript finished (a result waits to be published)
+  /// or other work became available. The daemon waits on it instead of
+  /// sleeping, so results are flushed immediately.
+  Future<void> get wakeup => (_wake ??= Completer<void>()).future;
+
+  void _signal() {
+    final wake = _wake;
+    _wake = null;
+    if (wake != null && !wake.isCompleted) wake.complete();
+  }
+
+  /// Transcripts currently running (diagnostics and tests).
+  int get activeTranscripts => _activeTranscripts.length;
 
   void recover() {
     store.transaction(() {
@@ -63,6 +114,10 @@ class WorkerEngine {
       if (!autoScanActive &&
           (store.checkpoint(autoScanCheckpoint)?.isNotEmpty ?? false)) {
         store.setCheckpoint(autoScanCheckpoint, '');
+      }
+      if (!liveScanActive &&
+          (store.checkpoint(autoLiveCheckpoint)?.isNotEmpty ?? false)) {
+        store.setCheckpoint(autoLiveCheckpoint, '');
       }
     });
   }
@@ -406,6 +461,12 @@ class WorkerEngine {
     if (_running) return;
     _running = true;
     try {
+      final pruned = _mediaPrunedAt;
+      if (pruned == null ||
+          clock().difference(pruned) > const Duration(hours: 1)) {
+        _mediaPrunedAt = clock();
+        pruneMediaCheckpoints();
+      }
       // Schedules take priority over paid audio jobs; each is independently durable.
       for (final job in store.jobs().where((j) => j['kind'] == 'schedule')) {
         await _schedule(job);
@@ -452,31 +513,74 @@ class WorkerEngine {
           _setState(job, 'done', null);
         }
       }
-      if (!_transcriptBusy) {
+      final free = maxConcurrentTranscripts - _activeTranscripts.length;
+      if (free > 0) {
+        final now = clock();
         final candidates = store
             .jobs()
             .where(
               (j) =>
                   j['kind'] == 'transcript' &&
-                  {'queued', 'waitingKeys'}.contains(j['state']),
+                  {'queued', 'waitingKeys'}.contains(j['state']) &&
+                  !_activeTranscripts.containsKey(j['id']) &&
+                  _retryDue(j, now),
             )
             .toList();
-        if (candidates.isNotEmpty) {
-          // Explicit requests never wait behind automatic background work.
-          final next = candidates.firstWhere(
-            (j) => j['origin'] != TranscriptionOrigin.auto.name,
-            orElse: () => candidates.first,
+        for (final next in _byPriority(candidates).take(free)) {
+          final id = next['id'] as String;
+          final run = _transcript(next);
+          _activeTranscripts[id] = run;
+          unawaited(
+            run.whenComplete(() {
+              if (identical(_activeTranscripts[id], run)) {
+                _activeTranscripts.remove(id);
+              }
+              _signal();
+            }),
           );
-          _transcriptBusy = true;
-          _activeTranscript = _transcript(
-            next,
-          ).whenComplete(() => _transcriptBusy = false);
-          unawaited(_activeTranscript);
         }
       }
     } finally {
       _running = false;
     }
+  }
+
+  static bool _retryDue(Map<String, dynamic> job, DateTime now) {
+    final at = job['retryAt'];
+    if (at is! String) return true;
+    final due = DateTime.tryParse(at);
+    return due == null || !now.isBefore(due);
+  }
+
+  /// Explicit requests never wait behind automatic background work; among
+  /// automatic jobs the newest message goes first (a fresh voice note should
+  /// not queue behind a burst of older ones). Manual jobs keep their order.
+  static List<Map<String, dynamic>> _byPriority(
+    List<Map<String, dynamic>> jobs,
+  ) {
+    final indexed = jobs.indexed.toList();
+    DateTime created(Map<String, dynamic> job) =>
+        DateTime.tryParse(job['createdAt'] as String? ?? '') ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    bool automatic(Map<String, dynamic> job) =>
+        job['origin'] == TranscriptionOrigin.auto.name;
+    indexed.sort((a, b) {
+      final autoA = automatic(a.$2), autoB = automatic(b.$2);
+      if (autoA != autoB) return autoA ? 1 : -1;
+      if (autoA) {
+        final order = created(b.$2).compareTo(created(a.$2));
+        if (order != 0) return order;
+      }
+      return a.$1.compareTo(b.$1);
+    });
+    return [for (final entry in indexed) entry.$2];
+  }
+
+  /// Exponential backoff for transient failures: 15 s, 1 min, 4 min, 16 min
+  /// (keys: up to 30 min apart, without a limit on attempts).
+  Duration _backoff(int attempt) {
+    final seconds = 15 * (1 << (2 * (attempt - 1)).clamp(0, 8));
+    return Duration(seconds: seconds.clamp(15, 1800));
   }
 
   Future<void> _schedule(Map<String, dynamic> job) async {
@@ -625,6 +729,7 @@ class WorkerEngine {
       job['revision'] = (job['revision'] as int) + 1;
       store.saveJob(job);
       store.invalidateTranscriptPublications(job['id'] as String);
+      pruneMediaCheckpoints(jobId: job['id'] as String);
       _result(job, 'source_redacted');
     });
   }
@@ -654,11 +759,31 @@ class WorkerEngine {
     }
 
     final cancel = _cancellations[id] = Cancellation();
+    void Function()? releaseLarge;
+    job.remove('retryAt');
     _setState(job, 'processing', null);
     try {
       final source = SourceEventRef.fromJson(
         Map<String, dynamic>.from(job['source'] as Map),
       );
+      // Declared metadata, before any download: automatic jobs skip what
+      // the limits or the user's kind switches exclude without fetching the
+      // media; every job learns whether it is large.
+      final facts = await _mediaFacts(source);
+      cancel.check();
+      if (automatic) {
+        final skipped = _autoSkip(facts);
+        final current = currentAttempt();
+        if (current == null) return;
+        if (facts?.kind case final kind?) {
+          current['mediaKind'] = kind.name;
+          store.saveJob(current);
+        }
+        if (skipped != null) {
+          _setState(current, 'cancelled', skipped);
+          return;
+        }
+      }
       final initialStatus = await _probeSource(source);
       cancel.check();
       final initial = currentAttempt();
@@ -671,41 +796,91 @@ class WorkerEngine {
         _invalidateSource(initial);
         return;
       }
-      final audio = await transport.loadAudio(source, cancel);
+      // Memory bound: media declared above largeMediaBytes (or a manual job
+      // of unknown size) waits for the single large slot; everything else,
+      // including automatic jobs of unknown size (older adapters declare
+      // none), is downloaded with a hard cap of largeMediaBytes, so wrong or
+      // missing metadata cannot smuggle a big file past the slot.
+      final declared = facts?.sizeBytes;
+      final large = declared == null ? !automatic : declared > largeMediaBytes;
+      if (large) {
+        releaseLarge = await _acquireLargeSlot();
+        cancel.check();
+        if (currentAttempt() == null) return;
+      }
+      final cap = !large
+          ? largeMediaBytes
+          : automatic
+          ? autoMediaMaxBytes
+          : transcriptionSourceMaxBytes;
+      final Object loader = transport;
+      final AudioSource audio;
+      try {
+        audio = loader is BoundedAudioLoader
+            ? await loader.loadAudioBounded(
+                source,
+                cancel,
+                maxBytes: cap,
+                requireDeclaredSize: false,
+              )
+            : await transport.loadAudio(source, cancel);
+      } on WorkerFailure catch (e) {
+        // An automatic small-capped download passed its cap: stopped before
+        // any provider request; the user can still ask manually.
+        if (automatic && !large && e.code == 'source_too_large') {
+          throw const WorkerFailure('auto_skipped_size_cap');
+        }
+        rethrow;
+      }
       cancel.check();
       if (currentAttempt() == null) return;
-      final result = await transcriber.transcribe(
-        audio,
-        job['language'] as String?,
-        cancel,
-        (duration, cost) {
-          final current = currentAttempt();
-          if (current == null || cancel.cancelled) return;
-          if (automatic) {
-            // Measured locally, before any upload: limits throw here so
-            // nothing reaches the provider and nothing is charged.
-            final policy = autoPolicy();
-            if (!autoTranscription || !policy.auto) {
-              throw const WorkerFailure('auto_disabled');
-            }
-            if (duration > policy.maxSeconds) {
-              throw const WorkerFailure('auto_skipped_duration');
-            }
-            if (autoSpent(excluding: id) + cost > policy.dailyBudgetUsd) {
-              throw const WorkerFailure('auto_skipped_budget');
-            }
-            // Keep the estimate durable for budget accounting, but skip the
-            // separate journal publication; the final result carries it.
-            current['durationSeconds'] = duration;
-            current['estimatedCostUsd'] = cost;
-            store.saveJob(current);
-            return;
-          }
-          current['durationSeconds'] = duration;
-          current['estimatedCostUsd'] = cost;
-          _setState(current, 'processing', null);
-        },
-      );
+      // Identical media (a forward, the same clip in merged chats) reuses an
+      // earlier transcript in the same language without a provider request.
+      final mediaKey =
+          '$mediaCheckpointPrefix${await mediaDigest(audio.bytes)}:'
+          '${job['language'] ?? ''}';
+      cancel.check();
+      final reused = _reusableTranscript(mediaKey, id);
+      final result =
+          reused ??
+          await transcriber.transcribe(
+            audio,
+            job['language'] as String?,
+            cancel,
+            (duration, cost) {
+              final current = currentAttempt();
+              if (current == null || cancel.cancelled) return;
+              if (automatic) {
+                // Measured locally, before any upload: limits throw here so
+                // nothing reaches the provider and nothing is charged.
+                final policy = autoPolicy();
+                if (!autoTranscription || !policy.auto) {
+                  throw const WorkerFailure('auto_disabled');
+                }
+                // The user may have switched this kind off while the job
+                // was queued or downloading.
+                final kind = _jobKind(current);
+                if (kind != null && !policy.kindEnabled(kind)) {
+                  throw const WorkerFailure('auto_skipped_kind');
+                }
+                if (duration > policy.maxSeconds) {
+                  throw const WorkerFailure('auto_skipped_duration');
+                }
+                if (autoSpent(excluding: id) + cost > policy.dailyBudgetUsd) {
+                  throw const WorkerFailure('auto_skipped_budget');
+                }
+                // Keep the estimate durable for budget accounting, but skip the
+                // separate journal publication; the final result carries it.
+                current['durationSeconds'] = duration;
+                current['estimatedCostUsd'] = cost;
+                store.saveJob(current);
+                return;
+              }
+              current['durationSeconds'] = duration;
+              current['estimatedCostUsd'] = cost;
+              _setState(current, 'processing', null);
+            },
+          );
       cancel.check();
       if (currentAttempt() == null) return;
       final redacted = await _probeSource(source);
@@ -721,12 +896,17 @@ class WorkerEngine {
         'durationSeconds': result.durationSeconds,
         'estimatedCostUsd': result.estimatedCostUsd,
       };
+      latest.remove('retries');
       if (redacted == null) {
         latest['pendingResult'] = values;
         _setState(latest, 'waitingSync', 'source_status_unknown');
       } else {
         latest.addAll(values);
         _setState(latest, 'done', null);
+        store.setCheckpoint(
+          mediaKey,
+          '$id ${clock().toUtc().millisecondsSinceEpoch}',
+        );
       }
     } on WorkerFailure catch (e) {
       final current = currentAttempt();
@@ -735,13 +915,34 @@ class WorkerEngine {
         _invalidateSource(current);
         return;
       }
+      final retries = (current['retries'] as int? ?? 0) + 1;
+      if (e.code == 'waiting_keys' ||
+          (transientRetryCodes.contains(e.code) &&
+              retries <= transientRetryLimit)) {
+        // Nothing was charged: wait, then try again without busy-looping.
+        current['retries'] = retries;
+        current['retryAt'] = clock()
+            .add(_backoff(retries))
+            .toUtc()
+            .toIso8601String();
+        _setState(
+          current,
+          e.code == 'waiting_keys' ? 'waitingKeys' : 'queued',
+          e.code,
+        );
+        return;
+      }
+      current.remove('retryAt');
+      // A video without an audio stream has nothing to transcribe; an
+      // automatic job is simply dropped (no error shown, nothing charged).
+      final silentSkip = e.code == 'no_audio_track' && automatic;
       _setState(
         current,
         e is PaidRequestUnknown
             ? 'unknown'
             : e.code == 'waiting_keys'
             ? 'waitingKeys'
-            : e.code == 'cancelled' || e.code.startsWith('auto_')
+            : e.code == 'cancelled' || e.code.startsWith('auto_') || silentSkip
             ? 'cancelled'
             : 'failed',
         e.code,
@@ -752,8 +953,144 @@ class WorkerEngine {
         _setState(current, 'failed', 'transcription_failed');
       }
     } finally {
+      releaseLarge?.call();
       if (identical(_cancellations[id], cancel)) _cancellations.remove(id);
     }
+  }
+
+  static AutoTranscriptionKind? _jobKind(Map<String, dynamic> job) {
+    final name = job['mediaKind'];
+    for (final kind in AutoTranscriptionKind.values) {
+      if (kind.name == name) return kind;
+    }
+    return null;
+  }
+
+  /// One large download at a time; returns the release callback.
+  Future<void Function()> _acquireLargeSlot() async {
+    final previous = _largeSlot;
+    final released = Completer<void>();
+    _largeSlot = released.future;
+    await previous;
+    var done = false;
+    return () {
+      if (done) return;
+      done = true;
+      released.complete();
+    };
+  }
+
+  /// SHA-256 of the media. Large buffers are hashed in 1 MiB slices that
+  /// yield to the event loop, so sync and journal work never stall for the
+  /// seconds a 100 MB video takes (no isolate copy of the buffer either).
+  static Future<String> mediaDigest(Uint8List bytes) async {
+    const slice = 1 << 20;
+    if (bytes.length <= 4 * slice) return sha256.convert(bytes).toString();
+    late Digest digest;
+    final input = sha256.startChunkedConversion(
+      ChunkedConversionSink<Digest>.withCallback((d) => digest = d.single),
+    );
+    for (var offset = 0; offset < bytes.length; offset += slice) {
+      final end = offset + slice < bytes.length ? offset + slice : bytes.length;
+      input.add(Uint8List.sublistView(bytes, offset, end));
+      await Future<void>.delayed(Duration.zero);
+    }
+    input.close();
+    return digest.toString();
+  }
+
+  /// Dedupe entries older than this are forgotten (also when the job they
+  /// point to is gone or lost its text), so plaintext-media fingerprints do
+  /// not accumulate indefinitely.
+  static const mediaDedupeTtl = Duration(days: 14);
+  static const mediaCheckpointPrefix = 'media-transcript:';
+
+  ({String id, DateTime at})? _mediaEntry(String? value) {
+    if (value == null) return null;
+    final space = value.lastIndexOf(' ');
+    final at = space < 0 ? null : int.tryParse(value.substring(space + 1));
+    if (at == null) return null;
+    return (
+      id: value.substring(0, space),
+      at: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
+    );
+  }
+
+  bool _mediaEntryLive(({String id, DateTime at})? entry) {
+    if (entry == null || clock().difference(entry.at) > mediaDedupeTtl) {
+      return false;
+    }
+    final job = store.job(entry.id);
+    final text = job?['text'];
+    return job != null &&
+        job['kind'] == 'transcript' &&
+        job['state'] == 'done' &&
+        text is String &&
+        text.isNotEmpty;
+  }
+
+  /// Removes expired or stale dedupe entries; [jobId] also forgets that job's
+  /// entries at once (source redacted). Returns how many were removed.
+  int pruneMediaCheckpoints({String? jobId}) {
+    var removed = 0;
+    for (final entry
+        in store.checkpointsWithPrefix(mediaCheckpointPrefix).entries) {
+      final parsed = _mediaEntry(entry.value);
+      if ((jobId != null && parsed?.id == jobId) || !_mediaEntryLive(parsed)) {
+        store.deleteCheckpoint(entry.key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  /// An earlier finished transcript of byte-identical media, at no cost.
+  TranscriptionResult? _reusableTranscript(String mediaKey, String id) {
+    final entry = _mediaEntry(store.checkpoint(mediaKey));
+    if (entry == null || entry.id == id) return null;
+    if (!_mediaEntryLive(entry)) {
+      store.deleteCheckpoint(mediaKey);
+      return null;
+    }
+    final job = store.job(entry.id)!;
+    final text = job['text'] as String;
+    final duration = job['durationSeconds'];
+    return TranscriptionResult(
+      text,
+      duration is num ? duration.toDouble() : 0,
+      0,
+    );
+  }
+
+  /// Declared media facts; null when the transport has none, fails or is
+  /// slow (the job then proceeds; an automatic one runs under the small
+  /// hard cap).
+  Future<MediaFacts?> _mediaFacts(SourceEventRef source) async {
+    final Object preflight = transport;
+    if (preflight is! MediaPreflight) return null;
+    try {
+      return await preflight
+          .mediaFacts(source)
+          .timeout(const Duration(seconds: 6));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Why an automatic job is skipped before download, or null to proceed.
+  /// Unknown facts never skip: the download is then hard-capped instead.
+  String? _autoSkip(MediaFacts? facts) {
+    if (facts == null) return null;
+    final policy = autoPolicy();
+    final kind = facts.kind;
+    if (kind != null && !policy.kindEnabled(kind)) return 'auto_skipped_kind';
+    final duration = facts.durationMs;
+    if (duration != null && duration > policy.maxSeconds * 1000) {
+      return 'auto_skipped_duration';
+    }
+    final size = facts.sizeBytes;
+    if (size != null && size > autoMediaMaxBytes) return 'auto_skipped_size';
+    return null;
   }
 
   /// Current synced policy. Absent or deleted = defaults (automatic on);
@@ -796,126 +1133,188 @@ class WorkerEngine {
     return value is Map ? Map<String, dynamic>.from(value) : null;
   }
 
-  /// Creates automatic jobs for newly indexed incoming voice/round messages.
-  /// Called from the daemon loop; a no-op unless the operator switch is on
-  /// and a local source is configured. The first scan (or the first after
-  /// the policy was off) only records the current position: no history.
+  /// Creates automatic jobs for newly received incoming speech media: the
+  /// worker's own Matrix sync feed (drained on every call, no delay) and the
+  /// local index scan (every [autoScanInterval]). A no-op unless the
+  /// operator switch is on. The first local scan (or the first after the
+  /// policy was off) only records the current position: no history; the
+  /// live feed likewise starts its window when it is first activated.
   Future<int> autoScan({bool force = false}) async {
-    final scanner = recentSources;
-    if (!autoTranscription || scanner == null || _autoScanBusy) return 0;
-    final now = clock();
-    if (!force &&
-        _autoScanAt != null &&
-        now.difference(_autoScanAt!) < autoScanInterval) {
-      return 0;
-    }
+    if (!autoTranscription || _autoScanBusy) return 0;
     _autoScanBusy = true;
-    _autoScanAt = now;
     try {
-      final policy = autoPolicy();
-      final stored = store.checkpoint(autoScanCheckpoint);
-      final cursor = stored == null || stored.isEmpty
-          ? null
-          : int.tryParse(stored);
-      if (!policy.auto) {
-        if (stored != null && stored.isNotEmpty) {
-          store.setCheckpoint(autoScanCheckpoint, '');
-        }
-        return 0;
+      var created = await _scanLive();
+      final scanner = recentSources;
+      final now = clock();
+      if (scanner != null &&
+          (force ||
+              _autoScanAt == null ||
+              now.difference(_autoScanAt!) >= autoScanInterval)) {
+        _autoScanAt = now;
+        created += await _scanLocal(scanner, now);
       }
-      final windowStart = now.subtract(autoTranscriptionMaxAge);
-      final enabledAt = policy.enabledAt;
-      final RecentSourcePage? page;
-      try {
-        page = await scanner.recent(
-          cursor: cursor,
-          since: enabledAt != null && enabledAt.isAfter(windowStart)
-              ? enabledAt
-              : windowStart,
-          limit: autoScanPageLimit,
-        );
-      } catch (_) {
-        // Source unavailable or malformed: keep the cursor, retry later, and
-        // never let an optional scan defer journal flush or paid jobs.
-        return 0;
-      }
-      if (page == null) return 0;
-      final scanned = page;
-      // The journal may have changed the policy while the scan was running.
-      final current = autoPolicy();
-      if (!current.auto) return 0;
-      var created = 0;
-      store.transaction(() {
-        final groups = _personGroupsByRoom();
-        final spent = autoSpent();
-        for (final item in scanned.items) {
-          final source = SourceEventRef(
-            conversation: ConversationRef(
-              accountId: transport.accountId,
-              roomId: item.roomId,
-              network: item.network,
-            ),
-            eventId: item.eventId,
-          );
-          final id = transcriptEntityId(source);
-          // Any existing job wins: manual, earlier automatic or cancelled.
-          if (store.job(id) != null) continue;
-          final group = groups[item.roomId];
-          final block = autoTranscriptionBlock(
-            current,
-            AutoTranscriptionCandidate(
-              kind: item.kind,
-              network: item.network,
-              roomId: item.roomId,
-              outgoing: false,
-              timestamp: item.timestamp,
-              durationMs: item.durationMs,
-              chatMetadata: _metadataValue('org:${item.roomId}'),
-              personMetadata: group == null
-                  ? null
-                  : _metadataValue('org:person:$group'),
-              networkMetadata: _metadataValue('network-policy:${item.network}'),
-            ),
-            now: now,
-          );
-          var skipped = switch (block) {
-            null => null,
-            'duration_limit' => 'auto_skipped_duration',
-            'budget' => 'auto_skipped_budget',
-            _ => '',
-          };
-          if (skipped == '') continue;
-          if (skipped == null && spent >= current.dailyBudgetUsd) {
-            skipped = 'auto_skipped_budget';
-          }
-          final body =
-              Map<String, dynamic>.from(
-                TranscriptionJob(
-                  id: id,
-                  source: source,
-                  state: skipped == null ? JobState.queued : JobState.cancelled,
-                  language: current.defaultLanguage,
-                  errorCode: skipped,
-                  origin: TranscriptionOrigin.auto,
-                ).toJson(),
-              )..addAll({
-                'kind': 'transcript',
-                'revision': 1,
-                'acceptedOpId': stableId('auto', id),
-                'createdAt': now.toUtc().toIso8601String(),
-              });
-          store.saveJob(body);
-          // Published like any job so every device shows the state; a
-          // skipped job explains why no transcript appeared.
-          _result(body, 'auto');
-          created++;
-        }
-        store.setCheckpoint(autoScanCheckpoint, '${scanned.cursor}');
-      });
       return created;
     } finally {
       _autoScanBusy = false;
     }
+  }
+
+  Future<int> _scanLive() async {
+    final feed = liveSources;
+    if (feed == null) return 0;
+    final policy = autoPolicy();
+    feed.active = policy.auto;
+    if (!policy.auto) {
+      if (store.checkpoint(autoLiveCheckpoint)?.isNotEmpty ?? false) {
+        store.setCheckpoint(autoLiveCheckpoint, '');
+      }
+      await feed.drain();
+      return 0;
+    }
+    var since = DateTime.tryParse(store.checkpoint(autoLiveCheckpoint) ?? '');
+    if (since == null) {
+      since = clock().toUtc();
+      store.setCheckpoint(autoLiveCheckpoint, since.toIso8601String());
+    }
+    final List<RecentSourceItem> items;
+    try {
+      items = await feed.drain();
+    } catch (_) {
+      return 0;
+    }
+    if (items.isEmpty) return 0;
+    // The journal may have changed the policy while the feed was drained.
+    final current = autoPolicy();
+    if (!current.auto) return 0;
+    var created = 0;
+    store.transaction(() {
+      created = _createAutoJobs(items, current, clock(), notBefore: since);
+    });
+    return created;
+  }
+
+  Future<int> _scanLocal(RecentSourceScanner scanner, DateTime now) async {
+    final policy = autoPolicy();
+    final stored = store.checkpoint(autoScanCheckpoint);
+    final cursor = stored == null || stored.isEmpty
+        ? null
+        : int.tryParse(stored);
+    if (!policy.auto) {
+      if (stored != null && stored.isNotEmpty) {
+        store.setCheckpoint(autoScanCheckpoint, '');
+      }
+      return 0;
+    }
+    final windowStart = now.subtract(autoTranscriptionMaxAge);
+    final enabledAt = policy.enabledAt;
+    final RecentSourcePage? page;
+    try {
+      page = await scanner.recent(
+        cursor: cursor,
+        since: enabledAt != null && enabledAt.isAfter(windowStart)
+            ? enabledAt
+            : windowStart,
+        limit: autoScanPageLimit,
+      );
+    } catch (_) {
+      // Source unavailable or malformed: keep the cursor, retry later, and
+      // never let an optional scan defer journal flush or paid jobs.
+      return 0;
+    }
+    if (page == null) return 0;
+    final scanned = page;
+    // The journal may have changed the policy while the scan was running.
+    final current = autoPolicy();
+    if (!current.auto) return 0;
+    var created = 0;
+    store.transaction(() {
+      created = _createAutoJobs(scanned.items, current, now);
+      store.setCheckpoint(autoScanCheckpoint, '${scanned.cursor}');
+    });
+    // A full page means more rows are waiting: scan again without delay.
+    if (scanned.items.length >= autoScanPageLimit) _autoScanAt = null;
+    return created;
+  }
+
+  /// Inside a store transaction: one job per eligible item without a job.
+  int _createAutoJobs(
+    List<RecentSourceItem> items,
+    TranscriptionPolicy current,
+    DateTime now, {
+    DateTime? notBefore,
+  }) {
+    var created = 0;
+    final groups = _personGroupsByRoom();
+    final spent = autoSpent();
+    for (final item in items) {
+      final timestamp = item.timestamp;
+      if (notBefore != null &&
+          (timestamp == null || timestamp.isBefore(notBefore))) {
+        continue;
+      }
+      final source = SourceEventRef(
+        conversation: ConversationRef(
+          accountId: transport.accountId,
+          roomId: item.roomId,
+          network: item.network,
+        ),
+        eventId: item.eventId,
+      );
+      final id = transcriptEntityId(source);
+      // Any existing job wins: manual, earlier automatic or cancelled.
+      if (store.job(id) != null) continue;
+      final group = groups[item.roomId];
+      final block = autoTranscriptionBlock(
+        current,
+        AutoTranscriptionCandidate(
+          kind: item.kind,
+          network: item.network,
+          roomId: item.roomId,
+          outgoing: false,
+          timestamp: timestamp,
+          durationMs: item.durationMs,
+          chatMetadata: _metadataValue('org:${item.roomId}'),
+          personMetadata: group == null
+              ? null
+              : _metadataValue('org:person:$group'),
+          networkMetadata: _metadataValue('network-policy:${item.network}'),
+        ),
+        now: now,
+      );
+      var skipped = switch (block) {
+        null => null,
+        'duration_limit' => 'auto_skipped_duration',
+        'budget' => 'auto_skipped_budget',
+        _ => '',
+      };
+      if (skipped == '') continue;
+      if (skipped == null && spent >= current.dailyBudgetUsd) {
+        skipped = 'auto_skipped_budget';
+      }
+      final body =
+          Map<String, dynamic>.from(
+            TranscriptionJob(
+              id: id,
+              source: source,
+              state: skipped == null ? JobState.queued : JobState.cancelled,
+              language: current.defaultLanguage,
+              errorCode: skipped,
+              origin: TranscriptionOrigin.auto,
+            ).toJson(),
+          )..addAll({
+            'kind': 'transcript',
+            'revision': 1,
+            'acceptedOpId': stableId('auto', id),
+            'createdAt': now.toUtc().toIso8601String(),
+            'mediaKind': item.kind.name,
+          });
+      store.saveJob(body);
+      // Published like any job so every device shows the state; a
+      // skipped job explains why no transcript appeared.
+      _result(body, 'auto');
+      created++;
+    }
+    return created;
   }
 
   /// Room → merged person group, from synced `person:<id>` metadata.
@@ -943,10 +1342,12 @@ class WorkerEngine {
 
   Future<void> shutdown() async {
     cancelAll();
-    await _activeTranscript;
+    await waitForIdle();
   }
 
   Future<void> waitForIdle() async {
-    await _activeTranscript;
+    while (_activeTranscripts.isNotEmpty) {
+      await Future.wait(_activeTranscripts.values.toList());
+    }
   }
 }

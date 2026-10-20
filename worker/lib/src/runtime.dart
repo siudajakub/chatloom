@@ -33,6 +33,7 @@ void sanitizeLogs() {
 Future<WorkerSessionClient> openSession(
   WorkerConfig config, {
   http.Client? httpClient,
+  void Function(Client client)? beforeInit,
 }) async {
   sanitizeLogs();
   final credentials = readCredentials(config);
@@ -98,6 +99,8 @@ Future<WorkerSessionClient> openSession(
     importantStateEvents: {personalJournalMarker},
   );
   client.syncPresence = PresenceType.offline;
+  // Subscribers attached here also see the catch-up sync after a restart.
+  beforeInit?.call(client);
   try {
     await client.init(
       waitForFirstSync: false,

@@ -285,4 +285,188 @@ void main() {
       expect(block(candidate(), policy.copyWith(dailyBudgetUsd: 0)), 'budget');
     });
   });
+
+  group('transcribable media kinds', () {
+    Map<String, dynamic> media(
+      String msgtype, {
+      Map<String, dynamic> info = const {},
+      Map<String, dynamic> extra = const {},
+      String body = 'clip',
+    }) => {'msgtype': msgtype, 'body': body, 'info': info, ...extra};
+
+    test('voice, other audio, rounds and videos are recognised', () {
+      expect(
+        transcribableMediaKind(
+          media('m.audio', extra: {'org.matrix.msc3245.voice': {}}),
+        ),
+        AutoTranscriptionKind.voice,
+      );
+      expect(
+        transcribableMediaKind(
+          media('m.audio', info: {'mimetype': 'audio/mpeg'}),
+        ),
+        AutoTranscriptionKind.audio,
+      );
+      expect(
+        transcribableMediaKind(
+          media(
+            'm.video',
+            info: {'mimetype': 'video/mp4', roundMessageMarker: true},
+          ),
+        ),
+        AutoTranscriptionKind.round,
+      );
+      for (final mime in [
+        'video/mp4',
+        'video/webm',
+        'video/quicktime',
+        'video/3gpp',
+        'video/x-matroska',
+        'video/x-m4v',
+      ]) {
+        expect(
+          transcribableMediaKind(media('m.video', info: {'mimetype': mime})),
+          AutoTranscriptionKind.video,
+          reason: mime,
+        );
+      }
+      expect(
+        transcribableMediaKind(media('m.video')),
+        AutoTranscriptionKind.video,
+      );
+    });
+
+    test('files with a media type or extension are recognised', () {
+      expect(
+        transcribableMediaKind(
+          media('m.file', info: {'mimetype': 'video/mp4'}),
+        ),
+        AutoTranscriptionKind.video,
+      );
+      expect(
+        transcribableMediaKind(
+          media('m.file', info: {'mimetype': 'audio/ogg'}),
+        ),
+        AutoTranscriptionKind.audio,
+      );
+      expect(
+        transcribableMediaKind(media('m.file', body: 'Lecture.MOV')),
+        AutoTranscriptionKind.video,
+      );
+      expect(
+        transcribableMediaKind(
+          media(
+            'm.file',
+            body: 'caption',
+            extra: {'filename': 'memo.m4a'},
+            info: {'mimetype': 'application/octet-stream'},
+          ),
+        ),
+        AutoTranscriptionKind.audio,
+      );
+      expect(transcribableMediaKind(media('m.file', body: 'a.pdf')), isNull);
+      expect(
+        transcribableMediaKind(
+          media('m.file', info: {'mimetype': 'application/pdf'}),
+        ),
+        isNull,
+      );
+    });
+
+    test('silent loops, images, playlists and protected media are not', () {
+      expect(
+        transcribableMediaKind(
+          media('m.video', info: {'mimetype': 'video/mp4', 'fi.mau.gif': true}),
+        ),
+        isNull,
+      );
+      expect(
+        transcribableMediaKind(
+          media('m.video', info: {'fi.mau.no_audio': true}),
+        ),
+        isNull,
+      );
+      expect(
+        transcribableMediaKind(
+          media(
+            'm.video',
+            info: {'fi.mau.loop': true, 'fi.mau.autoplay': true},
+          ),
+        ),
+        isNull,
+      );
+      expect(
+        transcribableMediaKind(
+          media('m.video', info: {'mimetype': 'image/gif'}),
+        ),
+        isNull,
+      );
+      expect(
+        transcribableMediaKind(
+          media('m.file', info: {'mimetype': 'audio/x-mpegurl'}),
+        ),
+        isNull,
+      );
+      expect(transcribableMediaKind(media('m.image')), isNull);
+      expect(
+        transcribableMediaKind({'msgtype': 'm.text', 'body': 'x'}),
+        isNull,
+      );
+      expect(
+        transcribableMediaKind(
+          media('m.video', extra: {'protected_content': true}),
+        ),
+        isNull,
+      );
+      expect(
+        transcribableMediaKind(
+          media(
+            'm.audio',
+            extra: {
+              beeperDisappearingTimerKey: {
+                'type': 'after_read',
+                'timer': 60000,
+              },
+            },
+          ),
+        ),
+        isNull,
+      );
+    });
+
+    test('per-kind switches are synced and apply even with Always', () {
+      const base = TranscriptionPolicy();
+      for (final kind in AutoTranscriptionKind.values) {
+        expect(base.kindEnabled(kind), isTrue, reason: kind.name);
+      }
+      final noVideo = base.withKind(AutoTranscriptionKind.video, false);
+      final restored = TranscriptionPolicy.fromValue(
+        jsonDecode(jsonEncode(noVideo.toJson())),
+      );
+      expect(restored, noVideo);
+      expect(restored.kindEnabled(AutoTranscriptionKind.video), isFalse);
+      expect(restored.kindEnabled(AutoTranscriptionKind.voice), isTrue);
+      expect(
+        autoTranscriptionBlock(
+          restored.withChatOverride('!room:beeper.local', true),
+          candidate(kind: AutoTranscriptionKind.video),
+          now: now,
+        ),
+        'kind_disabled',
+      );
+      expect(
+        autoTranscriptionBlock(
+          restored,
+          candidate(kind: AutoTranscriptionKind.audio),
+          now: now,
+        ),
+        isNull,
+      );
+      // Unknown and malformed kind switches are ignored.
+      final odd = TranscriptionPolicy.fromValue({
+        'kinds': {'video': 'no', 'hologram': false, 'round': false},
+      });
+      expect(odd.kinds, {'round': false});
+    });
+  });
 }

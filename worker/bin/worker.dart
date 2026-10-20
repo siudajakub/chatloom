@@ -19,6 +19,7 @@ import 'package:personal_worker/src/transcriber.dart';
 import 'package:personal_worker/src/reminder_relay.dart';
 import 'package:personal_worker/src/transcription_check.dart';
 import 'package:personal_worker/src/local_sources.dart';
+import 'package:personal_worker/src/matrix_sources.dart';
 
 Future<void> main(List<String> arguments) async {
   sanitizeLogs();
@@ -70,7 +71,19 @@ Future<void> main(List<String> arguments) async {
         File(path.join(config.stateDirectory, 'matrix.sqlite')).existsSync()) {
       throw const WorkerFailure('synthetic_check_requires_empty_session');
     }
-    final client = await openSession(config);
+    MatrixLiveSources? liveSources;
+    final client = await openSession(
+      config,
+      beforeInit:
+          arguments[0] == 'run' &&
+              config.autoTranscription &&
+              config.autoTranscriptionMatrix
+          ? (client) => liveSources = MatrixLiveSources(
+              client,
+              journalRoomId: config.journalRoomId,
+            )..start()
+          : null,
+    );
     if (arguments[0] == 'native-check') {
       if (client.isLogged()) {
         await client.dispose();
@@ -123,6 +136,7 @@ Future<void> main(List<String> arguments) async {
         // Automatic transcription scans only explicitly configured local
         // sources, and only with the private operator switch (default off).
         recentSources: transport is LocalSourceTransport ? transport : null,
+        liveSources: liveSources,
         autoTranscription: config.autoTranscription,
       );
       final devices = config.trustedDeviceIds.toSet()..add(transport.deviceId);
@@ -187,6 +201,11 @@ Future<void> main(List<String> arguments) async {
                 if (config.requireCodecSandbox)
                   'transcription': 'blocked_codec_sandbox',
                 'autoTranscription': engine.autoScanActive ? 'scan' : 'off',
+                // Worker capabilities for app-side gating: media kinds 2 =
+                // voice, round, any video and audio (also as files); live =
+                // cloud rooms are picked up from the worker's own sync.
+                'transcriptionMedia': 2,
+                'autoTranscriptionLive': engine.liveScanActive,
                 'reminderPush': reminderDelivery.configured
                     ? 'configured'
                     : 'not_configured',
@@ -194,11 +213,8 @@ Future<void> main(List<String> arguments) async {
                 'pending': store
                     .jobs()
                     .where(
-                      (j) => !{
-                        'done',
-                        'cancelled',
-                        'failed',
-                      }.contains(j['state']),
+                      (j) =>
+                          !{'done', 'cancelled', 'failed'}.contains(j['state']),
                     )
                     .length,
               };
@@ -235,10 +251,17 @@ Future<void> main(List<String> arguments) async {
               );
             }
             if (!stopping) {
-              await Future<void>.delayed(const Duration(seconds: 2));
+              // Event driven: a received message (live feed) or a finished
+              // transcript (result to publish) ends the wait at once.
+              await Future.any<void>([
+                Future<void>.delayed(const Duration(seconds: 2)),
+                engine.wakeup,
+                ?liveSources?.wakeup,
+              ]);
             }
           }
         } finally {
+          await liveSources?.close();
           await engine.shutdown();
           for (final subscription in subscriptions) {
             await subscription.cancel();

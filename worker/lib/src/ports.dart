@@ -2,6 +2,21 @@
 import 'dart:typed_data';
 import 'package:personal_core/personal_core.dart';
 
+/// Largest media the worker downloads for transcription (declared and
+/// actual size). Automatic jobs use the tighter [autoMediaMaxBytes].
+const transcriptionSourceMaxBytes = 250000000;
+
+/// Automatic jobs skip larger media before downloading: the audio of a
+/// five-minute clip is a few MB, but its video can be hundreds.
+const autoMediaMaxBytes = 150 * 1024 * 1024;
+
+/// Media above this (declared, or unknown for manual jobs) is "large": only
+/// one large job holds media in memory and in the tmpfs work directory at a
+/// time. Worst case one large job (download + decrypted copy, then bytes +
+/// temp file, about 2 x 250 MB) plus a small one stays well below the
+/// unit's MemoryMax of 1536 MiB.
+const largeMediaBytes = 32 * 1024 * 1024;
+
 class WorkerFailure implements Exception {
   final String code;
   const WorkerFailure(this.code);
@@ -38,9 +53,65 @@ class Cancellation {
 }
 
 class AudioSource {
-  final Uint8List bytes;
+  Uint8List _bytes;
   final String mimeType;
-  AudioSource(this.bytes, this.mimeType);
+  AudioSource(Uint8List bytes, this.mimeType) : _bytes = bytes;
+
+  Uint8List get bytes => _bytes;
+
+  /// Hands the media over and drops this reference, so a large video is not
+  /// held in memory while its extracted audio is uploaded.
+  Uint8List takeBytes() {
+    final taken = _bytes;
+    _bytes = Uint8List(0);
+    return taken;
+  }
+}
+
+/// Declared (not measured) facts about a source message's media, read from
+/// metadata before anything is downloaded. Every field may be unknown.
+class MediaFacts {
+  final AutoTranscriptionKind? kind;
+  final int? durationMs;
+  final int? sizeBytes;
+  const MediaFacts({this.kind, this.durationMs, this.sizeBytes});
+  @override
+  String toString() => 'MediaFacts(${kind?.name}, redacted)';
+}
+
+/// Optional transport capability: cheap metadata lookup before a download,
+/// so automatic limits can skip oversized media without fetching it.
+abstract class MediaPreflight {
+  /// null when the metadata is unavailable (the job then downloads and
+  /// measures as before).
+  Future<MediaFacts?> mediaFacts(SourceEventRef source);
+}
+
+/// Optional transport capability: a download that never buffers more than
+/// [maxBytes] (refused from declared metadata first, then aborted while
+/// streaming). With [requireDeclaredSize] media without a declared size is
+/// refused before any byte is fetched (automatic jobs).
+abstract class BoundedAudioLoader {
+  Future<AudioSource> loadAudioBounded(
+    SourceEventRef source,
+    Cancellation cancel, {
+    required int maxBytes,
+    required bool requireDeclaredSize,
+  });
+}
+
+/// Push feed of newly received messages, e.g. from the worker's own Matrix
+/// sync. Identifiers only, like [RecentSourceScanner].
+abstract class LiveSourceFeed {
+  /// Removes and returns the messages received since the previous call.
+  Future<List<RecentSourceItem>> drain();
+
+  /// Completes when new items are available (or after a resolution attempt
+  /// is due), so the daemon wakes immediately instead of polling.
+  Future<void> get wakeup;
+
+  /// Starts or stops collecting; inactive feeds drop what they receive.
+  set active(bool value);
 }
 
 class TranscriptionResult {

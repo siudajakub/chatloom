@@ -8,5 +8,6 @@
   "reminderRelayUrl": null,
   "requireCodecSandbox": false,
   "allowConversationSends": false,
-  "autoTranscription": false
+  "autoTranscription": false,
+  "autoTranscriptionMatrix": true
 }

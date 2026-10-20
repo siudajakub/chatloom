@@ -50,7 +50,11 @@ class FakeTransport implements FeatureTransport {
     Cancellation cancel,
   ) async {
     audioLoads++;
-    return AudioSource(Uint8List.fromList([1, 2, 3]), 'audio/ogg');
+    // Distinct bytes per source: identical media would share a transcript.
+    return AudioSource(
+      Uint8List.fromList([1, 2, 3, ...source.eventId.codeUnits]),
+      'audio/ogg',
+    );
   }
 
   @override

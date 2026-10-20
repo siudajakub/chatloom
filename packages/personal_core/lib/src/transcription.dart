@@ -8,6 +8,7 @@ library;
 import 'dart:convert';
 
 import 'contracts.dart';
+import 'round_video.dart';
 
 /// ISO-639-1 codes offered for transcription; null means automatic detection.
 /// The worker rejects every other value with `invalid_language`.
@@ -65,6 +66,11 @@ class TranscriptionPolicy {
 
   /// Per-room overrides: true = always, false = never.
   final Map<String, bool> chatOverrides;
+
+  /// Explicit per-kind switches (`voice`, `round`, `video`, `audio`); absent
+  /// kinds are on. Older apps drop this field when they save the policy,
+  /// which turns every kind back on (the documented default).
+  final Map<String, bool> kinds;
   final int maxSeconds;
   final double dailyBudgetUsd;
 
@@ -74,6 +80,7 @@ class TranscriptionPolicy {
     this.defaultLanguage,
     this.networks = const {},
     this.chatOverrides = const {},
+    this.kinds = const {},
     this.maxSeconds = defaultMaxSeconds,
     this.dailyBudgetUsd = defaultDailyBudgetUsd,
   });
@@ -122,6 +129,10 @@ class TranscriptionPolicy {
           : null,
       networks: Map.unmodifiable(switches(json['networks'])),
       chatOverrides: Map.unmodifiable(switches(json['chatOverrides'])),
+      kinds: Map.unmodifiable({
+        for (final entry in switches(json['kinds']).entries)
+          if (_kindNames.contains(entry.key)) entry.key: entry.value,
+      }),
       maxSeconds: seconds is int
           ? seconds.clamp(minMaxSeconds, maxMaxSeconds)
           : defaultMaxSeconds,
@@ -143,6 +154,7 @@ class TranscriptionPolicy {
       for (final key in chatOverrides.keys.toList()..sort())
         key: chatOverrides[key],
     },
+    'kinds': {for (final key in kinds.keys.toList()..sort()) key: kinds[key]},
     'maxSeconds': maxSeconds,
     'dailyBudgetUsd': dailyBudgetUsd,
   };
@@ -153,6 +165,7 @@ class TranscriptionPolicy {
     String? Function()? defaultLanguage,
     Map<String, bool>? networks,
     Map<String, bool>? chatOverrides,
+    Map<String, bool>? kinds,
     int? maxSeconds,
     double? dailyBudgetUsd,
   }) => TranscriptionPolicy(
@@ -163,6 +176,7 @@ class TranscriptionPolicy {
         : defaultLanguage(),
     networks: Map.unmodifiable(networks ?? this.networks),
     chatOverrides: Map.unmodifiable(chatOverrides ?? this.chatOverrides),
+    kinds: Map.unmodifiable(kinds ?? this.kinds),
     maxSeconds: (maxSeconds ?? this.maxSeconds).clamp(
       minMaxSeconds,
       maxMaxSeconds,
@@ -182,6 +196,15 @@ class TranscriptionPolicy {
 
   TranscriptionPolicy withNetwork(String network, bool enabled) =>
       copyWith(networks: {...networks, network: enabled});
+
+  TranscriptionPolicy withKind(AutoTranscriptionKind kind, bool enabled) =>
+      copyWith(kinds: {...kinds, kind.name: enabled});
+
+  /// Kinds without an explicit switch are transcribed automatically: J asked
+  /// (2026-10-19) for voice, rounds and videos alike, so an absent `kinds`
+  /// field (never saved, or saved by an older app) means every kind is on.
+  /// The worker re-checks this at job start and again before upload.
+  bool kindEnabled(AutoTranscriptionKind kind) => kinds[kind.name] ?? true;
 
   /// null removes the override (Default).
   TranscriptionPolicy withChatOverride(String roomId, bool? value) {
@@ -217,11 +240,81 @@ class TranscriptionPolicy {
   String toString() => 'TranscriptionPolicy(auto: $auto, redacted)';
 }
 
-enum AutoTranscriptionKind { voice, round }
+/// Media that carries speech and can be transcribed.
+///
+/// * `voice`: an `m.audio` voice note (MSC3245).
+/// * `round`: a Telegram round video (`fi.mau.telegram.round_message`).
+/// * `video`: any other video, also an `m.file` with a `video/*` type.
+/// * `audio`: any other audio, also an `m.file` with an `audio/*` type.
+enum AutoTranscriptionKind { voice, round, video, audio }
+
+final _kindNames = {for (final kind in AutoTranscriptionKind.values) kind.name};
+
+/// Containers and audio formats the worker's FFmpeg input whitelist reads.
+/// Used only where a file has no usable MIME type.
+const _videoExtensions = {
+  'mp4', 'm4v', 'mov', 'webm', 'mkv', '3gp', '3g2', 'avi', //
+};
+const _audioExtensions = {
+  'ogg', 'oga', 'opus', 'mp3', 'm4a', 'aac', 'wav', 'flac', 'amr', 'weba', //
+};
+
+/// The transcribable kind of a decrypted `m.room.message` [content], or null
+/// for text, images, stickers, GIF-style silent loops, playlists and media
+/// whose protective metadata forbids transcription (view-once, protected,
+/// disappearing). Shared by the app and the worker so both classify alike.
+/// Room-level disappearing settings are checked separately by the callers.
+AutoTranscriptionKind? transcribableMediaKind(Map<String, dynamic> content) {
+  final msgtype = content['msgtype'];
+  if (msgtype is! String) return null;
+  if (!const {'m.audio', 'm.video', 'm.file'}.contains(msgtype)) return null;
+  if (!RoundMediaPolicy.fromContent(content).canTranscribe) return null;
+  final info = content['info'] is Map ? content['info'] as Map : const {};
+  if (RoundVideoDescriptor.fromContent(content) != null) {
+    return AutoTranscriptionKind.round;
+  }
+  if (msgtype == 'm.audio') {
+    return content.containsKey('org.matrix.msc3245.voice')
+        ? AutoTranscriptionKind.voice
+        : AutoTranscriptionKind.audio;
+  }
+  // mautrix marks GIF-style clips (Telegram animations, WhatsApp GIFs):
+  // silent loops never carry speech, so nothing is downloaded for them.
+  if (info['fi.mau.gif'] == true ||
+      info['fi.mau.no_audio'] == true ||
+      (info['fi.mau.loop'] == true && info['fi.mau.autoplay'] == true)) {
+    return null;
+  }
+  final rawMime = info['mimetype'];
+  var mime = rawMime is String ? rawMime.toLowerCase().trim() : '';
+  if (mime.contains('mpegurl') || mime.contains('scpls')) return null;
+  if (mime.isEmpty || mime == 'application/octet-stream') {
+    final name = content['filename'] is String
+        ? content['filename'] as String
+        : content['body'] is String
+        ? content['body'] as String
+        : '';
+    final dot = name.lastIndexOf('.');
+    final extension = dot < 0 ? '' : name.substring(dot + 1).toLowerCase();
+    mime = _videoExtensions.contains(extension)
+        ? 'video/$extension'
+        : _audioExtensions.contains(extension)
+        ? 'audio/$extension'
+        : msgtype == 'm.video'
+        ? 'video/unknown'
+        : '';
+  }
+  if (msgtype == 'm.video') {
+    return mime.startsWith('image/') ? null : AutoTranscriptionKind.video;
+  }
+  if (mime.startsWith('video/')) return AutoTranscriptionKind.video;
+  if (mime.startsWith('audio/')) return AutoTranscriptionKind.audio;
+  return null;
+}
 
 /// Everything needed to decide automatic eligibility, without content.
 class AutoTranscriptionCandidate {
-  /// null = not a voice or round message.
+  /// null = no transcribable speech media (see [transcribableMediaKind]).
   final AutoTranscriptionKind? kind;
   final String network;
   final String roomId;
@@ -255,8 +348,9 @@ class AutoTranscriptionCandidate {
 
 /// Why a message is not transcribed automatically; null = eligible.
 ///
-/// Codes: disabled, unsupported, outgoing, before_enabled, too_old,
-/// chat_disabled, network_disabled, ignored, muted, duration_limit, budget.
+/// Codes: disabled, unsupported, kind_disabled, outgoing, before_enabled,
+/// too_old, chat_disabled, network_disabled, ignored, muted, duration_limit,
+/// budget. A per-kind switch applies in every chat, also with "Always".
 /// `duration_limit` and `budget` mean "eligible, but over a limit": the worker
 /// records them as `auto_skipped_duration` / `auto_skipped_budget` so the
 /// client can explain why no transcript appeared.
@@ -266,7 +360,9 @@ String? autoTranscriptionBlock(
   required DateTime now,
 }) {
   if (!policy.auto) return 'disabled';
-  if (candidate.kind == null) return 'unsupported';
+  final kind = candidate.kind;
+  if (kind == null) return 'unsupported';
+  if (!policy.kindEnabled(kind)) return 'kind_disabled';
   if (candidate.outgoing) return 'outgoing';
   final timestamp = candidate.timestamp;
   if (timestamp == null) return 'too_old';

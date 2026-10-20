@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:personal_core/personal_core.dart';
+import 'package:personal_worker/src/engine.dart';
 import 'package:personal_worker/src/local_sources.dart';
 import 'package:personal_worker/src/ports.dart';
+import 'package:personal_worker/src/store.dart';
+import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
 class NoMatrix implements FeatureTransport {
@@ -196,6 +199,9 @@ void main() {
     ('video as voice', 'video/mp4', 'voice', 'invalid_round_format'),
     ('audio as round', 'audio/ogg', 'round', 'protected_media'),
     ('other media', 'image/png', 'voice', 'protected_media'),
+    ('unknown video container', 'video/x-flv', 'video', 'invalid_media_format'),
+    ('image as video', 'image/gif', 'video', 'protected_media'),
+    ('video as other audio', 'video/mp4', 'audio', 'invalid_round_format'),
   ]) {
     test('$name is refused without exporting bytes', () async {
       final fixture = await FixtureSource.start(
@@ -215,6 +221,64 @@ void main() {
       expect(fixture.count('audio'), 0);
     });
   }
+
+  for (final (kind, mime) in [
+    ('video', 'video/mp4'),
+    ('video', 'video/webm'),
+    ('video', 'video/quicktime'),
+    ('video', 'video/3gpp'),
+    ('video', 'video/x-matroska'),
+    ('video', 'video/x-m4v'),
+    ('audio', 'audio/mpeg'),
+  ]) {
+    test('$kind $mime exports media bytes for audio extraction', () async {
+      final fixture = await FixtureSource.start(
+        (_) => {
+          'sourceKey': source.key,
+          'redacted': false,
+          'transcriptionAllowed': true,
+          'mimeType': mime,
+          'kind': kind,
+        },
+      );
+      fixture.media = List<int>.generate(2048, (i) => i % 241);
+      final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
+      final result = await transport.loadAudio(source, Cancellation());
+      expect(result.mimeType, mime);
+      expect(result.bytes, fixture.media);
+    });
+  }
+
+  test('declared duration and size are read before any export', () async {
+    final fixture = await FixtureSource.start(
+      (_) => {
+        'sourceKey': source.key,
+        'redacted': false,
+        'transcriptionAllowed': true,
+        'mimeType': 'video/mp4',
+        'kind': 'video',
+        'durationMs': 125000,
+        'fileSize': 9000000,
+      },
+    );
+    final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
+    final facts = await transport.mediaFacts(source);
+    expect(facts!.kind, AutoTranscriptionKind.video);
+    expect(facts.durationMs, 125000);
+    expect(facts.sizeBytes, 9000000);
+    expect(fixture.count('audio'), 0);
+    // An older adapter without the fields yields unknown values.
+    fixture.metadata = roundMetadata;
+    final legacy = await transport.mediaFacts(source);
+    expect(legacy!.kind, AutoTranscriptionKind.round);
+    expect(legacy.durationMs, isNull);
+    // Refused media has no facts (the job then fails closed on export).
+    fixture.metadata = (request) => {
+      ...roundMetadata(request),
+      'transcriptionAllowed': false,
+    };
+    expect(await transport.mediaFacts(source), isNull);
+  });
 
   test('kind changing between checks fails closed', () async {
     var calls = 0;
@@ -251,6 +315,8 @@ void main() {
             'kind': 'voice',
             'network': 'Not A Label!',
           },
+          {'roomId': '!d:beeper.local', 'eventId': r'$d', 'kind': 'video'},
+          {'roomId': '!e:beeper.local', 'eventId': r'$e', 'kind': 'audio'},
         ],
       };
       final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
@@ -261,6 +327,7 @@ void main() {
         'cursor': 10,
         'sinceMs': since.millisecondsSinceEpoch,
         'limit': 50,
+        'kinds': ['voice', 'round', 'video', 'audio'],
         '_path': '/recent',
       });
       expect(page!.cursor, 12);
@@ -268,6 +335,8 @@ void main() {
         AutoTranscriptionKind.round,
         AutoTranscriptionKind.voice,
         AutoTranscriptionKind.voice,
+        AutoTranscriptionKind.video,
+        AutoTranscriptionKind.audio,
       ]);
       expect(page.items.first.durationMs, 9000);
       expect(page.items.first.network, 'telegram');
@@ -363,4 +432,69 @@ void main() {
       expect(fixture.maxActive, 1);
     },
   );
+
+  test('automatic jobs work with the current production adapter, which '
+      'declares no size: bounded small export, no skip', () async {
+    // Exactly the 2026-10-18 adapter's metadata shape (no fileSize).
+    final fixture = await FixtureSource.start(
+      (_) => {
+        'sourceKey': source.key,
+        'redacted': false,
+        'transcriptionAllowed': true,
+        'mimeType': 'audio/ogg',
+        'kind': 'voice',
+      },
+    );
+    fixture.media = List<int>.generate(4096, (i) => i % 239);
+    final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
+    final store = WorkerStore(sqlite3.openInMemory());
+    addTearDown(store.close);
+    final transcriber = _CountingTranscriber();
+    final engine = WorkerEngine(
+      store,
+      transport,
+      transcriber,
+      autoTranscription: true,
+    );
+    final id = transcriptEntityId(source);
+    engine.accept(
+      PersonalOperation(
+        opId: 'auto-request',
+        kind: 'transcript.request',
+        entityId: id,
+        baseRevision: 0,
+        createdAt: DateTime.now(),
+        payload: Map<String, dynamic>.from(
+          TranscriptionJob(
+            id: id,
+            source: source,
+            state: JobState.queued,
+            origin: TranscriptionOrigin.auto,
+          ).toJson(),
+        ),
+      ),
+    );
+    for (var i = 0; i < 4; i++) {
+      await engine.tick();
+      await engine.waitForIdle();
+    }
+    expect(store.job(id)!['state'], 'done');
+    expect(transcriber.sizes, [4096]);
+    expect(fixture.count('audio'), 1);
+  });
+}
+
+class _CountingTranscriber implements Transcriber {
+  final sizes = <int>[];
+  @override
+  Future<TranscriptionResult> transcribe(
+    AudioSource audio,
+    String? language,
+    Cancellation cancel,
+    void Function(double, double) estimate,
+  ) async {
+    estimate(5, 5 / 60 * 0.0045);
+    sizes.add(audio.takeBytes().length);
+    return const TranscriptionResult('synthetic', 5, 5 / 60 * 0.0045);
+  }
 }

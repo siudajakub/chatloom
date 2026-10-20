@@ -201,5 +201,15 @@ class WorkerStore {
     'INSERT INTO checkpoints VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
     [id, value],
   );
+  Map<String, String> checkpointsWithPrefix(String prefix) => {
+    for (final row in db.select(
+      "SELECT id,value FROM checkpoints WHERE substr(id,1,length(?))=?",
+      [prefix, prefix],
+    ))
+      row['id'] as String: row['value'] as String,
+  };
+
+  void deleteCheckpoint(String id) =>
+      db.execute('DELETE FROM checkpoints WHERE id=?', [id]);
   void close() => db.close();
 }

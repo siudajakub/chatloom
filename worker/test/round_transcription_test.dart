@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:personal_worker/src/matrix_transport.dart';
@@ -101,13 +102,37 @@ void main() {
     eventId: r'$round',
   );
 
-  test('only ordinary strict round reaches the attachment loader', () async {
+  test('only unprotected speech media reaches the attachment loader', () async {
     final client = Client('round worker fixture', database: _UnusedDatabase());
     final room = _SourceRoom(client);
     final transport = _Transport(client, room);
     for (final content in [
-      _content(marker: false),
-      _content(marker: 'true'),
+      // GIF-style silent loops, images and text never carry speech.
+      {
+        'msgtype': 'm.video',
+        'body': 'loop.mp4',
+        'info': {'mimetype': 'video/mp4', 'size': 3, 'fi.mau.gif': true},
+      },
+      {
+        'msgtype': 'm.video',
+        'body': 'anim.gif',
+        'info': {'mimetype': 'image/gif', 'size': 3},
+      },
+      {
+        'msgtype': 'm.file',
+        'body': 'notes.pdf',
+        'info': {'mimetype': 'application/pdf', 'size': 3},
+      },
+      {
+        'msgtype': 'm.image',
+        'body': 'photo.jpg',
+        'info': {'mimetype': 'image/jpeg', 'size': 3},
+      },
+      {
+        'msgtype': 'm.video',
+        'body': 'huge.mp4',
+        'info': {'mimetype': 'video/mp4', 'size': 250000001},
+      },
       _content(extra: {'view_once': true}),
       _content(extra: {'ttl_seconds': 15}),
       _content(extra: {'protected_content': true}),
@@ -144,6 +169,34 @@ void main() {
     });
     await transport.loadAudio(sourceRef, Cancellation());
     expect(ordinaryAudio.downloads, 1);
+    // Ordinary videos (any container), malformed round markers and media
+    // sent as files are transcribed from their audio track as well.
+    for (final content in [
+      _content(marker: false),
+      _content(marker: 'true'),
+      {
+        'msgtype': 'm.video',
+        'body': 'clip.webm',
+        'info': {'mimetype': 'video/webm', 'size': 3},
+      },
+      {
+        'msgtype': 'm.video',
+        'body': 'clip.mov',
+        'info': {'mimetype': 'video/quicktime', 'size': 3},
+      },
+      {
+        'msgtype': 'm.file',
+        'body': 'lecture.mkv',
+        'info': {'mimetype': 'video/x-matroska', 'size': 3},
+      },
+      {'msgtype': 'm.file', 'body': 'memo.ogg'},
+    ]) {
+      final event = room.source = _SourceEvent(room, content);
+      await transport.loadAudio(sourceRef, Cancellation());
+      expect(event.downloads, 1, reason: '${content['body']}');
+    }
+    final facts = await transport.mediaFacts(sourceRef);
+    expect(facts!.kind, AutoTranscriptionKind.audio);
   });
 
   test('disappearing messages and chats never reach the loader', () async {
@@ -313,4 +366,168 @@ void main() {
       );
     },
   );
+
+  test(
+    'automatic loads refuse undeclared or oversized media unfetched',
+    () async {
+      final client = Client(
+        'round worker fixture',
+        database: _UnusedDatabase(),
+      );
+      final room = _SourceRoom(client);
+      final transport = _Transport(client, room);
+      final undeclared = room.source = _SourceEvent(room, {
+        'msgtype': 'm.video',
+        'body': 'clip.mp4',
+        'info': {'mimetype': 'video/mp4'},
+      });
+      await expectLater(
+        transport.loadAudioBounded(
+          sourceRef,
+          Cancellation(),
+          maxBytes: 1000,
+          requireDeclaredSize: true,
+        ),
+        throwsA(
+          isA<WorkerFailure>().having(
+            (e) => e.code,
+            'code',
+            'auto_skipped_unknown_size',
+          ),
+        ),
+      );
+      expect(undeclared.downloads, 0);
+      // A manual request keeps today's behaviour for undeclared sizes.
+      await transport.loadAudioBounded(
+        sourceRef,
+        Cancellation(),
+        maxBytes: 1000,
+        requireDeclaredSize: false,
+      );
+      expect(undeclared.downloads, 1);
+      final oversized = room.source = _SourceEvent(room, {
+        'msgtype': 'm.video',
+        'body': 'clip.mp4',
+        'info': {'mimetype': 'video/mp4', 'size': 1001},
+      });
+      await expectLater(
+        transport.loadAudioBounded(
+          sourceRef,
+          Cancellation(),
+          maxBytes: 1000,
+          requireDeclaredSize: true,
+        ),
+        throwsA(
+          isA<WorkerFailure>().having(
+            (e) => e.code,
+            'code',
+            'source_too_large',
+          ),
+        ),
+      );
+      expect(oversized.downloads, 0);
+    },
+  );
+
+  group('bounded media download', () {
+    final uri = Uri.parse('https://media.example.invalid/download');
+    MockClient streaming(List<List<int>> chunks, {int? length}) =>
+        MockClient.streaming((request, _) async {
+          expect(request.headers['authorization'], 'Bearer token');
+          return http.StreamedResponse(
+            Stream.fromIterable(chunks),
+            200,
+            contentLength: length,
+          );
+        });
+
+    test('returns the body within the bound', () async {
+      final bytes = await boundedMediaDownload(
+        streaming([
+          [1, 2],
+          [3],
+        ]),
+        uri,
+        accessToken: 'token',
+        maxBytes: 3,
+        cancel: Cancellation(),
+      );
+      expect(bytes, [1, 2, 3]);
+    });
+
+    test('aborts once the stream passes the bound', () async {
+      var produced = 0;
+      final client = MockClient.streaming((request, _) async {
+        Stream<List<int>> body() async* {
+          for (var i = 0; i < 1000; i++) {
+            produced++;
+            yield List<int>.filled(1024, 0);
+          }
+        }
+
+        return http.StreamedResponse(body(), 200);
+      });
+      await expectLater(
+        boundedMediaDownload(
+          client,
+          uri,
+          accessToken: 'token',
+          maxBytes: 4096,
+          cancel: Cancellation(),
+        ),
+        throwsA(
+          isA<WorkerFailure>().having(
+            (e) => e.code,
+            'code',
+            'source_too_large',
+          ),
+        ),
+      );
+      expect(produced, lessThan(10), reason: 'stream cancelled early');
+    });
+
+    test('a declared Content-Length above the bound is refused', () async {
+      await expectLater(
+        boundedMediaDownload(
+          streaming([
+            [1],
+          ], length: 5000),
+          uri,
+          accessToken: 'token',
+          maxBytes: 4096,
+          cancel: Cancellation(),
+        ),
+        throwsA(
+          isA<WorkerFailure>().having(
+            (e) => e.code,
+            'code',
+            'source_too_large',
+          ),
+        ),
+      );
+    });
+
+    test('HTTP errors fail without a body copy', () async {
+      final client = MockClient.streaming(
+        (request, _) async =>
+            http.StreamedResponse(Stream.value([1, 2, 3]), 404),
+      );
+      await expectLater(
+        boundedMediaDownload(
+          client,
+          uri,
+          accessToken: 'token',
+          maxBytes: 4096,
+          cancel: Cancellation(),
+        ),
+        throwsA(
+          isA<WorkerFailure>().having(
+            (e) => e.code,
+            'code',
+            'source_unavailable',
+          ),
+        ),
+      );
+    });
+  });
 }

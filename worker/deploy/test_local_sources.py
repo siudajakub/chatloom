@@ -86,26 +86,26 @@ class LocalRoundPolicyTests(unittest.TestCase):
                      {'extra': {'info': {'round_message': True}}},
                      {'extra': None, 'isRoundVideo': True}):
             with self.subTest(flag=flag):
-                attachment, kind = sources.exportable_media(round_message(**flag))
+                attachment, kind = sources.exportable_media(round_message(**flag), kinds=sources.LEGACY_KINDS)
                 self.assertEqual(kind, 'round')
                 self.assertEqual(attachment['mimeType'], 'video/mp4')
         # A voice note stays a voice note.
         voice = {'attachments': [{'isVoiceNote': True, 'type': 'audio', 'mimeType': 'audio/ogg',
                                   'fileSize': 10}]}
-        self.assertEqual(sources.exportable_media(voice)[1], 'voice')
+        self.assertEqual(sources.exportable_media(voice, kinds=sources.LEGACY_KINDS)[1], 'voice')
 
     def test_documented_fallback_needs_telegram_square_and_duration(self):
         message = round_message(extra=None)
-        self.assertEqual(sources.exportable_media(message)[1], 'round')
+        self.assertEqual(sources.exportable_media(message, kinds=sources.LEGACY_KINDS)[1], 'round')
         message['accountID'] = 'local-whatsapp_fixture'
-        self.assertEqual(sources.exportable_media(message), (None, None))
+        self.assertEqual(sources.exportable_media(message, kinds=sources.LEGACY_KINDS), (None, None))
         # The requesting device's Telegram room label also qualifies.
-        self.assertEqual(sources.exportable_media(message, telegram=True)[1], 'round')
+        self.assertEqual(sources.exportable_media(message, telegram=True, kinds=sources.LEGACY_KINDS)[1], 'round')
         for missing in ('size', 'duration'):
             with self.subTest(missing=missing):
                 m = round_message(extra=None)
                 del m['attachments'][0][missing]
-                self.assertEqual(sources.exportable_media(m, telegram=True), (None, None))
+                self.assertEqual(sources.exportable_media(m, telegram=True, kinds=sources.LEGACY_KINDS), (None, None))
 
     def test_round_bounds_and_protections_fail_closed(self):
         cases = [
@@ -122,16 +122,16 @@ class LocalRoundPolicyTests(unittest.TestCase):
         ]
         for patch_ in cases:
             with self.subTest(attachment=patch_):
-                self.assertEqual(sources.exportable_media(round_message(**patch_), telegram=True),
+                self.assertEqual(sources.exportable_media(round_message(**patch_), telegram=True, kinds=sources.LEGACY_KINDS),
                                  (None, None))
         for field, value in [('isDeleted', True), ('behavior', {'viewOnce': True}),
                              ('disappearingTimer', {'seconds': 30}), ('extra', {'protected': True})]:
             with self.subTest(message=field):
                 m = round_message(); m[field] = value
-                self.assertEqual(sources.exportable_media(m, telegram=True), (None, None))
+                self.assertEqual(sources.exportable_media(m, telegram=True, kinds=sources.LEGACY_KINDS), (None, None))
         two = round_message()
         two['attachments'].append(copy.deepcopy(two['attachments'][0]))
-        self.assertEqual(sources.exportable_media(two, telegram=True), (None, None))
+        self.assertEqual(sources.exportable_media(two, telegram=True, kinds=sources.LEGACY_KINDS), (None, None))
 
     def test_index_video_note_shape_is_a_round(self):
         # Shape observed on the production index (2026-10-18): video/mp4 with
@@ -144,30 +144,30 @@ class LocalRoundPolicyTests(unittest.TestCase):
             base.update(attachment)
             return {'isDeleted': False, 'behavior': None, 'disappearingTimer': {},
                     'attachments': [base]}
-        attachment, kind = sources.exportable_media(video_note())
+        attachment, kind = sources.exportable_media(video_note(), kinds=sources.LEGACY_KINDS)
         self.assertEqual(kind, 'round')
         self.assertEqual(attachment['mimeType'], 'video/mp4')
         self.assertEqual(sources.duration_ms(attachment), 12000)
-        self.assertEqual(sources.exportable_media(video_note(extra={'duration': 12000}))[1], 'round')
+        self.assertEqual(sources.exportable_media(video_note(extra={'duration': 12000}), kinds=sources.LEGACY_KINDS)[1], 'round')
         for patch_ in ({'isGif': True}, {'isSticker': True}, {'mimeType': 'video/webm'},
                        {'extra': {'duration': 75}}, {'extra': {'duration': 'long'}},
                        {'isVoiceNote': 'true'}, {'fileSize': sources.ROUND_MAX_BYTES + 1},
                        {'extra': {'duration': 12, 'protected': True}}):
             with self.subTest(attachment=patch_):
-                self.assertEqual(sources.exportable_media(video_note(**patch_)), (None, None))
+                self.assertEqual(sources.exportable_media(video_note(**patch_), kinds=sources.LEGACY_KINDS), (None, None))
         for field, value in [('isDeleted', True), ('behavior', {'viewOnce': True}),
                              ('disappearingTimer', {'seconds': 30})]:
             with self.subTest(message=field):
                 m = video_note(); m[field] = value
-                self.assertEqual(sources.exportable_media(m), (None, None))
+                self.assertEqual(sources.exportable_media(m, kinds=sources.LEGACY_KINDS), (None, None))
         # The same note typed as video also counts; audio typed MP4 without the
         # voice-note flag, and an unflagged video outside Telegram, do not.
-        self.assertEqual(sources.exportable_media(video_note(type='video'))[1], 'round')
-        self.assertEqual(sources.exportable_media(video_note(isVoiceNote=False)), (None, None))
-        self.assertEqual(sources.exportable_media(video_note(type='video', isVoiceNote=False)), (None, None))
+        self.assertEqual(sources.exportable_media(video_note(type='video'), kinds=sources.LEGACY_KINDS)[1], 'round')
+        self.assertEqual(sources.exportable_media(video_note(isVoiceNote=False), kinds=sources.LEGACY_KINDS), (None, None))
+        self.assertEqual(sources.exportable_media(video_note(type='video', isVoiceNote=False), kinds=sources.LEGACY_KINDS), (None, None))
         # Ordinary voice notes are unchanged.
         voice = video_note(mimeType='audio/ogg')
-        self.assertEqual(sources.exportable_media(voice)[1], 'voice')
+        self.assertEqual(sources.exportable_media(voice, kinds=sources.LEGACY_KINDS)[1], 'voice')
 
     def test_duration_units_are_seconds_or_milliseconds(self):
         self.assertEqual(sources.duration_ms({'duration': 12}), 12000)
@@ -235,13 +235,17 @@ class LocalRoundPolicyTests(unittest.TestCase):
             with patch.object(sources, 'INDEX', index), patch.object(sources, 'BeeperAPI') as client:
                 client.return_value.request.side_effect = api
                 self.assertEqual(sources.selected_source(source)[1]['_kind'], 'round')
+                # Not square: not a round, but still an ordinary video.
                 api_message['attachments'][0]['size'] = {'width': 640, 'height': 360}
-                self.assertIsNone(sources.selected_source(source)[1])
-                # Without the Telegram label the API is never consulted.
+                self.assertEqual(sources.selected_source(source)[1]['_kind'], 'video')
+                # Without the Telegram label it is an ordinary video directly.
                 calls.clear()
                 source['conversation']['network'] = 'whatsapp'
-                self.assertIsNone(sources.selected_source(source)[1])
-                self.assertEqual(calls, ['/v1/app/setup'])
+                self.assertEqual(sources.selected_source(source)[1]['_kind'], 'video')
+                self.assertEqual(calls[0], '/v1/app/setup')
+                # Rounds stay rounds only with the Telegram evidence; with
+                # video transcription excluded (legacy kinds) nothing else is.
+                self.assertIsNone(sources.exportable_media(canonical, kinds=sources.LEGACY_KINDS)[0])
 
 
 class LocalSourceHTTPTests(unittest.TestCase):
@@ -557,6 +561,60 @@ class LocalSourceResourceTests(unittest.TestCase):
 
 
 
+def video_message(**attachment):
+    base = {'id': 'clip', 'type': 'video', 'mimeType': 'video/mp4', 'fileSize': 4096,
+            'isVoiceNote': False, 'isGif': False, 'isSticker': False,
+            'size': {'width': 1280, 'height': 720}, 'duration': 95, 'srcURL': 'mxc://fixture/clip'}
+    base.update(attachment)
+    return {'isDeleted': False, 'behavior': None, 'disappearingTimer': {},
+            'accountID': 'local-whatsapp_ba_fixture', 'attachments': [base]}
+
+
+class LocalVideoAudioPolicyTests(unittest.TestCase):
+    def test_ordinary_videos_of_common_containers_are_exportable(self):
+        for mime in ('video/mp4', 'video/webm', 'video/quicktime', 'video/3gpp',
+                     'video/x-matroska', 'video/x-m4v'):
+            with self.subTest(mime=mime):
+                attachment, kind = sources.exportable_media(video_message(mimeType=mime))
+                self.assertEqual(kind, 'video')
+                self.assertEqual(attachment['mimeType'], mime)
+        # A video sent as a file.
+        attachment, kind = sources.exportable_media(video_message(type='unknown', mimeType='video/quicktime'))
+        self.assertEqual(kind, 'video')
+
+    def test_gifs_stickers_unknown_containers_and_protections_are_refused(self):
+        for change in ({'isGif': True}, {'isSticker': True}, {'mimeType': 'video/x-flv'},
+                       {'mimeType': 'image/gif', 'type': 'img'}, {'fileSize': 0},
+                       {'fileSize': sources.MAX_BYTES + 1}, {'extra': {'view_once': True}}):
+            with self.subTest(change=change):
+                self.assertEqual(sources.exportable_media(video_message(**change)), (None, None))
+        message = video_message()
+        message['disappearingTimer'] = {'seconds': 30}
+        self.assertEqual(sources.exportable_media(message), (None, None))
+
+    def test_round_wins_over_video_and_voice_over_audio(self):
+        _, kind = sources.exportable_media(round_message())
+        self.assertEqual(kind, 'round')
+        voice = {'isDeleted': False, 'attachments': [{'isVoiceNote': True, 'type': 'audio',
+                                                      'mimeType': 'audio/ogg', 'fileSize': 10}]}
+        self.assertEqual(sources.exportable_media(voice)[1], 'voice')
+        music = {'isDeleted': False, 'attachments': [{'isVoiceNote': False, 'type': 'audio',
+                                                      'mimeType': 'audio/mpeg', 'fileSize': 10}]}
+        self.assertEqual(sources.exportable_media(music)[1], 'audio')
+        playlist = {'isDeleted': False, 'attachments': [{'type': 'unknown', 'mimeType': 'audio/x-mpegurl',
+                                                         'fileSize': 10}]}
+        self.assertEqual(sources.exportable_media(playlist), (None, None))
+
+    def test_square_video_outside_round_bounds_is_an_ordinary_video(self):
+        message = round_message(size={'width': 720, 'height': 720})
+        self.assertEqual(sources.exportable_media(message, kinds=sources.LEGACY_KINDS), (None, None))
+        self.assertEqual(sources.exportable_media(message)[1], 'video')
+
+    def test_legacy_kinds_hide_video_and_audio(self):
+        self.assertEqual(sources.exportable_media(video_message(), kinds=sources.LEGACY_KINDS), (None, None))
+        self.assertEqual(sources.exportable_media(round_message(), kinds=sources.LEGACY_KINDS)[1], 'round')
+
+
 class LocalRecentTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -578,6 +636,11 @@ class LocalRecentTests(unittest.TestCase):
             (9, '!a:beeper.local', '$text', 0, 0, {'text': 'hello', 'attachments': []}),
             (10, '!a:beeper.local', '$self', 0, 0, {**voice, 'senderID': '@fixture:example.invalid'}),
         ]
+        clip = {**video_message(), 'isSender': False, 'senderID': '@ghost:beeper.local',
+                'timestamp': '2026-10-17T12:00:01.000Z'}
+        gif = {**video_message(isGif=True), 'isSender': False, 'timestamp': '2026-10-17T12:00:02.000Z'}
+        self.extra_rows = [(12, '!a:beeper.local', '$clip', 0, 0, clip),
+                           (13, '!a:beeper.local', '$gif', 0, 0, gif)]
         with sqlite3.connect(self.index) as db:
             db.execute('CREATE TABLE mx_room_messages(id,isDeleted,isEdited,message,roomID,eventID)')
             for row_id, room, event, deleted, edited, message in rows:
@@ -602,6 +665,24 @@ class LocalRecentTests(unittest.TestCase):
 
     def recent(self, **request):
         return sources.recent_media({'accountId': '@fixture:example.invalid', **request})
+
+    def add_media_rows(self):
+        with closing(sqlite3.connect(self.index)) as db, db:
+            for row_id, room, event, deleted, edited, message in self.extra_rows:
+                db.execute('INSERT INTO mx_room_messages VALUES(?,?,?,?,?,?)',
+                           (row_id, deleted, edited, json.dumps(message), room, event))
+
+    def test_videos_are_listed_only_when_the_worker_asks(self):
+        self.add_media_rows()
+        legacy = self.recent(cursor=11, limit=10)
+        self.assertEqual(legacy, {'cursor': 13, 'items': []})
+        page = self.recent(cursor=11, limit=10, kinds=['voice', 'round', 'video', 'audio'])
+        self.assertEqual([(i['eventId'], i['kind'], i['durationMs'], i['network']) for i in page['items']],
+                         [('$clip', 'video', 95000, 'whatsapp')])
+        for kinds in ([], ['image'], 'video', [1], ['voice'] * 5):
+            with self.subTest(kinds=kinds):
+                with self.assertRaises(sources.SourceFailure):
+                    self.recent(cursor=11, kinds=kinds)
 
     def test_null_cursor_returns_current_end_without_history(self):
         self.assertEqual(self.recent(cursor=None), {'cursor': 11, 'items': []})
@@ -724,6 +805,17 @@ class LocalRoundHTTPTests(unittest.TestCase):
         status, mime, data = self.serve(attachment, payload, 'audio')
         self.assertEqual((status, mime), (200, 'application/octet-stream'))
         self.assertEqual(data, payload)
+
+    def test_video_metadata_declares_duration_and_size(self):
+        attachment = {'id': 'clip', 'mimeType': 'video/webm', 'fileSize': 5000, 'duration': 95,
+                      '_kind': 'video'}
+        status, _, data = self.serve(attachment, b'', 'metadata')
+        self.assertEqual(status, 200)
+        metadata = json.loads(data)
+        self.assertEqual((metadata['kind'], metadata['durationMs'], metadata['fileSize']),
+                         ('video', 95000, 5000))
+        status, _, data = self.serve(attachment, b'webm fixture' * 10, 'audio')
+        self.assertEqual((status, data), (200, b'webm fixture' * 10))
 
     def test_round_file_above_round_cap_is_refused(self):
         attachment = {'id': 'round', 'mimeType': 'video/mp4', 'fileSize': 70000, '_kind': 'round'}

@@ -1,11 +1,69 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
 import 'dart:typed_data';
+import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 import 'ports.dart';
 import 'reminder_reply.dart';
 
-class MatrixFeatureTransport implements FeatureTransport {
+/// Streams one media download into memory, never buffering more than
+/// [maxBytes]: a larger declared `Content-Length` is refused before the body
+/// is read, and the stream is cancelled as soon as it passes the bound.
+Future<Uint8List> boundedMediaDownload(
+  http.Client httpClient,
+  Uri uri, {
+  required String? accessToken,
+  required int maxBytes,
+  required Cancellation cancel,
+  Duration timeout = const Duration(minutes: 10),
+}) async {
+  cancel.check();
+  final request = http.Request('GET', uri);
+  if (accessToken != null) {
+    request.headers['authorization'] = 'Bearer $accessToken';
+  }
+  final response = await httpClient
+      .send(request)
+      .timeout(const Duration(minutes: 2));
+  final done = Completer<Uint8List>();
+  final builder = BytesBuilder(copy: false);
+  late final StreamSubscription<List<int>> subscription;
+  void fail(String code) {
+    unawaited(subscription.cancel());
+    if (!done.isCompleted) done.completeError(WorkerFailure(code));
+  }
+
+  subscription = response.stream.listen(
+    (chunk) {
+      if (builder.length + chunk.length > maxBytes) {
+        fail('source_too_large');
+        return;
+      }
+      builder.add(chunk);
+    },
+    onError: (Object _) => fail('source_unavailable'),
+    onDone: () {
+      if (!done.isCompleted) done.complete(builder.takeBytes());
+    },
+    cancelOnError: true,
+  );
+  if (response.statusCode >= 400) {
+    fail('source_unavailable');
+  } else if ((response.contentLength ?? 0) > maxBytes) {
+    fail('source_too_large');
+  }
+  cancel.listen(() => fail('cancelled'));
+  try {
+    return await done.future.timeout(timeout);
+  } on TimeoutException {
+    fail('source_unavailable');
+    throw const WorkerFailure('source_unavailable');
+  }
+}
+
+class MatrixFeatureTransport
+    implements FeatureTransport, MediaPreflight, BoundedAudioLoader {
   final Client client;
   final bool allowConversationSends;
   MatrixFeatureTransport(this.client, {this.allowConversationSends = true});
@@ -53,10 +111,21 @@ class MatrixFeatureTransport implements FeatureTransport {
   }
 
   @override
-  Future<AudioSource> loadAudio(
+  Future<AudioSource> loadAudio(SourceEventRef source, Cancellation cancel) =>
+      loadAudioBounded(
+        source,
+        cancel,
+        maxBytes: transcriptionSourceMaxBytes,
+        requireDeclaredSize: false,
+      );
+
+  @override
+  Future<AudioSource> loadAudioBounded(
     SourceEventRef source,
-    Cancellation cancel,
-  ) async {
+    Cancellation cancel, {
+    required int maxBytes,
+    required bool requireDeclaredSize,
+  }) async {
     final selected = await room(source.conversation);
     cancel.check();
     final event = await selected.getEventById(source.eventId);
@@ -74,32 +143,85 @@ class MatrixFeatureTransport implements FeatureTransport {
       }
       throw const WorkerFailure('waiting_keys');
     }
-    final rejection = transcriptionSourceRejection(event);
+    final rejection = transcriptionSourceRejection(
+      event,
+      maxBytes: maxBytes,
+      requireDeclaredSize: requireDeclaredSize,
+    );
     if (rejection != null) throw WorkerFailure(rejection);
     cancel.check();
-    final file = await event.downloadAndDecryptAttachment();
+    // The SDK would buffer any size; the bounded callback aborts the
+    // transfer at maxBytes (the decrypted copy is the same size).
+    final file = await event.downloadAndDecryptAttachment(
+      downloadCallback: (uri) => boundedMediaDownload(
+        client.httpClient,
+        uri,
+        accessToken: client.accessToken,
+        maxBytes: maxBytes,
+        cancel: cancel,
+      ),
+    );
     cancel.check();
     // Redaction/protection may change while a download is in flight. Do not
     // send bytes to the decoder/provider after the source becomes unavailable.
-    final afterDownload = transcriptionSourceRejection(event);
+    final afterDownload = transcriptionSourceRejection(
+      event,
+      maxBytes: maxBytes,
+    );
     if (afterDownload != null) throw WorkerFailure(afterDownload);
-    if (file.bytes.lengthInBytes > 250000000) {
+    if (file.bytes.lengthInBytes > maxBytes) {
       throw const WorkerFailure('source_too_large');
     }
-    return AudioSource(Uint8List.fromList(file.bytes), file.mimeType);
+    // No defensive copy: the decrypted bytes are handed over as they are.
+    return AudioSource(file.bytes, file.mimeType);
   }
 
-  /// Video is permitted only for strict ordinary round notes. The transcriber
-  /// extracts 0:a:0 into metadata-free MP3; the provider never receives MP4.
-  static String? transcriptionSourceRejection(Event event) {
+  @override
+  Future<MediaFacts?> mediaFacts(SourceEventRef source) async {
+    try {
+      final selected = await room(source.conversation);
+      final event = await selected
+          .getEventById(source.eventId)
+          .timeout(const Duration(seconds: 5));
+      if (event == null || event.redacted || event.type != EventTypes.Message) {
+        return null;
+      }
+      final info = event.infoMap;
+      int? positive(Object? value) => value is int && value >= 0 ? value : null;
+      return MediaFacts(
+        kind: transcribableMediaKind(event.content),
+        durationMs: positive(info['duration']),
+        sizeBytes: positive(info['size']),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Voice notes, other audio, rounds and videos (also `m.file` media) are
+  /// accepted; GIF-style silent loops, images and protected media are not.
+  /// The transcriber extracts only 0:a:0 into metadata-free MP3; the
+  /// provider never receives video. A declared size above [maxBytes] is
+  /// refused; automatic jobs ([requireDeclaredSize]) also refuse media whose
+  /// size is not declared, since nothing would bound the download upfront.
+  static String? transcriptionSourceRejection(
+    Event event, {
+    int maxBytes = transcriptionSourceMaxBytes,
+    bool requireDeclaredSize = false,
+  }) {
     if (event.redacted) return 'source_redacted';
     if (event.type != EventTypes.Message) return 'not_audio';
-    final round = RoundVideoDescriptor.fromContent(event.content);
-    if (event.messageType != MessageTypes.Audio && round == null) {
+    if (!const {
+      MessageTypes.Audio,
+      MessageTypes.Video,
+      MessageTypes.File,
+    }.contains(event.messageType)) {
       return 'not_audio';
     }
+    final round = RoundVideoDescriptor.fromContent(event.content);
     final policy = RoundMediaPolicy.fromContent(event.content);
     if (!policy.canTranscribe) return 'protected_media';
+    if (transcribableMediaKind(event.content) == null) return 'not_audio';
     // The chat's disappearing-message setting (mautrix bridgev2 room state);
     // fail closed on anything but an explicit "off".
     if (disappearingTimerLimits(
@@ -116,7 +238,10 @@ class MatrixFeatureTransport implements FeatureTransport {
     if (size != null && (size is! int || size < 0)) {
       return 'invalid_media_metadata';
     }
-    if (size is int && size > 250000000) return 'source_too_large';
+    if (size is int && size > maxBytes) return 'source_too_large';
+    if (size == null && requireDeclaredSize) {
+      return 'auto_skipped_unknown_size';
+    }
     return null;
   }
 

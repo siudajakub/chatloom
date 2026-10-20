@@ -9,6 +9,23 @@ import 'ports.dart';
 /// Upper bound for a Telegram round video exported by the local adapter.
 const localRoundMaxBytes = 64 * 1024 * 1024;
 const localAudioMaxBytes = 250000000;
+
+/// Video containers the adapter may export (FFmpeg whitelist: mov,
+/// matroska/webm, avi). The worker keeps only the first audio stream.
+const localVideoMimeTypes = {
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+  'video/3gpp',
+  'video/3gpp2',
+  'video/x-matroska',
+  'video/x-m4v',
+  'video/x-msvideo',
+};
+
+/// Kinds this worker asks the adapter for. Adapters that predate video
+/// support ignore the field and keep returning voice/round only.
+const localRecentKinds = ['voice', 'round', 'video', 'audio'];
 const _metadataMaxBytes = 65536;
 const _recentMaxBytes = 262144;
 const _recentMaxLimit = 200;
@@ -20,7 +37,12 @@ const _recentMaxLimit = 200;
 /// Requests from this process are therefore serialized here: a background
 /// source scan or deletion audit must never make a paid job's media export
 /// fail with `local_source_unavailable`.
-class LocalSourceTransport implements FeatureTransport, RecentSourceScanner {
+class LocalSourceTransport
+    implements
+        FeatureTransport,
+        RecentSourceScanner,
+        MediaPreflight,
+        BoundedAudioLoader {
   final FeatureTransport matrix;
   final String socketPath;
   final _clients = <HttpClient>{};
@@ -177,25 +199,89 @@ class LocalSourceTransport implements FeatureTransport, RecentSourceScanner {
   }
 
   /// Media kind and byte bound approved by fresh adapter metadata. Voice notes
-  /// must be audio; round videos must be exactly video/mp4.
+  /// and other audio must be audio; round videos must be exactly video/mp4;
+  /// other videos one of [localVideoMimeTypes].
   static int _exportLimit(Map<String, dynamic> metadata) {
     final mime = metadata['mimeType'];
     final kind = metadata['kind'] ?? 'voice';
     if (mime is! String) throw const WorkerFailure('protected_media');
-    if (kind == 'voice' && mime.startsWith('audio/')) return localAudioMaxBytes;
+    if ((kind == 'voice' || kind == 'audio') && mime.startsWith('audio/')) {
+      return localAudioMaxBytes;
+    }
     if (kind == 'round' && mime == 'video/mp4') return localRoundMaxBytes;
+    if (kind == 'video' && localVideoMimeTypes.contains(mime)) {
+      return localAudioMaxBytes;
+    }
     if (mime.startsWith('video/')) {
-      throw const WorkerFailure('invalid_round_format');
+      throw WorkerFailure(
+        kind == 'video' ? 'invalid_media_format' : 'invalid_round_format',
+      );
     }
     throw const WorkerFailure('protected_media');
   }
 
+  static AutoTranscriptionKind? _kind(Object? value) => switch (value) {
+    'voice' => AutoTranscriptionKind.voice,
+    'round' => AutoTranscriptionKind.round,
+    'video' => AutoTranscriptionKind.video,
+    'audio' => AutoTranscriptionKind.audio,
+    _ => null,
+  };
+
   @override
-  Future<AudioSource> loadAudio(
+  Future<MediaFacts?> mediaFacts(SourceEventRef source) async {
+    if (!local(source)) {
+      final Object matrix = this.matrix;
+      return matrix is MediaPreflight ? matrix.mediaFacts(source) : null;
+    }
+    try {
+      // Advisory like status probes: never queue behind a long export.
+      final data = await metadata(
+        source,
+        Cancellation(),
+        wait: const Duration(seconds: 4),
+      );
+      if (data['redacted'] == true || data['transcriptionAllowed'] != true) {
+        return null;
+      }
+      int? positive(Object? value) => value is int && value >= 0 ? value : null;
+      return MediaFacts(
+        kind: _kind(data['kind'] ?? 'voice'),
+        durationMs: positive(data['durationMs']),
+        sizeBytes: positive(data['fileSize']),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<AudioSource> loadAudio(SourceEventRef source, Cancellation cancel) =>
+      loadAudioBounded(
+        source,
+        cancel,
+        maxBytes: localAudioMaxBytes,
+        requireDeclaredSize: false,
+      );
+
+  @override
+  Future<AudioSource> loadAudioBounded(
     SourceEventRef source,
-    Cancellation cancel,
-  ) async {
-    if (!local(source)) return matrix.loadAudio(source, cancel);
+    Cancellation cancel, {
+    required int maxBytes,
+    required bool requireDeclaredSize,
+  }) async {
+    if (!local(source)) {
+      final Object matrix = this.matrix;
+      return matrix is BoundedAudioLoader
+          ? matrix.loadAudioBounded(
+              source,
+              cancel,
+              maxBytes: maxBytes,
+              requireDeclaredSize: requireDeclaredSize,
+            )
+          : this.matrix.loadAudio(source, cancel);
+    }
     final before = await metadata(source, cancel);
     if (before['redacted'] == true) {
       throw const WorkerFailure('source_redacted');
@@ -203,7 +289,18 @@ class LocalSourceTransport implements FeatureTransport, RecentSourceScanner {
     if (before['transcriptionAllowed'] != true) {
       throw const WorkerFailure('protected_media');
     }
-    final limit = _exportLimit(before);
+    final declared = before['fileSize'];
+    if (declared is int && declared > maxBytes) {
+      throw const WorkerFailure('source_too_large');
+    }
+    // Older adapters do not declare the size: automatic jobs refuse them.
+    if (declared is! int && requireDeclaredSize) {
+      throw const WorkerFailure('auto_skipped_unknown_size');
+    }
+    final kindLimit = _exportLimit(before);
+    // The adapter response is refused above this before buffering (declared
+    // Content-Length) and aborted while streaming.
+    final limit = kindLimit < maxBytes ? kindLimit : maxBytes;
     // Wire mode stays 'audio' for compatibility; it means "approved media
     // bytes". The transcriber keeps only the first audio stream.
     final bytes = await request(source, 'audio', cancel, limit: limit);
@@ -243,6 +340,7 @@ class LocalSourceTransport implements FeatureTransport, RecentSourceScanner {
             'cursor': cursor,
             'sinceMs': since?.toUtc().millisecondsSinceEpoch,
             'limit': limit,
+            'kinds': localRecentKinds,
           },
           _recentMaxBytes,
           Cancellation(),
@@ -270,11 +368,7 @@ class LocalSourceTransport implements FeatureTransport, RecentSourceScanner {
     for (final raw in data['items'] as List) {
       if (raw is! Map) throw const WorkerFailure('invalid_recent_response');
       final room = raw['roomId'], event = raw['eventId'];
-      final kind = switch (raw['kind']) {
-        'voice' => AutoTranscriptionKind.voice,
-        'round' => AutoTranscriptionKind.round,
-        _ => null,
-      };
+      final kind = _kind(raw['kind']);
       final duration = raw['durationMs'];
       final timestamp = raw['timestampMs'];
       final network = raw['network'];

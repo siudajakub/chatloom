@@ -10,6 +10,10 @@ void main() {
     final config = WorkerConfig.read('config.example.json');
     expect(config.credentialsPath, '/run/personal-worker/credentials.json');
     expect(config.allowConversationSends, isFalse);
+    // Automatic work stays off until the operator opts in; once on, cloud
+    // rooms come from the worker's own sync unless explicitly disabled.
+    expect(config.autoTranscription, isFalse);
+    expect(config.autoTranscriptionMatrix, isTrue);
   });
 
   test(

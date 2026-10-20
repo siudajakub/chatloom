@@ -12,7 +12,7 @@ import 'package:test/test.dart';
 const account = '@self:example.invalid';
 const room = '!telegram:beeper.local';
 
-class FakeTransport implements FeatureTransport {
+class FakeTransport implements FeatureTransport, MediaPreflight {
   @override
   String get accountId => account;
   @override
@@ -20,6 +20,18 @@ class FakeTransport implements FeatureTransport {
   @override
   bool get verified => true;
   final loads = <String>[];
+
+  /// Events whose media bytes are identical (forwards, merged chats).
+  final sharedMedia = <String, List<int>>{};
+
+  /// Declared metadata; small declared size unless overridden (null facts
+  /// = metadata unavailable).
+  final facts = <String, MediaFacts?>{};
+  @override
+  Future<MediaFacts?> mediaFacts(SourceEventRef source) async =>
+      facts.containsKey(source.eventId)
+      ? facts[source.eventId]
+      : const MediaFacts(sizeBytes: 3);
   @override
   Future<bool?> sourceRedacted(SourceEventRef source) async => false;
   @override
@@ -28,7 +40,13 @@ class FakeTransport implements FeatureTransport {
     Cancellation cancel,
   ) async {
     loads.add(source.eventId);
-    return AudioSource(Uint8List.fromList([1, 2, 3]), 'video/mp4');
+    // Distinct bytes per source: identical media would share a transcript.
+    return AudioSource(
+      Uint8List.fromList(
+        sharedMedia[source.eventId] ?? utf8.encode(source.eventId),
+      ),
+      'video/mp4',
+    );
   }
 
   @override
@@ -125,13 +143,14 @@ void main() {
   late WorkerEngine engine;
   var now = DateTime.utc(2026, 10, 17, 12);
 
-  WorkerEngine build({bool auto = true}) => WorkerEngine(
+  WorkerEngine build({bool auto = true, int concurrency = 2}) => WorkerEngine(
     store,
     transport,
     transcriber,
     clock: () => now,
     recentSources: scanner,
     autoTranscription: auto,
+    maxConcurrentTranscripts: concurrency,
   );
 
   void putPolicy(TranscriptionPolicy policy) {
@@ -387,6 +406,7 @@ void main() {
   );
 
   test('manual requests run before queued automatic work', () async {
+    engine = build(concurrency: 1);
     store.setCheckpoint(WorkerEngine.autoScanCheckpoint, '1');
     scanner.pages.add(RecentSourcePage(2, [item(r'$auto')]));
     await engine.autoScan(force: true);
