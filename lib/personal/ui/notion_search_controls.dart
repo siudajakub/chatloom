@@ -3,28 +3,30 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// Typing can only invoke the local callback. Public discovery is an explicit
-/// separate action, so the production controller never discloses a typed query.
-class NotionInboxSearch extends StatelessWidget {
+/// The field of the full-screen search (a pill in the glass header).
+///
+/// Typing only invokes [onChanged], which filters on the device; anything
+/// that sends the query to a network is a separate, explicit action on the
+/// page. Escape closes the search unless an IME composition is active.
+class NotionSearchField extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final ValueChanged<String> onChanged;
+  final ValueChanged<String>? onSubmitted;
   final VoidCallback onClose;
-  final VoidCallback onHistorySearch;
-  final VoidCallback onPublicDiscovery;
-  final bool searchingPublic;
-  final Widget? options;
-  const NotionInboxSearch({
+  final String hint;
+  final bool autofocus;
+  const NotionSearchField({
     super.key,
     required this.controller,
     required this.focusNode,
     required this.onChanged,
     required this.onClose,
-    required this.onHistorySearch,
-    required this.onPublicDiscovery,
-    this.searchingPublic = false,
-    this.options,
+    this.onSubmitted,
+    this.hint = 'Search chats, people and messages',
+    this.autofocus = false,
   });
+
   @override
   Widget build(BuildContext context) => Focus(
     canRequestFocus: false,
@@ -38,89 +40,38 @@ class NotionInboxSearch extends StatelessWidget {
       onClose();
       return KeyEventResult.handled;
     },
-    child: ValueListenableBuilder<TextEditingValue>(
-      valueListenable: controller,
-      builder: (context, value, _) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  onChanged: onChanged,
-                  textInputAction: TextInputAction.search,
-                  decoration: InputDecoration(
-                    hintText: 'Search your chats',
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: controller,
-                      builder: (context, value, _) => TextButton(
-                        onPressed: value.text.isEmpty
-                            ? null
-                            : () {
-                                controller.clear();
-                                onChanged('');
-                                focusNode.requestFocus();
-                              },
-                        child: const Text('Clear'),
-                      ),
-                    ),
-                    isDense: true,
-                    // The theme's pill outline (NotionRadius.field).
+    child: TextField(
+      controller: controller,
+      focusNode: focusNode,
+      autofocus: autofocus,
+      onChanged: onChanged,
+      onSubmitted: onSubmitted,
+      textInputAction: TextInputAction.search,
+      style: context.notion.typography.callout,
+      decoration: InputDecoration(
+        hintText: hint,
+        isDense: true,
+        prefixIcon: const Icon(Icons.search, size: NotionSize.icon),
+        // The clear button pops in once there is something to clear.
+        suffixIcon: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: controller,
+          builder: (context, value, _) => NotionMorphSwitcher(
+            rotate: false,
+            child: value.text.isEmpty
+                ? const SizedBox.shrink(key: ValueKey('empty'))
+                : IconButton(
+                    key: const ValueKey('clear'),
+                    tooltip: 'Clear search',
+                    icon: const Icon(Icons.close, size: NotionSize.icon),
+                    onPressed: () {
+                      controller.clear();
+                      onChanged('');
+                      focusNode.requestFocus();
+                    },
                   ),
-                ),
-              ),
-              NotionIconButton(
-                icon: Icons.close,
-                label: 'Close search',
-                onPressed: onClose,
-              ),
-            ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Private search · loaded conversation names and metadata',
-            style: TextStyle(
-              fontSize: 12,
-              height: 1.4,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              TextButton.icon(
-                onPressed: onHistorySearch,
-                icon: const Icon(Icons.manage_search, size: 18),
-                label: const Text('Search message history'),
-              ),
-              TextButton.icon(
-                onPressed: searchingPublic || value.text.trim().isEmpty
-                    ? null
-                    : onPublicDiscovery,
-                icon: NotionMorphSwitcher(
-                  rotate: false,
-                  child: searchingPublic
-                      ? const NotionDelayedSpinner(
-                          key: ValueKey('searching'),
-                          size: 16,
-                        )
-                      : const Icon(
-                          Icons.public,
-                          key: ValueKey('public'),
-                          size: 18,
-                        ),
-                ),
-                label: const Text('Discover publicly'),
-              ),
-              ?options,
-            ],
-          ),
-        ],
+        ),
+        // The theme's pill outline (NotionRadius.field).
       ),
     ),
   );

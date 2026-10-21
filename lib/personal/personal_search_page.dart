@@ -73,7 +73,15 @@ class _SearchScope {
 /// conversation. It never emits read markers or uploads message contents.
 class PersonalSearchPage extends StatefulWidget {
   final PersonalClient personal;
-  const PersonalSearchPage({super.key, required this.personal});
+
+  /// Text to search for (from the full-screen search); nothing is loaded
+  /// until a conversation is chosen and Search is pressed.
+  final String initialQuery;
+  const PersonalSearchPage({
+    super.key,
+    required this.personal,
+    this.initialQuery = '',
+  });
 
   /// Number of result scans so far (tests check typing is debounced and
   /// unrelated rebuilds reuse the memoised results).
@@ -88,10 +96,10 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
   /// you type; one scan per pause instead of one per keystroke).
   static const typingDebounce = Duration(milliseconds: 150);
 
-  final query = TextEditingController();
+  late final query = TextEditingController(text: widget.initialQuery);
 
   /// The query text the results use; follows [query] after [typingDebounce].
-  String _appliedText = '';
+  late String _appliedText = widget.initialQuery;
   Timer? _typing;
 
   /// Bumped when a loaded timeline or the personal store (bookmarks,
