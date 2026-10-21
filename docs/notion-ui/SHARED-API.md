@@ -1,5 +1,17 @@
 # Frozen ownership and shared API
 
+## Manual read action — 2026-10-21
+
+Ordinary and merged conversations show `ConversationReadButton(rooms:)` in
+incognito, above the microphone in the measured composer overlay. It uses the
+existing `NotionGlassPill` with a double-check icon and a 48 dp touch target.
+One tap immediately sends public read receipts for the latest event of each
+source; all cutoffs are captured before awaiting. Incognito and the automatic
+receipt preference stay unchanged. `PersonalPrivacy.markRead(publicReceipt:
+true)` overrides that preference only together with `manual: true`, through the
+existing exact room/event transport grant. Pending taps are disabled; failures
+allow retry. The jump-to-latest control sits above this action.
+
 2026-10-13. Write only this isolated checkout. Root coordinator owns `lib/ui/notion/`, theme/router/app/locale/avatar/hub/organization/assets registration/preview/evidence and every Flutter job. A owns inbox paths and inbox/network/search tests; B owns conversation presentation and merged/media/transcript paths and tests; C owns details/settings presentation and corresponding tests. Protected functional files remain unchanged except reviewed presentation hunks.
 
 Import `package:fluffychat/ui/notion/notion.dart`: `NotionTokens` (background/surface/selected/border/text/secondary/cover, inset/radius/avatarRadius/headerHeight/touchTarget, title/heading/body/caption), `NotionIconButton(icon:, label:, onPressed:)`, `NotionPropertyRow(label:, value:, onTap:)`, `NotionListRow(leading:, title:, subtitle:, trailing:, onTap:)`, `NotionCompactChatHeader(avatar:, name:, onDetails:)`.
@@ -106,6 +118,21 @@ Frozen API (all from `package:fluffychat/ui/notion/notion.dart`; full table and 
 - `showNotionCustomDialog<T>(context:, builder:, barrierDismissible:, barrierColor:, useRootNavigator:, useSafeArea:, routeSettings:)`, `NotionDialogRoute`, `NotionDialogTransition(animation:, child:, from:, alignment:)`, `showNotionPopover<T>(context:, builder:, alignment:, barrierDismissible:, barrierColor:, useRootNavigator:, routeSettings:)`, `NotionPopoverRoute` — `notion_modal_routes.dart`. `showNotionDialog` routes through `showNotionCustomDialog`; `showNotionSheet` uses `NotionMotion.sheetStyleOf(context)`.
 
 Owners applying motion: conversation (A) — newest-message reveal, send morph (`NotionMorphSwitcher(bounce: true)` + `NotionPressable(bounce: true, hapticOnTap: true)`), `NotionTypingDots` in `NotionSizeReveal`, delayed history loaders, `ConversationMotion.reduced` delegating to `NotionMotion.reduced`; inbox (B) — `NotionSkeleton` rows, `NotionEntranceScope` first-screen stagger, `NotionFadeThrough` on filter change, `NotionPop` + `NotionAnimatedCount` badges, `NotionRowHighlight` for moved rows, `showNotionPopover` for the network selector; settings/dialogs (C) — adaptive dialog/sheet helpers through `showNotionCustomDialog`/`sheetStyleOf`/`menuStyle`, delayed-reveal `future_loading_dialog`; onboarding/hub (D) — `NotionStaggeredColumn` on intro/sign-in, skeletons, `NotionPulse` for calls.
+
+## Transcript folding and focused playback — 2026-10-21
+
+`TranscriptPanel` measures the result at its rendered width, text scale,
+locale and direction. Up to five lines stay visible; longer results show
+three lines with Show more / Show less. Copy always uses the full result.
+Expansion resets when the result is replaced.
+
+`NotionMediaPlaybackControls` is a presentation-only transport with position,
+duration, playing, speed and callbacks. It owns no decoder or media lease.
+`NotionMediaActionsButton` groups secondary `NotionMediaAction`s in a sheet;
+it dismisses the sheet before invoking the selected action.
+Voice, video and round playback retain their existing media ownership and
+playback coordination. Focused playback uses `NotionMediaColors.stageScrim`.
+See `docs/personal/media-playback-2026-10-21.md` for verification boundaries.
 
 ## Glass and rounded surfaces — 2026-10-19
 
