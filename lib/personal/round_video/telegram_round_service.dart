@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/round_video_recorder.dart';
@@ -9,7 +10,10 @@ import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/journal_trust.dart';
 import 'package:chatloom/personal/media/immediate_media_outbox.dart';
+import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/pending_media_store.dart';
+import 'package:chatloom/personal/media/send_error_text.dart';
+import 'package:chatloom/personal/media/upload_progress.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
@@ -68,15 +72,26 @@ class TelegramRoundService extends ChangeNotifier
   /// True once the verified reverse state for [event] was loaded, including a
   /// known absence (no row). Distinguishes "known null" from "not loaded".
   bool isMediaStateKnown(Event event) => _states.containsKey(_stateKey(event));
+
+  /// A recording protected storage refused, per room, with the action ID
+  /// its bubble already shows. Memory only: the bubble offers Retry/Delete.
   final _unstaged =
-      <String, (RoundSendTarget, RoundEncodingProfile, PreparedRoundMedia)>{};
+      <
+        String,
+        (RoundSendTarget, RoundEncodingProfile, PreparedRoundMedia, String)
+      >{};
 
-  /// Rooms whose just-recorded round is being committed to protected storage
-  /// (before its durable record exists). In memory only, for the outbox row.
-  final _saving = <String, int>{};
-
-  /// Live dispatch phase per action, for the optimistic outbox row only.
+  /// Live dispatch phase per action (memory only, never decides a send).
   final _phases = <String, RoundSendPhase>{};
+
+  /// First frames of this session's own rounds, by transaction ID: the
+  /// bubble shows the frame from the moment the recorder closes, before
+  /// the server has the round (Telegram). Small JPEGs, bounded.
+  final _localThumbnails = <String, Uint8List>{};
+  static const _localThumbnailLimit = 16;
+
+  /// Actions whose bubble is already being reconciled after a restart.
+  final _reconciling = <String>{};
 
   /// One dispatch at a time per room keeps rounds in recording order while the
   /// composer is already free for the next recording.
@@ -90,8 +105,36 @@ class TelegramRoundService extends ChangeNotifier
   /// state, trust and capability are still evaluated at every guard.
   static const preflightReuse = Duration(seconds: 30);
 
-  bool isSaving(String roomId) => (_saving[roomId] ?? 0) > 0;
   RoundSendPhase? phaseOf(String actionId) => _phases[actionId];
+
+  /// The action of an own round bubble (`round-<id>`), or null.
+  static String? actionOf(Event event) {
+    final txid = event.transactionId ?? event.eventId;
+    return RegExp(r'^round-([A-Za-z0-9_-]{1,128})$').firstMatch(txid)?[1];
+  }
+
+  /// Whether [event] is an own round the server does not have yet. Such a
+  /// bubble shows its first frame and the upload, and cannot be played:
+  /// the SDK would look for a cached file that rounds never use.
+  bool isUnsentRound(Event event) =>
+      event.senderId == client.userID &&
+      !event.status.isSent &&
+      actionOf(event) != null;
+
+  /// The first frame of this session's own round [event], if known.
+  Uint8List? localThumbnail(Event event) {
+    final txid = event.transactionId ?? event.eventId;
+    return txid.startsWith('round-') ? _localThumbnails[txid] : null;
+  }
+
+  void _rememberThumbnail(String transactionId, Uint8List? bytes) {
+    if (bytes == null || bytes.isEmpty) return;
+    _localThumbnails.remove(transactionId);
+    _localThumbnails[transactionId] = bytes;
+    while (_localThumbnails.length > _localThumbnailLimit) {
+      _localThumbnails.remove(_localThumbnails.keys.first);
+    }
+  }
 
   Future<void> initialize() async {
     if (_closed) throw const ImmediateMediaRejected('sessionClosed');
@@ -389,6 +432,7 @@ class TelegramRoundService extends ChangeNotifier
     bool silent = false,
     required bool Function() stillCurrent,
     RoundCaptureGestureController? gesture,
+    void Function(String eventId)? onAccepted,
   }) async {
     // Freeze before storage, permission dialogs, trust prompts or capture.
     final initialBinding = TelegramRoomBinding.unverifiedCandidate(room);
@@ -417,11 +461,11 @@ class TelegramRoundService extends ChangeNotifier
       if (!context.mounted || !stillCurrent()) return null;
       if (!await _ensureTrustedBridge(context, room)) return null;
       if (!context.mounted || !stillCurrent()) return null;
-      final caps = await TelegramRoomBinding.preflight(room);
+      // A passing upload-limit measurement younger than [preflightReuse] is
+      // reused (capabilities are still read from current room state), so a
+      // second round in a row opens the camera without a network round trip.
+      final caps = await _preflight(room);
       final profile = caps?.profile;
-      if (caps?.result.allowed == true && profile != null) {
-        _preflightAt[room.id] = DateTime.now();
-      }
       if (caps?.result.allowed != true ||
           (silent &&
               caps?.extension.operation('silent_send').allowed != true) ||
@@ -477,52 +521,199 @@ class TelegramRoundService extends ChangeNotifier
         ),
       );
       if (prepared == null) return null;
-      _unstaged[frozen.roomId] = (frozen, profile, prepared);
-      _saving.update(frozen.roomId, (n) => n + 1, ifAbsent: () => 1);
-      notifyListeners();
-      final ImmediateMediaResult staged;
+      // The bubble appears as the recorder closes (Telegram): a local echo
+      // with the first frame and the frozen reply, sending until the server
+      // has the round. Staging, encryption and the upload follow.
+      final actionId = _outbox!.newActionId();
+      final transactionId = 'round-$actionId';
+      final descriptor = _descriptorOf(prepared);
+      Uint8List? frame;
       try {
-        staged = await _stage(frozen, profile, prepared);
-      } finally {
-        final left = (_saving[frozen.roomId] ?? 1) - 1;
-        if (left > 0) {
-          _saving[frozen.roomId] = left;
-        } else {
-          _saving.remove(frozen.roomId);
-        }
+        frame = await prepared.readThumbnailBytes();
+      } catch (_) {
+        frame = null;
+      }
+      _rememberThumbnail(transactionId, frame);
+      await _showEcho(room, frozen, transactionId, descriptor);
+      _unstaged[frozen.roomId] = (frozen, profile, prepared, actionId);
+      ImmediateMediaResult staged;
+      try {
+        staged = await _stage(frozen, profile, prepared, actionId: actionId);
+      } catch (_) {
+        staged = ImmediateMediaResult(
+          actionId: actionId,
+          transactionId: transactionId,
+          state: ImmediateMediaState.failed,
+          errorCode: 'storageUnavailable',
+        );
       }
       if (staged.state == ImmediateMediaState.failed) {
-        _unstaged[frozen.roomId] = (frozen, profile, prepared);
+        // Protected storage refused it: the bubble says "Not sent" and its
+        // Retry saves and sends this in-memory recording again.
+        await _markFailed(room, transactionId);
         notifyListeners();
         return staged;
       }
       _unstaged.remove(frozen.roomId);
       await prepared.close();
+      if (staged.actionId != actionId) {
+        // An identical draft already existed: its bubble is the one to keep.
+        await _replaceEcho(room, transactionId, staged.actionId);
+      }
       // The protected draft is durable: the composer may record the next round
       // while this one uploads (Telegram parity). Sends stay ordered per room.
       capturing = false;
       notifyListeners();
-      if (!context.mounted ||
-          !stillCurrent() ||
-          !PersonalPrivacy.surfaceUnlocked ||
-          !PersonalPrivacy.surfaceForeground) {
-        // Locked, backgrounded or left: the durable draft waits for an
-        // explicit retry; do not keep its multi-megabyte copy in memory.
-        _outbox!.releaseStaged(staged.actionId);
-        return staged;
-      }
-      final result = await _inRoomOrder(
-        frozen.roomId,
-        () => runZoned(
-          () => _outbox!.dispatch(staged.actionId),
-          zoneValues: {_dispatchEligibilityKey: stillCurrent},
-        ),
-      );
-      notifyListeners();
-      return result;
+      unawaited(_dispatch(room, staged.actionId, onAccepted: onAccepted));
+      return staged;
     } finally {
       capturing = false;
       if (!_closed) notifyListeners();
+    }
+  }
+
+  RoundVideoDescriptor _descriptorOf(PreparedRoundMedia media) =>
+      RoundVideoDescriptor(
+        sizeBytes: media.sizeBytes,
+        width: media.width,
+        height: media.height,
+        durationMs: media.durationMs,
+        videoCodec: media.videoCodec,
+        audioCodec: media.audioCodec,
+        cornersSanitized: media.cornersSanitized,
+      );
+
+  /// Content of the bubble shown before the round is uploaded: the round
+  /// marker and size (so it renders as a round of its final size) and the
+  /// same relation the final event carries. No file: nothing to download.
+  static Map<String, dynamic> roundEchoContent(
+    RoundSendTarget target,
+    RoundVideoDescriptor descriptor,
+  ) => {
+    'msgtype': 'm.video',
+    'body': 'video_message.mp4',
+    'filename': 'video_message.mp4',
+    'info': descriptor.matrixInfo,
+    if (target.threadEventId != null)
+      'm.relates_to': {
+        'rel_type': 'm.thread',
+        'event_id': target.threadEventId,
+        'is_falling_back': target.replyEventId == null,
+        'm.in_reply_to': {
+          'event_id': target.replyEventId ?? target.threadEventId,
+        },
+      }
+    else if (target.replyEventId != null)
+      'm.relates_to': {
+        'm.in_reply_to': {'event_id': target.replyEventId},
+      },
+  };
+
+  Future<void> _showEcho(
+    Room room,
+    RoundSendTarget target,
+    String transactionId,
+    RoundVideoDescriptor descriptor, {
+    EventStatus status = EventStatus.sending,
+  }) async {
+    // Never aged into "error" by the SDK while this process works on it.
+    if (status.isSending) OutgoingEcho.own(room, transactionId);
+    try {
+      await OutgoingEcho.show(
+        room,
+        transactionId: transactionId,
+        at: DateTime.now(),
+        status: status,
+        content: roundEchoContent(target, descriptor),
+      );
+    } catch (_) {
+      // Without the early bubble the SDK still shows one once the round is
+      // sent; nothing about the send itself depends on it.
+    }
+  }
+
+  /// Unsent bubble -> "Not sent · Tap to retry". Never touches a round the
+  /// server accepted.
+  Future<void> _markFailed(Room room, String transactionId) async {
+    OutgoingEcho.release(room, transactionId);
+    try {
+      await OutgoingEcho.setStatus(room, transactionId, EventStatus.error);
+    } catch (_) {}
+  }
+
+  Future<void> _replaceEcho(Room room, String from, String actionId) async {
+    try {
+      final early = await OutgoingEcho.stored(room, from);
+      if (early != null && !early.status.isSent) await early.cancelSend();
+    } catch (_) {}
+    final thumbnail = _localThumbnails[from];
+    if (thumbnail != null) _rememberThumbnail('round-$actionId', thumbnail);
+    await _ensureEcho(room, actionId);
+  }
+
+  /// Sends a durable draft in the background, in recording order per room.
+  /// The bubble shows the upload and ends as sent, or as "Not sent" with
+  /// Retry. Leaving the chat does not stop it; a locked or backgrounded app
+  /// sends nothing (the guard checks that before and after the upload).
+  Future<ImmediateMediaResult?> _dispatch(
+    Room room,
+    String actionId, {
+    void Function(String eventId)? onAccepted,
+  }) async {
+    final transactionId = 'round-$actionId';
+    if (_closed || !_dispatching.add(actionId)) return null;
+    if (!PersonalPrivacy.surfaceUnlocked ||
+        !PersonalPrivacy.surfaceForeground) {
+      // Do not keep the multi-megabyte copy in memory; Retry reads storage.
+      _outbox!.releaseStaged(actionId);
+      await _markFailed(room, transactionId);
+      _dispatching.remove(actionId);
+      return null;
+    }
+    OutgoingEcho.own(room, transactionId);
+    try {
+      final result = await _inRoomOrder(
+        room.id,
+        () => UploadProgress.track(
+          transactionId,
+          () => _outbox!.dispatch(actionId),
+        ),
+      );
+      switch (result.state) {
+        case ImmediateMediaState.matrixAccepted:
+          _unconfirmed.remove(actionId);
+          final eventId = result.eventId;
+          if (eventId != null) onAccepted?.call(eventId);
+          await _finishAccepted(actionId);
+        case ImmediateMediaState.cancelled:
+          break;
+        case ImmediateMediaState.unknown:
+          _unconfirmed.add(actionId);
+          await _markFailed(room, transactionId);
+        case ImmediateMediaState.staged:
+        case ImmediateMediaState.failed:
+          await _markFailed(room, transactionId);
+      }
+      return result;
+    } catch (_) {
+      await _markFailed(room, transactionId);
+      return null;
+    } finally {
+      _dispatching.remove(actionId);
+      OutgoingEcho.release(room, transactionId);
+      UploadProgress.reset(transactionId);
+      if (!_closed) notifyListeners();
+    }
+  }
+
+  /// Matrix accepted the round: that is "sent". The durable record keeps
+  /// its tombstone (no resend) and drops the media bytes.
+  Future<void> _finishAccepted(String actionId) async {
+    try {
+      await _outbox!.complete(actionId);
+      await _outbox!.purgeAcceptedMedia(actionId);
+    } catch (_) {
+      // Retried by [reconcileRoom]; the round is sent either way.
     }
   }
 
@@ -539,24 +730,18 @@ class TelegramRoundService extends ChangeNotifier
   Future<ImmediateMediaResult> _stage(
     RoundSendTarget target,
     RoundEncodingProfile profile,
-    PreparedRoundMedia media,
-  ) async => _outbox!.stage(
+    PreparedRoundMedia media, {
+    String? actionId,
+  }) async => _outbox!.stage(
     target: target,
     profile: profile,
     bytes: await media.readBytes(),
     thumbnailBytes: await media.readThumbnailBytes(),
+    reservedActionId: actionId,
     // The plaintext draft commits first; SDK encryption runs alongside it and
     // its ciphertext is committed by dispatch while the upload runs.
     encryptWhileStaging: true,
-    descriptor: RoundVideoDescriptor(
-      sizeBytes: media.sizeBytes,
-      width: media.width,
-      height: media.height,
-      durationMs: media.durationMs,
-      videoCodec: media.videoCodec,
-      audioCodec: media.audioCodec,
-      cornersSanitized: media.cornersSanitized,
-    ),
+    descriptor: _descriptorOf(media),
   );
 
   bool hasUnstaged(String roomId) => _unstaged.containsKey(roomId);
@@ -610,59 +795,254 @@ class TelegramRoundService extends ChangeNotifier
     return true;
   }
 
-  Future<void> discardUnstaged(String roomId) async {
-    final media = _unstaged.remove(roomId);
-    await media?.$3.close();
-    notifyListeners();
-  }
-
-  Future<void> retryStaging(String roomId) async {
-    final media = _unstaged[roomId];
-    if (media == null) return;
-    await initialize();
-    final result = await _stage(media.$1, media.$2, media.$3);
-    if (result.state != ImmediateMediaState.failed) {
-      _unstaged.remove(roomId);
-      await media.$3.close();
+  (RoundSendTarget, RoundEncodingProfile, PreparedRoundMedia, String)?
+  _unstagedFor(String actionId) {
+    for (final entry in _unstaged.values) {
+      if (entry.$4 == actionId) return entry;
     }
-    notifyListeners();
+    return null;
   }
 
-  Future<List<PendingMediaSummary>> pendingFor(String roomId) async {
-    await initialize();
-    return (await _outbox!.recoverSummaries())
-        .where(
-          (record) =>
-              (record.metadata['target'] as Map)['roomId'] == roomId &&
-              !{'completed', 'cancelled'}.contains(record.metadata['state']),
-        )
-        .toList();
+  Future<Map<String, dynamic>?> _metadataOf(String actionId) async {
+    for (final record in await _outbox!.recoverSummaries()) {
+      if (record.actionId == actionId) return record.metadata;
+    }
+    return null;
   }
 
-  Future<ImmediateMediaResult> retry(
+  Future<Room?> _roomOf(String actionId) async {
+    final target = (await _metadataOf(actionId))?['target'];
+    return target is Map && target['roomId'] is String
+        ? client.getRoomById(target['roomId'] as String)
+        : null;
+  }
+
+  /// Retry from a round's bubble ("Not sent · Tap to retry"): the same
+  /// durable attempt and transaction ID, so it is never sent twice. A
+  /// recording protected storage refused is saved first. Returns the
+  /// dispatch result, or null when nothing could be started.
+  Future<ImmediateMediaResult?> retry(
     String actionId, {
+    Room? room,
     bool Function()? stillCurrent,
   }) async {
     await initialize();
-    final result = await runZoned(
-      () => _outbox!.dispatch(actionId),
-      zoneValues: {_dispatchEligibilityKey: stillCurrent},
+    if (stillCurrent?.call() == false) return null;
+    final unstaged = _unstagedFor(actionId);
+    final target =
+        room ??
+        (unstaged == null ? null : client.getRoomById(unstaged.$1.roomId)) ??
+        await _roomOf(actionId);
+    if (target == null) return null;
+    final transactionId = 'round-$actionId';
+    try {
+      await OutgoingEcho.setStatus(target, transactionId, EventStatus.sending);
+    } catch (_) {}
+    if (unstaged == null) return _dispatch(target, actionId);
+    ImmediateMediaResult staged;
+    try {
+      staged = await _stage(
+        unstaged.$1,
+        unstaged.$2,
+        unstaged.$3,
+        actionId: actionId,
+      );
+    } catch (_) {
+      staged = ImmediateMediaResult(
+        actionId: actionId,
+        transactionId: transactionId,
+        state: ImmediateMediaState.failed,
+        errorCode: 'storageUnavailable',
+      );
+    }
+    if (staged.state == ImmediateMediaState.failed) {
+      await _markFailed(target, transactionId);
+      notifyListeners();
+      return staged;
+    }
+    _unstaged.remove(unstaged.$1.roomId);
+    await unstaged.$3.close();
+    if (staged.actionId != actionId) {
+      await _replaceEcho(target, transactionId, staged.actionId);
+    }
+    return _dispatch(target, staged.actionId);
+  }
+
+  /// Delete from a round's bubble: retires the attempt (it is never sent)
+  /// and drops its local copy. The caller removes the bubble itself.
+  Future<void> discard(String actionId) async {
+    await initialize();
+    final unstaged = _unstagedFor(actionId);
+    if (unstaged != null) {
+      _unstaged.remove(unstaged.$1.roomId);
+      await unstaged.$3.close();
+    }
+    await _outbox!.discard(actionId);
+    _unconfirmed.remove(actionId);
+    _localThumbnails.remove('round-$actionId');
+    notifyListeners();
+  }
+
+  /// Why the round [actionId] was not sent, in plain language, for the
+  /// bubble's Retry/Delete sheet.
+  // TODO(matrix-errors): use the shared Matrix error text for refusals.
+  Future<String> failureReason(String actionId) async {
+    const same = 'Retry sends the same attempt, so it is never sent twice.';
+    if (_unstagedFor(actionId) != null) {
+      return 'The round video could not be saved on this device. Retry '
+          'saves and sends it; it is lost if ChatLoom closes first.';
+    }
+    await initialize();
+    final metadata = await _metadataOf(actionId);
+    if (metadata == null) {
+      return 'This round video is no longer on this device. Delete it and '
+          'record it again.';
+    }
+    if ({'unknown', 'inFlight'}.contains(metadata['state'])) {
+      return 'ChatLoom could not confirm that the server received this '
+          'round video. $same';
+    }
+    final code = metadata['errorCode'];
+    if (code is String && code.startsWith('round:')) {
+      return 'The Telegram bridge does not accept round videos right now. '
+          '$same';
+    }
+    return switch (code) {
+      'encryptionOrSurfaceUnavailable' =>
+        'ChatLoom was locked or in the background, so the round video was '
+            'not sent. Retry sends it now.',
+      'roundCapabilityUnavailable' || 'encryptionUnavailable' =>
+        'The Telegram bridge does not accept round videos right now. $same',
+      'frozenRelationUnavailable' =>
+        'The message you replied to is no longer available.',
+      'frozenBridgeIdentityChanged' =>
+        'The Telegram bridge of this chat changed. Delete the round video '
+            'and record it again.',
+      'sendRejected' => 'The server did not accept this round video.',
+      'preDispatchFailure' =>
+        'The upload did not finish. Check your connection and retry. $same',
+      _ => 'The round video was not sent. $same',
+    };
+  }
+
+  /// Actions dispatched (or queued for dispatch) by this process.
+  final _dispatching = <String>{};
+
+  /// Attempts whose server response was lost: their copy arriving in sync
+  /// confirms them ([_receive]).
+  final _unconfirmed = <String>{};
+
+  /// Brings the bubbles of [room]'s own rounds in line with the durable
+  /// queue when the chat opens: accepted rounds are finished (their local
+  /// copy dropped), an unsent bubble no longer uploading says "Not sent"
+  /// with Retry, and a draft whose bubble was lost gets it back. Never
+  /// sends anything by itself.
+  Future<void> reconcileRoom(Room room) async {
+    if (_closed) return;
+    await initialize();
+    final records = await _outbox!.recoverSummaries();
+    for (final record in records) {
+      final target = record.metadata['target'];
+      final id = record.actionId;
+      if (target is! Map ||
+          target['roomId'] != room.id ||
+          _dispatching.contains(id) ||
+          !_reconciling.add(id)) {
+        continue;
+      }
+      try {
+        switch (record.metadata['state']) {
+          case 'matrixAccepted':
+            await _finishAccepted(id);
+          case 'completed':
+            if (record.metadata['bytesReleased'] == true) {
+              await _outbox!.forgetCompleted(id);
+            } else {
+              await _outbox!.purgeAcceptedMedia(id);
+            }
+          case 'cancelled':
+            break;
+          default:
+            await _reconcileUnsent(room, record);
+        }
+      } catch (_) {
+        // The next chat opening tries again.
+      } finally {
+        _reconciling.remove(id);
+      }
+    }
+    if (!_closed) notifyListeners();
+  }
+
+  Future<void> _reconcileUnsent(Room room, PendingMediaSummary record) async {
+    final id = record.actionId;
+    final transactionId = 'round-$id';
+    final unknown = {'unknown', 'inFlight'}.contains(record.metadata['state']);
+    if (unknown) _unconfirmed.add(id);
+    final echo = await OutgoingEcho.stored(room, transactionId);
+    if (echo != null) {
+      // Nothing uploads it in this process: say so, with Retry.
+      if (echo.status.isSending) await _markFailed(room, transactionId);
+      return;
+    }
+    if (unknown) {
+      // The server's copy may have replaced the bubble already.
+      final accepted = await _acceptedCopy(room, transactionId);
+      if (accepted != null) {
+        if (await _outbox!.confirmAccepted(id, accepted)) {
+          _unconfirmed.remove(id);
+          await _finishAccepted(id);
+        }
+        return;
+      }
+    }
+    await _ensureEcho(room, id, status: EventStatus.error);
+  }
+
+  /// The accepted event of [transactionId] among [room]'s recent stored
+  /// events, if the server's copy already arrived.
+  Future<String?> _acceptedCopy(Room room, String transactionId) async {
+    try {
+      final events = await client.database.getEventList(room, limit: 200);
+      for (final event in events) {
+        if (event.transactionId == transactionId &&
+            event.eventId.startsWith(r'$')) {
+          return event.eventId;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Shows the bubble of a durable draft that has none (e.g. lost with a
+  /// cleared timeline cache).
+  Future<void> _ensureEcho(
+    Room room,
+    String actionId, {
+    EventStatus status = EventStatus.sending,
+  }) async {
+    final transactionId = 'round-$actionId';
+    if (await OutgoingEcho.stored(room, transactionId) != null) return;
+    final metadata = await _metadataOf(actionId);
+    final target = metadata?['target'], descriptor = metadata?['descriptor'];
+    if (target is! Map || descriptor is! Map) return;
+    await _showEcho(
+      room,
+      RoundSendTarget.fromJson(Map<String, dynamic>.from(target)),
+      transactionId,
+      RoundVideoDescriptor.fromJson(Map<String, dynamic>.from(descriptor)),
+      status: status,
     );
-    notifyListeners();
-    return result;
   }
 
-  Future<void> cancel(String actionId) async {
-    await initialize();
-    await _outbox!.cancel(actionId);
-    notifyListeners();
-  }
-
-  Future<void> retainAccepted(String actionId) async {
-    await initialize();
-    await _outbox!.complete(actionId);
-    await _outbox!.purgeAcceptedMedia(actionId);
-    notifyListeners();
+  Future<void> _confirmFromSync(String actionId, String eventId) async {
+    try {
+      await initialize();
+      if (await _outbox!.confirmAccepted(actionId, eventId)) {
+        await _finishAccepted(actionId);
+      }
+      _unconfirmed.remove(actionId);
+    } catch (_) {}
   }
 
   @override
@@ -914,9 +1294,7 @@ class TelegramRoundService extends ChangeNotifier
     if (!canNativeForward(event)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'The bridge has not confirmed safe forwarding for this message.',
-          ),
+          content: Text('This round video cannot be forwarded in Telegram.'),
         ),
       );
       return;
@@ -957,35 +1335,41 @@ class TelegramRoundService extends ChangeNotifier
         generation != PersonalPrivacy.surfaceGeneration ||
         !identical(Matrix.of(context).client, client))
       return;
+    // Telegram: a short confirmation naming the chat, an error only when
+    // it really failed. Matrix acceptance is "forwarded"; the bridge's own
+    // failure would come back as a bridge notice.
+    final destination = selected.getLocalizedDisplayname();
+    String message;
     try {
       final result = await forward(event, selected);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              result == null
-                  ? 'Forwarding outcome unknown. Retrying will keep the same attempt.'
-                  : 'Matrix accepted the forward. Telegram confirmation has not arrived.',
-            ),
-          ),
-        );
-      }
-    } catch (_) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Forwarding was not confirmed. Check the bridge and permissions.',
-            ),
-          ),
-        );
-      }
+      message = result == null
+          ? 'Couldn\'t confirm the forward to $destination. Try again; it is never sent twice.'
+          : 'Forwarded to $destination';
+    } on ImmediateMediaRejected {
+      message = 'Telegram does not allow forwarding this round video there.';
+    } catch (error) {
+      message = 'Couldn\'t forward to $destination. ${sendErrorText(error)}';
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
   void _receive(Event event) {
     PersonalPrivacy.forgetObservedControl(event);
-    if (event.type != telegramMediaStateEventType || _closed) return;
+    if (_closed) return;
+    if (event.senderId == client.userID &&
+        event.status.isSent &&
+        event.eventId.startsWith(r'$')) {
+      final id = actionOf(event);
+      // A lost response: the server's copy confirms the attempt.
+      if (id != null && _unconfirmed.contains(id)) {
+        unawaited(_confirmFromSync(id, event.eventId));
+      }
+    }
+    if (event.type != telegramMediaStateEventType) return;
     unawaited(_applyState(event).catchError((Object _) {}));
   }
 

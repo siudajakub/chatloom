@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/media/upload_progress.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
@@ -130,12 +131,19 @@ class _RoundVideoBridgeMessageState extends State<RoundVideoBridgeMessage> {
     final event = widget.event;
     final policy = RoundMediaPolicy.fromContent(event.content);
     final ready = !_pending && !_unavailable && _state?['expired'] != true;
+    // An own round the server does not have yet: first frame, upload ring.
+    final unsent = _service.isUnsentRound(event);
     return RoundVideoMessage(
       event,
       textColor: widget.textColor,
       outgoing: widget.outgoing,
       statusOverlay: widget.statusOverlay,
       enlargeOnPlay: widget.enlargeOnPlay,
+      localThumbnail: _service.localThumbnail(event),
+      unsent: unsent,
+      upload: unsent && event.status.isSending
+          ? UploadProgress.of(event.transactionId ?? event.eventId)
+          : null,
       showThumbnail: AppSettings.showThumbnailsInTimeline.value,
       // Muted previews would create a second native player per visible row;
       // only the round the user plays owns a controller.
@@ -154,13 +162,17 @@ class _RoundVideoBridgeMessageState extends State<RoundVideoBridgeMessage> {
         )?['media_unread'];
         return unread is bool ? unread : null;
       },
-      onForward: ready && policy.canForward && _service.canNativeForward(event)
+      onForward:
+          !unsent &&
+              ready &&
+              policy.canForward &&
+              _service.canNativeForward(event)
           ? (source) => _service.showForwardPicker(context, source)
           : null,
-      onExport: ready && policy.canExport
+      onExport: !unsent && ready && policy.canExport
           ? (source) => source.saveFile(context)
           : null,
-      below: ready && widget.showTranscript && policy.canTranscribe
+      below: !unsent && ready && widget.showTranscript && policy.canTranscribe
           ? TranscriptPanel(event: event, foregroundColor: widget.textColor)
           : null,
     );

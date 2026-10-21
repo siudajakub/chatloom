@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/events/outgoing_upload_progress.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Scrim behind text and glyphs drawn over video frames. Video content is
@@ -47,6 +48,11 @@ class RoundVideoView extends StatelessWidget {
   /// Attached to the circle so a stage can measure where it flies from.
   final Key? circleKey;
 
+  /// Set while an own round uploads (the server does not have it yet): the
+  /// circle shows the first frame, a ring that fills with the upload and
+  /// no play button (Telegram).
+  final ValueListenable<double?>? upload;
+
   const RoundVideoView({
     super.key,
     this.video,
@@ -72,6 +78,7 @@ class RoundVideoView extends StatelessWidget {
     this.below,
     this.diameter,
     this.circleKey,
+    this.upload,
   });
 
   static const double minDiameter = 96;
@@ -183,7 +190,8 @@ class RoundVideoView extends StatelessWidget {
           minimumSize: const Size.square(_glyphSize),
           tapTargetSize: MaterialTapTargetSize.padded,
         );
-        final tapEnabled = !blocked && !pending && !loading;
+        final upload = blocked ? null : this.upload;
+        final tapEnabled = !blocked && !pending && !loading && upload == null;
         final indeterminate = loading && downloadProgress == null;
         final circle = SizedBox.square(
           key: circleKey,
@@ -218,6 +226,27 @@ class RoundVideoView extends StatelessWidget {
                                 : notion.text,
                             track: roundVideoScrim,
                           ),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (upload != null)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: RepaintBoundary(
+                        child: ValueListenableBuilder<double?>(
+                          valueListenable: upload,
+                          builder: (context, value, _) =>
+                              value == null || value >= 1
+                              ? const SizedBox.shrink()
+                              : CustomPaint(
+                                  key: const ValueKey('round-upload-ring'),
+                                  painter: RoundProgressPainter(
+                                    progress: value,
+                                    color: theme.colorScheme.primary,
+                                    track: roundVideoScrim,
+                                  ),
+                                ),
                         ),
                       ),
                     ),
@@ -261,7 +290,9 @@ class RoundVideoView extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (!loading && playing && !blocked)
+                if (upload != null)
+                  OutgoingUploadOverlay(progress: upload)
+                else if (!loading && playing && !blocked)
                   Semantics(
                     button: true,
                     label: 'Pause round video',
@@ -317,6 +348,11 @@ class RoundVideoView extends StatelessWidget {
             ),
           ),
         );
+        final availability = upload != null
+            ? ', sending'
+            : pending
+            ? ', checking availability'
+            : '';
         final semanticCircle = Semantics(
           container: true,
           label: blocked ? 'Round video unavailable' : 'Round video',
@@ -324,7 +360,7 @@ class RoundVideoView extends StatelessWidget {
               '${formatTime(position)} of ${formatTime(duration)}'
               '${mediaUnread ? ', not played yet' : ''}'
               '${muted ? ', muted' : ''}'
-              '${pending ? ', checking availability' : ''}',
+              '$availability',
           child: circle,
         );
         final column = Column(

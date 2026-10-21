@@ -155,9 +155,9 @@ String roundFailureMessage(Object error) {
         RoundGateCode.bridgeLacksRoundSupport,
       ),
       'saveExistingDraftFirst' =>
-        'Save or discard the previous round video in this chat before recording a new one.',
+        'The previous round video in this chat was not sent. Retry or delete it first.',
       'pendingMediaQuota' =>
-        'Not enough room for another round video. Send or delete queued recordings first.',
+        'Not enough room for another round video. Retry or delete unsent round videos first.',
       'sessionClosed' || 'sessionUnavailable' =>
         "Your session isn't ready. Try again in a moment.",
       'roundCapabilityUnavailable' =>
@@ -181,8 +181,8 @@ String roundFailureMessage(Object error) {
   if (error is PendingMediaFailure) {
     return switch (error.code) {
       'storeQuota' || 'fileQuota' =>
-        'Not enough room for another round video. Send or delete queued recordings first.',
-      _ => "Couldn't open the round video queue. Nothing was sent.",
+        'Not enough room for another round video. Retry or delete unsent round videos first.',
+      _ => "Couldn't save the round video on this device. Nothing was sent.",
     };
   }
   if (error is StorageFailure) {

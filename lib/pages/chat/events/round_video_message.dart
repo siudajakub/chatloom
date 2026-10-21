@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_media_loader.dart';
@@ -9,6 +8,7 @@ import 'package:chatloom/personal/round_video/round_playback_queue.dart';
 import 'package:chatloom/personal/round_video/round_playback_receipts.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/bounded_byte_cache.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -51,6 +51,18 @@ class RoundVideoMessage extends StatefulWidget {
 
   /// Starting audible playback enlarges the round on [RoundStageController].
   final bool enlargeOnPlay;
+
+  /// First frame of an own round recorded in this session, shown before
+  /// (and instead of) a thumbnail download.
+  final Uint8List? localThumbnail;
+
+  /// An own round the server does not have yet (sending or failed). It
+  /// cannot be played: there is nothing to download, and the SDK would
+  /// remove an unsent bubble whose file it cannot find in its cache.
+  final bool unsent;
+
+  /// Upload progress while [unsent] and sending: the circle shows it.
+  final ValueListenable<double?>? upload;
   const RoundVideoMessage(
     this.event, {
     super.key,
@@ -75,6 +87,9 @@ class RoundVideoMessage extends StatefulWidget {
     this.statusOverlay,
     this.below,
     this.enlargeOnPlay = true,
+    this.localThumbnail,
+    this.unsent = false,
+    this.upload,
   });
 
   /// Decoded-on-demand thumbnail bytes keyed by account, source and mxc, so
@@ -205,6 +220,11 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
   /// Memory hit only: no download, decrypt or media-state wait.
   void _cachedThumbnail() {
     if (_thumbnail != null || !_thumbnailAllowed) return;
+    final local = widget.localThumbnail;
+    if (local != null) {
+      _thumbnail = local;
+      return;
+    }
     final key = RoundVideoMessage._thumbnailKey(widget.event);
     if (key != null) _thumbnail = RoundVideoMessage._thumbnailCache.get(key);
   }
@@ -637,7 +657,9 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       _registerTarget();
     }
     if (sourceChanged || !_available) {
-      if (sourceChanged) _thumbnail = null;
+      // An own round keeps its first frame while the echo becomes the
+      // server's event (no blank circle in between).
+      if (sourceChanged) _thumbnail = widget.localThumbnail;
       // Pending/unavailable rows rebuild often; only stop real work.
       if (sourceChanged || _busy) {
         unawaited(
@@ -1089,7 +1111,11 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       blockedReason = 'This round video is unavailable.';
     }
     // Pending keeps the normal frame (stable row height) with play disabled.
-    final pending = blockedReason == null && widget.sourceStatePending;
+    // An own round the server does not have yet cannot be played either.
+    final uploading =
+        blockedReason == null && widget.unsent && widget.upload != null;
+    final pending =
+        blockedReason == null && (widget.sourceStatePending || widget.unsent);
     if ((blockedReason != null || pending) && (_player != null || _loading)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_stop());
@@ -1105,6 +1131,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       outgoing: widget.outgoing,
       blockedReason: blockedReason,
       pending: pending,
+      upload: uploading ? widget.upload : null,
       statusOverlay: widget.statusOverlay,
       below: widget.below,
       video: value?.isInitialized == true && !staged
