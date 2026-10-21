@@ -2,6 +2,7 @@
 // Offline widget tests for the transcription split button and panel.
 import 'dart:async';
 
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
@@ -143,6 +144,47 @@ void main() {
     ),
   );
 
+  testWidgets('double tap transcript reacts without selecting text', (
+    tester,
+  ) async {
+    personal.setJob(voice, JobState.done, text: 'Do zobaczenia');
+    var likes = 0;
+    String? selected;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SelectionArea(
+            onSelectionChanged: (value) => selected = value?.plainText,
+            child: Center(
+              child: SizedBox(
+                width: 320,
+                child: ConversationMessageGestures(
+                  identity: voice.eventId,
+                  onLike: () async {
+                    likes++;
+                    return true;
+                  },
+                  child: TranscriptPanel(
+                    event: voice,
+                    personalClient: personal,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Do zobaczenia'));
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tap(find.text('Do zobaczenia'));
+    await tester.pumpAndSettle();
+    expect(likes, 1);
+    expect(selected, isNull);
+    expect(find.byType(SelectableText), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('idle shows the split button and requests one job', (
     tester,
   ) async {
@@ -230,8 +272,9 @@ void main() {
     );
     expect(find.textContaining('Connect private sync'), findsNothing);
 
-    ScaffoldMessenger.of(tester.element(find.byType(TranscriptPanel)))
-        .removeCurrentSnackBar();
+    ScaffoldMessenger.of(
+      tester.element(find.byType(TranscriptPanel)),
+    ).removeCurrentSnackBar();
     await settle(tester);
     personal
       ..fakeReady = false
@@ -395,9 +438,7 @@ void main() {
     expect(find.text('Transcribe'), findsNothing);
     expect(find.text('Transcript · PL'), findsOneWidget);
     expect(find.text('Estimated cost: \$0.0012'), findsNothing);
-    final transcript = tester.widget<SelectableText>(
-      find.byType(SelectableText),
-    );
+    final transcript = tester.widget<Text>(find.text('Do zobaczenia'));
     expect(transcript.style?.color, Colors.white);
     // The caption row starts at the transcript text's inset.
     expect(

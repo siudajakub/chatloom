@@ -198,8 +198,9 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
 
   void _snack(String text) {
     if (!mounted) return;
-    ScaffoldMessenger.maybeOf(context)
-        ?.showSnackBar(SnackBar(content: Text(text)));
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _request([String? language]) async {
@@ -295,17 +296,24 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
     };
     // The panel grows to the new phase while the phases fade through
     // (requesting → transcribing → text, or an error).
-    return Padding(
-      padding: const EdgeInsets.only(top: NotionSpace.xxs),
-      child: AnimatedSize(
-        duration: ConversationMotion.sizeDuration(context, NotionMotion.medium),
-        alignment: AlignmentDirectional.topStart,
-        curve: NotionMotion.emphasized,
-        child: NotionFadeThrough(
-          duration: NotionMotion.short,
-          child: KeyedSubtree(
-            key: ValueKey(subtle ? 'auto-busy' : phase),
-            child: child,
+    // Keep the timeline selection recognizer out of this message surface.
+    // Copy remains available in Transcript options.
+    return SelectionContainer.disabled(
+      child: Padding(
+        padding: const EdgeInsets.only(top: NotionSpace.xxs),
+        child: AnimatedSize(
+          duration: ConversationMotion.sizeDuration(
+            context,
+            NotionMotion.medium,
+          ),
+          alignment: AlignmentDirectional.topStart,
+          curve: NotionMotion.emphasized,
+          child: NotionFadeThrough(
+            duration: NotionMotion.short,
+            child: KeyedSubtree(
+              key: ValueKey(subtle ? 'auto-busy' : phase),
+              child: child,
+            ),
           ),
         ),
       ),
@@ -467,7 +475,7 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
               ),
             ),
           ),
-          child: SelectableText(
+          child: Text(
             text,
             style: NotionType.callout.copyWith(color: foreground),
           ),
