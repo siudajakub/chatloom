@@ -35,7 +35,10 @@ extension LocalNotificationsExtension on MatrixState {
     ..load();
 
   Future<void> showLocalNotification(Event event) async {
-    if (!PlatformInfos.supportsSystemNotifications) return;
+    final incomingCall =
+        event.type == RtcNotificationContent.eventType &&
+        event.tryParseRtcNotificationContent()?.notificationType == .ring;
+    if (!PlatformInfos.supportsSystemNotifications && !incomingCall) return;
     if (isTelegramMediaControl(event.type)) return;
     if (PersonalPrivacy.isJournal(event.room)) {
       // Same presenter, claim and trust checks as the background paths.
@@ -72,8 +75,7 @@ extension LocalNotificationsExtension on MatrixState {
       return;
     }
 
-    if (event.type == RtcNotificationContent.eventType &&
-        event.tryParseRtcNotificationContent()?.notificationType == .ring) {
+    if (incomingCall) {
       final context =
           ChatLoomApp.router.routerDelegate.navigatorKey.currentContext ??
           this.context;
@@ -89,7 +91,7 @@ extension LocalNotificationsExtension on MatrixState {
       });
     }
 
-    if (!mounted) return;
+    if (!PlatformInfos.supportsSystemNotifications || !mounted) return;
     final l10n = L10n.of(context);
     final roomId = event.room.id;
     if (activeRoomId == roomId) {

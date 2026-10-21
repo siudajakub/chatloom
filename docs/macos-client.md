@@ -5,11 +5,13 @@ SQLCipher store, private metadata sync, durable outbox and worker integration.
 System notifications, notification sounds, Dock badges and push registration
 are disabled on macOS. Reminders and scheduled messages remain in Tools; the
 worker continues to execute accepted jobs independently of the app.
+The in-app incoming-call dialog is retained independently of system alerts.
 
 ## Build and download
 
-The `Personal macOS` GitHub Actions workflow builds on the standard `macos-15`
-runner with Flutter 3.47.4 and Xcode 26.3. It runs desktop regressions and an
+The `Personal macOS` GitHub Actions workflow builds Apple Silicon and Intel
+packages on the standard `macos-15` and `macos-15-intel` runners with Flutter
+3.47.4 and Xcode 26.3. It runs desktop regressions and an
 account-free native smoke test before building the release application. The
 smoke test exercises vodozemac initialization, Keychain write/read/delete and
 SQLCipher persistence, including rejection of a wrong key without changing the
@@ -24,12 +26,15 @@ default branch. Runs have a 45-minute limit; the native smoke step has a
 expire after seven days. No release, store submission, installation or service
 deployment happens automatically.
 
-Open a successful workflow run and download its `ChatLoom-macos-…` artifact.
+Open a successful workflow run and download its `ChatLoom-macos-…` artifact:
+`ARM64` / `arm64` is for Apple Silicon (M-series), and `X64` / `x86_64` is for Intel.
 Inside it are the application ZIP, `manifest.json` and `SHA256SUMS`. The manifest
 records the commit, actual executable architectures, version, native smoke-test
 result and ZIP digest. Every embedded Mach-O image must contain those same
 architecture slices.
-Check the architecture list before choosing a machine for testing.
+The packages contain one native architecture each. This avoids an upstream
+`webcrypto`/BoringSSL cross-build linker failure in the Intel slice on an ARM
+runner. The pinned cryptographic libraries and native hooks remain unchanged.
 
 Extract the application ZIP with Archive Utility and copy `Personal Chat.app`
 to Applications. Its visible name is ChatLoom; the existing bundle identifier

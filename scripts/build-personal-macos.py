@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import plistlib
 import shutil
@@ -30,8 +31,17 @@ def main():
 
     config = ROOT / 'build' / 'personal-macos-signing.xcconfig'
     config.parent.mkdir(parents=True, exist_ok=True)
+    architecture = platform.machine()
+    if architecture not in ('arm64', 'x86_64'):
+        parser.error('Unsupported macOS host architecture')
+    excluded = 'x86_64' if architecture == 'arm64' else 'arm64'
+    # webcrypto's BoringSSL assembly selection must use its native host. Build
+    # each CPU on its own runner instead of cross-compiling the Intel slice on
+    # arm64. Keep the library and all native cryptographic hooks unchanged.
     config.write_text('CODE_SIGN_IDENTITY = -\nCODE_SIGN_STYLE = Manual\n'
-                      'DEVELOPMENT_TEAM =\nPROVISIONING_PROFILE_SPECIFIER =\n')
+                      'DEVELOPMENT_TEAM =\nPROVISIONING_PROFILE_SPECIFIER =\n'
+                      f'ARCHS = {architecture}\nEXCLUDED_ARCHS = {excluded}\n'
+                      'ONLY_ACTIVE_ARCH = YES\n')
     env = {**os.environ, 'XCODE_XCCONFIG_FILE': str(config)}
     # An empty access-group array in the inherited template is invalid for
     # ad-hoc signing. Preserve all other sandbox entitlements and restore files.
@@ -73,6 +83,8 @@ def main():
     run('codesign', '--verify', '--deep', '--strict', str(bundle))
     architectures = run('lipo', '-archs', str(executable), capture_output=True,
                         text=True).stdout.strip().split()
+    if architectures != [architecture]:
+        raise SystemExit(f'Expected a native {architecture} executable, got {architectures}')
     # A universal launcher with an arm64-only native plugin is not an Intel app.
     # Inspect every embedded Mach-O image, including native-hook dylibs.
     macho_magic = {bytes.fromhex(value) for value in
@@ -92,7 +104,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     revision = run('git', 'rev-parse', 'HEAD', capture_output=True,
                    text=True).stdout.strip()
-    archive = output / f'ChatLoom-macos-{revision[:12]}.zip'
+    archive = output / f'ChatLoom-macos-{architecture}-{revision[:12]}.zip'
     run('ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(bundle), str(archive))
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     manifest = {

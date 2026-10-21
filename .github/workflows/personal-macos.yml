@@ -23,7 +23,11 @@ concurrency:
 
 jobs:
   macos:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '2'
@@ -56,6 +60,7 @@ jobs:
           test/notion/settings_widgets_test.dart
           test/utils/session_backup_writer_test.dart
           test/personal/recording_lifecycle_test.dart
+          test/personal/integration/notification_eligibility_test.dart
       - name: Account-free native storage and crypto smoke test
         timeout-minutes: 20
         run: python3 scripts/build-personal-macos.py --smoke-test

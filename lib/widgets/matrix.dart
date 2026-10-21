@@ -494,23 +494,24 @@ class MatrixState extends State<Matrix> {
       unawaited(personal.load());
     }
 
-    if (PlatformInfos.supportsSystemNotifications &&
-        (PlatformInfos.isWeb || PlatformInfos.isDesktop)) {
-      FlutterLocalNotificationsPlugin().initialize(
-        settings: InitializationSettings(
-          linux: LinuxInitializationSettings(
-            defaultActionName: ChatLoomNotificationActions.open.name,
+    if (PlatformInfos.isWeb || PlatformInfos.isDesktop) {
+      if (PlatformInfos.supportsSystemNotifications) {
+        FlutterLocalNotificationsPlugin().initialize(
+          settings: InitializationSettings(
+            linux: LinuxInitializationSettings(
+              defaultActionName: ChatLoomNotificationActions.open.name,
+            ),
+            windows: ClientManager.windowsNotificationSettings,
+            macOS: const DarwinInitializationSettings(),
           ),
-          windows: ClientManager.windowsNotificationSettings,
-          macOS: const DarwinInitializationSettings(),
-        ),
-        onDidReceiveNotificationResponse: (response) => notificationTap(
-          response,
-          clients: widget.clients,
-          router: ChatLoomApp.router,
-          l10n: null,
-        ),
-      );
+          onDidReceiveNotificationResponse: (response) => notificationTap(
+            response,
+            clients: widget.clients,
+            router: ChatLoomApp.router,
+            l10n: null,
+          ),
+        );
+      }
       c.onSync.stream.first.then((s) {
         if (!mounted || !widget.clients.contains(c) || !c.isLogged()) return;
         if (kIsWeb) html.Notification.requestPermission();
