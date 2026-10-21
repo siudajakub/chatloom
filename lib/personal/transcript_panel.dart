@@ -472,21 +472,24 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
               ),
             ),
           ),
-          child: Text(
-            text,
-            style: NotionType.callout.copyWith(color: foreground),
+          child: _ExpandableTranscript(
+            key: ValueKey(job.id),
+            text: text,
+            foreground: foreground,
           ),
         ),
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Padding(
-              padding: const EdgeInsetsDirectional.only(start: _textInset),
-              child: Tooltip(
-                message: cost == null
-                    ? caption
-                    : 'Estimated cost: \$${cost.toStringAsFixed(4)}',
-                child: _caption(caption, foreground),
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsetsDirectional.only(start: _textInset),
+                child: Tooltip(
+                  message: cost == null
+                      ? caption
+                      : 'Estimated cost: \$${cost.toStringAsFixed(4)}',
+                  child: _caption(caption, foreground),
+                ),
               ),
             ),
             MenuAnchor(
@@ -538,6 +541,106 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// Counts rendered lines at the bubble's actual width and accessibility scale.
+/// The threshold is five lines, but a long transcript previews only three.
+class _ExpandableTranscript extends StatefulWidget {
+  final String text;
+  final Color foreground;
+
+  const _ExpandableTranscript({
+    super.key,
+    required this.text,
+    required this.foreground,
+  });
+
+  @override
+  State<_ExpandableTranscript> createState() => _ExpandableTranscriptState();
+}
+
+class _ExpandableTranscriptState extends State<_ExpandableTranscript> {
+  bool _expanded = false;
+
+  @override
+  void didUpdateWidget(covariant _ExpandableTranscript oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) _expanded = false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final defaults = DefaultTextStyle.of(context);
+    final baseStyle = defaults.style.merge(
+      NotionType.callout.copyWith(color: widget.foreground),
+    );
+    final style = MediaQuery.boldTextOf(context)
+        ? baseStyle.copyWith(fontWeight: FontWeight.bold)
+        : baseStyle;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final direction = Directionality.of(context);
+    final locale = Localizations.maybeLocaleOf(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: widget.text, style: style),
+          textDirection: direction,
+          textScaler: textScaler,
+          locale: locale,
+          maxLines: 5,
+          textWidthBasis: defaults.textWidthBasis,
+          textHeightBehavior: defaults.textHeightBehavior,
+        )..layout(maxWidth: constraints.maxWidth);
+        final collapsible = painter.didExceedMaxLines;
+        painter.dispose();
+        final collapsed = collapsible && !_expanded;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.text,
+              key: const ValueKey('transcript-text'),
+              style: style,
+              textScaler: textScaler,
+              locale: locale,
+              maxLines: collapsed ? 3 : null,
+              overflow: collapsed ? TextOverflow.ellipsis : TextOverflow.clip,
+            ),
+            if (collapsible)
+              TextButtonTheme(
+                data: TextButtonThemeData(
+                  style:
+                      TextButtonTheme.of(context).style?.copyWith(
+                        foregroundColor: WidgetStatePropertyAll(
+                          widget.foreground,
+                        ),
+                        minimumSize: const WidgetStatePropertyAll(
+                          Size(NotionSize.touchTarget, NotionSize.touchTarget),
+                        ),
+                      ) ??
+                      TextButton.styleFrom(
+                        foregroundColor: widget.foreground,
+                        minimumSize: const Size.square(NotionSize.touchTarget),
+                      ),
+                ),
+                child: Semantics(
+                  expanded: _expanded,
+                  child: NotionButton.ghost(
+                    key: const ValueKey('transcript-expand'),
+                    label: _expanded ? 'Show less' : 'Show more',
+                    icon: _expanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    onPressed: () => setState(() => _expanded = !_expanded),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Offline widget tests for the transcription split button and panel.
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -8,6 +10,8 @@ import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
 import 'package:chatloom/personal/worker_readiness.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -146,18 +150,29 @@ void main() {
     WidgetTester tester, {
     Color? foreground,
     List<Event>? events,
+    double? width,
+    double textScale = 1,
   }) => tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: ListView(
-          children: [
-            for (final event in events ?? [voice])
-              TranscriptPanel(
-                event: event,
-                foregroundColor: foreground,
-                personalClient: personal,
+        body: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(textScale)),
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: width,
+              child: ListView(
+                children: [
+                  for (final event in events ?? [voice])
+                    TranscriptPanel(
+                      event: event,
+                      foregroundColor: foreground,
+                      personalClient: personal,
+                    ),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
       ),
     ),
@@ -254,9 +269,7 @@ void main() {
     expect(personal.requests, ['pl']);
   });
 
-  testWidgets('every busy step is the same quiet placeholder', (
-    tester,
-  ) async {
+  testWidgets('every busy step is the same quiet placeholder', (tester) async {
     for (final origin in TranscriptionOrigin.values) {
       for (final state in [
         JobState.waitingSync,
@@ -566,6 +579,186 @@ void main() {
     await tester.tap(find.text('Armenian'));
     await settle(tester);
     expect(personal.requests, ['hy']);
+  });
+
+  testWidgets('five transcript lines stay fully visible without a toggle', (
+    tester,
+  ) async {
+    final text = List.generate(5, (i) => 'Line ${i + 1}').join('\n');
+    personal.setJob(voice, JobState.done, text: text);
+    await pump(tester, width: 320);
+    final transcript = tester.widget<Text>(
+      find.byKey(const ValueKey('transcript-text')),
+    );
+    expect(transcript.maxLines, isNull);
+    expect(find.byKey(const ValueKey('transcript-expand')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('six transcript lines preview three and expand and collapse', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    final text = List.generate(6, (i) => 'Line ${i + 1}').join('\n');
+    personal.setJob(voice, JobState.done, text: text);
+    await pump(tester, width: 320);
+    final textFinder = find.byKey(const ValueKey('transcript-text'));
+    expect(tester.widget<Text>(textFinder).maxLines, 3);
+    expect(tester.widget<Text>(textFinder).overflow, TextOverflow.ellipsis);
+    final collapsedHeight = tester.getSize(textFinder).height;
+    expect(find.bySemanticsLabel('Show more'), findsOneWidget);
+    final button = find.byKey(const ValueKey('transcript-expand'));
+    expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
+    await tester.tap(button);
+    await settle(tester);
+    expect(tester.widget<Text>(textFinder).maxLines, isNull);
+    expect(tester.getSize(textFinder).height, greaterThan(collapsedHeight));
+    expect(find.bySemanticsLabel('Show less'), findsOneWidget);
+    await tester.tap(button);
+    await settle(tester);
+    expect(tester.widget<Text>(textFinder).maxLines, 3);
+    expect(tester.getSize(textFinder).height, collapsedHeight);
+    semantics.dispose();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('wrapped lines follow width and accessibility text scale', (
+    tester,
+  ) async {
+    const text =
+        'One two three four five six seven eight nine ten. '
+        'One two three four five six seven eight nine ten.';
+    personal.setJob(voice, JobState.done, text: text);
+    await pump(tester, width: 640);
+    expect(find.byKey(const ValueKey('transcript-expand')), findsNothing);
+    await pump(tester, width: 240, textScale: 2);
+    await settle(tester);
+    expect(find.text('Show more'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('transcript-text')))
+          .maxLines,
+      3,
+    );
+    await tester.tap(find.text('Show more'));
+    await settle(tester);
+    expect(find.text('Show less'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('copy keeps the full collapsed transcript', (tester) async {
+    final text = List.generate(8, (i) => 'Line ${i + 1}').join('\n');
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    personal.setJob(voice, JobState.done, text: text);
+    await pump(tester, width: 320);
+    await tester.tap(find.byKey(const ValueKey('transcript-menu')));
+    await settle(tester);
+    await tester.tap(find.text('Copy'));
+    await settle(tester);
+    expect(copied, text);
+  });
+
+  testWidgets('capture synthetic collapsed and expanded transcripts', (
+    tester,
+  ) async {
+    final output = Platform.environment['NOTION_CAPTURE_DIR'];
+    if (output == null) return;
+    await tester.runAsync(() async {
+      await (FontLoader(
+            'Roboto',
+          )..addFont(rootBundle.load('assets/notion/fonts/Roboto-Regular.ttf')))
+          .load();
+      await (FontLoader(
+        'MaterialIcons',
+      )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+    });
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final key = GlobalKey();
+    personal.setJob(
+      voice,
+      JobState.done,
+      language: 'pl',
+      text:
+          'To jest przykładowa transkrypcja wiadomości głosowej. '
+          'Spotkajmy się jutro po południu w kawiarni. '
+          'Przyniosę szkice projektu i omówimy wszystkie szczegóły. '
+          'Daj znać, która godzina będzie dla ciebie wygodna. '
+          'Jeśli pogoda dopisze, możemy też wybrać się na krótki spacer.',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: NotionTheme.build(Brightness.dark),
+        home: Scaffold(
+          body: Center(
+            child: RepaintBoundary(
+              key: key,
+              child: Container(
+                width: 320,
+                padding: const EdgeInsets.all(NotionSpace.md),
+                color: NotionTheme.build(Brightness.dark).colorScheme.surface,
+                child: TranscriptPanel(event: voice, personalClient: personal),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final state in ['collapsed', 'expanded']) {
+      final boundary =
+          key.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      await tester.runAsync(() async {
+        final image = await boundary.toImage(pixelRatio: 2);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        final file = File('$output/transcript-$state.png');
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      });
+      if (state == 'collapsed') {
+        await tester.tap(find.text('Show more'));
+        await tester.pumpAndSettle();
+      }
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a replacement transcript starts collapsed again', (
+    tester,
+  ) async {
+    final text = List.generate(6, (i) => 'Line ${i + 1}').join('\n');
+    personal.setJob(voice, JobState.done, text: text);
+    await pump(tester, width: 320);
+    await tester.tap(find.text('Show more'));
+    await settle(tester);
+    personal.setJob(voice, JobState.done, text: '$text\nAnother line');
+    await settle(tester);
+    expect(find.text('Show more'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('transcript-text')))
+          .maxLines,
+      3,
+    );
   });
 
   testWidgets('panels never reload the client and ignore unrelated changes', (
