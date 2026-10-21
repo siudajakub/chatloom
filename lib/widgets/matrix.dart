@@ -484,15 +484,18 @@ class MatrixState extends State<Matrix> {
     onUiaRequest[name] ??= c.onUiaRequest.stream.listen(uiaRequestHandler);
     if (!kIsWeb && c.isLogged()) {
       final personal = PersonalClient.of(c);
-      onPersonalReminder[name] ??= personal.changes.listen((_) {
-        for (final event in personal.dueReminderEvents) {
-          unawaited(showLocalNotification(event).catchError((Object _) {}));
-        }
-      });
+      if (PlatformInfos.supportsSystemNotifications) {
+        onPersonalReminder[name] ??= personal.changes.listen((_) {
+          for (final event in personal.dueReminderEvents) {
+            unawaited(showLocalNotification(event).catchError((Object _) {}));
+          }
+        });
+      }
       unawaited(personal.load());
     }
 
-    if (PlatformInfos.isWeb || PlatformInfos.isDesktop) {
+    if (PlatformInfos.supportsSystemNotifications &&
+        (PlatformInfos.isWeb || PlatformInfos.isDesktop)) {
       FlutterLocalNotificationsPlugin().initialize(
         settings: InitializationSettings(
           linux: LinuxInitializationSettings(

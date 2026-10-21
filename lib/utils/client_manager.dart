@@ -160,6 +160,7 @@ abstract class ClientManager {
       );
 
   static Future<void> sendInitNotification(String title, String body) async {
+    if (!PlatformInfos.supportsSystemNotifications) return;
     if (kIsWeb) {
       html.Notification(title, body: body);
       return;

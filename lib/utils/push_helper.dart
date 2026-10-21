@@ -854,6 +854,7 @@ Future<void> _clearReadNotifications(
 }
 
 void updateAppBadge(int unreadCount) {
+  if (!PlatformInfos.supportsSystemNotifications) return;
   if (PlatformInfos.isAndroid || PlatformInfos.isMacOS || PlatformInfos.isIOS) {
     // A launcher without badge support must not fail push handling.
     unawaited(

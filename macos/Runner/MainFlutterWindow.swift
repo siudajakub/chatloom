@@ -10,6 +10,10 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
+    title = "ChatLoom"
+    minSize = NSSize(width: 720, height: 520)
+    setFrameAutosaveName("ChatLoomMainWindow")
+
     super.awakeFromNib()
   }
 }

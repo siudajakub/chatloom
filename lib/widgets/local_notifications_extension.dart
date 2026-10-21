@@ -19,6 +19,7 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/chatloom_app.dart';
 import 'package:chatloom/widgets/incoming_call_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -34,6 +35,7 @@ extension LocalNotificationsExtension on MatrixState {
     ..load();
 
   Future<void> showLocalNotification(Event event) async {
+    if (!PlatformInfos.supportsSystemNotifications) return;
     if (isTelegramMediaControl(event.type)) return;
     if (PersonalPrivacy.isJournal(event.room)) {
       // Same presenter, claim and trust checks as the background paths.

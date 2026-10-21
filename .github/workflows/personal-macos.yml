@@ -1,0 +1,54 @@
+name: Personal macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/macos-client]
+    paths:
+      - '.github/workflows/personal-macos.yml'
+      - 'macos/**'
+      - 'lib/**'
+      - 'integration_test/macos_smoke_test.dart'
+      - 'scripts/build-personal-macos.py'
+      - 'pubspec.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.4'
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          flutter --version
+          df -h .
+      - name: Resolve pinned dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze application
+        run: flutter analyze lib --no-fatal-infos
+      - name: Account-free native storage and crypto smoke test
+        run: python3 scripts/build-personal-macos.py --smoke-test
+      - name: Build and verify release bundle
+        run: python3 scripts/build-personal-macos.py
+      - name: Upload app and verification manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatLoom-macos-${{ runner.arch }}-${{ github.sha }}
+          path: artifacts/macos/*
+          if-no-files-found: error
+          retention-days: 7

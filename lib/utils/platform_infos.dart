@@ -32,6 +32,9 @@ abstract class PlatformInfos {
 
   static bool get isDesktop => isLinux || isWindows || isMacOS;
 
+  /// The private macOS client intentionally runs without system notifications.
+  static bool get supportsSystemNotifications => !isMacOS;
+
   static bool get usesTouchscreen => !isMobile;
 
   static bool get supportsVideoPlayer =>
