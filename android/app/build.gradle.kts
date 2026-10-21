@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import java.nio.file.Files
 
 plugins {
     id("com.android.application")
@@ -7,8 +8,33 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-if (file("google-services.json").exists()) {
+val googleServicesFile = file("google-services.json")
+if (googleServicesFile.exists()) {
     apply(plugin = "com.google.gms.google-services")
+} else {
+    // Without the Firebase configuration the APK builds and starts, but FCM
+    // can never issue a token, so push notifications silently never work.
+    // A symlink to a missing file (a Mac path on the Linux devbox) counts as
+    // missing. Release builds stop here; pass -Pchatloom.allowNoFirebase=true
+    // only for a deliberate build without push.
+    val reason = if (Files.isSymbolicLink(googleServicesFile.toPath())) {
+        "android/app/google-services.json is a symlink to a missing file"
+    } else {
+        "android/app/google-services.json is missing"
+    }
+    val allowNoFirebase = project.findProperty("chatloom.allowNoFirebase")?.toString() == "true"
+    logger.warn("WARNING: $reason; this build cannot receive push notifications.")
+    tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+        doFirst {
+            if (!allowNoFirebase) {
+                throw GradleException(
+                    "$reason: a release APK without Firebase cannot receive push " +
+                        "notifications. Restore the private Firebase config (see " +
+                        "push-gateway/README.md) or pass -Pchatloom.allowNoFirebase=true.",
+                )
+            }
+        }
+    }
 }
 
 dependencies {

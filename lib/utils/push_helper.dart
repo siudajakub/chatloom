@@ -22,6 +22,7 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/private_avatar.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/personal/push_rule_check.dart';
 import 'package:chatloom/personal/reminder_notification.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
@@ -354,7 +355,10 @@ Future<PushOutcome> _tryPushHelper(
     return PushOutcome.seen;
   }
 
-  if (!client.pushruleEvaluator.match(event).notify) {
+  // The server already matched its rules; the phone re-checks the decrypted
+  // event with the server's member counts and never vetoes on rules it
+  // cannot evaluate (see push_rule_check.dart).
+  if (!personalPushRuleVerdict(client, event).allows) {
     Logs().i('Push helper: filtered by client-side push rules.');
     return PushOutcome.pushRules;
   }

@@ -718,6 +718,10 @@ class Gateway:
         priority = "high" if event and priority_hint == "high" else "normal"
         if authorized:
             trace.field("prio", priority)
+            # Normal-priority FCM waits for Doze maintenance windows and cannot
+            # start the phone's short foreground service: count how often the
+            # homeserver asks for it.
+            trace.count(f"prio.{priority}")
         return NotifyRequest(data, event, priority, authorized, rejected)
 
     def _publish(self, request: "NotifyRequest", db, trace):
@@ -911,6 +915,8 @@ def read_stats(state_directory: str | Path) -> dict:
         report["hints"].append("fcm_retries_seen")
     if total("notify.fcm.accepted"):
         report["hints"].append("fcm_accepted_check_phone_diagnostics")
+    if total("notify.prio.normal"):
+        report["hints"].append("normal_priority_pushes_may_wait_for_doze")
     return report
 
 

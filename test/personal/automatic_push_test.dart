@@ -4,9 +4,11 @@ import 'dart:convert';
 
 import 'package:chatloom/personal/automatic_push.dart';
 import 'package:chatloom/personal/push_registration.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:matrix/matrix.dart';
 
 void main() {
   const user = '@synthetic:matrix.beeper.com';
@@ -152,6 +154,88 @@ void main() {
       await expectLater(enroll(offline), throwsA(isA<http.ClientException>()));
     },
   );
+
+  test('setup failures become fixed, content-free reasons', () {
+    expect(
+      pushSetupFailureDetail(
+        PlatformException(code: 'fcm_unavailable', message: 'secret'),
+      ),
+      firebaseNotConfiguredDetail,
+    );
+    expect(
+      pushSetupFailureDetail(PlatformException(code: 'fcm_get_token_failed')),
+      'token_failed',
+    );
+    expect(
+      pushSetupFailureDetail(const PushEnrollmentFailure(forbidden: true)),
+      'forbidden',
+    );
+    expect(
+      pushSetupFailureDetail(const PushEnrollmentFailure(status: 503)),
+      'gateway_unavailable',
+    );
+    expect(
+      pushSetupFailureDetail(const PushEnrollmentFailure(status: 400)),
+      'http_400',
+    );
+    expect(
+      pushSetupFailureDetail(const PushEnrollmentFailure()),
+      'bad_response',
+    );
+    expect(pushSetupFailureDetail(TimeoutException('x')), 'timeout');
+    expect(
+      pushSetupFailureDetail(http.ClientException('host unreachable')),
+      'network',
+    );
+    expect(
+      pushSetupFailureDetail(
+        MatrixException.fromJson({'errcode': 'M_FORBIDDEN', 'error': 'x'}),
+      ),
+      'matrix_m_forbidden',
+    );
+    expect(pushSetupFailureDetail(StateError('secret')), 'error');
+  });
+
+  test('gateway responses carry their status into the failure', () async {
+    for (final status in [400, 403, 503]) {
+      final transport = MockClient((_) async => http.Response('{}', status));
+      addTearDown(transport.close);
+      await expectLater(
+        enroll(transport),
+        throwsA(
+          isA<PushEnrollmentFailure>()
+              .having((e) => e.status, 'status', status)
+              .having((e) => e.forbidden, 'forbidden', status == 403),
+        ),
+      );
+    }
+  });
+
+  test('the gateway probe is a plain GET and reads only the status', () async {
+    Future<PushGatewayProbe> probe(http.Response Function() reply) async {
+      final transport = MockClient((request) async {
+        expect(request.method, 'GET');
+        expect(request.body, isEmpty);
+        expect(request.headers.containsKey('authorization'), isFalse);
+        expect(request.url.toString(), personalPushGateway);
+        return reply();
+      });
+      addTearDown(transport.close);
+      return probePushGateway(transport, personalPushGateway);
+    }
+
+    expect(
+      (await probe(() => http.Response('', 405))).reachability,
+      PushGatewayReachability.online,
+    );
+    final missing = await probe(() => http.Response('', 404));
+    expect(missing.reachability, PushGatewayReachability.unexpected);
+    expect(missing.status, 404);
+    expect(
+      (await probe(() => throw http.ClientException('offline'))).reachability,
+      PushGatewayReachability.unreachable,
+    );
+  });
 
   test('authorization failure has safe actionable state', () async {
     final transport = MockClient((_) async => http.Response('{}', 403));

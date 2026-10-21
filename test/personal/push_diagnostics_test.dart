@@ -83,13 +83,86 @@ void main() {
     expect(text, isNot(contains('!')));
   });
 
-  test('reset clears everything', () async {
-    await PushDiagnostics.record(PushKind.reminder, PushOutcome.reminderShown);
-    await PushDiagnostics.reset();
-    final snapshot = await PushDiagnostics.read();
-    expect(snapshot.counters, isEmpty);
-    expect(snapshot.recent, isEmpty);
-    expect(snapshot.last, isNull);
+  test(
+    'reset clears counters and outcomes but keeps the setup steps',
+    () async {
+      await PushDiagnostics.record(
+        PushKind.reminder,
+        PushOutcome.reminderShown,
+      );
+      await PushDiagnostics.setup(PushSetupStep.pusher, ok: true);
+      await PushDiagnostics.reset();
+      var snapshot = await PushDiagnostics.read();
+      expect(snapshot.counters, isEmpty);
+      expect(snapshot.recent, isEmpty);
+      expect(snapshot.last, isNull);
+      expect(snapshot.setup[PushSetupStep.pusher]?.ok, isTrue);
+      await PushDiagnostics.clear();
+      snapshot = await PushDiagnostics.read();
+      expect(snapshot.setup, isEmpty);
+    },
+  );
+
+  test(
+    'setup steps keep the latest attempt with a content-free reason',
+    () async {
+      final at = DateTime.utc(2026, 10, 21, 8);
+      await PushDiagnostics.setup(
+        PushSetupStep.token,
+        ok: false,
+        detail: 'firebase_not_configured',
+        now: at,
+      );
+      await PushDiagnostics.setup(
+        PushSetupStep.gateway,
+        ok: false,
+        detail: 'http_503',
+        now: at,
+      );
+      // Anything that is not a fixed lowercase word is dropped.
+      await PushDiagnostics.setup(
+        PushSetupStep.pusher,
+        ok: false,
+        detail: 'M_FORBIDDEN @user:server',
+        now: at,
+      );
+      final snapshot = await PushDiagnostics.read();
+      expect(
+        snapshot.setup[PushSetupStep.token]!.detail,
+        'firebase_not_configured',
+      );
+      expect(snapshot.setup[PushSetupStep.token]!.at, at);
+      expect(snapshot.setup[PushSetupStep.gateway]!.detail, 'http_503');
+      expect(snapshot.setup[PushSetupStep.pusher]!.ok, isFalse);
+      expect(snapshot.setup[PushSetupStep.pusher]!.detail, isNull);
+      final raw = (await SharedPreferences.getInstance()).getString(
+        PushDiagnostics.storageKey,
+      )!;
+      expect(raw, isNot(contains('@user')));
+      final text = PushDiagnostics.describe(snapshot);
+      expect(text, contains('Setup token: failed (firebase_not_configured)'));
+      expect(text, contains('Setup gateway: failed (http_503)'));
+      await PushDiagnostics.setup(PushSetupStep.token, ok: true, now: at);
+      expect(
+        PushDiagnostics.describe(await PushDiagnostics.read()),
+        contains('Setup token: ok at'),
+      );
+    },
+  );
+
+  test('setup reasons have readable labels', () {
+    expect(
+      pushSetupDetailLabel('firebase_not_configured'),
+      contains('google-services.json'),
+    );
+    expect(pushSetupDetailLabel('http_503'), 'The gateway answered HTTP 503');
+    expect(
+      pushSetupDetailLabel('matrix_m_forbidden'),
+      'The homeserver refused (M_FORBIDDEN)',
+    );
+    expect(pushSetupDetailLabel('forbidden'), contains('authorize'));
+    expect(pushSetupDetailLabel('something_new'), 'Failed');
+    expect(pushSetupDetailLabel(null), 'Failed');
   });
 
   test('corrupt or unavailable storage never throws', () async {

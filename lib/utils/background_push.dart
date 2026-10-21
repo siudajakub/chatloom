@@ -43,6 +43,23 @@ import 'push_registration_retry.dart';
 import 'start_push_foreground_service.dart';
 
 class BackgroundPush {
+  /// Method channel of `fcm_shared_isolate` (Kotlin and Dart side).
+  static const fcmChannel = 'fcm_shared_isolate';
+
+  /// Keeps every FCM message that arrives before the push listener exists.
+  ///
+  /// A push that starts the app cold reaches Dart long before startup has
+  /// opened the encrypted store and created [BackgroundPush]. Until then
+  /// Flutter buffers platform messages per channel, by default only one: a
+  /// second message (another chat writing during start-up) silently replaced
+  /// the first. Called first thing in `main`, before any await; needs no
+  /// binding.
+  static void bufferEarlyMessages() {
+    try {
+      channelBuffers.resize(fcmChannel, 64);
+    } catch (_) {}
+  }
+
   static BackgroundPush? _instance;
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -80,12 +97,76 @@ class BackgroundPush {
   Future<void> _tokenPersistence = Future<void>.value();
   late final PushRegistrationRetry<Client> _registrationRetry;
 
-  void setRegistrationForeground(bool foreground) =>
-      _registrationRetry.setForeground(foreground);
+  void setRegistrationForeground(bool foreground) {
+    _registrationRetry.setForeground(foreground);
+    if (foreground) _recoverOnResume();
+  }
+
   int get registrationRevision => _registration.revision;
+
+  /// Last time [_recoverOnResume] started a fresh series.
+  DateTime? _lastResumeRecovery;
+
+  /// How long a failed setup waits before returning to the app retries it.
+  static const resumeRecoveryInterval = Duration(minutes: 30);
+
+  /// The bounded retries stop after five attempts (about 13 minutes). A
+  /// gateway or network outage can outlast them, and the app may then stay
+  /// in memory for days without another start. Coming back to the app after
+  /// that starts a fresh series, at most every [resumeRecoveryInterval]; it
+  /// never shows a permission dialog. A build without Firebase is not
+  /// retried: no attempt can succeed.
+  void _recoverOnResume() {
+    if (!firebaseEnabled ||
+        upAction ||
+        _registration.updating ||
+        !usesAutomaticPush(AppSettings.pushNotificationsGatewayUrl.value)) {
+      return;
+    }
+    final now = DateTime.now();
+    final last = _lastResumeRecovery;
+    if (last != null && now.difference(last) < resumeRecoveryInterval) return;
+    for (final client in List<Client>.from(clients)) {
+      if (!client.isLogged()) continue;
+      final phase = registrationPhase(client);
+      if (phase != PushRegistrationPhase.failed &&
+          phase != PushRegistrationPhase.tokenUnavailable) {
+        continue;
+      }
+      _lastResumeRecovery = now;
+      _registrationRetry.forget(client);
+      unawaited(setupFirebase(client, quiet: true));
+    }
+  }
 
   String? get _fcmToken => _registration.token;
   String? get fcmToken => _fcmToken;
+
+  /// Why the last token request failed (a [pushSetupFailureDetail] word), or
+  /// null once a token was received in this process.
+  String? tokenFailure;
+
+  /// Whether this build can talk to Firebase at all; false when the APK was
+  /// built without `google-services.json`. Null until a token was requested.
+  bool? get firebaseConfigured => _fcmToken != null
+      ? true
+      : tokenFailure == null
+      ? null
+      : tokenFailure != firebaseNotConfiguredDetail;
+
+  /// Pause between two token requests of one setup.
+  @visibleForTesting
+  static Duration tokenRetryDelay = const Duration(seconds: 1);
+
+  /// The notify URL the account's pusher should point at.
+  String get gatewayUrl {
+    final configured = AppSettings.pushNotificationsGatewayUrl.value;
+    return usesAutomaticPush(configured) ? personalPushGateway : configured;
+  }
+
+  /// Whether the next pusher update is posted even when an identical pusher
+  /// is listed (one-tap re-register).
+  bool _forcePusherPost = false;
   String registrationDescription(Client client) {
     final view = PushRegistration()
       ..phase = _pusherPhases[client] ?? _registration.phase;
@@ -266,12 +347,22 @@ class BackgroundPush {
         onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
       );
       Logs().v('Flutter Local Notifications initialized');
+    } catch (e, s) {
+      Logs().e('Unable to initialize Flutter local notifications', e, s);
+    }
+    // Independent of the step above: a failed notification setup must not
+    // leave FCM messages and token updates without a listener forever.
+    try {
       if (firebaseEnabled) {
         firebase.setListeners(
           onMessage: handleFcmMessage,
           onNewToken: (token) => unawaited(_onNewFcmToken(token)),
         );
       }
+    } catch (_) {
+      Logs().w('[Push] fcm_listener_failed');
+    }
+    try {
       if (Platform.isAndroid) {
         await UnifiedPush.initialize(
           onNewEndpoint: _newUpEndpoint,
@@ -280,14 +371,17 @@ class BackgroundPush {
           onMessage: _onUpMessage,
         );
       }
-    } catch (e, s) {
-      Logs().e('Unable to initialize Flutter local notifications', e, s);
+    } catch (_) {
+      Logs().w('[Push] unifiedpush_init_failed');
     }
   }
 
   BackgroundPush._(this._clients) {
     _registrationRetry = PushRegistrationRetry<Client>(
-      retry: _queueFirebaseRegistration,
+      // Without a token there is nothing to register yet: fetch it again.
+      retry: (client) => _fcmToken == null
+          ? setupFirebase(client, quiet: true)
+          : _queueFirebaseRegistration(client),
       eligible: (client) =>
           clients.contains(client) &&
           client.isLogged() &&
@@ -410,6 +504,9 @@ class BackgroundPush {
       _pusherPhases[client] = PushRegistrationPhase.registering;
       _changed();
     }
+    // Which step a failure belongs to, for the diagnostics page.
+    var step = PushSetupStep.pusher;
+    final force = ownFcmGateway && _forcePusherPost;
     try {
       final completed = await registerCurrentPush(
         current: current,
@@ -443,6 +540,7 @@ class BackgroundPush {
             }
             if (!current()) return;
             final transport = http.Client();
+            step = PushSetupStep.gateway;
             try {
               final enrolled = await enrollAutomaticPush(
                 transport: transport,
@@ -455,9 +553,17 @@ class BackgroundPush {
                 current: current,
               );
               if (!enrolled) return;
+              unawaited(
+                PushDiagnostics.setup(
+                  PushSetupStep.gateway,
+                  ok: true,
+                  detail: 'registered',
+                ),
+              );
             } finally {
               transport.close();
             }
+            step = PushSetupStep.pusher;
           }
           if (ownFcmGateway && !validGatewayNonce(nonce)) {
             throw StateError('Private gateway registration required');
@@ -481,22 +587,24 @@ class BackgroundPush {
             ),
             kind: 'http',
           );
-          alreadySet = pushers.any(
-            (p) =>
-                p.pushkey == token &&
-                p.appId == thisAppId &&
-                p.kind == 'http' &&
-                p.appDisplayName == appDisplayName &&
-                p.deviceDisplayName == desired!.deviceDisplayName &&
-                p.lang == 'en' &&
-                p.data.url.toString() == gatewayUrl &&
-                p.data.format == desired!.data.format &&
-                p.data.additionalProperties['client_name'] ==
-                    client.clientName &&
-                p.data.additionalProperties['data_message'] ==
-                    pusherDataMessageFormat &&
-                p.data.additionalProperties['gateway_nonce'] == nonce,
-          );
+          alreadySet =
+              !force &&
+              pushers.any(
+                (p) =>
+                    p.pushkey == token &&
+                    p.appId == thisAppId &&
+                    p.kind == 'http' &&
+                    p.appDisplayName == appDisplayName &&
+                    p.deviceDisplayName == desired!.deviceDisplayName &&
+                    p.lang == 'en' &&
+                    p.data.url.toString() == gatewayUrl &&
+                    p.data.format == desired!.data.format &&
+                    p.data.additionalProperties['client_name'] ==
+                        client.clientName &&
+                    p.data.additionalProperties['data_message'] ==
+                        pusherDataMessageFormat &&
+                    p.data.additionalProperties['gateway_nonce'] == nonce,
+              );
         },
         post: () async {
           if (!alreadySet) await client.postPusher(desired!, append: true);
@@ -516,9 +624,40 @@ class BackgroundPush {
             if (!current()) return;
             await client.deletePusher(old);
           }
+          // A token belongs to this one install. The same token under an
+          // older ChatLoom app id is a session of this phone that was signed
+          // out without its pusher being removed. The gateway moved the
+          // token to the new app id and rejects the old one; a homeserver
+          // that removes pushers by token on rejection could then remove
+          // the current pusher too. Remove the stale one first.
+          if (!ownFcmGateway) return;
+          for (final stale in pushers.where(
+            (p) =>
+                p.pushkey == token &&
+                p.appId != thisAppId &&
+                p.appId.startsWith('${AppConfig.pushNotificationsAppId}.') &&
+                p.kind == 'http' &&
+                p.data.url.toString() == gatewayUrl,
+          )) {
+            if (!current()) return;
+            try {
+              await client.deletePusher(stale);
+            } catch (_) {
+              // Best effort: the current pusher is already saved.
+              Logs().w('[Push] stale_pusher_cleanup_failed');
+            }
+          }
         },
       );
       if (completed && ownFcmGateway && current()) {
+        if (force) _forcePusherPost = false;
+        unawaited(
+          PushDiagnostics.setup(
+            PushSetupStep.pusher,
+            ok: true,
+            detail: alreadySet ? 'already_set' : 'posted',
+          ),
+        );
         _registrationRetry.forget(client);
         _pusherPhases[client] = !permissionGranted
             ? PushRegistrationPhase.permissionRequired
@@ -529,6 +668,13 @@ class BackgroundPush {
       }
     } catch (error) {
       if (current() && ownFcmGateway) {
+        unawaited(
+          PushDiagnostics.setup(
+            step,
+            ok: false,
+            detail: pushSetupFailureDetail(error),
+          ),
+        );
         _pusherPhases[client] =
             error is PushEnrollmentFailure && error.forbidden
             ? PushRegistrationPhase.notAuthorized
@@ -630,10 +776,7 @@ class BackgroundPush {
     final pusher =
         pushers.firstWhereOrNull((p) => p.pushkey == token) ??
         pushers.firstOrNull;
-    final configured = AppSettings.pushNotificationsGatewayUrl.value;
-    final gateway = usesAutomaticPush(configured)
-        ? personalPushGateway
-        : configured;
+    final gateway = gatewayUrl;
     String? nonce;
     try {
       nonce = await const FlutterSecureStorage().read(
@@ -644,6 +787,7 @@ class BackgroundPush {
     }
     return PushPusherCheck(
       exists: pusher != null,
+      tokenKnown: token != null,
       tokenMatches: pusher != null && token != null && pusher.pushkey == token,
       urlMatches: pusher != null && pusher.data.url.toString() == gateway,
       formatEventIdOnly: pusher?.data.format == 'event_id_only',
@@ -652,6 +796,17 @@ class BackgroundPush {
           nonce != null &&
           pusher.data.additionalProperties['gateway_nonce'] == nonce,
     );
+  }
+
+  /// Plain GET of the gateway's notify URL from this phone (see
+  /// [probePushGateway]); sends no token, key or account.
+  Future<PushGatewayProbe> probeGateway() async {
+    final transport = http.Client();
+    try {
+      return await probePushGateway(transport, gatewayUrl);
+    } finally {
+      transport.close();
+    }
   }
 
   final pusherDataMessageFormat = Platform.isAndroid;
@@ -724,7 +879,9 @@ class BackgroundPush {
     });
   }
 
-  Future<void> setupFirebase(Client client) async {
+  /// Fetches the FCM token and registers it. [quiet] (automatic retries)
+  /// never shows the "no Google services" dialog again.
+  Future<void> setupFirebase(Client client, {bool quiet = false}) async {
     Logs().v('Setup firebase');
     if (!firebaseEnabled) {
       await _noFcmWarning();
@@ -734,23 +891,55 @@ class BackgroundPush {
     // while this isolate was stopped. A newer callback wins over this read.
     try {
       if (PlatformInfos.isIOS) await firebase.requestPermission();
+      Object? failure;
       for (var i = 0; i < 5; i++) {
         final revision = _registration.revision;
-        final token = await firebase.getToken();
-        if (revision == _registration.revision &&
-            token != null &&
-            token.isNotEmpty) {
-          await _acceptFcmToken(token);
+        try {
+          final token = await firebase.getToken().timeout(
+            const Duration(seconds: 20),
+          );
+          failure = null;
+          if (revision == _registration.revision &&
+              token != null &&
+              token.isNotEmpty) {
+            await _acceptFcmToken(token);
+          }
+        } catch (error) {
+          // Each attempt fails on its own: Play services may still be
+          // starting. A build without Firebase can never get a token.
+          failure = error;
+          if (pushSetupFailureDetail(error) == firebaseNotConfiguredDetail) {
+            break;
+          }
         }
         if (_fcmToken != null) break;
-        await Future<void>.delayed(const Duration(seconds: 1));
+        await Future<void>.delayed(tokenRetryDelay);
       }
       if (_fcmToken == null) {
-        _registration.phase = PushRegistrationPhase.tokenUnavailable;
+        final detail = failure == null
+            ? 'token_unavailable'
+            : pushSetupFailureDetail(failure);
+        tokenFailure = detail;
+        _pusherPhases.remove(client);
+        final noFirebase = detail == firebaseNotConfiguredDetail;
+        _registration.phase = noFirebase
+            ? PushRegistrationPhase.firebaseUnavailable
+            : PushRegistrationPhase.tokenUnavailable;
         _changed();
-        await _noFcmWarning();
+        Logs().w('[Push] token_unavailable', detail);
+        unawaited(
+          PushDiagnostics.setup(PushSetupStep.token, ok: false, detail: detail),
+        );
+        if (noFirebase) return;
+        if (usesAutomaticPush(AppSettings.pushNotificationsGatewayUrl.value)) {
+          // Try again later in the foreground (bounded), not only on restart.
+          _registrationRetry.failed(client);
+        }
+        if (!quiet) await _noFcmWarning();
         return;
       }
+      tokenFailure = null;
+      unawaited(PushDiagnostics.setup(PushSetupStep.token, ok: true));
       await _tokenPersistence;
       await _queueFirebaseRegistration(client);
     } catch (_) {
@@ -758,6 +947,18 @@ class BackgroundPush {
       _pusherPhases[client] = PushRegistrationPhase.failed;
       _changed();
     }
+  }
+
+  /// One-tap repair from the diagnostics page: a fresh registration series
+  /// (token, gateway, pusher) that also re-posts the account's pusher. It is
+  /// a visible action, so Android may ask for the notification permission.
+  Future<void> reregister(BuildContext context) async {
+    _lastResumeRecovery = null;
+    beginRegistrationUpdate();
+    endRegistrationUpdate();
+    _forcePusherPost = true;
+    if (!context.mounted) return;
+    await setupPush(context);
   }
 
   Future<void> _newUpEndpoint(PushEndpoint newPushEndpoint, String i) async {
@@ -886,20 +1087,27 @@ Future<Room?> testNotificationRoom(Client client) async {
 
 class PushPusherCheck {
   final bool exists;
+
+  /// Whether this process knows its FCM token; without it [tokenMatches]
+  /// cannot be decided.
+  final bool tokenKnown;
   final bool tokenMatches;
   final bool urlMatches;
   final bool formatEventIdOnly;
   final bool nonceMatches;
   const PushPusherCheck({
     required this.exists,
+    this.tokenKnown = true,
     required this.tokenMatches,
     required this.urlMatches,
     required this.formatEventIdOnly,
     required this.nonceMatches,
   });
 
-  bool get healthy =>
-      exists && tokenMatches && urlMatches && formatEventIdOnly && nonceMatches;
+  /// Everything the gateway needs: the pusher exists, carries this phone's
+  /// token, points at the gateway and has the gateway key. The format is not
+  /// required: Beeper's homeserver drops it and the gateway accepts that.
+  bool get healthy => exists && tokenMatches && urlMatches && nonceMatches;
 }
 
 class UPFunctions extends UnifiedPushFunctions {

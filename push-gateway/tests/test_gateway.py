@@ -386,6 +386,11 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(stats["notify.fcm.accepted"], 2)
             self.assertEqual(stats["notify.fcm.dedup"], 1)
             self.assertEqual(stats["notify.kind.counts"], 1)
+            # Event pushes keep the homeserver's high priority; count-only
+            # pushes are normal priority.
+            self.assertEqual(stats["notify.prio.high"], 3)
+            self.assertEqual(stats["notify.prio.normal"], 1)
+            self.assertIn("normal_priority_pushes_may_wait_for_doze", report["hints"])
             self.assertEqual(report["tables"], {"registrations":0,"invalid":0,"accepted":1})
             self.assertIn("fcm_accepted_check_phone_diagnostics", report["hints"])
             self.assertIn("fcm_retries_seen", report["hints"])

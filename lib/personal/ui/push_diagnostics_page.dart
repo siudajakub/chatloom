@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/automatic_push.dart';
 import 'package:chatloom/personal/message_notification.dart';
+import 'package:chatloom/personal/push_delivery_stages.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/personal/push_registration.dart';
+import 'package:chatloom/personal/push_rule_check.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/background_push.dart';
@@ -11,6 +16,7 @@ import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -78,11 +84,18 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
   _DeviceChecks _device = const _DeviceChecks();
   PushDiagnosticsSnapshot _snapshot = PushDiagnosticsSnapshot.empty;
   PushPusherCheck? _pusher;
+  PushGatewayProbe? _probe;
+  AccountPushRulesSummary _rules = AccountPushRulesSummary.notLoaded;
   bool _pusherFailed = false;
   bool _testing = false;
+  bool _reregistering = false;
   bool _loaded = false;
+  bool _refreshing = false;
+  bool _refreshAgain = false;
   String? _testResult;
+  String? _reregisterResult;
   Client? _client;
+  BackgroundPush? _push;
 
   @override
   void initState() {
@@ -93,7 +106,14 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final client = Matrix.of(context).client;
+    final matrix = Matrix.of(context);
+    final push = matrix.backgroundPush;
+    if (!identical(push, _push)) {
+      _push?.registrationChanges.removeListener(_registrationChanged);
+      _push = push;
+      push?.registrationChanges.addListener(_registrationChanged);
+    }
+    final client = matrix.client;
     if (!identical(client, _client)) {
       _client = client;
       unawaited(_refresh());
@@ -102,6 +122,7 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
 
   @override
   void dispose() {
+    _push?.registrationChanges.removeListener(_registrationChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -112,28 +133,66 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
     if (state == AppLifecycleState.resumed) unawaited(_refresh());
   }
 
+  /// A registration step finished somewhere (also outside this page).
+  void _registrationChanged() {
+    if (mounted && !_reregistering) unawaited(_refresh());
+  }
+
+  /// One refresh at a time; a request while one runs schedules one more.
   Future<void> _refresh() async {
+    if (_refreshing) {
+      _refreshAgain = true;
+      return;
+    }
+    _refreshing = true;
+    try {
+      do {
+        _refreshAgain = false;
+        await _load();
+      } while (_refreshAgain && mounted);
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  /// The account's pushers, or a failed read; never throws.
+  static Future<(PushPusherCheck?, bool)> _checkPusher(
+    BackgroundPush? push,
+    Client? client,
+  ) async {
+    if (push == null || client == null) return (null, false);
+    try {
+      return (
+        await push.checkPusher(client).timeout(const Duration(seconds: 10)),
+        false,
+      );
+    } catch (_) {
+      return (null, true);
+    }
+  }
+
+  Future<void> _load() async {
     final client = _client;
-    final push = Matrix.of(context).backgroundPush;
+    final push = _push;
+    // Network checks run while the local ones are read.
+    final pusherCheck = _checkPusher(push, client);
+    final probe = push != null && PlatformInfos.isAndroid
+        ? push.probeGateway()
+        : Future<PushGatewayProbe?>.value();
     final snapshot = await PushDiagnostics.read();
     final device = await _deviceChecks();
-    PushPusherCheck? pusher;
-    var pusherFailed = false;
-    if (push != null && client != null) {
-      try {
-        pusher = await push
-            .checkPusher(client)
-            .timeout(const Duration(seconds: 10));
-      } catch (_) {
-        pusherFailed = true;
-      }
-    }
+    final (pusher, pusherFailed) = await pusherCheck;
+    final reach = await probe;
     if (!mounted || !identical(client, _client)) return;
     setState(() {
       _snapshot = snapshot;
       _device = device;
       _pusher = pusher;
       _pusherFailed = pusherFailed;
+      _probe = reach;
+      _rules = client == null
+          ? AccountPushRulesSummary.notLoaded
+          : AccountPushRulesSummary.of(client);
       _loaded = true;
     });
   }
@@ -172,12 +231,58 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
     );
   }
 
-  Map<String, String> _checks() {
-    final push = Matrix.of(context).backgroundPush;
+  PushStageFacts _facts() {
+    final push = _push;
     final client = _client;
     final pusher = _pusher;
+    final tokenRecord = _snapshot.setup[PushSetupStep.token];
+    // A failure remembered from an earlier process counts until this
+    // process has asked Firebase itself.
+    final tokenFailure =
+        push?.tokenFailure ??
+        (push?.fcmToken == null && tokenRecord != null && !tokenRecord.ok
+            ? tokenRecord.detail
+            : null);
+    return PushStageFacts(
+      firebase: push != null && push.firebaseEnabled && !push.upAction,
+      automatic: usesAutomaticPush(
+        AppSettings.pushNotificationsGatewayUrl.value,
+      ),
+      firebaseConfigured:
+          push?.firebaseConfigured ??
+          (tokenFailure == firebaseNotConfiguredDetail ? false : null),
+      tokenFailure: tokenFailure,
+      tokenPresent: push?.fcmToken != null,
+      permission: _device.permission,
+      messagesChannel: _device.messagesChannel,
+      phase: push == null || client == null
+          ? PushRegistrationPhase.unknown
+          : push.registrationPhase(client),
+      probe: _probe,
+      pusherChecked: pusher != null,
+      pusherCheckFailed: _pusherFailed,
+      pusherExists: pusher?.exists ?? false,
+      pusherTokenKnown: pusher?.tokenKnown ?? false,
+      pusherTokenMatches: pusher?.tokenMatches ?? false,
+      pusherUrlMatches: pusher?.urlMatches ?? false,
+      pusherNonceMatches: pusher?.nonceMatches ?? false,
+      snapshot: _snapshot,
+    );
+  }
+
+  List<PushStage> _stages() => pushDeliveryStages(_facts(), time: _time);
+
+  Map<String, String> _checks() {
+    final push = _push;
+    final client = _client;
+    final pusher = _pusher;
+    final stages = _stages();
+    final rules = _rules;
     return {
       'Platform': PlatformInfos.isAndroid ? 'Android' : 'Not Android',
+      for (var i = 0; i < stages.length; i++)
+        'Step ${i + 1} ${stages[i].title}':
+            '${pushStageStateLabel(stages[i].state)}: ${stages[i].detail}',
       'Notifications allowed': yesNo(_device.permission),
       'Messages channel': _device.messagesChannel,
       'Reminders channel': _device.remindersChannel,
@@ -191,18 +296,40 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
       ),
       if (push != null && client != null)
         'Registration': push.registrationDescription(client),
+      'Gateway reachable from phone': switch (_probe?.reachability) {
+        PushGatewayReachability.online => 'Yes',
+        PushGatewayReachability.unexpected =>
+          'Unexpected HTTP ${_probe!.status}',
+        PushGatewayReachability.unreachable => 'No',
+        null => 'Unknown',
+      },
       'Pusher registered': _pusherFailed ? 'Unknown' : yesNo(pusher?.exists),
       if (pusher != null) ...{
-        'Pusher uses this device': yesNo(pusher.tokenMatches),
+        'Pusher uses this device': pusher.tokenKnown
+            ? yesNo(pusher.tokenMatches)
+            : 'Unknown',
         'Pusher gateway address matches': yesNo(pusher.urlMatches),
         'Pusher format is event_id_only': yesNo(pusher.formatEventIdOnly),
         'Pusher gateway key matches': yesNo(pusher.nonceMatches),
+      },
+      'Account rules synced': yesNo(rules.loaded),
+      if (rules.loaded) ...{
+        'Account Do Not Disturb': rules.doNotDisturb ? 'On' : 'Off',
+        'Account rule direct chats': accountRuleStateLabel(rules.oneToOne),
+        'Account rule group chats': accountRuleStateLabel(rules.groups),
+        'Account rule encrypted direct chats': accountRuleStateLabel(
+          rules.encryptedOneToOne,
+        ),
+        'Account rule encrypted groups': accountRuleStateLabel(
+          rules.encryptedGroups,
+        ),
+        'Account rules with unknown conditions': yesNo(rules.unknownConditions),
       },
     };
   }
 
   Future<void> _sendTest() async {
-    final push = Matrix.of(context).backgroundPush;
+    final push = _push;
     final client = _client;
     if (push == null || client == null || _testing) return;
     setState(() {
@@ -224,6 +351,28 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
     setState(() {
       _testing = false;
       _testResult = result;
+    });
+    await _refresh();
+  }
+
+  /// Token, gateway registration and account pusher again, in one tap.
+  Future<void> _reregister() async {
+    final push = _push;
+    final client = _client;
+    if (push == null || client == null || _reregistering) return;
+    setState(() {
+      _reregistering = true;
+      _reregisterResult = null;
+    });
+    try {
+      await push.reregister(context).timeout(const Duration(seconds: 90));
+    } catch (_) {
+      // The steps below show where it stopped.
+    }
+    if (!mounted) return;
+    setState(() {
+      _reregistering = false;
+      _reregisterResult = push.registrationDescription(client);
     });
     await _refresh();
   }
@@ -284,27 +433,19 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
   }
 
   /// Failing checks in display order; the first one names the verdict.
-  List<String?> _problems(BackgroundPush? push) {
-    final pusher = _pusher;
-    return [
-      if (_device.permission == false) 'Notifications are not allowed',
-      if (channelStateIsProblem(_device.messagesChannel))
-        'Messages channel is ${_device.messagesChannel.toLowerCase()}',
-      if (channelStateIsProblem(_device.remindersChannel))
-        'Reminders channel is ${_device.remindersChannel.toLowerCase()}',
-      if (_device.batteryUnrestricted == false)
-        'Battery optimization is restricted',
-      if (push != null && push.fcmToken == null) 'No Firebase token',
-      if (!_pusherFailed && pusher != null && !pusher.exists)
-        'Pusher is not registered',
-      if (pusher != null && pusher.exists) ...[
-        if (pusher.tokenMatches == false) 'Pusher does not use this device',
-        if (pusher.urlMatches == false) 'Gateway address does not match',
-        if (pusher.formatEventIdOnly == false) 'Pusher format is wrong',
-        if (pusher.nonceMatches == false) 'Gateway key does not match',
-      ],
-    ];
-  }
+  List<String?> _problems(List<PushStage> stages) => [
+    ...stageProblems(stages),
+    if (channelStateIsProblem(_device.remindersChannel))
+      'Reminders channel is ${_device.remindersChannel.toLowerCase()}',
+    if (_rules.loaded && _rules.doNotDisturb) 'Account Do Not Disturb is on',
+    if (_rules.loaded && _ruleSilent(_rules.oneToOne))
+      'Account rules silence direct chats',
+    if (_device.batteryUnrestricted == false)
+      'Battery optimization is restricted',
+  ];
+
+  static bool _ruleSilent(AccountRuleState state) =>
+      state == AccountRuleState.off || state == AccountRuleState.silent;
 
   Widget _channelRow(String title, String state) {
     final problem = channelStateIsProblem(state);
@@ -324,13 +465,54 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
         '${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(local), alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context))}';
   }
 
+  Widget _stageRow(int index, PushStage stage, {VoidCallback? onTap}) {
+    final colors = context.notion.colors;
+    final (icon, color) = switch (stage.state) {
+      PushStageState.ok => (Icons.check_circle_outline, colors.success),
+      PushStageState.problem => (Icons.error_outline, colors.danger),
+      PushStageState.waiting => (Icons.schedule, colors.textSecondary),
+      PushStageState.unknown => (Icons.help_outline, colors.textTertiary),
+    };
+    return NotionListRow(
+      key: ValueKey(('push-stage', index)),
+      leading: NotionFadeThrough(
+        child: Icon(
+          icon,
+          key: ValueKey((index, stage.state)),
+          size: NotionSize.icon,
+          color: color,
+        ),
+      ),
+      title: '${index + 1}. ${stage.title}',
+      subtitle: stage.detail,
+      trailing: _value(
+        context,
+        pushStageStateLabel(stage.state),
+        problem: stage.problem,
+      ),
+      onTap: onTap,
+    );
+  }
+
+  Widget _ruleRow(String title, AccountRuleState state, {bool alert = false}) =>
+      NotionListRow(
+        title: title,
+        trailing: _value(
+          context,
+          accountRuleStateLabel(state),
+          problem: alert && _ruleSilent(state),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
-    final push = Matrix.of(context).backgroundPush;
+    final push = _push;
     final client = _client ?? Matrix.of(context).client;
     final pusher = _pusher;
     final snapshot = _snapshot;
     final last = snapshot.last;
+    final stages = _stages();
+    final rules = _rules;
     final failures =
         snapshot.count(PushOutcome.timeout) +
         snapshot.count(PushOutcome.fetchFailed) +
@@ -347,6 +529,7 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
       PushOutcome.ignored,
     ].fold<int>(0, (sum, outcome) => sum + snapshot.count(outcome));
     final typography = context.notion.typography;
+    final android = PlatformInfos.isAndroid;
     return NotionSettingsScaffold(
       title: 'Notification diagnostics',
       child: Column(
@@ -358,11 +541,11 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
             'identifiers are shown or copied.',
             style: typography.footnoteMuted,
           ),
-          if (PlatformInfos.isAndroid)
+          if (android)
             Builder(
               builder: (context) {
                 final verdict = _loaded
-                    ? pushDiagnosticsVerdict(_problems(push))
+                    ? pushDiagnosticsVerdict(_problems(stages))
                     : 'Checking this device…';
                 final problem = verdict.startsWith('Problem:');
                 return NotionFadeThrough(
@@ -380,13 +563,67 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
                 );
               },
             ),
+          if (android) ...[
+            const NotionSectionHeader(title: 'Delivery path'),
+            for (var i = 0; i < stages.length; i++)
+              _stageRow(
+                i,
+                stages[i],
+                onTap: i == 1 ? _openSystemNotificationSettings : null,
+              ),
+            NotionSizeReveal(
+              visible: _reregisterResult != null,
+              child: NotionListRow(
+                title: 'Re-register result',
+                subtitle: _reregisterResult,
+              ),
+            ),
+            NotionSizeReveal(
+              visible: _testResult != null,
+              child: NotionListRow(title: 'Test result', subtitle: _testResult),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: NotionSpace.xs),
+              child: Wrap(
+                spacing: NotionSpace.xs,
+                runSpacing: NotionSpace.xs,
+                children: [
+                  NotionButton.primary(
+                    label: 'Re-register this device',
+                    icon: Icons.sync,
+                    busy: _reregistering,
+                    onPressed: push == null || _reregistering
+                        ? null
+                        : _reregister,
+                  ),
+                  NotionButton(
+                    label: 'Send test notification',
+                    icon: Icons.notifications_active_outlined,
+                    busy: _testing,
+                    onPressed: push == null ? null : _sendTest,
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: NotionSpace.xs),
+              child: Text(
+                'Re-register asks for a new token, registers it with the '
+                'gateway and saves the pusher on your account again. The '
+                'test runs the real notification path for the newest message '
+                'from someone else, skipping only the "already read" and '
+                '"chat open" checks.',
+                style: typography.footnoteMuted,
+              ),
+            ),
+          ],
           const NotionSectionHeader(title: 'This device'),
-          if (!PlatformInfos.isAndroid)
+          if (!android)
             const NotionListRow(
               title: 'Push notifications',
               subtitle: 'Background notifications are available on Android.',
             ),
-          if (PlatformInfos.isAndroid) ...[
+          if (android) ...[
             NotionListRow(
               title: 'Notifications allowed',
               subtitle: _device.permission == false
@@ -434,12 +671,58 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _check('Uses this device', pusher?.tokenMatches),
+                  if (pusher == null || pusher.tokenKnown)
+                    _check('Uses this device', pusher?.tokenMatches)
+                  else
+                    NotionListRow(
+                      title: 'Uses this device',
+                      trailing: _value(context, 'Unknown'),
+                    ),
                   _check('Gateway address matches', pusher?.urlMatches),
-                  _check('Format is event_id_only', pusher?.formatEventIdOnly),
                   _check('Gateway key matches', pusher?.nonceMatches),
+                  // Informational: Beeper's homeserver does not forward the
+                  // format and the gateway accepts that.
+                  NotionListRow(
+                    title: 'Format is event_id_only',
+                    subtitle:
+                        'Informational; the gateway never forwards '
+                        'message content either way.',
+                    trailing: _value(context, yesNo(pusher?.formatEventIdOnly)),
+                  ),
                 ],
               ),
+            ),
+          ],
+          const NotionSectionHeader(title: 'Account notification rules'),
+          if (!rules.loaded)
+            const NotionListRow(
+              title: 'Not synced to this device yet',
+              subtitle:
+                  'Until they are, the server’s decision to notify is used.',
+            )
+          else ...[
+            NotionListRow(
+              title: 'Do Not Disturb (account)',
+              subtitle: 'Silences every notification on all devices.',
+              trailing: _value(
+                context,
+                rules.doNotDisturb ? 'On' : 'Off',
+                problem: rules.doNotDisturb,
+              ),
+            ),
+            _ruleRow('Direct chats', rules.oneToOne, alert: true),
+            _ruleRow('Group chats', rules.groups),
+            _ruleRow('Encrypted direct chats', rules.encryptedOneToOne),
+            _ruleRow('Encrypted group chats', rules.encryptedGroups),
+            if (rules.unknownConditions)
+              const NotionListRow(
+                title: 'Some rules can’t be evaluated on this phone',
+                subtitle: 'For those, the server’s decision to notify is used.',
+              ),
+            NotionListRow(
+              title: 'Change account notification rules',
+              subtitle: 'Settings → Notifications',
+              onTap: () => context.push('/rooms/settings/notifications'),
             ),
           ],
           const NotionSectionHeader(title: 'Recent pushes'),
@@ -494,24 +777,12 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
               trailing: _value(context, _time(entry.at)),
             ),
           const NotionSectionHeader(title: 'Actions'),
-          NotionSizeReveal(
-            visible: _testResult != null,
-            child: NotionListRow(title: 'Test result', subtitle: _testResult),
-          ),
           Padding(
             padding: const EdgeInsets.only(top: NotionSpace.xs),
             child: Wrap(
               spacing: NotionSpace.xs,
               runSpacing: NotionSpace.xs,
               children: [
-                NotionButton.primary(
-                  label: 'Send test notification',
-                  icon: Icons.notifications_active_outlined,
-                  busy: _testing,
-                  onPressed: push == null || !PlatformInfos.isAndroid
-                      ? null
-                      : _sendTest,
-                ),
                 NotionButton(
                   label: 'Copy diagnostics (no content)',
                   icon: Icons.copy_outlined,
@@ -528,10 +799,8 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
           Padding(
             padding: const EdgeInsets.only(top: NotionSpace.md),
             child: Text(
-              'The test runs the real notification path for the newest '
-              'message from someone else, skipping only the "already read" '
-              'and "chat open" checks. If messages from others never show '
-              '"Last push received", the server is not reaching this device.',
+              'If messages from others never show "Last push received", the '
+              'server is not reaching this device.',
               style: typography.footnoteMuted,
             ),
           ),

@@ -35,6 +35,16 @@ Brama została wdrożona pod `https://push.example.org/_matrix/push/v1/notify`. 
 
 Rejestracje są nadal puste, nie ma potwierdzonego odbioru na telefonie. Pozostają rejestracja urządzenia i fizyczne testy. Szczegóły wdrożenia: `../../docs/personal-push-deployment-2026-10-06.md`.
 
+### Build bez Firebase = brak push (2026-10-21)
+
+APK zbudowane na devboksie od 2026-10-20 (debug `chatloom-wave-20261020`, debug i release `wave2-20261020`) nie zawierają zasobów Firebase (`google_app_id`, `gcm_defaultSenderId`): `android/app/google-services.json` w kopii na VPS jest dowiązaniem do ścieżki Maca (`~/.config/...`), które na Linuksie nie istnieje, więc Gradle pomijał plugin Google services bez błędu. Taka aplikacja startuje normalnie, ale `FirebaseMessaging.getInstance()` rzuca wyjątek, nie ma tokena FCM, rejestracji w bramie ani aktualizacji pushera. Release z Maca (16, 18, 19.10) zawierają te zasoby; release z devboksa jest podpisany tym samym kluczem i instaluje się na nie jako aktualizacja.
+
+- Gradle (`android/app/build.gradle.kts`) ostrzega przy każdym buildzie bez pliku i **przerywa build release** (`preReleaseBuild`), chyba że świadomie podano `-Pchatloom.allowNoFirebase=true`.
+- `scripts/build-personal-release.py` odrzuca APK bez `string/google_app_id` w `aapt2 dump resources`.
+- Ręczna kontrola APK: `aapt2 dump resources APK | grep -E 'string/(google_app_id|gcm_defaultSenderId)'` musi zwrócić obie linie.
+- Naprawa na devboksie (bez commitowania pliku): skopiować prywatny plik z Maca do `~/.config/personal-chat/firebase/google-services.json` na VPS (katalog 0700, plik 0600) i przestawić ignorowane dowiązanie `client/android/app/google-services.json` (oraz w worktree używanym do buildu) na tę ścieżkę. Plik nie jest sekretem serwerowym (jego wartości są w każdym APK), ale projekt trzyma go poza repo.
+- Na telefonie: Settings → Notifications → Notification diagnostics pokazuje krok 1 „App build” jako Problem; po instalacji poprawnego APK „Re-register this device” rejestruje token, bramę i pusher jednym dotknięciem.
+
 ## Historyczna ręczna konfiguracja / własny alternatywny gateway
 
 | Krok | Co przygotować / wykonać | Dowód odbioru |
@@ -103,6 +113,7 @@ Jak czytać (`--stats` dodaje też listę `hints`):
 | `notify.format.other` / `notify.format.missing` (hint `pusher_format_not_event_id_only`) | pusher nie ma `format=event_id_only`, więc homeserver wysyła do gatewaya pełną treść; gateway nadal przekazuje tylko ID, ale pusher trzeba ustawić ponownie na telefonie |
 | `notify.fcm.transient` / `ratelimited` | Google/IAM/limit; homeserver ponowi po `Retry-After` |
 | `notify.fcm.accepted` rośnie, a alertu brak | problem po stronie telefonu — sprawdź Settings → Notifications → Notification diagnostics |
+| `notify.prio.normal` (hint `normal_priority_pushes_may_wait_for_doze`) | homeserver prosi o niski priorytet (`prio=low`); FCM normal czeka na okna Doze i nie pozwala telefonowi uruchomić krótkiej usługi pierwszoplanowej, więc alert może się spóźnić |
 
 Liczniki są od chwili wdrożenia tej wersji; wcześniejszych żądań nie odtworzą. Tabela ma ograniczony zbiór nazw i nie wymaga czyszczenia.
 

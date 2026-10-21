@@ -6,6 +6,11 @@ bool validGatewayNonce(String? value) =>
 enum PushRegistrationPhase {
   unknown,
   tokenUnavailable,
+
+  /// The installed build has no Firebase configuration (`google-services.json`
+  /// was missing when it was built), so FCM can never issue a token. Retrying
+  /// cannot fix it; only a correctly built APK can.
+  firebaseUnavailable,
   gatewayRequired,
   registering,
   pusherConfigured,
@@ -61,6 +66,9 @@ class PushRegistration {
       'Notification registration has not been checked.',
     PushRegistrationPhase.tokenUnavailable =>
       'The device notification token is unavailable. Retry notification setup.',
+    PushRegistrationPhase.firebaseUnavailable =>
+      'This app build has no Firebase push configuration, so this phone '
+          'cannot receive notifications. Install a build that includes it.',
     PushRegistrationPhase.gatewayRequired =>
       'This device is waiting for notification setup.',
     PushRegistrationPhase.registering =>

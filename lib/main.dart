@@ -49,6 +49,8 @@ void main(List<String> args) => runZonedGuarded(() async {
 
   isIntegrationTest = args.singleOrNull == 'integration_test';
   if (PlatformInfos.isAndroid) {
+    // Before any await: pushes that start the app must not be dropped.
+    BackgroundPush.bufferEarlyMessages();
     final port = mainIsolateReceivePort = ReceivePort();
     IsolateNameServer.removePortNameMapping(AppConfig.mainIsolatePortName);
     IsolateNameServer.registerPortWithName(

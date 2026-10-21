@@ -32,6 +32,67 @@ enum PushOutcome {
 /// The kind of push wake, derived only from the content-free FCM data map.
 enum PushKind { message, countOnly, reminder, test }
 
+/// The steps that must all succeed before the homeserver can reach this
+/// phone, in order: an FCM token, the private gateway's registration of that
+/// token, and the Matrix pusher on the account that points at the gateway.
+enum PushSetupStep { token, gateway, pusher }
+
+/// The latest attempt of one [PushSetupStep]. [detail] is a fixed word such
+/// as `forbidden`, `network` or `http_503`, never a value or message.
+class PushSetupRecord {
+  final DateTime at;
+  final bool ok;
+  final String? detail;
+  const PushSetupRecord({required this.at, required this.ok, this.detail});
+
+  Map<String, Object?> toJson() => {
+    'at': at.toUtc().millisecondsSinceEpoch,
+    'ok': ok,
+    if (detail != null) 'detail': detail,
+  };
+
+  static PushSetupRecord? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final at = json['at'];
+    final ok = json['ok'];
+    if (at is! int || ok is! bool) return null;
+    final detail = json['detail'];
+    return PushSetupRecord(
+      at: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
+      ok: ok,
+      detail: detail is String && PushDiagnostics.validDetail(detail)
+          ? detail
+          : null,
+    );
+  }
+}
+
+/// English explanation of a setup [detail] for the diagnostics page.
+String pushSetupDetailLabel(String? detail) {
+  if (detail == null) return 'Failed';
+  final status = RegExp(r'^http_(\d{3})$').firstMatch(detail)?.group(1);
+  if (status != null) return 'The gateway answered HTTP $status';
+  if (detail.startsWith('matrix_')) {
+    return 'The homeserver refused (${detail.substring(7).toUpperCase()})';
+  }
+  return switch (detail) {
+    'firebase_not_configured' =>
+      'This build has no Firebase configuration (google-services.json)',
+    'token_failed' => 'Google Play services did not issue a token',
+    'token_unavailable' => 'No token yet',
+    'forbidden' => 'The gateway did not authorize this account',
+    'gateway_unavailable' => 'The gateway is temporarily unavailable',
+    'bad_response' => 'The gateway sent an unexpected reply',
+    'network' => 'No connection',
+    'timeout' => 'Timed out',
+    'posted' => 'Pusher saved on the account',
+    'already_set' => 'Pusher was already up to date',
+    'registered' => 'Registered',
+    'platform_error' => 'The phone reported an error',
+    _ => 'Failed',
+  };
+}
+
 String pushOutcomeLabel(PushOutcome outcome) => switch (outcome) {
   PushOutcome.received => 'Received',
   PushOutcome.shown => 'Notification shown',
@@ -125,6 +186,7 @@ class PushDiagnosticsSnapshot {
   final PushDiagnosticsEntry? last;
   final Map<String, int> counters;
   final List<PushDiagnosticsEntry> recent;
+  final Map<PushSetupStep, PushSetupRecord> setup;
 
   const PushDiagnosticsSnapshot({
     this.lastReceivedAt,
@@ -132,12 +194,17 @@ class PushDiagnosticsSnapshot {
     this.last,
     this.counters = const {},
     this.recent = const [],
+    this.setup = const {},
   });
 
   static const empty = PushDiagnosticsSnapshot();
 
   int count(PushOutcome outcome) => counters[outcome.name] ?? 0;
   int received(PushKind kind) => counters['received.${kind.name}'] ?? 0;
+
+  /// The newest push handled with [outcome] among [recent], if any.
+  PushDiagnosticsEntry? lastWith(Set<PushOutcome> outcomes) =>
+      recent.where((entry) => outcomes.contains(entry.outcome)).firstOrNull;
 }
 
 /// Failure-tolerant, content-free record of push handling on this device.
@@ -200,9 +267,35 @@ abstract final class PushDiagnostics {
     state['recent'] = recent.take(maxRecent).toList();
   });
 
+  /// Remembers the outcome of the latest attempt of a setup [step]. Survives
+  /// restarts so the page can tell which step failed in an earlier process.
+  static Future<void> setup(
+    PushSetupStep step, {
+    required bool ok,
+    String? detail,
+    Future<SharedPreferences> Function()? store,
+    DateTime? now,
+  }) => _update(store, (state) {
+    final steps = state['setup'] is Map
+        ? Map<String, Object?>.from(state['setup'] as Map)
+        : <String, Object?>{};
+    steps[step.name] = PushSetupRecord(
+      at: (now ?? DateTime.now()).toUtc(),
+      ok: ok,
+      detail: detail != null && validDetail(detail) ? detail : null,
+    ).toJson();
+    state['setup'] = steps;
+  });
+
+  /// Setup details are fixed lowercase words; anything else is dropped.
+  static bool validDetail(String detail) =>
+      RegExp(r'^[a-z0-9_]{1,40}$').hasMatch(detail);
+
   static Future<PushDiagnosticsSnapshot> read({
     Future<SharedPreferences> Function()? store,
   }) async {
+    // Writes queued by this isolate land first (they never throw).
+    await _queue;
     try {
       final prefs = await (store ?? SharedPreferences.getInstance)().timeout(
         const Duration(seconds: 2),
@@ -236,7 +329,16 @@ abstract final class PushDiagnostics {
                 .whereType<PushDiagnosticsEntry>()
                 .toList()
           : <PushDiagnosticsEntry>[];
+      final setup = <PushSetupStep, PushSetupRecord>{};
+      final rawSetup = state['setup'];
+      if (rawSetup is Map) {
+        for (final step in PushSetupStep.values) {
+          final record = PushSetupRecord.fromJson(rawSetup[step.name]);
+          if (record != null) setup[step] = record;
+        }
+      }
       return PushDiagnosticsSnapshot(
+        setup: setup,
         lastReceivedAt: received is int
             ? DateTime.fromMillisecondsSinceEpoch(received, isUtc: true)
             : null,
@@ -250,7 +352,13 @@ abstract final class PushDiagnostics {
     }
   }
 
+  /// Clears counters and outcomes; the setup steps describe the current
+  /// registration, not history, so they stay.
   static Future<void> reset({Future<SharedPreferences> Function()? store}) =>
+      _update(store, (state) => state.removeWhere((key, _) => key != 'setup'));
+
+  /// Forgets everything, including the setup steps (tests, sign-out).
+  static Future<void> clear({Future<SharedPreferences> Function()? store}) =>
       _update(store, (state) => state.clear());
 
   static void _bump(Map<String, Object?> state, String name) {
@@ -308,6 +416,18 @@ abstract final class PushDiagnostics {
     );
     for (final check in checks.entries) {
       buffer.writeln('${check.key}: ${check.value}');
+    }
+    for (final step in PushSetupStep.values) {
+      final record = snapshot.setup[step];
+      if (record == null) {
+        buffer.writeln('Setup ${step.name}: not attempted');
+        continue;
+      }
+      final detail = record.detail == null ? '' : ' (${record.detail})';
+      buffer.writeln(
+        'Setup ${step.name}: ${record.ok ? 'ok' : 'failed'}$detail'
+        ' at ${record.at.toIso8601String()}',
+      );
     }
     buffer.writeln(
       'Last push received: ${snapshot.lastReceivedAt?.toIso8601String() ?? 'never'}',
