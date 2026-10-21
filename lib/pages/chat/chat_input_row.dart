@@ -231,10 +231,10 @@ class _ChatInputRowState extends State<ChatInputRow> {
     ];
   }
 
-  /// Round video in this chat, or null outside Android Telegram chats.
+  /// Round video in this chat, or null outside supported Telegram chats.
   /// Display only: `TelegramRoundService.captureAndSend` re-checks it.
   RoundAvailability? get _round =>
-      PlatformInfos.isAndroid &&
+      PlatformInfos.supportsRoundCapture &&
           PersonalClient.networkOf(controller.room) == 'telegram'
       ? controller.roundAvailability
       : null;
@@ -318,7 +318,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (PlatformInfos.isAndroid &&
+        if (PlatformInfos.supportsRoundCapture &&
             PersonalClient.networkOf(controller.room) == 'telegram')
           RoundOutboxPanel(room: controller.room),
         RecordingViewModel(

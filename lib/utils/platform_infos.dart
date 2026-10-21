@@ -46,6 +46,8 @@ abstract class PlatformInfos {
   /// Web could also record in theory but currently creates broken opus
   static bool get platformCanRecord => (isMobile || isMacOS);
 
+  static bool get supportsRoundCapture => isAndroid || isMacOS;
+
   static bool get supportsAppLock => (isMobile || isMacOS);
 
   static String get appDisplayName =>

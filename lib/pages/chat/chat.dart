@@ -1884,7 +1884,7 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   bool get canRecordRoundSilently =>
-      PlatformInfos.isAndroid &&
+      PlatformInfos.supportsRoundCapture &&
       roundAvailability.canRecord &&
       TelegramRoomBinding.of(
             room,

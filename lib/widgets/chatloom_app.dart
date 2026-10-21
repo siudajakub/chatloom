@@ -9,6 +9,7 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/macos_desktop.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/client_startup.dart';
 import 'package:chatloom/widgets/layouts/call_overlay.dart';
@@ -74,7 +75,11 @@ class ChatLoomApp extends StatelessWidget {
       builder: (context, themeMode, primaryColor) => MaterialApp.router(
         title: AppSettings.applicationName.value,
         themeMode: themeMode,
-        theme: ChatLoomThemes.buildTheme(context, Brightness.light, primaryColor),
+        theme: ChatLoomThemes.buildTheme(
+          context,
+          Brightness.light,
+          primaryColor,
+        ),
         darkTheme: ChatLoomThemes.buildTheme(
           context,
           Brightness.dark,
@@ -95,17 +100,31 @@ class ChatLoomApp extends StatelessWidget {
           isLoggedIn: clients.any((client) => client.isLogged()),
           // Need a navigator above the Matrix widget for
           // displaying dialogs
-          child: Matrix(
-            clients: clients,
-            store: store,
-            child: CallOverlay(
-              child: Column(
-                children: [
-                  if (startup != null) ClientStartupNotice(startup: startup!),
-                  Expanded(
-                    child: testWidget ?? child ?? const SizedBox.shrink(),
-                  ),
-                ],
+          child: MacDesktopIntegration(
+            onSettings: () {
+              if (clients.any((client) => client.isLogged())) {
+                router.go('/rooms/settings');
+              }
+            },
+            onWake: () {
+              for (final client in clients.where(
+                (client) => client.isLogged(),
+              )) {
+                client.restartSync().catchError((Object _) {});
+              }
+            },
+            child: Matrix(
+              clients: clients,
+              store: store,
+              child: CallOverlay(
+                child: Column(
+                  children: [
+                    if (startup != null) ClientStartupNotice(startup: startup!),
+                    Expanded(
+                      child: testWidget ?? child ?? const SizedBox.shrink(),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

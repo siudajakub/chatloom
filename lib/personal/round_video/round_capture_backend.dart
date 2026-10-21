@@ -214,13 +214,14 @@ abstract interface class RoundCaptureBackend {
   Future<void> dispose({bool keepPrepared = false});
 }
 
-/// Permission requests and capture are Android-only. Callers must freeze and
+/// Callers must freeze and
 /// authorize the destination before initialize(), which can show permissions.
 class AndroidRoundCaptureBackend implements RoundCaptureBackend {
   static const channelName = 'pl.personal.chat/round_capture';
   static final Map<String, AndroidRoundCaptureBackend> _channelOwners = {};
   final MediaAccess mediaAccess;
   final MethodChannel _channel;
+  final TargetPlatform _platform;
   final _events = StreamController<RoundCaptureNativeEvent>.broadcast();
   ManagedMediaFile? _lease;
   RoundCaptureProfile? _profile;
@@ -235,8 +236,12 @@ class AndroidRoundCaptureBackend implements RoundCaptureBackend {
   final String _captureId =
       '${DateTime.now().microsecondsSinceEpoch}-${++_nextCaptureId}';
 
-  AndroidRoundCaptureBackend(this.mediaAccess, {MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel(channelName) {
+  AndroidRoundCaptureBackend(
+    this.mediaAccess, {
+    MethodChannel? channel,
+    TargetPlatform platform = TargetPlatform.android,
+  }) : _platform = platform,
+       _channel = channel ?? const MethodChannel(channelName) {
     _channelOwners[_channel.name] = this;
     _channel.setMethodCallHandler((call) async {
       if (_disposed ||
@@ -279,7 +284,7 @@ class AndroidRoundCaptureBackend implements RoundCaptureBackend {
       throw const RoundCaptureException('disposed');
     }
     if (!profile.isValid) throw const RoundCaptureException('invalid_profile');
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+    if (kIsWeb || defaultTargetPlatform != _platform) {
       throw const RoundCaptureException('unsupported_platform');
     }
     _profile = profile;
@@ -448,3 +453,15 @@ class AndroidRoundCaptureBackend implements RoundCaptureBackend {
     }
   }
 }
+
+/// macOS implements the same private-lease and event protocol as Android.
+/// Inheriting the protocol preserves interruption handling in the controller.
+class MacOSRoundCaptureBackend extends AndroidRoundCaptureBackend {
+  MacOSRoundCaptureBackend(super.mediaAccess, {super.channel})
+    : super(platform: TargetPlatform.macOS);
+}
+
+RoundCaptureBackend createRoundCaptureBackend(MediaAccess mediaAccess) =>
+    defaultTargetPlatform == TargetPlatform.macOS
+    ? MacOSRoundCaptureBackend(mediaAccess)
+    : AndroidRoundCaptureBackend(mediaAccess);

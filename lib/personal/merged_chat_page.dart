@@ -2145,7 +2145,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   RoundAvailability get roundAvailability {
     final room = _targetRoom;
-    if (room == null || !PlatformInfos.isAndroid) {
+    if (room == null || !PlatformInfos.supportsRoundCapture) {
       return RoundAvailability.fromReport(
         const RoundGateReport(RoundGateCode.notJoined),
       );
@@ -2157,7 +2157,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   bool get canRecordRoundSilently {
     final room = _targetRoom;
     return room != null &&
-        PlatformInfos.isAndroid &&
+        PlatformInfos.supportsRoundCapture &&
         roundAvailability.canRecord &&
         TelegramRoomBinding.of(
               room,

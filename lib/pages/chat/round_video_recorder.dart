@@ -158,7 +158,7 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
 
   void _setup() {
     _controller = RoundCaptureController(
-      backend: AndroidRoundCaptureBackend(widget.mediaAccess),
+      backend: createRoundCaptureBackend(widget.mediaAccess),
       profile: widget.profile,
     )..addListener(_changed);
     _lastState = _controller.state;

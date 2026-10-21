@@ -32,6 +32,7 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart'
     show ExceptionContext;
+import 'package:chatloom/utils/macos_desktop.dart';
 import 'package:chatloom/utils/owned_async_wait.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/show_scaffold_dialog.dart';
@@ -404,6 +405,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   /// and recent messages. It is also where new chats start (Telegram,
   /// Messenger); the app never searches the Matrix directory.
   void openSearch() {
+    if (!mounted || !PersonalPrivacy.surfaceUnlocked) return;
     final client = Matrix.of(context).client;
     final navigator = Navigator.of(context);
     navigator.push(
@@ -566,6 +568,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
   @override
   void initState() {
+    if (PlatformInfos.isMacOS) MacDesktopCommands.bindSearch(this, openSearch);
     _initReceiveSharingIntent();
     _activeSpaceId = widget.activeSpace;
 
@@ -614,6 +617,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    MacDesktopCommands.unbindSearch(this);
     _cancelFirstSyncWait();
     if (identical(_shortcutOwner, this)) _shortcutOwner = null;
     _intentDataStreamSubscription?.cancel();
