@@ -5,12 +5,14 @@ import 'dart:typed_data';
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/send_file_dialog.dart';
+import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
+import '../personal/outgoing_media_support.dart';
 import 'conversation_test_support.dart';
 
 class _MediaClient extends ConversationClient {
@@ -164,47 +166,53 @@ void main() {
     },
   );
 
-  testWidgets('one pending attachment send retains preview until acceptance', (
-    tester,
-  ) async {
-    final client = _MediaClient()..configGate = Completer<MediaConfig>();
-    final room = _MediaRoom(client);
-    final accepted = Completer<String?>();
-    room.response = (_) => accepted.future;
-    AttachmentSendResult? result;
-    await open(tester, room, onResult: (value) => result = value);
-    final send = tester.widget<TextButton>(
-      find.widgetWithText(TextButton, 'Send'),
-    );
-    send.onPressed!();
-    send.onPressed!();
-    await tester.pump();
-    expect(find.byType(SendFileDialog), findsOneWidget);
-    expect(find.text('Fictional caption'), findsOneWidget);
-    client.configGate!.complete(MediaConfig(mUploadSize: 1024 * 1024));
-    await tester.pump();
-    await tester.pump();
-    expect(room.sent, hasLength(1));
-    expect(find.byType(LinearProgressIndicator), findsOneWidget);
-    accepted.complete(r'$accepted');
-    await tester.pumpAndSettle();
-    expect(find.byType(SendFileDialog), findsNothing);
-    expect(result?.caption, 'Fictional caption');
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'the dialog closes once the bubble is in the chat, before the upload ends',
+    (tester) async {
+      final echoes = OutgoingEcho.debugWriter = FakeEchoes();
+      addTearDown(() => OutgoingEcho.debugWriter = null);
+      final client = _MediaClient()..configGate = Completer<MediaConfig>();
+      final room = _MediaRoom(client);
+      final accepted = Completer<String?>();
+      room.response = (_) => accepted.future;
+      AttachmentSendResult? result;
+      await open(tester, room, onResult: (value) => result = value);
+      final send = tester.widget<TextButton>(
+        find.widgetWithText(TextButton, 'Send'),
+      );
+      send.onPressed!();
+      send.onPressed!();
+      await tester.pump();
+      // Only the (cached) media limit is awaited; no progress dialog.
+      expect(find.byType(SendFileDialog), findsOneWidget);
+      client.configGate!.complete(MediaConfig(mUploadSize: 1024 * 1024));
+      await tester.pumpAndSettle();
+      expect(find.byType(SendFileDialog), findsNothing);
+      expect(result?.caption, 'Fictional caption');
+      expect(echoes.events, hasLength(1), reason: 'one bubble, one send');
+      expect(room.sent, hasLength(1));
+      expect(room.sent.single.id, echoes.events.keys.single);
+      // The upload is still running in the background.
+      expect(accepted.isCompleted, isFalse);
+      accepted.complete(r'$accepted');
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
-    'confirmed rejection keeps files and caption and retries the same source context',
+    'a refusal after the bubble shows in the bubble, not in a dialog',
     (tester) async {
+      final echoes = OutgoingEcho.debugWriter = FakeEchoes();
+      addTearDown(() => OutgoingEcho.debugWriter = null);
       final room = _MediaRoom(_MediaClient());
       final reply = room.message(r'$reply', 'Fictional source reply');
-      room.response = (attempt) async {
-        if (attempt == 1) throw _rejected();
-        return r'$accepted';
-      };
+      room.response = (_) async => throw _rejected();
+      AttachmentSendResult? result;
       await open(
         tester,
         room,
+        onResult: (value) => result = value,
         frozen: FrozenAttachmentContext(
           room: room,
           isCurrent: () => true,
@@ -215,81 +223,58 @@ void main() {
       );
       await tester.tap(find.text('Send'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('server rejected'), findsOneWidget);
-      expect(find.text('fictional.txt'), findsOneWidget);
-      expect(find.text('Fictional caption'), findsOneWidget);
-      await tester.tap(find.text('Send'));
-      await tester.pumpAndSettle();
-      expect(room.sent, hasLength(2));
-      expect(room.sent[0].id, room.sent[1].id);
+      expect(find.byType(SendFileDialog), findsNothing);
+      expect(result?.caption, 'Fictional caption');
+      final id = echoes.events.keys.single;
+      expect(echoes.statusOf(id), EventStatus.error.intValue);
+      // The shared Matrix error text (matrix-errors), never the errcode.
       expect(
-        room.sent.every(
-          (send) =>
-              identical(send.reply, reply) &&
-              send.root == r'$thread' &&
-              send.last == r'$thread-last',
-        ),
-        isTrue,
+        OutgoingMedia.failureOf(id),
+        'You don’t have permission to do that.',
       );
+      final sent = room.sent.single;
+      expect(sent.reply, same(reply));
+      expect(sent.root, r'$thread');
+      expect(sent.last, r'$thread-last');
     },
   );
 
-  testWidgets('rate-limit retry keeps the transaction, reply and thread', (
-    tester,
-  ) async {
-    final room = _MediaRoom(_MediaClient());
-    final reply = room.message(r'$reply', 'Fictional source reply');
-    room.response = (attempt) async {
-      if (attempt == 1) throw _rejected(rateLimit: true);
-      return r'$accepted';
-    };
-    await open(
-      tester,
-      room,
-      frozen: FrozenAttachmentContext(
-        room: room,
-        isCurrent: () => true,
-        replyTo: reply,
-        threadRootEventId: r'$thread',
-        threadLastEventId: r'$last',
-      ),
-    );
-    await tester.tap(find.text('Send'));
-    await tester.pump();
-    await tester.pump(const Duration(seconds: 2));
-    await tester.pumpAndSettle();
-    expect(room.sent, hasLength(2));
-    expect(room.sent[0], room.sent[1]);
-  });
-
   testWidgets(
-    'unknown acceptance keeps selection and requires checking the source',
+    'a rate limit is retried with the transaction, reply and thread',
     (tester) async {
-      final room = _MediaRoom(_MediaClient())
-        ..response = (_) async =>
-            throw StateError('fictional transport failure');
-      await open(tester, room);
-      await tester.tap(find.text('Send'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('Sending was not confirmed'), findsOneWidget);
-      expect(find.text('fictional.txt'), findsOneWidget);
-      expect(find.text('Fictional caption'), findsOneWidget);
-      expect(
-        tester
-            .widget<TextButton>(find.widgetWithText(TextButton, 'Send'))
-            .onPressed,
-        isNull,
+      OutgoingEcho.debugWriter = FakeEchoes();
+      addTearDown(() => OutgoingEcho.debugWriter = null);
+      final room = _MediaRoom(_MediaClient());
+      final reply = room.message(r'$reply', 'Fictional source reply');
+      room.response = (attempt) async {
+        if (attempt == 1) throw _rejected(rateLimit: true);
+        return r'$accepted';
+      };
+      await open(
+        tester,
+        room,
+        frozen: FrozenAttachmentContext(
+          room: room,
+          isCurrent: () => true,
+          replyTo: reply,
+          threadRootEventId: r'$thread',
+          threadLastEventId: r'$last',
+        ),
       );
-      expect(room.sent, hasLength(1));
-      await tester.tap(find.text('Close without retrying'));
+      await tester.tap(find.text('Send'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
-      expect(find.byType(SendFileDialog), findsNothing);
+      expect(room.sent, hasLength(2));
+      expect(room.sent[0], room.sent[1]);
     },
   );
 
   testWidgets(
     'source drift while config loads prevents any attachment transport',
     (tester) async {
+      final echoes = OutgoingEcho.debugWriter = FakeEchoes();
+      addTearDown(() => OutgoingEcho.debugWriter = null);
       final client = _MediaClient()..configGate = Completer<MediaConfig>();
       final room = _MediaRoom(client);
       var current = true;
@@ -304,32 +289,49 @@ void main() {
       client.configGate!.complete(MediaConfig(mUploadSize: 1024 * 1024));
       await tester.pumpAndSettle();
       expect(room.sent, isEmpty);
+      expect(echoes.events, isEmpty);
       expect(find.textContaining('could not be prepared'), findsOneWidget);
       expect(find.text('Fictional caption'), findsOneWidget);
     },
   );
 
-  testWidgets('accepted files are skipped when a later file is rejected', (
+  testWidgets('files go out in order, each with its own transaction', (
     tester,
   ) async {
+    final echoes = OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
     final room = _MediaRoom(_MediaClient());
-    room.response = (attempt) async {
-      if (attempt == 2) throw _rejected();
-      return r'$accepted';
-    };
     await open(tester, room, files: [_file('one.txt'), _file('two.txt')]);
     await tester.tap(find.text('Send'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('1 of 2 attachments accepted'), findsOneWidget);
-    await tester.tap(find.text('Send'));
-    await tester.pumpAndSettle();
-    expect(room.sent.map((send) => send.name), [
-      'one.txt',
-      'two.txt',
-      'two.txt',
-    ]);
-    expect(room.sent[1].id, room.sent[2].id);
+    expect(find.byType(SendFileDialog), findsNothing);
+    expect(room.sent.map((send) => send.name), ['one.txt', 'two.txt']);
+    expect(echoes.events.keys, [room.sent[0].id, room.sent[1].id]);
+    expect(room.sent[0].id, isNot(room.sent[1].id));
   });
+
+  testWidgets(
+    'when a later bubble cannot be stored, Send again sends only the rest',
+    (tester) async {
+      final echoes = OutgoingEcho.debugWriter = FakeEchoes()
+        ..failWriteNumber = 2;
+      addTearDown(() => OutgoingEcho.debugWriter = null);
+      final room = _MediaRoom(_MediaClient());
+      await open(tester, room, files: [_file('one.txt'), _file('two.txt')]);
+      await tester.tap(find.text('Send'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('1 of 2 attachments are already in the chat'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('could not be prepared'), findsOneWidget);
+      await tester.tap(find.text('Send'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SendFileDialog), findsNothing);
+      expect(room.sent.map((send) => send.name), ['one.txt', 'two.txt']);
+      expect(echoes.events, hasLength(2));
+    },
+  );
 
   testWidgets(
     'unreadable image displays a failed preview instead of spinning',

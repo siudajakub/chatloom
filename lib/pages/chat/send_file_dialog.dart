@@ -6,25 +6,25 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:async/async.dart' show Result;
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/image_edit_geometry.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/show_scaffold_dialog.dart';
 import 'package:chatloom/utils/size_string.dart';
-import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/dialog_text_field.dart';
 import 'package:crop_image/crop_image.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:matrix/matrix.dart' hide Result;
+import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';
 import 'package:uuid/uuid.dart';
 
@@ -91,14 +91,13 @@ class SendFileDialog extends StatefulWidget {
 
 class SendFileDialogState extends State<SendFileDialog> {
   bool compress = true;
-  bool _sending = false, _uncertain = false, _attempted = false;
+  bool _sending = false;
   int _accepted = 0;
   String? _problem;
   late final _transactionIds = List.generate(
     _files.length,
     (_) => const Uuid().v4(),
   );
-  final _prepared = <int, (MatrixFile, MatrixImageFile?)>{};
 
   /// Images smaller than 20kb don't need compression.
   static const int minSizeToCompress = 20 * 1000;
@@ -114,7 +113,7 @@ class SendFileDialogState extends State<SendFileDialog> {
   late final List<XFile> _files = List<XFile>.of(widget.files);
 
   Future<void> _editImage(int index) async {
-    if (_sending || _attempted) return;
+    if (_sending || _accepted > 0) return;
     Uint8List bytes;
     try {
       bytes = await _files[index].readAsBytes();
@@ -145,11 +144,14 @@ class SendFileDialogState extends State<SendFileDialog> {
     });
   }
 
+  /// Telegram/Messenger: the dialog closes as soon as every attachment has
+  /// its bubble in the chat. Compression, thumbnails, encryption and the
+  /// upload continue in the background ([OutgoingMedia]); progress and any
+  /// failure ("Not sent · Tap to retry") are shown in the bubble. Only a
+  /// problem found before anything is shown keeps the dialog open.
   Future<void> _send() async {
-    if (_sending || _uncertain) return;
+    if (_sending) return;
     final label = _labelTextController.text.trim();
-    var foregroundStarted = false;
-    var transportStarted = false;
     setState(() {
       _sending = true;
       _problem = null;
@@ -162,136 +164,93 @@ class SendFileDialogState extends State<SendFileDialog> {
       if (!widget.room.otherPartyCanReceiveMessages) {
         throw OtherPartyCanNotReceiveMessages();
       }
+      // Cached by the SDK (days); a network fetch only on first use.
       final clientConfig = await widget.room.client.getConfig();
       if (!mounted) return;
       widget.composeContext?.validate();
       final maxUploadSize = clientConfig.mUploadSize ?? 100 * 1000 * 1000;
 
-      if (ForegroundServices.platformSupported) {
-        foregroundStarted = await ForegroundServices.startService('send_files');
-      }
-
       for (var i = _accepted; i < _files.length; i++) {
         if (!mounted) return;
         widget.composeContext?.validate();
         final xfile = _files[i];
-        final MatrixFile file;
-        MatrixImageFile? thumbnail;
         final mimeType = xfile.mimeType ?? lookupMimeType(xfile.path);
-
-        final cached = _prepared[i];
-        if (cached != null) {
-          file = cached.$1;
-          thumbnail = cached.$2;
+        final video =
+            PlatformInfos.isMobile &&
+            mimeType != null &&
+            mimeType.startsWith('video');
+        final bytes = await xfile.readAsBytes();
+        if (!mounted) return;
+        widget.composeContext?.validate();
+        final MatrixFile file;
+        OutgoingMediaPrepare? prepare;
+        if (video) {
+          file = MatrixVideoFile(
+            bytes: bytes,
+            name: xfile.name,
+            mimeType: mimeType,
+          );
+          final shrink = bytes.length > minSizeToCompress && compress;
+          // Thumbnail and compression run after the bubble is shown.
+          prepare = () async {
+            final thumbnail = await xfile.getVideoThumbnail();
+            final compressed = await xfile.getVideoInfo(compress: shrink);
+            if (compressed.bytes.length > maxUploadSize) {
+              throw FileTooBigMatrixException(
+                compressed.bytes.length,
+                maxUploadSize,
+              );
+            }
+            return (compressed, thumbnail);
+          };
         } else {
-          // Generate video thumbnail
-          if (PlatformInfos.isMobile &&
-              mimeType != null &&
-              mimeType.startsWith('video')) {
-            thumbnail = await xfile.getVideoThumbnail();
+          if (bytes.length > maxUploadSize) {
+            throw FileTooBigMatrixException(bytes.length, maxUploadSize);
           }
-
-          // If file is a video, shrink it!
-          if (PlatformInfos.isMobile &&
-              mimeType != null &&
-              mimeType.startsWith('video')) {
-            final lengthResult = await Result.capture(xfile.length());
-            final length = lengthResult.asValue?.value;
-            file = await xfile.getVideoInfo(
-              compress:
-                  length != null && length > minSizeToCompress && compress,
-            );
-          } else {
-            // Else we just create a MatrixFile
-            file = MatrixFile(
-              bytes: await _files[i].readAsBytes(),
+          file = await withImageSize(
+            MatrixFile(
+              bytes: bytes,
               name: xfile.name,
               mimeType: mimeType,
-            ).detectFileType;
-          }
-
-          if (file.bytes.length > maxUploadSize) {
-            throw FileTooBigMatrixException(file.bytes.length, maxUploadSize);
-          }
-          _prepared[i] = (file, thumbnail);
+            ).detectFileType,
+          );
         }
         if (!mounted) return;
         widget.composeContext?.validate();
-        _attempted = true;
-        transportStarted = true;
-
-        try {
-          final eventId = await widget.room.sendFileEvent(
-            file,
-            txid: _transactionIds[i],
-            inReplyTo: widget.replyTo,
-            thumbnail: thumbnail,
-            shrinkImageMaxDimension: compress ? 1600 : null,
-            extraContent: label.isEmpty ? null : {'body': label},
-            threadRootEventId: widget.threadRootEventId,
-            threadLastEventId: widget.threadLastEventId,
-          );
-          if (eventId == null || !eventId.startsWith(r'$')) {
-            throw StateError('Acceptance unknown');
-          }
-        } on MatrixException catch (e) {
-          transportStarted = false;
-          final retryAfterMs = e.retryAfterMs;
-          if (e.error != MatrixError.M_LIMIT_EXCEEDED || retryAfterMs == null) {
-            rethrow;
-          }
-          final retryAfterDuration = Duration(
-            milliseconds: retryAfterMs + 1000,
-          );
-
-          await Future.delayed(retryAfterDuration);
-          if (!mounted) return;
-          widget.composeContext?.validate();
-          transportStarted = true;
-          final eventId = await widget.room.sendFileEvent(
-            file,
-            txid: _transactionIds[i],
-            inReplyTo: widget.replyTo,
-            thumbnail: thumbnail,
-            shrinkImageMaxDimension: compress ? 1600 : null,
-            extraContent: label.isEmpty ? null : {'body': label},
-            threadRootEventId: widget.threadRootEventId,
-            threadLastEventId: widget.threadLastEventId,
-          );
-          if (eventId == null || !eventId.startsWith(r'$')) {
-            throw StateError('Acceptance unknown');
-          }
-        }
-        transportStarted = false;
+        await OutgoingMedia.send(
+          widget.room,
+          file,
+          txid: _transactionIds[i],
+          inReplyTo: widget.replyTo,
+          shrinkImageMaxDimension: compress ? 1600 : null,
+          extraContent: label.isEmpty ? null : {'body': label},
+          threadRootEventId: widget.threadRootEventId,
+          threadLastEventId: widget.threadLastEventId,
+          prepare: prepare,
+        );
         if (mounted) setState(() => _accepted = i + 1);
       }
       if (mounted) {
         setState(() => _sending = false);
         Navigator.of(context).pop(AttachmentSendResult(label));
       }
-    } on MatrixException catch (_) {
-      if (mounted)
+    } on FileTooBigMatrixException catch (_) {
+      if (mounted) {
         setState(
           () => _problem =
-              'The server rejected this attachment. Your selection and caption are kept. Try again when the source is ready.',
+              'This file is too large for the server. Your selection and caption are kept.',
         );
+      }
     } catch (_) {
       if (mounted) {
-        setState(() {
-          _uncertain = transportStarted;
-          _problem = _uncertain
-              ? 'Sending was not confirmed. Check this conversation before sending again. Your selection and caption are kept.'
-              : 'Attachments could not be prepared in this conversation. Your selection and caption are kept.';
-        });
+        setState(
+          () => _problem =
+              'Attachments could not be prepared in this conversation. Your selection and caption are kept.',
+        );
       }
     } finally {
-      if (foregroundStarted) {
-        await Result.capture(ForegroundServices.stopService('send_files'));
-      }
       if (mounted) setState(() => _sending = false);
     }
-
-    return;
   }
 
   Future<String> _calcCombinedFileSize() async {
@@ -360,7 +319,7 @@ class SendFileDialogState extends State<SendFileDialog> {
                   children: [
                     if (_accepted > 0)
                       Text(
-                        '$_accepted of ${_files.length} attachments accepted. Accepted files will be skipped on retry.',
+                        '$_accepted of ${_files.length} attachments are already in the chat. Send again for the rest.',
                       ),
                     if (_problem != null)
                       Semantics(
@@ -375,11 +334,12 @@ class SendFileDialogState extends State<SendFileDialog> {
                           ),
                         ),
                       ),
-                    if (_sending) ...[
-                      const LinearProgressIndicator(),
-                      const SizedBox(height: 12),
-                      const Text('Sending attachments…'),
-                    ],
+                    // Only a slow read (a long video) ever shows this; the
+                    // dialog closes once the bubbles are in the chat.
+                    if (_sending)
+                      const NotionDelayedReveal(
+                        child: LinearProgressIndicator(),
+                      ),
                     const SizedBox(height: 12),
                     if (uniqueFileType == 'image')
                       Padding(
@@ -469,7 +429,7 @@ class SendFileDialogState extends State<SendFileDialog> {
                                             color: Colors.white,
                                             size: 20,
                                           ),
-                                          onPressed: _sending || _attempted
+                                          onPressed: _sending || _accepted > 0
                                               ? null
                                               : () => _editImage(i),
                                         ),
@@ -524,7 +484,7 @@ class SendFileDialogState extends State<SendFileDialog> {
                       padding: const EdgeInsets.only(bottom: 8.0),
                       child: DialogTextField(
                         controller: _labelTextController,
-                        readOnly: _sending || _attempted,
+                        readOnly: _sending || _accepted > 0,
                         labelText: L10n.of(context).optionalMessage,
                         minLines: 1,
                         maxLines: 3,
@@ -546,7 +506,7 @@ class SendFileDialogState extends State<SendFileDialog> {
                               onChanged:
                                   compressionSupported &&
                                       !_sending &&
-                                      !_attempted
+                                      _accepted == 0
                                   ? (v) => setState(() => compress = v)
                                   : null,
                             )
@@ -556,7 +516,7 @@ class SendFileDialogState extends State<SendFileDialog> {
                               onChanged:
                                   compressionSupported &&
                                       !_sending &&
-                                      !_attempted
+                                      _accepted == 0
                                   ? (v) => setState(() => compress = v)
                                   : null,
                             ),
@@ -595,14 +555,10 @@ class SendFileDialogState extends State<SendFileDialog> {
                 onPressed: _sending
                     ? null
                     : () => Navigator.of(context, rootNavigator: false).pop(),
-                child: Text(
-                  _uncertain
-                      ? 'Close without retrying'
-                      : L10n.of(context).cancel,
-                ),
+                child: Text(L10n.of(context).cancel),
               ),
               AdaptiveDialogAction(
-                onPressed: _sending || _uncertain ? null : _send,
+                onPressed: _sending ? null : _send,
                 child: Text(L10n.of(context).send),
               ),
             ],
@@ -810,7 +766,7 @@ class _ImageEditPageState extends State<_ImageEditPage> {
       Logs().w('Unable to save edited image', e, s);
       if (!mounted) return;
       setState(() => _saving = false);
-      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+      messenger.showSnackBar(SnackBar(content: Text(humanErrorText(e))));
     }
   }
 

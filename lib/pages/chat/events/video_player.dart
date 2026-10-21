@@ -19,6 +19,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 import '../../image_viewer/image_viewer.dart';
+import 'outgoing_upload_progress.dart';
 
 class EventVideoPlayer extends StatelessWidget {
   final Event event;
@@ -58,6 +59,9 @@ class EventVideoPlayer extends StatelessWidget {
         : Duration(milliseconds: durationInt);
     final borderRadius =
         this.borderRadius ?? BorderRadius.circular(NotionTokens.radius);
+    // While an own video uploads its bubble shows the upload, and opening
+    // it waits until the server has it.
+    final uploading = isOutgoingUpload(event);
     // A caption continues the frame below, so the joint stays flush.
     final frameRadius = fileDescription == null
         ? borderRadius
@@ -87,9 +91,11 @@ class EventVideoPlayer extends StatelessWidget {
               color: Colors.black,
               borderRadius: frameRadius,
               child: InkWell(
-                onTap: () => supportsVideoPlayer
-                    ? showImageViewer(context, event, timeline: timeline)
-                    : event.saveFile(context),
+                onTap: uploading
+                    ? null
+                    : () => supportsVideoPlayer
+                          ? showImageViewer(context, event, timeline: timeline)
+                          : event.saveFile(context),
                 borderRadius: frameRadius,
                 child: SizedBox(
                   width: width,
@@ -125,11 +131,17 @@ class EventVideoPlayer extends StatelessWidget {
                             fit: BoxFit.cover,
                           ),
                         Center(
-                          child: CircleAvatar(
-                            child: supportsVideoPlayer
-                                ? const Icon(Icons.play_arrow_outlined)
-                                : const Icon(Icons.file_download_outlined),
-                          ),
+                          child: uploading
+                              ? OutgoingUploadOverlay(
+                                  progress: uploadProgressOf(event),
+                                )
+                              : CircleAvatar(
+                                  child: supportsVideoPlayer
+                                      ? const Icon(Icons.play_arrow_outlined)
+                                      : const Icon(
+                                          Icons.file_download_outlined,
+                                        ),
+                                ),
                         ),
                         if (duration != null)
                           Positioned(

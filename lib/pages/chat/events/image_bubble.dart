@@ -17,6 +17,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 import '../../../widgets/blur_hash.dart';
+import 'outgoing_upload_progress.dart';
 
 class ImageBubble extends StatelessWidget {
   final Event event;
@@ -135,6 +136,9 @@ class ImageBubble extends StatelessWidget {
                               fit: fit,
                             ),
                     ),
+                    // Telegram's upload disc while an own photo uploads.
+                    if (isOutgoingUpload(event))
+                      OutgoingUploadOverlay(progress: uploadProgressOf(event)),
                   ],
                 ),
               ),

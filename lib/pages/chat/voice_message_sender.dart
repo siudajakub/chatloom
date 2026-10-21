@@ -2,9 +2,9 @@
 import 'dart:typed_data';
 
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/personal/media/outgoing_media.dart';
+import 'package:chatloom/personal/media/send_error_text.dart';
 import 'package:chatloom/personal/privacy.dart';
-import 'package:chatloom/utils/localized_exception_extension.dart';
-import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:crypto/crypto.dart';
@@ -57,17 +57,20 @@ class _VoiceMessageSendAttempt {
       thread == this.thread;
 }
 
-/// Sends stopped voice recordings for one composer. A lost response is not
-/// permission to create a second event in another room, reply or thread: the
-/// same stopped draft can only retry its first intent, with its original SDK
-/// transaction. Shared by the ordinary chat and the merged person chat.
+/// Sends stopped voice recordings for one composer. The recording is handed
+/// to the chat as soon as its bubble (with this device's copy of the audio)
+/// exists; from then on its upload, result and Retry live in the bubble.
+/// A failure before that keeps the stopped draft, and the same draft can
+/// only retry its first intent with its original SDK transaction, never in
+/// another room, reply or thread. Shared by the ordinary chat and the
+/// merged person chat.
 class VoiceMessageSender {
   _VoiceMessageSendAttempt? _attempt;
 
   /// Sends [path] to [target]. [composerUnchanged] is the caller's own check
   /// that the composer still targets the same room/reply/thread (and is
   /// mounted); it is re-evaluated after every wait. [onAccepted] runs when
-  /// the event was accepted while the composer is still unchanged.
+  /// the bubble is in the chat while the composer is still unchanged.
   Future<bool> send({
     required BuildContext context,
     required Room target,
@@ -119,12 +122,15 @@ class VoiceMessageSender {
             showTrustUserInRoomDialog(context, target));
     if (!proceed || !current() || !context.mounted) return false;
     final scaffoldMessenger = ScaffoldMessenger.of(context);
-    final bytes = readRecording != null
-        ? await readRecording(path)
-        : (await showFutureLoadingDialog(
-            context: context,
-            future: XFile(path).readAsBytes,
-          )).result;
+    // A stopped recording is a local file: read it without a loader.
+    Uint8List? bytes;
+    try {
+      bytes = readRecording != null
+          ? await readRecording(path)
+          : await XFile(path).readAsBytes();
+    } catch (_) {
+      bytes = null;
+    }
     if (bytes == null || !current()) return false;
 
     final mimeType = lookupMimeType(fileName, headerBytes: bytes);
@@ -184,7 +190,12 @@ class VoiceMessageSender {
 
     attempt.inFlight = true;
     try {
-      final eventId = await attempt.target.sendFileEvent(
+      // Returns once the bubble (and this device's copy of the audio) is in
+      // the chat: the recorder is free for the next message at once, the
+      // upload continues in the bubble, and a failure stays there with
+      // Retry (same transaction, never a second message).
+      await OutgoingMedia.send(
+        attempt.target,
         file,
         txid: attempt.transactionId,
         inReplyTo: attempt.reply,
@@ -199,12 +210,11 @@ class VoiceMessageSender {
           },
         },
       );
-      if (eventId == null || !eventId.startsWith(r'$')) return false;
       attempt.accepted = true;
     } catch (e) {
       if (current() && context.mounted) {
         scaffoldMessenger.showSnackBar(
-          SnackBar(content: Text(e.toLocalizedString(context))),
+          SnackBar(content: Text(sendErrorText(e))),
         );
       }
       return false;

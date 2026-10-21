@@ -8,7 +8,6 @@ import 'dart:async';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/events/map_bubble.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
-import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:material_ui/material_ui.dart';
@@ -92,9 +91,12 @@ class SendLocationDialogState extends State<SendLocationDialog> {
         'https://www.openstreetmap.org/?mlat=${position!.latitude}&mlon=${position!.longitude}#map=16/${position!.latitude}/${position!.longitude}';
     final uri =
         'geo:${position!.latitude},${position!.longitude};u=${position!.accuracy}';
-    await showFutureLoadingDialog(
-      context: context,
-      future: () => widget.room.sendLocation(body, uri),
+    // No loader: the bubble shows "Sending" and, if it fails, "Not sent ·
+    // Tap to retry".
+    unawaited(
+      widget.room
+          .sendLocation(body, uri)
+          .then<void>((_) {}, onError: (Object _) {}),
     );
     if (!mounted) return;
     Navigator.of(context, rootNavigator: false).pop();

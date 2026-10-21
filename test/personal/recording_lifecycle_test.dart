@@ -8,6 +8,7 @@ import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat/recording_input_row.dart';
 import 'package:chatloom/pages/chat/recording_view_model.dart';
 import 'package:chatloom/pages/chat/recording_waveform.dart';
+import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -22,6 +23,8 @@ import 'package:wakelock_plus/wakelock_plus.dart'
     show wakelockPlusPlatformInstance;
 import 'package:wakelock_plus_platform_interface/wakelock_plus_platform_interface.dart';
 
+import 'outgoing_media_support.dart';
+
 class _NoDatabase implements DatabaseApi {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
@@ -30,6 +33,8 @@ class _NoDatabase implements DatabaseApi {
 
 class _Client extends Client {
   _Client() : super('offline recorder fixture', database: _NoDatabase());
+  @override
+  String get userID => '@owner:example.invalid';
   @override
   Future<MediaConfig> getConfig({
     Duration cacheLifetime = const Duration(days: 3),
@@ -159,6 +164,8 @@ class _VoiceRoom extends Room {
   _VoiceRoom(Client client, String id) : super(id: id, client: client);
   @override
   bool get canSendDefaultMessages => true;
+  @override
+  Future<Event?> getEventById(String eventID) async => null;
   @override
   Future<String?> sendFileEvent(
     MatrixFile file, {
@@ -332,9 +339,12 @@ void main() {
     expect(wake.values, [true]);
   }
 
+  late FakeEchoes echoes;
   Future<(_VoiceController, _VoiceMatrix)> mountSend(
     WidgetTester tester,
   ) async {
+    echoes = OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
     final client = _Client();
     final target = _VoiceRoom(client, '!voice:example.invalid');
     final control = _VoiceController(target);
@@ -373,7 +383,7 @@ void main() {
 
   for (final nullAck in [false, true]) {
     testWithDeadline(
-      'voice ${nullAck ? 'null' : 'lost'} ACK retry commits one event with the original SDK transaction',
+      'voice ${nullAck ? 'null' : 'lost'} ACK stays in its bubble; Retry commits one event with the original SDK transaction',
       (tester) async {
         final (control, _) = await mountSend(tester);
         final target = control.target
@@ -387,59 +397,93 @@ void main() {
           confirmTrust: (_) async => true,
           readRecording: (_) async => Uint8List.fromList([0]),
         );
-        expect(await send(), isFalse);
-        expect(target.committed.length, 1);
+        // The bubble is in the chat: the recorder is free at once.
         expect(await send(), isTrue);
+        await tester.pump();
+        expect(target.committed.length, 1);
+        final txid = target.transactions.single!;
+        expect(echoes.statusOf(txid), EventStatus.error.intValue);
+        // Retry from the bubble: same transaction, still one event.
+        final failed = Event.fromMatrixEvent(echoes.events[txid]!, target);
+        final again = await OutgoingMedia.retry(failed);
+        await tester.pump();
+        expect(await again.accepted, startsWith(r'$committed'));
         expect(target.sends, 2);
-        expect(target.transactions.first, isNotNull);
-        expect(target.transactions[1], target.transactions.first);
+        expect(target.transactions[1], txid);
         expect(target.fileNames[1], target.fileNames.first);
         expect(target.committed.length, 1);
-        // A duplicate completion callback after composer clear is a tombstone hit.
+        // A duplicate completion callback after the composer cleared is a
+        // tombstone hit, never a second message.
         expect(await send(), isTrue);
         expect(target.sends, 2);
       },
     );
   }
 
-  for (final change in ['room', 'reply', 'thread', 'account', 'bytes']) {
-    testWithDeadline('unknown voice send cannot retry after changing $change', (
-      tester,
-    ) async {
-      final (control, matrix) = await mountSend(tester);
-      final target = control.target
-        ..simulateFirstAckLoss = true
-        ..nullFirstAck = true;
-      var bytes = Uint8List.fromList([0]);
+  testWithDeadline(
+    'a voice draft whose bubble could not be stored retries with the same transaction',
+    (tester) async {
+      final (control, _) = await mountSend(tester);
+      final target = control.target;
+      echoes.failWriteNumber = 1;
       Future<bool> send() => control.onVoiceMessageSend(
         '/stopped-voice',
         1000,
         const [1024],
         'voice.ogg',
         confirmTrust: (_) async => true,
-        readRecording: (_) async => bytes,
+        readRecording: (_) async => Uint8List.fromList([0]),
       );
-      expect(await send(), isFalse);
-      switch (change) {
-        case 'room':
-          control.target = _VoiceRoom(
-            target.client,
-            '!another:example.invalid',
-          );
-        case 'reply':
-          control.replyEvent = null;
-        case 'thread':
-          control.activeThreadId = r'$another-thread';
-        case 'account':
-          matrix.active = _Client();
-        case 'bytes':
-          bytes = Uint8List.fromList([1]);
-      }
-      expect(await send(), isFalse);
+      expect(await send(), isFalse, reason: 'the draft stays in the recorder');
+      expect(target.sends, 0);
+      expect(await send(), isTrue);
+      await tester.pump();
       expect(target.sends, 1);
-      expect(target.committed.length, 1);
-      if (!identical(control.target, target)) expect(control.target.sends, 0);
-    });
+      expect(echoes.events.keys.single, target.transactions.single);
+    },
+  );
+
+  for (final change in ['room', 'reply', 'thread', 'account', 'bytes']) {
+    testWithDeadline(
+      'an unstored voice draft cannot be sent after changing $change',
+      (tester) async {
+        final (control, matrix) = await mountSend(tester);
+        final target = control.target;
+        echoes.failWriteNumber = 1;
+        var bytes = Uint8List.fromList([0]);
+        Future<bool> send() => control.onVoiceMessageSend(
+          '/stopped-voice',
+          1000,
+          const [1024],
+          'voice.ogg',
+          confirmTrust: (_) async => true,
+          readRecording: (_) async => bytes,
+        );
+        expect(await send(), isFalse);
+        switch (change) {
+          case 'room':
+            control.target = _VoiceRoom(
+              target.client,
+              '!another:example.invalid',
+            );
+          case 'reply':
+            control.replyEvent = null;
+          case 'thread':
+            control.activeThreadId = r'$another-thread';
+          case 'account':
+            matrix.active = _Client();
+          case 'bytes':
+            bytes = Uint8List.fromList([1]);
+        }
+        expect(await send(), isFalse);
+        await tester.pump();
+        expect(target.sends, 0);
+        expect(echoes.events, isEmpty);
+        if (!identical(control.target, target)) {
+          expect(control.target.sends, 0);
+        }
+      },
+    );
   }
 
   testWithDeadline(
@@ -537,7 +581,7 @@ void main() {
   });
 
   testWithDeadline(
-    'voice accepted send uses its frozen reply/thread and preserves a later reply',
+    'voice is handed to the chat before its upload ends, with its frozen reply/thread',
     (tester) async {
       final (control, _) = await mountSend(tester);
       final target = control.target;
@@ -551,17 +595,45 @@ void main() {
         confirmTrust: (_) async => true,
         readRecording: (_) async => Uint8List.fromList([0]),
       );
+      // Returns while the upload is still held: the recorder is free.
+      expect(await sent, isTrue);
       await tester.pump();
       expect(target.sends, 1);
       expect(target.sentReply, same(reply));
       expect(target.sentThread, r'$thread');
       expect(target.sentLastThread, r'$last-thread-event');
-      control.activeThreadId = r'$new-thread';
+      final txid = target.transactions.single!;
+      expect(echoes.events[txid]?.content['m.relates_to'], isNotNull);
+      // The reply moved into the bubble.
+      expect(control.replyEvent, isNull);
       target.sendGate!.complete(r'$accepted');
-      expect(await sent, isTrue);
-      expect(control.replyEvent, same(reply));
+      await tester.pump();
     },
   );
+
+  testWithDeadline('a reply chosen while the voice bubble is stored is kept', (
+    tester,
+  ) async {
+    final (control, _) = await mountSend(tester);
+    final target = control.target;
+    final reply = control.replyEvent;
+    echoes.writeGate = Completer<void>();
+    final sent = control.onVoiceMessageSend(
+      '/unused',
+      1000,
+      const [1024],
+      'voice.ogg',
+      confirmTrust: (_) async => true,
+      readRecording: (_) async => Uint8List.fromList([0]),
+    );
+    await tester.pump();
+    control.activeThreadId = r'$new-thread';
+    echoes.writeGate!.complete();
+    expect(await sent, isTrue);
+    await tester.pump();
+    expect(target.sentThread, r'$thread');
+    expect(control.replyEvent, same(reply));
+  });
 
   testWithDeadline(
     'pending permission is single flight and cancellation disposes its only recorder',
