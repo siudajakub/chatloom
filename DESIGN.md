@@ -198,11 +198,26 @@ surfaces that stay still while content moves beneath them:
 | Bottom sheets and action sheets | `showNotionSheet`, `showModalActionPopup` (a `NotionGlassPanel` with `NotionGlass.sheetRadius`) |
 | Floating pills over content | `NotionGlassPill(blur: true)` |
 
-Overlays (`overlay: true`, the default of `NotionGlassPanel`) blur only once
-their route has settled: while a dialog grows, a sheet slides or is dragged,
-or anything leaves, they paint the opaque fallback tone (below). The blur is
-therefore never animated, never sits inside a route's fade and costs nothing
-per frame; settling changes no colour, only lets the blurred content appear.
+An overlay (`overlay: true`, the default of `NotionGlassPanel`) keeps one
+glass state for as long as it moves, because a `BackdropFilter` inside an
+animating `Opacity` reads an empty layer and a scaled one changes its blur
+radius (both flash):
+
+- Popovers and menus (`showNotionPopover`) blur from their first to their
+  last frame. The route neither fades nor scales; `NotionGlassReveal` grows
+  the panel's clip out of the anchor (Telegram's popup: the background
+  expands from the anchor, the rows fade in inside it) and collapses it back
+  on exit. Only the clip and the opacity of the content above the blur
+  animate.
+- Bottom sheets blur from their first frame: their slide and drag only
+  translate them.
+- Dialogs fade and scale, so they blur only once their route has settled and
+  paint the opaque tone composited over their barrier while they grow or
+  leave; settling changes no colour, only lets the blurred content appear.
+
+Switching a surface's glass state flips `BackdropFilter.enabled` and the
+fill in place; the content is never remounted (a remount replayed a
+popover's row entrances the moment it settled).
 
 A glass surface is one surface: anything attached to it (a popover pointer,
 a tab, a badge that overlaps its edge) either lives inside the same
@@ -236,6 +251,7 @@ the dock's `surface` fill, opaque.
 | `NotionGlassSurface(tint:, dock:, overlay:, borderRadius:, border:)` | the only blur primitive; `RepaintBoundary` built in |
 | `NotionGlassBar(hairlineTop:, hairlineBottom:)` | full-width header and composer strip |
 | `NotionGlassPanel(child:, borderRadius:, padding:, overlay:, blur:)` | menus, popovers, dialogs, sheets: tint + hairline + ink-ready `Material` |
+| `NotionGlassReveal`, `NotionRevealClip` | the popover entrance: provided by `NotionPopoverRoute`, consumed by the first overlay surface below it (clip grows from the anchor, content fades, blur steady) |
 | `NotionGlassMenuRow(leading:, title:, trailing:, selected:, onTap:)` | a 48 pt row in a glass menu with a rounded, inset highlight |
 | `NotionGlassDivider(vertical:)` | the dock's 1 × 36 separator; `vertical: false` is the inset hairline between menu sections |
 | `NotionGlassPill(icon:, label:, onPressed:, selected:, blur:)` | a dock-style pill button: content presses inside the ink, the pill never scales |
@@ -308,6 +324,7 @@ dialogs and sheets never bounce.
 | `rise` 8 · `riseList` 10 · `riseSheet` 12 | px | entrance travel |
 | `pressButton` .96 · `pressIcon` .90 · `pressRow` .985 | scale | `NotionPressable` |
 | `popFrom` .6 · `dialogFrom` .94 · `popoverFrom` .92 | scale | start scales |
+| `refreshFrom` .5 | opacity | a list that changed view or network fades in from here, never from an empty frame |
 | `sheetStyle` / `sheetStyleOf(context)` · `menuStyle` | `AnimationStyle` | `showModalBottomSheet(sheetAnimationStyle:)`, `showMenu`/`PopupMenuButton(popUpAnimationStyle:)` |
 | `reduced(context)` | bool | **the** reduced-motion check (Android "Remove animations", iOS Reduce Motion) |
 | `of(context, d)` | Duration | `d`, or zero under reduced motion |
@@ -337,7 +354,7 @@ default.
 | `NotionDelayedSpinner()`, `NotionDelayedReveal(child:)` | loaders that only show after `loaderGrace` | `if (busy) const NotionDelayedSpinner()` |
 | `NotionTypingDots(size:)`, `NotionPulse(child:, color:)` | loops: typing, live call/recording | `NotionPulse(color: colors.danger, child: callButton)` |
 | `showNotionCustomDialog(context:, builder:)`, `NotionDialogRoute`, `NotionDialogTransition` | any dialog: barrier fade, scale .94 → 1 on `smoothCurve`, faster exit | `showNotionCustomDialog(context: context, builder: (_) => NotionDialog(...))` |
-| `showNotionPopover(context:, builder:, alignment:)`, `NotionPopoverRoute` | anchored panels/menus that grow from their anchor | `showNotionPopover(context: context, alignment: Alignment.bottomRight, builder: panel)` |
+| `showNotionPopover(context:, builder:, alignment:)`, `NotionPopoverRoute` | anchored panels/menus: the `NotionGlassPanel` in `builder` grows out of `alignment` (the anchor) with its blur on, content fades in; collapses back in `quick`; instant under reduced motion. Content without a glass panel appears without motion | `showNotionPopover(context: context, alignment: Alignment.bottomRight, builder: panel)` |
 | `AfterRouteTransition(child:)` | heavy content after the push; now fades the child in | as before |
 | `NotionMediaRoute(builder:)`, `NotionMediaHero(tag:, sourceRadius:)`, `NotionDismissDrag`, `NotionDismissTransform`, `NotionMediaBackdrop`, `NotionMediaChrome`, `NotionDoubleTapZoom`, `notionFitMedia(...)` | full-screen media (Telegram): the photo flies out of its thumbnail and back (straight path, corners square off), follows a downward swipe with the backdrop and chrome fading and springs back below the threshold, double tap zooms into the tapped point, a tap toggles the chrome. A thumbnail that opens the viewer is a `Hero(tag:, createRectTween: NotionMediaHero.rectTween)` | `showImageViewer(context, event, heroTag: ('details-media', id), sourceRadius: NotionRadius.smAll)` |
 
@@ -392,7 +409,8 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
 
 1. Animate transform and opacity only. Size animation (`NotionSizeReveal`)
    is for single elements, never rows in bulk. No blur animation, never
-   animate glass, never put glass inside an animating `Opacity`.
+   animate glass, never put glass inside an animating `Opacity` or scale
+   (a popover reveals its glass by clip, `NotionGlassReveal`).
 2. Lists: entrances play on a page's first appearance (≤ 10 items, inside a
    `NotionEntranceScope`) or for the one newest message. Scroll-built items
    never animate. No per-item controllers beyond that.
@@ -453,7 +471,8 @@ Do:
 Don't:
 - Add shadows, gradients, coloured surfaces or elevation.
 - Blur anything that scrolls (rows, bubbles, cards, chips, grid tiles) or
-  animate a blur; blur only fixed chrome and settled overlays (see Glass).
+  animate a blur; blur only fixed chrome and overlays that keep one glass
+  state while they move (see Glass).
 - Leave a square corner: every shape takes a `NotionRadius`/`NotionShapes`
   value.
 - Use status colours (`danger`, `success`, ...) as decoration.
@@ -495,8 +514,9 @@ Don't:
   conversation, chat details, settings) plus scrolled inbox/conversation
   captures with glass forced on. Glass has `glass-on-*`,
   `glass-overlays-*` (panel, menu rows, pills) and `glass-fallback-dark`
-  goldens; the golden suite also checks that overlay glass blurs only after
-  its route settles and that no theme shape is square; `motion-dark` shows the motion primitives
+  goldens; the golden suite also checks that dialog glass blurs only after
+  its route settles (`overlay_glass_motion_test.dart`: popovers and sheets
+  keep one blur per frame, nothing remounts) and that no theme shape is square; `motion-dark` shows the motion primitives
   at rest. `test/notion/motion_primitives_test.dart` checks settle-to-
   identity, reduced motion, timers and loops for every motion primitive. Run them in the isolated harness:
 
