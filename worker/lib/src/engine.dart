@@ -1215,6 +1215,8 @@ class WorkerEngine {
             ? enabledAt
             : windowStart,
         limit: autoScanPageLimit,
+        // Reels (on demand by default) are only listed when wanted.
+        reels: policy.kindEnabled(AutoTranscriptionKind.reel),
       );
     } catch (_) {
       // Source unavailable or malformed: keep the cursor, retry later, and

@@ -35,6 +35,9 @@ class FixtureSource {
   List<int> media = [1, 2, 3];
   int? declaredLength;
 
+  /// Non-200 answers, e.g. an older adapter refusing an unknown kind.
+  int Function(Map request)? status;
+
   FixtureSource._(this.server, this.directory, this.metadata);
 
   String get socket => '${directory.path}/source.sock';
@@ -72,6 +75,16 @@ class FixtureSource {
         request['_path'] = r.uri.path;
         fixture.requests.add(request);
         await fixture.delay?.call(request);
+        final code = fixture.status?.call(request) ?? 200;
+        if (code != 200) {
+          r.response.statusCode = code;
+          final body = utf8.encode('{"error":"local_source_unavailable"}');
+          r.response.contentLength = body.length;
+          done();
+          r.response.add(body);
+          await r.response.close();
+          return;
+        }
         List<int> bytes;
         if (r.uri.path == '/recent') {
           bytes = utf8.encode(jsonEncode(fixture.recent(request)));
@@ -278,6 +291,83 @@ void main() {
       'transcriptionAllowed': false,
     };
     expect(await transport.mediaFacts(source), isNull);
+  });
+
+  test(
+    'reels are asked for only when wanted; older adapters fall back',
+    () async {
+      final fixture = await FixtureSource.start(roundMetadata);
+      fixture.recent = (request) => {
+        'cursor': 3,
+        'items': [
+          if ((request['kinds'] as List).contains('reel'))
+            {
+              'roomId': '!ig:beeper.local',
+              'eventId': r'$reel',
+              'kind': 'reel',
+              'network': 'instagram',
+            },
+        ],
+      };
+      final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
+      expect((await transport.recent(cursor: 1))!.items, isEmpty);
+      expect(fixture.requests.last['kinds'], [
+        'voice',
+        'round',
+        'video',
+        'audio',
+      ]);
+      final reels = await transport.recent(cursor: 1, reels: true);
+      expect(fixture.requests.last['kinds'], [
+        'voice',
+        'round',
+        'video',
+        'audio',
+        'reel',
+      ]);
+      expect(reels!.items.single.kind, AutoTranscriptionKind.reel);
+      // An adapter that predates reels refuses the unknown kind: the scan is
+      // repeated without it, and later scans do not ask again.
+      fixture.status = (request) =>
+          (request['kinds'] as List).contains('reel') ? 503 : 200;
+      final before = fixture.requests.length;
+      final fallback = await transport.recent(cursor: 1, reels: true);
+      expect(fallback!.items, isEmpty);
+      expect(
+        fixture.requests
+            .skip(before)
+            .map((r) => (r['kinds'] as List).contains('reel')),
+        [true, false],
+      );
+      await transport.recent(cursor: 1, reels: true);
+      expect(
+        (fixture.requests.last['kinds'] as List).contains('reel'),
+        isFalse,
+      );
+    },
+  );
+
+  test('a reel is an ordinary video export flagged as a reel', () async {
+    final fixture = await FixtureSource.start(
+      (_) => {
+        'sourceKey': source.key,
+        'redacted': false,
+        'transcriptionAllowed': true,
+        'mimeType': 'video/mp4',
+        'kind': 'video',
+        'reel': true,
+        'durationMs': 30000,
+        'fileSize': 900000,
+      },
+    );
+    final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
+    expect(
+      (await transport.mediaFacts(source))!.kind,
+      AutoTranscriptionKind.reel,
+    );
+    final audio = await transport.loadAudio(source, Cancellation());
+    expect(audio.mimeType, 'video/mp4');
+    expect(audio.bytes, fixture.media);
   });
 
   test('kind changing between checks fails closed', () async {

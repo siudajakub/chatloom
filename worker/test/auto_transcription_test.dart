@@ -78,14 +78,17 @@ class MeasuringTranscriber implements Transcriber {
 class FakeScanner implements RecentSourceScanner {
   final pages = <RecentSourcePage?>[];
   final calls = <(int?, DateTime?)>[];
+  final reelRequests = <bool>[];
   Object? failure;
   @override
   Future<RecentSourcePage?> recent({
     required int? cursor,
     DateTime? since,
     int limit = 100,
+    bool reels = false,
   }) async {
     calls.add((cursor, since));
+    reelRequests.add(reels);
     if (failure != null) throw failure!;
     return pages.isEmpty ? null : pages.removeAt(0);
   }
@@ -259,6 +262,50 @@ void main() {
       expect(store.job(entity(r'$voice'))!['state'], 'done');
       expect(store.job(entity(r'$round'))!['state'], 'done');
       expect(transcriber.uploads, ['video/mp4', 'video/mp4']);
+    },
+  );
+
+  test(
+    'Instagram reels are on demand unless the policy switches them on',
+    () async {
+      scanner.pages.add(const RecentSourcePage(1, []));
+      await engine.autoScan(force: true);
+      expect(scanner.reelRequests.last, isFalse);
+      // A reel reported anyway (an older adapter) still creates no job.
+      scanner.pages.add(
+        RecentSourcePage(3, [
+          item(
+            r'$reel',
+            kind: AutoTranscriptionKind.reel,
+            network: 'instagram',
+          ),
+          item(
+            r'$clip',
+            kind: AutoTranscriptionKind.video,
+            network: 'instagram',
+          ),
+        ]),
+      );
+      expect(await engine.autoScan(force: true), 1);
+      expect(scanner.reelRequests.last, isFalse);
+      expect(store.job(entity(r'$reel')), isNull);
+      expect(store.job(entity(r'$clip'))!['mediaKind'], 'video');
+
+      putPolicy(
+        const TranscriptionPolicy().withKind(AutoTranscriptionKind.reel, true),
+      );
+      scanner.pages.add(
+        RecentSourcePage(4, [
+          item(
+            r'$reel2',
+            kind: AutoTranscriptionKind.reel,
+            network: 'instagram',
+          ),
+        ]),
+      );
+      expect(await engine.autoScan(force: true), 1);
+      expect(scanner.reelRequests.last, isTrue);
+      expect(store.job(entity(r'$reel2'))!['mediaKind'], 'reel');
     },
   );
 

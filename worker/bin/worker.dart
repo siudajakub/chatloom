@@ -202,9 +202,10 @@ Future<void> main(List<String> arguments) async {
                   'transcription': 'blocked_codec_sandbox',
                 'autoTranscription': engine.autoScanActive ? 'scan' : 'off',
                 // Worker capabilities for app-side gating: media kinds 2 =
-                // voice, round, any video and audio (also as files); live =
-                // cloud rooms are picked up from the worker's own sync.
-                'transcriptionMedia': 2,
+                // voice, round, any video and audio (also as files); 3 = also
+                // Instagram reels as their own kind (on demand by default);
+                // live = cloud rooms are picked up from the worker's own sync.
+                'transcriptionMedia': 3,
                 'autoTranscriptionLive': engine.liveScanActive,
                 'reminderPush': reminderDelivery.configured
                     ? 'configured'

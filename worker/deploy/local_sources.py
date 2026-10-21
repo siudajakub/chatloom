@@ -41,9 +41,22 @@ ROUND_MAX_SIDE = 640
 ROUND_SQUARE_TOLERANCE = 2
 # Media kinds. `video` and `audio` are only listed by /recent when the
 # worker asks for them (`kinds`), so a worker that predates them never
-# receives an item kind it would refuse as an invalid page.
-KINDS = ('voice', 'round', 'video', 'audio')
+# receives an item kind it would refuse as an invalid page. `reel` (a video
+# shared from Instagram) is listed only when asked for, too: J wants reels
+# transcribed on demand (2026-10-20), so a worker that does not ask (every
+# worker before the reel switch, or one with the switch off) never starts
+# automatic work for them. Selected-source metadata keeps `kind: video` for
+# a reel and adds `reel: true`, which older workers ignore.
+KINDS = ('voice', 'round', 'video', 'audio', 'reel')
 LEGACY_KINDS = ('voice', 'round')
+# A shared Instagram post, reel or story. mautrix-meta adds the post's link as
+# the event's `external_url` and as the last line of the caption; the local
+# index keeps the caption as the message text.
+INSTAGRAM_HOST = re.compile(r'(?:[a-z0-9-]+\.)*(?:instagram\.com|instagr\.am)\Z', re.I)
+INSTAGRAM_POST = re.compile(
+    r'https?://(?:[a-z0-9-]+\.)*(?:instagram\.com|instagr\.am)/'
+    r'(?:[A-Za-z0-9_.]+/)?(?:reels?|p|tv|stories)/', re.I)
+EXTERNAL_URL_FIELDS = ('external_url', 'externalURL', 'externalUrl')
 # Containers the worker's FFmpeg whitelist reads (mov/mp4/3gp, matroska/webm, avi).
 VIDEO_MIMES = frozenset({'video/mp4', 'video/webm', 'video/quicktime', 'video/3gpp', 'video/3gpp2',
                          'video/x-matroska', 'video/x-m4v', 'video/x-msvideo'})
@@ -223,6 +236,37 @@ def ordinary_video(message):
     return attachment
 
 
+def _instagram_url(value):
+    if not isinstance(value, str) or len(value) > 2048:
+        return False
+    parsed = urlparse(value.strip())
+    return parsed.scheme in ('http', 'https') and bool(INSTAGRAM_HOST.match(parsed.hostname or ''))
+
+
+def instagram_share(message):
+    """True for a video shared from Instagram (a reel, post or story share),
+    not one recorded and sent in the chat.
+
+    Either an `external_url` field (the bridge's marker, kept by some index
+    models at the top level, in `extra` or on the attachment) points to
+    Instagram, or an Instagram message's text carries a post/reel/story link
+    (the caption mautrix-meta writes for a share)."""
+    if not isinstance(message, dict):
+        return False
+    attachments = message.get('attachments') or []
+    places = [message, message.get('extra')]
+    if isinstance(attachments, list):
+        for attachment in attachments[:1]:
+            if isinstance(attachment, dict):
+                places += [attachment, attachment.get('extra')]
+    for place in places:
+        if isinstance(place, dict) and any(_instagram_url(place.get(k)) for k in EXTERNAL_URL_FIELDS):
+            return True
+    text = message.get('text')
+    return (network_of(message) == 'instagram' and isinstance(text, str)
+            and len(text) <= 65536 and INSTAGRAM_POST.search(text) is not None)
+
+
 def ordinary_audio(message):
     """A single non-voice audio attachment, e.g. a recording sent as a file."""
     attachment = single_attachment(message)
@@ -389,10 +433,11 @@ def exportable_media(message, telegram=False, kinds=KINDS):
     video = ordinary_round(message, telegram)
     if video is not None:
         return (video, 'round') if 'round' in kinds else (None, None)
-    if 'video' in kinds:
+    if 'video' in kinds or 'reel' in kinds:
         video = ordinary_video(message)
         if video is not None:
-            return video, 'video'
+            kind = 'reel' if instagram_share(message) else 'video'
+            return (video, kind) if kind in kinds else (None, None)
     if 'audio' in kinds:
         audio = ordinary_audio(message)
         if audio is not None:
@@ -443,7 +488,12 @@ def selected_source(source):
         if candidate is not None and round_flag(canonical, candidate) is None:
             pending = candidate
     if original is None and pending is None:
-        original, kind = exportable_media(canonical, telegram, ('video', 'audio'))
+        original, kind = exportable_media(canonical, telegram, ('video', 'audio', 'reel'))
+    # A reel is exported (on demand) like any video; the flag lets a worker
+    # that knows reels keep them out of automatic work.
+    reel = kind == 'reel'
+    if reel:
+        kind = 'video'
     # The public message API omits some behavior/timer fields. The canonical
     # stored model must approve export before the API is used to resolve bytes.
     if rows[0][2] or (original is None and pending is None):
@@ -479,6 +529,8 @@ def selected_source(source):
         if any(attachment.get(k) != original.get(k) for k in ('id', 'mimeType', 'fileSize')):
             raise SourceFailure()
         attachment = {**attachment, '_sourceAPI': api, '_kind': kind}
+        if reel:
+            attachment['_reel'] = True
     return message, attachment
 
 
@@ -551,7 +603,8 @@ def recent_media(request):
     limit, since = request.get('limit', 100), request.get('sinceMs')
     kinds = request.get('kinds', list(LEGACY_KINDS))
     if (not isinstance(kinds, list) or not 0 < len(kinds) <= len(KINDS)
-            or any(not isinstance(k, str) or k not in KINDS for k in kinds)):
+            or any(not isinstance(k, str) or k not in KINDS for k in kinds)
+            or len(set(kinds)) != len(kinds)):
         raise SourceFailure()
     if (not isinstance(account, str) or not account.startswith('@')
             or (cursor is not None and (not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0))
@@ -617,7 +670,9 @@ class Handler(BaseHTTPRequestHandler):
                     # Declared values let the worker skip over-limit media
                     # before any export; its own measurement stays final.
                     'durationMs': _declared_duration(attachment),
-                    'fileSize': attachment.get('fileSize') if attachment else None}).encode(), 'application/json')
+                    'fileSize': attachment.get('fileSize') if attachment else None,
+                    **({'reel': True} if attachment and attachment.get('_reel') else {})}).encode(),
+                    'application/json')
                 return
             if attachment is None:
                 self.reply(403, b'{}', 'application/json')

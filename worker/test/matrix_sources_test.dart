@@ -4,6 +4,7 @@
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:personal_worker/src/matrix_sources.dart';
+import 'package:personal_worker/src/matrix_transport.dart';
 import 'package:test/test.dart';
 
 class _UnusedDatabase implements DatabaseApi {
@@ -101,6 +102,31 @@ void main() {
     // The same event delivered again (sync retry) is not reported twice.
     feed.observe(message(r'$clip', video()));
     expect(await feed.drain(), isEmpty);
+  });
+
+  test('a video shared from Instagram is reported as a reel', () async {
+    feed.observe(
+      message(r'$reel', {
+        ...video(),
+        'external_url': 'https://www.instagram.com/reel/Cfixture/',
+      }),
+    );
+    feed.observe(message(r'$clip', video()));
+    final items = await feed.drain();
+    expect(items.map((i) => (i.eventId, i.kind)), [
+      (r'$reel', AutoTranscriptionKind.reel),
+      (r'$clip', AutoTranscriptionKind.video),
+    ]);
+    // On demand a reel is transcribed like any other video.
+    expect(
+      MatrixFeatureTransport.transcriptionSourceRejection(
+        message(r'$reel-request', {
+          ...video(info: {'size': 900000}),
+          'external_url': 'https://www.instagram.com/reel/Cfixture/',
+        }),
+      ),
+      isNull,
+    );
   });
 
   test('silent loops, text, edits, journal, local and disappearing chats '

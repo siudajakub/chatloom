@@ -615,6 +615,86 @@ class LocalVideoAudioPolicyTests(unittest.TestCase):
         self.assertEqual(sources.exportable_media(round_message(), kinds=sources.LEGACY_KINDS)[1], 'round')
 
 
+def reel_message(**change):
+    message = video_message(size={'width': 720, 'height': 1280})
+    message['accountID'] = 'local-instagram_ba_fixture'
+    message['text'] = 'fixture\nCaption of the shared post\nhttps://www.instagram.com/reel/Cfixture/'
+    message.update(change)
+    return message
+
+
+class LocalReelPolicyTests(unittest.TestCase):
+    """J (2026-10-20): Instagram reels are transcribed only on demand."""
+
+    def test_instagram_shares_are_reels(self):
+        for text in ('https://www.instagram.com/reel/Cfixture/?igsh=x',
+                     'Caption\nhttps://instagram.com/p/Cfixture/',
+                     'https://www.instagram.com/fixture/reel/Cfixture/',
+                     'https://www.instagram.com/stories/fixture/123/',
+                     'http://instagr.am/tv/Cfixture'):
+            with self.subTest(text=text):
+                self.assertEqual(sources.exportable_media(reel_message(text=text))[1], 'reel')
+        # The bridge's external_url, wherever the index model keeps it.
+        for place in ('top', 'extra', 'attachment'):
+            with self.subTest(place=place):
+                message = video_message()
+                url = 'https://www.instagram.com/reel/Cfixture/'
+                if place == 'top':
+                    message['external_url'] = url
+                elif place == 'extra':
+                    message['extra'] = {'externalURL': url}
+                else:
+                    message['attachments'][0]['externalUrl'] = url
+                self.assertEqual(sources.exportable_media(message)[1], 'reel')
+
+    def test_other_videos_are_not_reels(self):
+        # Recorded and sent in an Instagram chat: no shared link.
+        self.assertEqual(sources.exportable_media(reel_message(text='look at this'))[1], 'video')
+        self.assertEqual(sources.exportable_media(reel_message(text=None))[1], 'video')
+        # A link typed into another network's caption is not a share.
+        self.assertEqual(sources.exportable_media(video_message(
+            text='https://www.instagram.com/reel/Cfixture/'))[1], 'video')
+        for url in ('https://www.facebook.com/reel/1', 'https://notinstagram.com/reel/x',
+                    'https://instagram.com.example.org/p/x', 'ftp://instagram.com/p/x', 42):
+            with self.subTest(url=url):
+                message = video_message()
+                message['external_url'] = url
+                self.assertEqual(sources.exportable_media(message)[1], 'video')
+        # Shared loops and protected shares stay refused.
+        self.assertEqual(sources.exportable_media(reel_message(
+            attachments=[{**reel_message()['attachments'][0], 'isGif': True}])), (None, None))
+        self.assertEqual(sources.exportable_media(reel_message(extra={'view_once': True})), (None, None))
+
+    def test_reels_are_exported_only_for_workers_that_ask(self):
+        everything_but_reels = ('voice', 'round', 'video', 'audio')
+        self.assertEqual(sources.exportable_media(reel_message(), kinds=everything_but_reels), (None, None))
+        self.assertEqual(sources.exportable_media(reel_message(), kinds=sources.LEGACY_KINDS), (None, None))
+        self.assertEqual(sources.exportable_media(reel_message(), kinds=('reel',))[1], 'reel')
+        self.assertEqual(sources.exportable_media(video_message(), kinds=('reel',)), (None, None))
+
+    def test_selected_reel_is_a_video_with_the_reel_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            index = Path(directory) / 'index.db'
+            canonical = reel_message()
+            with sqlite3.connect(index) as db:
+                db.execute('CREATE TABLE mx_room_messages(id,isDeleted,isEdited,message,roomID,eventID)')
+                db.execute('INSERT INTO mx_room_messages VALUES(5,0,0,?,?,?)',
+                           (json.dumps(canonical), '!ig:beeper.local', '$reel'))
+            api_message = {'id': '5', 'chatID': '!ig:beeper.local', 'attachments': canonical['attachments']}
+
+            def api(method, path):
+                if path == '/v1/app/setup':
+                    return {'matrix': {'userID': '@fixture:example.invalid'}}
+                return api_message
+            source = {'conversation': {'roomId': '!ig:beeper.local', 'accountId': '@fixture:example.invalid',
+                                       'network': 'instagram'}, 'eventId': '$reel'}
+            with patch.object(sources, 'INDEX', index), patch.object(sources, 'BeeperAPI') as client:
+                client.return_value.request.side_effect = api
+                _, attachment = sources.selected_source(source)
+            self.assertEqual(attachment['_kind'], 'video')
+            self.assertTrue(attachment['_reel'])
+
+
 class LocalRecentTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -679,10 +759,22 @@ class LocalRecentTests(unittest.TestCase):
         page = self.recent(cursor=11, limit=10, kinds=['voice', 'round', 'video', 'audio'])
         self.assertEqual([(i['eventId'], i['kind'], i['durationMs'], i['network']) for i in page['items']],
                          [('$clip', 'video', 95000, 'whatsapp')])
-        for kinds in ([], ['image'], 'video', [1], ['voice'] * 5):
+        for kinds in ([], ['image'], 'video', [1], ['voice'] * 5, ['voice', 'voice'], ['voice'] * 6):
             with self.subTest(kinds=kinds):
                 with self.assertRaises(sources.SourceFailure):
                     self.recent(cursor=11, kinds=kinds)
+
+    def test_reels_are_listed_only_when_the_worker_asks(self):
+        reel = {**reel_message(), 'isSender': False, 'senderID': '@ghost:beeper.local',
+                'timestamp': '2026-10-17T12:00:03.000Z'}
+        with closing(sqlite3.connect(self.index)) as db, db:
+            db.execute('INSERT INTO mx_room_messages VALUES(?,?,?,?,?,?)',
+                       (14, 0, 0, json.dumps(reel), '!ig:beeper.local', '$reel'))
+        page = self.recent(cursor=11, limit=10, kinds=['voice', 'round', 'video', 'audio'])
+        self.assertEqual(page, {'cursor': 14, 'items': []})
+        page = self.recent(cursor=11, limit=10, kinds=['voice', 'round', 'video', 'audio', 'reel'])
+        self.assertEqual([(i['eventId'], i['kind'], i['network']) for i in page['items']],
+                         [('$reel', 'reel', 'instagram')])
 
     def test_null_cursor_returns_current_end_without_history(self):
         self.assertEqual(self.recent(cursor=None), {'cursor': 11, 'items': []})
@@ -816,6 +908,17 @@ class LocalRoundHTTPTests(unittest.TestCase):
                          ('video', 95000, 5000))
         status, _, data = self.serve(attachment, b'webm fixture' * 10, 'audio')
         self.assertEqual((status, data), (200, b'webm fixture' * 10))
+
+    def test_reel_metadata_is_a_video_with_the_reel_flag(self):
+        attachment = {'id': 'clip', 'mimeType': 'video/mp4', 'fileSize': 5000, 'duration': 30,
+                      '_kind': 'video', '_reel': True}
+        status, _, data = self.serve(attachment, b'', 'metadata')
+        self.assertEqual(status, 200)
+        metadata = json.loads(data)
+        self.assertEqual((metadata['kind'], metadata['reel'], metadata['transcriptionAllowed']),
+                         ('video', True, True))
+        status, _, data = self.serve({**attachment, '_reel': False}, b'', 'metadata')
+        self.assertNotIn('reel', json.loads(data))
 
     def test_round_file_above_round_cap_is_refused(self):
         attachment = {'id': 'round', 'mimeType': 'video/mp4', 'fileSize': 70000, '_kind': 'round'}

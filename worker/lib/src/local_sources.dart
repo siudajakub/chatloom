@@ -24,8 +24,11 @@ const localVideoMimeTypes = {
 };
 
 /// Kinds this worker asks the adapter for. Adapters that predate video
-/// support ignore the field and keep returning voice/round only.
+/// support ignore the field and keep returning voice/round only. Reels are
+/// asked for only while the policy transcribes them automatically; a current
+/// adapter then lists them as `reel`, and never as `video` otherwise.
 const localRecentKinds = ['voice', 'round', 'video', 'audio'];
+const localReelKind = 'reel';
 const _metadataMaxBytes = 65536;
 const _recentMaxBytes = 262144;
 const _recentMaxLimit = 200;
@@ -209,7 +212,8 @@ class LocalSourceTransport
       return localAudioMaxBytes;
     }
     if (kind == 'round' && mime == 'video/mp4') return localRoundMaxBytes;
-    if (kind == 'video' && localVideoMimeTypes.contains(mime)) {
+    if ((kind == 'video' || kind == localReelKind) &&
+        localVideoMimeTypes.contains(mime)) {
       return localAudioMaxBytes;
     }
     if (mime.startsWith('video/')) {
@@ -225,8 +229,22 @@ class LocalSourceTransport
     'round' => AutoTranscriptionKind.round,
     'video' => AutoTranscriptionKind.video,
     'audio' => AutoTranscriptionKind.audio,
+    localReelKind => AutoTranscriptionKind.reel,
     _ => null,
   };
+
+  /// The adapter answers a reel as `kind: video` plus `reel: true`, which
+  /// older workers ignore.
+  static AutoTranscriptionKind? _metadataKind(Map<String, dynamic> data) {
+    final kind = _kind(data['kind'] ?? 'voice');
+    return kind == AutoTranscriptionKind.video && data['reel'] == true
+        ? AutoTranscriptionKind.reel
+        : kind;
+  }
+
+  /// Set once an adapter refused the `reel` kind (it predates reels): later
+  /// scans of this process do not ask again, and reels stay on demand.
+  bool _reelKindRefused = false;
 
   @override
   Future<MediaFacts?> mediaFacts(SourceEventRef source) async {
@@ -246,7 +264,7 @@ class LocalSourceTransport
       }
       int? positive(Object? value) => value is int && value >= 0 ? value : null;
       return MediaFacts(
-        kind: _kind(data['kind'] ?? 'voice'),
+        kind: _metadataKind(data),
         durationMs: positive(data['durationMs']),
         sizeBytes: positive(data['fileSize']),
       );
@@ -321,6 +339,7 @@ class LocalSourceTransport
     required int? cursor,
     DateTime? since,
     int limit = 100,
+    bool reels = false,
   }) async {
     if (!verified) throw const WorkerFailure('device_verification_required');
     if (limit < 1 ||
@@ -330,23 +349,34 @@ class LocalSourceTransport
     }
     // A scan is optional work: skip this interval instead of waiting.
     if (_active != null) return null;
-    final Uint8List bytes;
+    final askReels = reels && !_reelKindRefused;
+    Future<Uint8List> page(bool withReels) => _exclusive(
+      () => _post(
+        '/recent',
+        {
+          'accountId': accountId,
+          'cursor': cursor,
+          'sinceMs': since?.toUtc().millisecondsSinceEpoch,
+          'limit': limit,
+          'kinds': [...localRecentKinds, if (withReels) localReelKind],
+        },
+        _recentMaxBytes,
+        Cancellation(),
+      ),
+      wait: Duration.zero,
+    );
+    Uint8List bytes;
     try {
-      bytes = await _exclusive(
-        () => _post(
-          '/recent',
-          {
-            'accountId': accountId,
-            'cursor': cursor,
-            'sinceMs': since?.toUtc().millisecondsSinceEpoch,
-            'limit': limit,
-            'kinds': localRecentKinds,
-          },
-          _recentMaxBytes,
-          Cancellation(),
-        ),
-        wait: Duration.zero,
-      );
+      try {
+        bytes = await page(askReels);
+      } on WorkerFailure catch (e) {
+        if (!askReels || e.code == 'local_source_busy') rethrow;
+        // An adapter that predates reels refuses the unknown kind. Scan
+        // without it: reels then stay on demand rather than every
+        // automatic transcription stopping.
+        _reelKindRefused = true;
+        bytes = await page(false);
+      }
     } on WorkerFailure catch (e) {
       if (e.code == 'local_source_busy') return null;
       rethrow;
