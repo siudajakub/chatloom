@@ -224,8 +224,7 @@ final class RoundCapture: NSObject, FlutterTexture,
         fail(result, "capture"); return
       }
       capture.addOutput(preview); capture.addOutput(recording)
-      if let connection = recording.connection(with: .video),
-         recording.supportedOutputSettingsKeys(for: connection).contains(AVVideoCodecKey) {
+      if let connection = recording.connection(with: .video) {
         recording.setOutputSettings([AVVideoCodecKey: AVVideoCodecType.h264], for: connection)
       }
       capture.commitConfiguration()
