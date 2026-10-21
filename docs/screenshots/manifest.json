@@ -1,15 +1,15 @@
 {
   "inbox.png": {
     "source_capture": "inbox-390.png",
-    "sha256": "91b422887860357bbc1d3aba278fa536750a036f30cb759950a57ac2380fad7a"
+    "sha256": "4fba6bbca6c254f787d79f4fde712948aaa41f7b38bc258517efd9ad0d5479c3"
   },
   "conversation.png": {
     "source_capture": "conversation-390.png",
-    "sha256": "195d5dca3e3e5f7d336e404945757896493aee79075615954c4026dc6619de93"
+    "sha256": "392dcf9757eef5fad4b65213be3d0cec0f378b4e78df458d86a21f1d8d1d6fa9"
   },
   "settings.png": {
     "source_capture": "settings-390.png",
-    "sha256": "27c57fd55c550e2a3d1826440082d3d857b2cfe6377b90bba063b8f3a3502e13"
+    "sha256": "16e8cf9146d36c1676f0a394dbe2aa2ab1dd561619113da454d4709be32fae28"
   },
-  "source_manifest_sha256": "f7f8e3cf980289ea79de5ae9c514a326e72dbdb31f54c0d979c56cbd5f6a35b9"
+  "source_manifest_sha256": "0466c8d3a2e3123c815415dfe9315fe0529727d3c17ac307991d78ea10804b00"
 }
