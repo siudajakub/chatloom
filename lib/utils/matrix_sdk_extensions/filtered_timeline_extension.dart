@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:matrix/matrix.dart';
 
@@ -29,7 +30,7 @@ extension VisibleInGuiExtension on List<Event> {
 extension IsStateExtension on Event {
   bool get isVisibleInGui =>
       // always filter out edit and reaction relationships
-      !{
+      !const {
         RelationshipTypes.edit,
         RelationshipTypes.reaction,
       }.contains(relationshipType) &&
@@ -37,17 +38,18 @@ extension IsStateExtension on Event {
       !isKnownHiddenStates &&
       // event types to hide: redaction and reaction events
       // if a reaction has been redacted we also want it to be hidden in the timeline
-      !{EventTypes.Reaction, EventTypes.Redaction}.contains(type) &&
+      !const {EventTypes.Reaction, EventTypes.Redaction}.contains(type) &&
       // if we enabled to hide all redacted events, don't show those
       (!AppSettings.hideRedactedEvents.value || !redacted) &&
       // if we enabled to hide all unknown events, don't show those
       (!AppSettings.hideUnknownEvents.value || isEventTypeKnown);
 
-  bool get isState => !{EventTypes.Message, EventTypes.Sticker}.contains(type);
+  bool get isState =>
+      !const {EventTypes.Message, EventTypes.Sticker}.contains(type);
 
   /// Runs of these fold into one "more events" line. Encrypted events are
   /// messages waiting for a key, never folded state.
-  bool get isCollapsedState => !{
+  bool get isCollapsedState => !const {
     EventTypes.Message,
     EventTypes.Sticker,
     EventTypes.Encrypted,
@@ -57,6 +59,8 @@ extension IsStateExtension on Event {
 
   bool get isKnownHiddenStates =>
       isTelegramMediaControl(type) ||
-      {PollEventContent.responseType}.contains(type) ||
+      type == PollEventContent.responseType ||
+      // Bridge delivery reports render on the message they refer to.
+      type == beeperMessageSendStatusType ||
       type.startsWith('m.key.verification.');
 }

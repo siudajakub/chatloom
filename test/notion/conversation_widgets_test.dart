@@ -250,6 +250,9 @@ void main() {
       isNull,
     );
     expect(sends, 0);
+    // The spinner waits for the loader grace (no flash on fast sends).
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await tester.pump(const Duration(seconds: 1));
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
 

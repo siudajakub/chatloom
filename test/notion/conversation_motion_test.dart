@@ -218,15 +218,17 @@ void main() {
       expect(haptics, ['HapticFeedbackType.lightImpact']);
     });
 
-    testWidgets('busy morphs the arrow into a spinner', (tester) async {
+    testWidgets('busy shows a spinner only after the loader grace', (
+      tester,
+    ) async {
       await tester.pumpWidget(_app(NotionSendButton(onPressed: () {})));
       await tester.pumpWidget(
         _app(NotionSendButton(busy: true, onPressed: () {})),
       );
       await tester.pump(const Duration(milliseconds: 40));
-      // Both glyphs share the slot mid-morph.
+      // A normal send (a few milliseconds of storage) shows no spinner.
       expect(find.byIcon(Icons.arrow_upward), findsOneWidget);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
       await tester.pump(const Duration(seconds: 1));
       expect(find.byIcon(Icons.arrow_upward), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsOneWidget);

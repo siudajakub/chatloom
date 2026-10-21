@@ -132,6 +132,18 @@ class ConversationPersonal extends PersonalClient {
   final drafts = <({SendTarget target, String text})>[];
   final sends = <({Room room, String text, Event? reply, String? edit})>[];
   ImmediateSendState sendState = ImmediateSendState.accepted;
+
+  /// Whether the fixture outbox persists the attempt (and calls onDurable).
+  bool durable = true;
+
+  /// Whether a failed attempt had a local echo (a bubble with Retry).
+  bool echoShown = false;
+
+  /// Holds the "network" after the attempt is durable (a slow bridge).
+  Completer<void>? transportGate;
+  final discarded = <String>[];
+  final retried = <String>[];
+  var _attempts = 0;
   ConversationPersonal(super.client)
     : super.forTesting(openStore: () => throw StateError('No fixture store'));
   @override
@@ -155,15 +167,70 @@ class ConversationPersonal extends PersonalClient {
     Event? replyTo,
     String? editEventId,
     String? threadId,
+    ImmediateDurable? onDurable,
   }) async {
     sends.add((room: room, text: text, reply: replyTo, edit: editEventId));
+    final id = 'fixture-action-${++_attempts}';
+    if (!durable) {
+      return ImmediateSendResult(
+        state: ImmediateSendState.failed,
+        actionId: '',
+        transactionId: '',
+        errorCode: 'storageUnavailable',
+      );
+    }
+    // The record write: asynchronous, but no timer (tests stay pending-free).
+    await Future<void>.value();
+    onDurable?.call(
+      ImmediateAttempt(actionId: id, transactionId: 'immediate-$id'),
+    );
+    final gate = transportGate;
+    if (gate != null) await gate.future;
     return ImmediateSendResult(
       state: sendState,
-      actionId: 'fixture-action',
-      transactionId: 'fixture-txn',
-      eventId: r'$accepted',
+      actionId: id,
+      transactionId: 'immediate-$id',
+      eventId: sendState == ImmediateSendState.accepted ? r'$accepted' : null,
+      errorCode: sendState == ImmediateSendState.failed ? 'rejected' : null,
     );
   }
+
+  @override
+  Future<String?> loadDraft(Room room) async =>
+      values['draft:${room.id}']?['text'] as String?;
+
+  @override
+  Future<void> saveDraft(Room room, String text) => savePersonalDraft(
+    'draft:${room.id}',
+    SendTarget(conversation: ref(room)),
+    text,
+  );
+
+  @override
+  bool localEchoShown(String transactionId) => echoShown;
+
+  @override
+  Future<void> discardImmediate(String actionId) async =>
+      discarded.add(actionId);
+
+  @override
+  Future<ImmediateSendResult> retryImmediate(String actionId) async {
+    retried.add(actionId);
+    return ImmediateSendResult(
+      state: ImmediateSendState.accepted,
+      actionId: actionId,
+      transactionId: 'immediate-$actionId',
+      eventId: r'$retried',
+    );
+  }
+
+  @override
+  Future<ImmediateSendResult?> immediateState(String actionId) async =>
+      ImmediateSendResult(
+        state: ImmediateSendState.unknown,
+        actionId: actionId,
+        transactionId: 'immediate-$actionId',
+      );
 
   @override
   Future<void> completeImmediate(String actionId) async {}

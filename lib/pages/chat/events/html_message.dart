@@ -23,7 +23,13 @@ import 'package:matrix/matrix.dart';
 
 import '../../../utils/url_launcher.dart';
 
-class HtmlMessage extends StatelessWidget {
+/// Renders a Matrix HTML (or escaped plain) body as one rich paragraph.
+///
+/// The parsed DOM and the built span (including highlighted code blocks)
+/// are cached in the state and rebuilt only when the inputs that shape them
+/// change, so timeline updates that rebuild every visible row do not
+/// re-parse every message (review R9).
+class HtmlMessage extends StatefulWidget {
   final String html;
   final Room room;
   final Color textColor;
@@ -118,6 +124,57 @@ class HtmlMessage extends StatelessWidget {
     'h6',
     'li',
   };
+
+  @override
+  State<HtmlMessage> createState() => _HtmlMessageState();
+}
+
+class _HtmlMessageState extends State<HtmlMessage> {
+  Room get room => widget.room;
+  Color get textColor => widget.textColor;
+  double get fontSize => widget.fontSize;
+  TextStyle get linkStyle => widget.linkStyle;
+  String? get eventId => widget.eventId;
+  Set<Event>? get checkboxCheckedEvents => widget.checkboxCheckedEvents;
+
+  /// Spans keep this tear-off, so a cached span always opens links with the
+  /// current widget's callback.
+  void onOpen(LinkableElement link) => widget.onOpen(link);
+
+  static const allowedHtmlTags = HtmlMessage.allowedHtmlTags;
+  static const ignoredHtmlTags = HtmlMessage.ignoredHtmlTags;
+  static const blockHtmlTags = HtmlMessage.blockHtmlTags;
+  static const fullLineHtmlTag = HtmlMessage.fullLineHtmlTag;
+
+  Object? _key;
+  InlineSpan? _span;
+  String _plainText = '';
+
+  /// Everything the span depends on. Checkbox reactions are compared by
+  /// their content, because the timeline hands over a new set every build.
+  Object _keyOf(HtmlMessage w) => (
+    w.html,
+    w.textColor,
+    w.fontSize,
+    w.linkStyle,
+    w.room,
+    w.eventId,
+    Object.hashAllUnordered(
+      (w.checkboxCheckedEvents ?? const <Event>{}).map(
+        (e) => Object.hash(e.eventId, e.senderId, e.checkedCheckboxId),
+      ),
+    ),
+  );
+
+  InlineSpan _cachedSpan(BuildContext context) {
+    final key = _keyOf(widget);
+    final cached = _span;
+    if (cached != null && key == _key) return cached;
+    final element = parser.parse(widget.html).body ?? dom.Element.html('');
+    _key = key;
+    _plainText = element.text;
+    return _span = _renderHtml(element, context);
+  }
 
   /// Adding line breaks before block elements.
   List<InlineSpan> _renderWithLineBreaks(
@@ -585,12 +642,20 @@ class HtmlMessage extends StatelessWidget {
     }
   }
 
+  // Every paragraph, quote, list item and code block sizes to its longest
+  // line (nested Text.rich widgets inherit the basis), so a wrapped message
+  // shrink-wraps its bubble. Same cost as the default basis: the paragraph
+  // already knows its line metrics after its single layout.
   @override
-  Widget build(BuildContext context) {
-    final element = parser.parse(html).body ?? dom.Element.html('');
+  Widget build(BuildContext context) => DefaultTextStyle.merge(
+    textWidthBasis: TextWidthBasis.longestLine,
+    child: _build(context),
+  );
+
+  Widget _build(BuildContext context) {
     final configuredMaxLines = AppSettings.messagePreviewMaxLines.value;
     final maxLines = configuredMaxLines <= 0 ? null : configuredMaxLines;
-    final span = _renderHtml(element, context);
+    final span = _cachedSpan(context);
     final style = TextStyle(fontSize: fontSize, color: textColor);
 
     if (maxLines == null) {
@@ -602,7 +667,7 @@ class HtmlMessage extends StatelessWidget {
     }
 
     // Heuristic: if plain text has enough newlines or length, it will overflow.
-    final plainText = element.text;
+    final plainText = _plainText;
     final lineCount = '\n'.allMatches(plainText).length + 1;
     final likelyOverflows =
         lineCount > maxLines || plainText.length > maxLines * 50;
@@ -669,13 +734,12 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
             selectionColor: widget.textColor.withAlpha(128),
           ),
         ),
-        Center(
-          child: TextButton.icon(
-            onPressed: () => setState(() => _expanded = !_expanded),
-            style: TextButton.styleFrom(foregroundColor: widget.linkColor),
-            icon: Icon(_expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down),
-            label: Text(_expanded ? l10n.showLess : l10n.showMore),
-          ),
+        // Not centred: a Center would stretch the bubble to its max width.
+        TextButton.icon(
+          onPressed: () => setState(() => _expanded = !_expanded),
+          style: TextButton.styleFrom(foregroundColor: widget.linkColor),
+          icon: Icon(_expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down),
+          label: Text(_expanded ? l10n.showLess : l10n.showMore),
         ),
       ],
     );

@@ -5,6 +5,7 @@ import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -15,23 +16,6 @@ class ChatAppBarTitle extends StatelessWidget {
   const ChatAppBarTitle(this.controller, {super.key});
   @override
   Widget build(BuildContext context) {
-    // Selection count and chat header cross-fade; the count rolls.
-    return NotionFadeThrough(
-      duration: NotionMotion.short,
-      alignment: AlignmentDirectional.centerStart,
-      child: controller.selectedEvents.isNotEmpty
-          ? NotionAnimatedCount(
-              key: const ValueKey('selection'),
-              count: controller.selectedEvents.length,
-            )
-          : KeyedSubtree(
-              key: const ValueKey('header'),
-              child: _header(context),
-            ),
-    );
-  }
-
-  Widget _header(BuildContext context) {
     final room = controller.room;
     final personal = PersonalClient.of(room.client);
     final projection = InboxProjection(personal);
@@ -52,6 +36,7 @@ class ChatAppBarTitle extends StatelessWidget {
         ),
       ),
       name: name,
+      status: ConnectionStatusLine(client: room.client),
       onDetails: () => ChatLoomThemes.isThreeColumnMode(context)
           ? controller.toggleDisplayChatDetailsColumn()
           : context.go('${chatLocation(context, room.id)}/details'),

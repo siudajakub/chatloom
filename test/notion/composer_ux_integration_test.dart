@@ -119,9 +119,11 @@ void main() {
         }
         await tester.pumpAndSettle();
         expect(personal.sends.length, 1);
+        // The outbox has the message: the composer is empty either way
+        // (Telegram). A failed draft clear keeps the attempt, not the text.
         expect(
           tester.widget<TextField>(editor).controller!.text,
-          failSave ? 'Original message' : 'The next draft',
+          failSave ? isEmpty : 'The next draft',
         );
         expect(personal.completed, failSave ? 0 : 1);
         if (failSave)

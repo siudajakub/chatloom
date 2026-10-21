@@ -26,6 +26,7 @@ import 'package:matrix/matrix.dart';
 
 import 'chat.dart' show AddPopupMenuActions;
 import 'conversation_source.dart';
+import 'conversation_source_picker.dart' show ConversationSourceHintHost;
 import 'input_bar.dart';
 
 /// The composer of a conversation: one room ([ChatController]) or the
@@ -40,7 +41,6 @@ class ChatInputRow extends StatefulWidget {
 }
 
 class _ChatInputRowState extends State<ChatInputRow> {
-  static const double height = ChatInputRow.height;
   final VoiceRecordHold _hold = VoiceRecordHold();
   bool _holding = false;
 
@@ -284,11 +284,6 @@ class _ChatInputRowState extends State<ChatInputRow> {
     );
   }
 
-  Event _displayOf(Event event) {
-    final timeline = controller.timelineFor(event);
-    return timeline == null ? event : event.getDisplayEvent(timeline);
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -301,9 +296,6 @@ class _ChatInputRowState extends State<ChatInputRow> {
         ),
       );
     }
-    final selectedTextButtonStyle = TextButton.styleFrom(
-      foregroundColor: theme.colorScheme.onSurface,
-    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -313,91 +305,14 @@ class _ChatInputRowState extends State<ChatInputRow> {
         RecordingViewModel(
           builder: (context, recordingViewModel) {
             // A held recording keeps the composer (and this pointer) mounted.
-            // The recorder and the selection actions rise into the
-            // composer's place (one-shot, settles to identity).
+            // The recorder rises into the composer's place (one-shot,
+            // settles to identity).
             if (recordingViewModel.isRecording && !_hold.capturing) {
               return NotionEntrance(
                 afterRoute: false,
                 child: RecordingInputRow(
                   state: recordingViewModel,
                   onSend: controller.onVoiceMessageSend,
-                ),
-              );
-            }
-            if (controller.selectMode) {
-              return NotionEntrance(
-                afterRoute: false,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    if (controller.selectedEvents.every(
-                      (event) => event.status == EventStatus.error,
-                    ))
-                      SizedBox(
-                        height: height,
-                        child: TextButton(
-                          style: TextButton.styleFrom(
-                            foregroundColor: theme.colorScheme.error,
-                          ),
-                          onPressed: controller.deleteErrorEventsAction,
-                          child: Row(
-                            children: <Widget>[
-                              const Icon(Icons.delete_forever_outlined),
-                              Text(L10n.of(context).delete),
-                            ],
-                          ),
-                        ),
-                      )
-                    else
-                      SizedBox(
-                        height: height,
-                        child: TextButton(
-                          style: selectedTextButtonStyle,
-                          onPressed: controller.forwardEventsAction,
-                          child: Row(
-                            children: <Widget>[
-                              const Icon(Icons.keyboard_arrow_left_outlined),
-                              Text(L10n.of(context).forward),
-                            ],
-                          ),
-                        ),
-                      ),
-                    controller.selectedEvents.length == 1
-                        ? _displayOf(
-                                controller.selectedEvents.first,
-                              ).status.isSent
-                              ? SizedBox(
-                                  height: height,
-                                  child: TextButton(
-                                    style: selectedTextButtonStyle,
-                                    onPressed: controller.replyAction,
-                                    child: Row(
-                                      children: <Widget>[
-                                        Text(L10n.of(context).reply),
-                                        const Icon(Icons.keyboard_arrow_right),
-                                      ],
-                                    ),
-                                  ),
-                                )
-                              : SizedBox(
-                                  height: height,
-                                  child: TextButton(
-                                    style: selectedTextButtonStyle,
-                                    onPressed: controller.sendAgainAction,
-                                    child: Row(
-                                      children: <Widget>[
-                                        Text(L10n.of(context).tryToSendAgain),
-                                        const SizedBox(width: 4),
-                                        const Icon(
-                                          Icons.send_outlined,
-                                          size: 16,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                )
-                        : const SizedBox.shrink(),
-                  ],
                 ),
               );
             }
@@ -422,13 +337,18 @@ class _ChatInputRowState extends State<ChatInputRow> {
                   onSubmitImage: controller.sendImageFromClipBoard,
                   focusNode: controller.inputFocus,
                   controller: controller.sendController,
-                  decoration: const InputDecoration(
-                    contentPadding: EdgeInsets.symmetric(
+                  decoration: InputDecoration(
+                    contentPadding: const EdgeInsets.symmetric(
                       horizontal: 4,
                       vertical: 6,
                     ),
-                    counter: SizedBox.shrink(),
-                    hintText: 'Message…',
+                    counter: const SizedBox.shrink(),
+                    // A merged chat names the network it sends through.
+                    hintText: switch (controller) {
+                      ConversationSourceHintHost(:final composerHint) =>
+                        composerHint,
+                      _ => 'Message…',
+                    },
                     hintMaxLines: 1,
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
@@ -457,9 +377,13 @@ class _ChatInputRowState extends State<ChatInputRow> {
                   _holding,
                 ),
                 inputOverlay: _hold.capturing
-                    ? VoiceRecordHoldOverlay(
-                        hold: _hold,
-                        duration: recordingViewModel.elapsed,
+                    // Recording samples tick only the overlay's clock.
+                    ? ListenableBuilder(
+                        listenable: recordingViewModel.samples,
+                        builder: (context, _) => VoiceRecordHoldOverlay(
+                          hold: _hold,
+                          duration: recordingViewModel.elapsed,
+                        ),
                       )
                     : null,
                 source: controller.buildComposerSource(context),

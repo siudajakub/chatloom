@@ -113,14 +113,11 @@ void main() {
           body: Message(
             event,
             bigEmojis: const {},
-            onSelect: (_) {},
             onInfoTab: (_) {
               infoTaps++;
             },
             scrollToEventId: (_) {},
             onSwipe: () => replies++,
-            onEdit: () {},
-            singleSelected: false,
             timeline: t,
             onMention: () {},
             scrollController: scroll,

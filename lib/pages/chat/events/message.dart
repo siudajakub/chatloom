@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
@@ -9,27 +8,26 @@ import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/conversation_grouping.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
-import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
-import 'package:chatloom/utils/file_description.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/member_actions_popup_menu_button.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show ChatTheme;
 
-import '../sticker_picker_dialog.dart';
 import 'message_content.dart';
+import 'message_delivery_status.dart';
 import 'message_reactions.dart';
 import 'reply_content.dart';
 import 'round_video_view.dart';
@@ -40,18 +38,18 @@ class Message extends StatelessWidget {
   final Event? nextEvent;
   final Event? previousEvent;
   final bool displayReadMarker;
-  final void Function(Event) onSelect;
   final void Function(Event) onInfoTab;
   final void Function(String) scrollToEventId;
   final void Function() onSwipe;
   final void Function() onMention;
-  final void Function() onEdit;
   final void Function(String eventId)? enterThread;
-  final bool longPressSelect;
   final bool textSelectionActive;
   final String? readMarkerEventId;
-  final bool selected;
-  final bool singleSelected;
+
+  /// The actions of the long-press menu for this message (reply, copy,
+  /// forward, delete...), decided by the conversation host. Reactions are
+  /// added by the menu itself.
+  final List<ConversationMessageAction> Function(Event event)? menuActions;
   final Timeline timeline;
   final bool highlightMarker;
   final bool wallpaperMode;
@@ -81,17 +79,13 @@ class Message extends StatelessWidget {
     this.nextEvent,
     this.previousEvent,
     this.displayReadMarker = false,
-    this.longPressSelect = false,
     required this.bigEmojis,
-    required this.onSelect,
     required this.onInfoTab,
     required this.scrollToEventId,
     required this.onSwipe,
-    this.selected = false,
     this.textSelectionActive = false,
     this.readMarkerEventId,
-    required this.onEdit,
-    required this.singleSelected,
+    this.menuActions,
     required this.timeline,
     this.highlightMarker = false,
     this.wallpaperMode = false,
@@ -200,31 +194,20 @@ class Message extends StatelessWidget {
         : context.notion.colors.background;
     // Over a wallpaper, metadata gets a chip of the page colour.
     final metaBackdrop = wallpaperMode ? pageBackground : null;
+    // A caption (an Instagram reel's link, too) stays inside the media
+    // bubble below the frame, so captioned media keeps the media width.
     final media =
         {
           MessageTypes.Image,
           MessageTypes.Video,
           MessageTypes.Sticker,
         }.contains(event.messageType) &&
-        event.fileDescription == null &&
         !event.redacted;
     final sender = event.senderFromMemoryOrFallback;
-    final reactionPicker = singleSelected && event.room.canSendDefaultMessages;
-    final replyCapability = RoomCapabilities.forFeature(
-      BridgeFeature.reply,
-      event.room,
-      event: event,
+    final canReply = ConversationMessageActions.canReply(
+      event,
+      strict: strictCapabilities,
     );
-    final canReply =
-        !event.redacted &&
-        // Its reply fallback would quote the SDK's decryption error.
-        !isUndecryptable(event) &&
-        event.status.isSent &&
-        event.room.membership == Membership.join &&
-        event.room.canSendDefaultMessages &&
-        (strictCapabilities
-            ? replyCapability.allowed
-            : replyCapability.status != CapabilityStatus.unavailable);
     final pollBlocked =
         strictCapabilities &&
         event.type == PollEventContent.startType &&
@@ -238,6 +221,14 @@ class Message extends StatelessWidget {
       theme.colorScheme.onSurfaceVariant,
     );
     final edited = event.hasAggregatedEvents(timeline, RelationshipTypes.edit);
+    final delivery = own
+        ? messageDeliveryOf(
+            event,
+            timeline,
+            network: () =>
+                notionNetworkLabel(PersonalClient.networkOf(event.room)),
+          )
+        : MessageDelivery.none;
     // Over the circle: always the time, colours inherited from the pill.
     final roundStatus = round
         ? Row(
@@ -245,43 +236,41 @@ class Message extends StatelessWidget {
             spacing: 4,
             children: [
               if (edited) Text(L10n.of(context).edited),
-              Text(
-                selected
-                    ? event.originServerTs.localizedDetailedTime(context)
-                    : event.originServerTs.localizedTimeOfDay(context),
-              ),
-              if (display.status.isError)
+              Text(event.originServerTs.localizedTimeOfDay(context)),
+              if (delivery.failed)
                 Icon(
-                  Icons.error_outline,
+                  Icons.error,
+                  size: NotionSize.iconSm,
                   color: theme.colorScheme.error,
-                  semanticLabel: L10n.of(context).couldNotBeSent,
+                  semanticLabel: delivery.label,
                 ),
-              if (display.status == EventStatus.sending)
-                const SizedBox.square(
-                  dimension: 10,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1,
-                    color: roundVideoOnScrim,
+              if (delivery.kind == MessageDeliveryKind.sending)
+                const NotionDelayedReveal(
+                  child: SizedBox.square(
+                    dimension: 10,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1,
+                      color: roundVideoOnScrim,
+                    ),
                   ),
                 ),
             ],
           )
         : null;
-    final hasStatus =
-        last ||
-        selected ||
-        edited ||
-        display.status.isError ||
-        display.status == EventStatus.sending;
+    // Delivery-status block (composer-send lane). "Sending…" appears only
+    // after the loader grace, so a fast send never flashes it; a failure
+    // gets its own tappable line below (Retry / Delete).
+    final sending = delivery.kind == MessageDeliveryKind.sending;
+    final timeVisible = last || edited;
+    final hasStatus = timeVisible || sending;
+    final fileStatus = display.fileSendingStatus;
     final status = Wrap(
       spacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        if (last || selected)
+        if (last)
           Text(
-            selected
-                ? event.originServerTs.localizedDetailedTime(context)
-                : event.originServerTs.localizedTimeOfDay(context),
+            event.originServerTs.localizedTimeOfDay(context),
             style: TextStyle(fontSize: 11, color: statusColor),
           ),
         if (edited)
@@ -289,25 +278,31 @@ class Message extends StatelessWidget {
             L10n.of(context).edited,
             style: TextStyle(fontSize: 11, color: statusColor),
           ),
-        if (display.status.isError)
-          Text(
-            L10n.of(context).couldNotBeSent,
-            style: TextStyle(fontSize: 11, color: theme.colorScheme.error),
+        if (sending)
+          NotionDelayedReveal(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              spacing: 4,
+              children: [
+                Text(switch (fileStatus) {
+                  null => L10n.of(context).sending,
+                  FileSendingStatus.generatingThumbnail => L10n.of(
+                    context,
+                  ).generatingThumbnail,
+                  FileSendingStatus.encrypting => L10n.of(context).encrypting,
+                  FileSendingStatus.uploading => L10n.of(context).uploading,
+                }, style: TextStyle(fontSize: 11, color: statusColor)),
+                // Telegram's clock for text; files keep their progress.
+                if (fileStatus == null)
+                  Icon(Icons.schedule, size: 11, color: statusColor)
+                else
+                  const SizedBox.square(
+                    dimension: 11,
+                    child: CircularProgressIndicator(strokeWidth: 1),
+                  ),
+              ],
+            ),
           ),
-        if (display.status == EventStatus.sending) ...[
-          Text(switch (display.fileSendingStatus) {
-            null => L10n.of(context).sending,
-            FileSendingStatus.generatingThumbnail => L10n.of(
-              context,
-            ).generatingThumbnail,
-            FileSendingStatus.encrypting => L10n.of(context).encrypting,
-            FileSendingStatus.uploading => L10n.of(context).uploading,
-          }, style: TextStyle(fontSize: 11, color: statusColor)),
-          const SizedBox.square(
-            dimension: 11,
-            child: CircularProgressIndicator(strokeWidth: 1),
-          ),
-        ],
       ],
     );
     final messageContent = MessageContent(
@@ -317,7 +312,7 @@ class Message extends StatelessWidget {
       onInfoTab: onInfoTab,
       borderRadius: radius,
       timeline: timeline,
-      selected: selected,
+      selected: false,
       bigEmojis: bigEmojis,
       outgoing: own,
       roundStatus: roundStatus,
@@ -378,7 +373,7 @@ class Message extends StatelessWidget {
                 groupPosition: position,
                 media: media,
                 chromeless: round,
-                selected: selected || highlightMarker,
+                selected: highlightMarker,
                 backgroundColor: custom is int ? Color(custom) : null,
                 quote: isReply
                     ? _ReplyPreview(
@@ -388,33 +383,10 @@ class Message extends StatelessWidget {
                         colors: quoteColors,
                         captionColor: statusColor,
                         captionBackdrop: metaBackdrop,
-                        onOpen: longPressSelect
-                            ? (_) => onSelect(event)
-                            : scrollToEventId,
-                        onLongPress: longPressSelect
-                            ? null
-                            : () {
-                                NotionHaptics.longPress();
-                                onSelect(event);
-                              },
+                        onOpen: scrollToEventId,
                       )
                     : null,
-                // Entering selection mode morphs the avatar into a circle,
-                // and the circle into a check (rows built later do not).
-                avatar: ConversationSlotMorph(
-                  child: longPressSelect && !event.redacted
-                      ? IconButton(
-                          key: ValueKey(selected),
-                          tooltip: L10n.of(context).select,
-                          onPressed: () => onSelect(event),
-                          icon: Icon(
-                            selected
-                                ? Icons.check_circle
-                                : Icons.circle_outlined,
-                          ),
-                        )
-                      : _SenderAvatar(event: event, onMention: onMention),
-                ),
+                avatar: _SenderAvatar(event: event, onMention: onMention),
                 heading: !first
                     ? null
                     : sourceLabel != null
@@ -447,12 +419,26 @@ class Message extends StatelessWidget {
                       : CrossAxisAlignment.start,
                   children: [
                     if (!round && hasStatus)
-                      ConversationMetaChip(
+                      timeVisible
+                          ? ConversationMetaChip(
+                              backdrop: metaBackdrop,
+                              child: status,
+                            )
+                          // Only "Sending…": the chip itself waits.
+                          : NotionDelayedReveal(
+                              child: ConversationMetaChip(
+                                backdrop: metaBackdrop,
+                                child: status,
+                              ),
+                            ),
+                    if (delivery.failed)
+                      MessageDeliveryFailure(
+                        event: event,
+                        timeline: timeline,
+                        delivery: delivery,
                         backdrop: metaBackdrop,
-                        child: status,
                       ),
                     ConversationReactionFeedback(event, timeline),
-                    if (reactionPicker && _canReact) _reactionPicker(context),
                     if (enterThread != null && threads.isNotEmpty)
                       TextButton.icon(
                         onPressed: () => enterThread!(event.eventId),
@@ -474,50 +460,47 @@ class Message extends StatelessWidget {
                         event,
                         timeline,
                         strict: strictCapabilities,
+                        ring: pageBackground,
                       )
                     : null,
+                // Swipe to reply on every message kind, double tap for the
+                // network's first quick reaction, long-press for the menu.
                 surfaceBuilder: (surface) => ConversationMessageGestures(
                   identity: event.transactionId ?? event.eventId,
-                  enabled:
-                      !longPressSelect && !selected && !textSelectionActive,
+                  enabled: !textSelectionActive,
                   swipeRightToLeft: AppSettings.swipeRightToLeftToReply.value,
-                  interactiveContent: conversationHasInteractiveContent(
-                    display,
-                  ),
                   onReply: canReply ? onSwipe : null,
                   quickLikeEnabled: AppSettings.doubleTapToReact.value,
-                  likeEmoji: AppSettings.doubleTapReaction.value,
+                  likeLabel: 'Quick reaction',
+                  likePreview: () {
+                    final emoji = ConversationMessageActions.doubleTapReaction(
+                      event.room,
+                    );
+                    return (
+                      emoji: emoji,
+                      adds: ConversationMessageActions.wouldAdd(
+                        event,
+                        timeline,
+                        emoji,
+                        strict: strictCapabilities,
+                      ),
+                    );
+                  },
                   onLike: () => ConversationMessageActions.react(
                     context,
                     event,
                     timeline,
-                    AppSettings.doubleTapReaction.value,
+                    ConversationMessageActions.doubleTapReaction(event.room),
+                    toggle: true,
                     strict: strictCapabilities,
                   ),
-                  // A held bubble sinks a little until the long-press
-                  // selects it, then springs back on release.
-                  child: ConversationPressScale(
-                    enabled: !longPressSelect && !textSelectionActive,
-                    alignment: own
-                        ? Alignment.centerRight
-                        : Alignment.centerLeft,
-                    child: surface,
-                  ),
+                  onLongPress: (press) => _openMenu(context, press),
+                  pressAlignment: own
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: surface,
                 ),
-                body: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: longPressSelect ? () => onSelect(event) : null,
-                  onLongPress: longPressSelect
-                      ? null
-                      : () {
-                          NotionHaptics.longPress();
-                          onSelect(event);
-                        },
-                  child: AbsorbPointer(
-                    absorbing: longPressSelect,
-                    child: content,
-                  ),
-                ),
+                body: content,
               ),
               if (displayReadMarker)
                 Row(
@@ -547,111 +530,38 @@ class Message extends StatelessWidget {
     );
   }
 
-  /// Strict sources offer the picker only for a verified reaction feature.
-  bool get _canReact =>
-      !strictCapabilities ||
-      RoomCapabilities.forFeature(
-        BridgeFeature.reaction,
-        event.room,
-        event: event,
-      ).allowed;
-
-  Widget _reactionPicker(BuildContext context) => Wrap(
-    spacing: 2,
-    children: [
-      for (final emoji in AppConfig.defaultReactions)
-        IconButton(
-          tooltip: 'React $emoji',
-          onPressed: () {
-            onSelect(event);
-            ConversationMessageActions.react(
-              context,
-              event,
-              timeline,
-              emoji,
-              strict: strictCapabilities,
-            );
-          },
-          icon: Text(emoji, style: const TextStyle(fontSize: 20)),
-        ),
-      IconButton(
-        tooltip: L10n.of(context).customReaction,
-        icon: const Icon(Icons.add_reaction_outlined),
-        onPressed: () => _customReaction(context),
+  /// The long-press menu: quick reactions of this network (when it takes
+  /// reactions here) above the lifted bubble, the host's actions below.
+  void _openMenu(BuildContext context, ConversationMessagePress press) {
+    final reactions =
+        ConversationMessageActions.canReactAtAll(
+          event,
+          strict: strictCapabilities,
+        )
+        ? ConversationMessageActions.quickReactions(event.room)
+        : const <String>[];
+    showConversationMessageMenu(
+      context: context,
+      press: press,
+      outgoing: event.senderId == event.room.client.userID,
+      reactions: reactions,
+      ownReactions: ConversationMessageActions.ownReactionKeys(event, timeline),
+      onReact: (emoji) => ConversationMessageActions.react(
+        context,
+        event,
+        timeline,
+        emoji,
+        toggle: true,
+        strict: strictCapabilities,
       ),
-    ],
-  );
+      onMoreReactions: () => _customReaction(context),
+      actions: menuActions?.call(event) ?? const [],
+      caption: event.originServerTs.localizedDetailedTime(context),
+    );
+  }
 
   Future<void> _customReaction(BuildContext context) async {
-    final theme = Theme.of(context);
-    final emoji = await showAdaptiveBottomSheet<String>(
-      context: context,
-      builder: (context) => Scaffold(
-        appBar: AppBar(
-          title: Text(L10n.of(context).customReaction),
-          leading: CloseButton(
-            onPressed: () => Navigator.of(context).pop(null),
-          ),
-        ),
-        body: SizedBox(
-          height: double.infinity,
-          child: DefaultTabController(
-            length: 2,
-            child: Column(
-              children: [
-                TabBar(
-                  tabs: [
-                    Tab(text: L10n.of(context).emojis),
-                    Tab(text: L10n.of(context).stickers),
-                  ],
-                ),
-                Expanded(
-                  child: TabBarView(
-                    children: [
-                      EmojiPicker(
-                        onEmojiSelected: (_, emoji) =>
-                            Navigator.of(context).pop(emoji.emoji),
-                        config: Config(
-                          locale: Localizations.localeOf(context),
-                          emojiViewConfig: const EmojiViewConfig(
-                            backgroundColor: Colors.transparent,
-                          ),
-                          bottomActionBarConfig: const BottomActionBarConfig(
-                            enabled: false,
-                          ),
-                          categoryViewConfig: CategoryViewConfig(
-                            initCategory: Category.SMILEYS,
-                            backspaceColor: theme.colorScheme.primary,
-                            iconColor: theme.colorScheme.primary.withAlpha(128),
-                            iconColorSelected: theme.colorScheme.primary,
-                            indicatorColor: theme.colorScheme.primary,
-                            backgroundColor: theme.colorScheme.surface,
-                          ),
-                          skinToneConfig: SkinToneConfig(
-                            dialogBackgroundColor: Color.lerp(
-                              theme.colorScheme.surface,
-                              theme.colorScheme.primaryContainer,
-                              0.75,
-                            )!,
-                            indicatorColor: theme.colorScheme.onSurface,
-                          ),
-                        ),
-                      ),
-                      StickerPickerDialog(
-                        room: event.room,
-                        usage: ImagePackUsage.emoticon,
-                        onSelected: (sticker) =>
-                            Navigator.of(context).pop(sticker.url.toString()),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    final emoji = await showConversationReactionPicker(context, event.room);
     if (emoji == null || !context.mounted) return;
     await ConversationMessageActions.react(
       context,
@@ -744,7 +654,6 @@ class _ReplyPreview extends StatefulWidget {
   final Color captionColor;
   final Color? captionBackdrop;
   final void Function(String eventId) onOpen;
-  final VoidCallback? onLongPress;
   const _ReplyPreview({
     required this.event,
     required this.timeline,
@@ -753,7 +662,6 @@ class _ReplyPreview extends StatefulWidget {
     required this.captionColor,
     required this.captionBackdrop,
     required this.onOpen,
-    required this.onLongPress,
   });
 
   @override
@@ -922,7 +830,6 @@ class _ReplyPreviewState extends State<_ReplyPreview> {
         textColor: colors.text,
         outgoing: widget.own,
         caption: caption,
-        onLongPress: widget.onLongPress,
       );
     }
     return ReplyContent(
@@ -933,7 +840,6 @@ class _ReplyPreviewState extends State<_ReplyPreview> {
       outgoing: widget.own,
       caption: caption,
       onTap: () => widget.onOpen(original.eventId),
-      onLongPress: widget.onLongPress,
     );
   }
 }

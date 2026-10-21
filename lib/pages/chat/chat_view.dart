@@ -4,7 +4,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
-import 'dart:ui' as ui;
 
 import 'package:async/async.dart';
 import 'package:chatloom/config/themes.dart';
@@ -13,6 +12,7 @@ import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat/chat_app_bar_list_tile.dart';
 import 'package:chatloom/pages/chat/chat_app_bar_title.dart';
 import 'package:chatloom/pages/chat/chat_event_list.dart';
+import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
 import 'package:chatloom/pages/chat/pinned_events.dart';
 import 'package:chatloom/pages/chat/reply_display.dart';
@@ -22,15 +22,11 @@ import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_hub.dart';
+import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/account_config.dart';
-import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
-import 'package:chatloom/utils/sync_status_localization.dart';
-import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:chatloom/widgets/pulsating_widget.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:material_ui/material_ui.dart';
@@ -39,8 +35,6 @@ import 'package:matrix/matrix.dart';
 import '../../utils/stream_extension.dart';
 import 'chat_emoji_picker.dart';
 import 'chat_input_row.dart';
-
-enum _EventContextAction { info, report }
 
 class ChatView extends StatelessWidget {
   final ChatController controller;
@@ -51,13 +45,7 @@ class ChatView extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final hasActiveGroupCall = controller.room.hasActiveMatrixRtcCall;
-    if (controller.room.membership == Membership.invite) {
-      showFutureLoadingDialog(
-        context: context,
-        future: () => controller.room.join(),
-        exceptionContext: ExceptionContext.joinRoom,
-      );
-    }
+    controller.joinInviteOnce();
     final bottomSheetPadding = ChatLoomThemes.isColumnMode(context) ? 16.0 : 12.0;
     final scrollUpBannerEventId = controller.scrollUpBannerEventId;
 
@@ -65,15 +53,18 @@ class ChatView extends StatelessWidget {
 
     return PopScope(
       canPop:
-          controller.selectedEvents.isEmpty &&
           !controller.showEmojiPicker &&
+          // Telegram: back cancels a reply or edit before leaving the chat.
+          controller.replyEvent == null &&
+          controller.editEvent == null &&
           controller.activeThreadId == null,
       onPopInvokedWithResult: (pop, _) async {
         if (pop) return;
-        if (controller.selectedEvents.isNotEmpty) {
-          controller.clearSelectedEvents();
-        } else if (controller.showEmojiPicker) {
+        if (controller.showEmojiPicker) {
           controller.emojiPickerAction();
+        } else if (controller.replyEvent != null ||
+            controller.editEvent != null) {
+          controller.cancelReplyOrEditOnBack();
         } else if (controller.activeThreadId != null) {
           controller.closeThread();
         }
@@ -84,30 +75,20 @@ class ChatView extends StatelessWidget {
           // Built once per controller rebuild and handed to the room-state
           // listener as a stable child: room-state and sync-status ticks only
           // rebuild the chrome (app bar, notice, composer), never the timeline.
-          final timelineBody = GestureDetector(
-            onTap: controller.clearSingleSelectedEvent,
-            child: snapshot.hasError && controller.timeline == null
-                ? ChatTimelineLoadError(onRetry: controller.retryLoadTimeline)
-                : ChatEventList(controller: controller),
-          );
+          final timelineBody = snapshot.hasError && controller.timeline == null
+              ? ChatTimelineLoadError(onRetry: controller.retryLoadTimeline)
+              : ChatEventList(controller: controller);
           return ChatRoomSignals(
             room: controller.room,
             child: timelineBody,
             builder: (context, timelineBody) {
               final scheduledSource = controller.room;
-              final sync = controller.room.client.onSyncStatus.value;
-              final showSyncNotice = chatSyncNoticeVisible(
-                controller.room.client,
-              );
-              final syncHeight = showSyncNotice
-                  ? 32.0 * MediaQuery.textScalerOf(context).scale(1)
-                  : 0.0;
-              var appbarBottomHeight = syncHeight;
+              // Connection status shows (debounced) under the chat name.
+              var appbarBottomHeight = 0.0;
               final activeThreadId = controller.activeThreadId;
               // Rows the list shows that still wait for a key; brand-new ones
               // get a moment for a key already on its way.
-              final locked = (controller.timeline?.events ?? const <Event>[])
-                  .filterByVisibleInGui(threadId: activeThreadId)
+              final locked = (controller.conversationEvents ?? const <Event>[])
                   .where(isUndecryptable)
                   .toList();
               final lockedCount = UndecryptableMessages.settledCount(locked);
@@ -126,7 +107,7 @@ class ChatView extends StatelessWidget {
               if (scrollUpBannerEventId != null && activeThreadId == null) {
                 appbarBottomHeight += ChatAppBarListTile.fixedHeight;
               }
-              final chatBackground = InboxProjection(
+              final chatBackground = InboxProjection.snapshot(
                 PersonalClient.of(controller.room.client),
               ).metadataFor(controller.room).theme?.backgroundColor;
               return Scaffold(
@@ -137,18 +118,11 @@ class ChatView extends StatelessWidget {
                 // Timeline scrolls under the glass header (DESIGN.md "Glass").
                 extendBodyBehindAppBar: true,
                 appBar: AppBar(
-                  actionsIconTheme: IconThemeData(
-                    color: controller.selectedEvents.isEmpty
-                        ? null
-                        : theme.colorScheme.onTertiaryContainer,
-                  ),
                   backgroundColor: Colors.transparent,
                   flexibleSpace: NotionGlassBar(
-                    tint: controller.selectedEvents.isEmpty
-                        ? controller.activeThreadId != null
-                              ? theme.colorScheme.secondaryContainer
-                              : null
-                        : theme.colorScheme.tertiaryContainer,
+                    tint: controller.activeThreadId != null
+                        ? theme.colorScheme.secondaryContainer
+                        : null,
                   ),
                   toolbarHeight: NotionTokens.headerHeight,
                   elevation: 0,
@@ -157,14 +131,7 @@ class ChatView extends StatelessWidget {
                     bottom: BorderSide(color: theme.colorScheme.outlineVariant),
                   ),
                   automaticallyImplyLeading: false,
-                  leading: controller.selectMode
-                      ? IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: controller.clearSelectedEvents,
-                          tooltip: L10n.of(context).close,
-                          color: theme.colorScheme.onTertiaryContainer,
-                        )
-                      : activeThreadId != null
+                  leading: activeThreadId != null
                       ? IconButton(
                           icon: const Icon(Icons.close),
                           onPressed: controller.closeThread,
@@ -180,219 +147,67 @@ class ChatView extends StatelessWidget {
                         ),
                   titleSpacing: ChatLoomThemes.isColumnMode(context) ? 24 : 0,
                   title: ChatAppBarTitle(controller),
-                  // Selection and chat actions cross-fade instead of
-                  // swapping in one frame.
                   actions: [
-                    NotionFadeThrough(
-                      duration: NotionMotion.short,
-                      alignment: AlignmentDirectional.centerEnd,
-                      child: Row(
-                        key: ValueKey(controller.selectMode),
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (controller.selectMode) ...[
-                            if (controller.canEditSelectedEvents)
-                              IconButton(
-                                icon: const Icon(Icons.edit_outlined),
-                                tooltip: L10n.of(context).edit,
-                                onPressed: controller.editSelectedEventAction,
+                    if (!controller.room.isArchived) ...[
+                      if (hasActiveGroupCall)
+                        PulsatingWidget(
+                          color: theme.colorScheme.error,
+                          child: Padding(
+                            padding: const EdgeInsets.all(4.0),
+                            child: TextButton.icon(
+                              icon: Icon(switch (controller
+                                  .room
+                                  .activeMatrixRtcCallIntent) {
+                                .voice => Icons.video_call_outlined,
+                                _ => Icons.mic_outlined,
+                              }),
+                              label: Text(
+                                controller.room
+                                    .getActiveMatrixRtcMembers()
+                                    .length
+                                    .toString(),
                               ),
-                            if (controller.selectedEvents.length == 1 &&
-                                controller.activeThreadId == null &&
-                                controller.room.canSendDefaultMessages)
-                              IconButton(
-                                icon: const Icon(Icons.message_outlined),
-                                tooltip: L10n.of(context).replyInThread,
-                                onPressed: () => controller.enterThread(
-                                  controller.selectedEvents.single.eventId,
-                                ),
+                              onPressed:
+                                  controller.room.hasPermissionForMatrixRtcCall
+                                  ? controller.startOrJoinVideoCall
+                                  : null,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: theme.colorScheme.error,
+                                foregroundColor: theme.colorScheme.onError,
                               ),
-                            IconButton(
-                              icon: const Icon(Icons.copy_outlined),
-                              tooltip: L10n.of(context).copyToClipboard,
-                              onPressed: controller.copyEventsAction,
                             ),
-                            if (controller.canRedactSelectedEvents)
-                              IconButton(
-                                icon: const Icon(Icons.delete_outlined),
-                                tooltip: L10n.of(context).redactMessage,
-                                onPressed: controller.redactEventsAction,
-                              ),
-                            if (controller.selectedEvents.length == 1)
-                              PopupMenuButton<_EventContextAction>(
-                                useRootNavigator: true,
-                                onSelected: (action) {
-                                  switch (action) {
-                                    case _EventContextAction.info:
-                                      controller.showEventInfo();
-                                      controller.clearSelectedEvents();
-                                      break;
-                                    case _EventContextAction.report:
-                                      controller.reportEventAction();
-                                      break;
-                                  }
-                                },
-                                itemBuilder: (context) => [
-                                  if (controller.canPinSelectedEvents)
-                                    PopupMenuItem(
-                                      onTap: controller.pinEvent,
-                                      value: null,
-                                      child: Row(
-                                        mainAxisSize: .min,
-                                        children: [
-                                          const Icon(Icons.push_pin_outlined),
-                                          const SizedBox(width: 12),
-                                          Text(L10n.of(context).pinMessage),
-                                        ],
-                                      ),
-                                    ),
-                                  if (controller.canSaveSelectedEvent)
-                                    PopupMenuItem(
-                                      onTap: () =>
-                                          controller.saveSelectedEvent(context),
-                                      value: null,
-                                      child: Row(
-                                        mainAxisSize: .min,
-                                        children: [
-                                          const Icon(Icons.download_outlined),
-                                          const SizedBox(width: 12),
-                                          Text(L10n.of(context).downloadFile),
-                                        ],
-                                      ),
-                                    ),
-                                  PopupMenuItem(
-                                    value: _EventContextAction.info,
-                                    child: Row(
-                                      mainAxisSize: .min,
-                                      children: [
-                                        const Icon(Icons.info_outlined),
-                                        const SizedBox(width: 12),
-                                        Text(L10n.of(context).messageInfo),
-                                      ],
-                                    ),
-                                  ),
-                                  if (controller
-                                      .selectedEvents
-                                      .single
-                                      .status
-                                      .isSent)
-                                    PopupMenuItem(
-                                      value: _EventContextAction.report,
-                                      child: Row(
-                                        mainAxisSize: .min,
-                                        children: [
-                                          const Icon(
-                                            Icons.shield_outlined,
-                                            color: Colors.red,
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Text(L10n.of(context).reportMessage),
-                                        ],
-                                      ),
-                                    ),
-                                ],
-                              ),
-                          ] else if (!controller.room.isArchived) ...[
-                            if (hasActiveGroupCall)
-                              PulsatingWidget(
-                                color: theme.colorScheme.error,
-                                child: Padding(
-                                  padding: const EdgeInsets.all(4.0),
-                                  child: TextButton.icon(
-                                    icon: Icon(switch (controller
-                                        .room
-                                        .activeMatrixRtcCallIntent) {
-                                      .voice => Icons.video_call_outlined,
-                                      _ => Icons.mic_outlined,
-                                    }),
-                                    label: Text(
-                                      controller.room
-                                          .getActiveMatrixRtcMembers()
-                                          .length
-                                          .toString(),
-                                    ),
-                                    onPressed:
-                                        controller
-                                            .room
-                                            .hasPermissionForMatrixRtcCall
-                                        ? controller.startOrJoinVideoCall
-                                        : null,
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: theme.colorScheme.error,
-                                      foregroundColor:
-                                          theme.colorScheme.onError,
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else if (controller.room.states['m.bridge'] ==
-                                    null &&
-                                controller.room.states['uk.half-shot.bridge'] ==
-                                    null &&
-                                controller.room.hasPermissionForMatrixRtcCall &&
-                                controller.supportLiveKitCalls)
-                              IconButton(
-                                icon: Icon(Icons.call_outlined),
-                                onPressed: controller.startOrJoinVideoCall,
-                              ),
-                            RoomPersonalButton(
-                              room: scheduledSource,
-                              composer: controller.sendController,
-                              readCutoff: () => controller.personalSeenEventId,
-                              replyEvent: () => controller.replyEvent,
-                              isEditing: () => controller.editEvent != null,
-                              threadRootEventId: () =>
-                                  controller.activeThreadId,
-                              threadLastEventId: () =>
-                                  controller.threadLastEventId,
-                              isCurrentSource: () =>
-                                  controller.mounted &&
-                                  identical(controller.room, scheduledSource),
-                              clearScheduledReply:
-                                  controller.cancelReplyEventAction,
-                              includeChatSettings: true,
-                            ),
-                          ],
-                        ],
+                          ),
+                        )
+                      else if (controller.room.states['m.bridge'] == null &&
+                          controller.room.states['uk.half-shot.bridge'] ==
+                              null &&
+                          controller.room.hasPermissionForMatrixRtcCall &&
+                          controller.supportLiveKitCalls)
+                        IconButton(
+                          icon: Icon(Icons.call_outlined),
+                          onPressed: controller.startOrJoinVideoCall,
+                        ),
+                      RoomPersonalButton(
+                        room: scheduledSource,
+                        composer: controller.sendController,
+                        readCutoff: () => controller.personalSeenEventId,
+                        replyEvent: () => controller.replyEvent,
+                        isEditing: () => controller.editEvent != null,
+                        threadRootEventId: () => controller.activeThreadId,
+                        threadLastEventId: () => controller.threadLastEventId,
+                        isCurrentSource: () =>
+                            controller.mounted &&
+                            identical(controller.room, scheduledSource),
+                        clearScheduledReply: controller.cancelReplyEventAction,
+                        includeChatSettings: true,
                       ),
-                    ),
+                    ],
                   ],
                   bottom: PreferredSize(
                     preferredSize: Size.fromHeight(appbarBottomHeight),
                     child: Column(
                       mainAxisSize: .min,
                       children: [
-                        if (showSyncNotice)
-                          SizedBox(
-                            height: syncHeight,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    sync!.status == SyncStatus.error
-                                        ? Icons.sync_problem_outlined
-                                        : Icons.sync_outlined,
-                                    size: 16,
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      sync.calcLocalizedString(context),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color:
-                                            theme.colorScheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
                         if (lockedCount > 0)
                           UndecryptableChatHint(
                             count: lockedCount,
@@ -446,12 +261,6 @@ class ChatView extends StatelessWidget {
                     ),
                   ),
                 ),
-                floatingActionButton: ConversationJumpButton(
-                  visible:
-                      controller.showScrollDownButton &&
-                      controller.selectedEvents.isEmpty,
-                  onPressed: controller.scrollDown,
-                ),
                 body: NotificationListener<SizeChangedLayoutNotification>(
                   onNotification: (SizeChangedLayoutNotification notification) {
                     WidgetsBinding.instance.addPostFrameCallback(
@@ -468,26 +277,13 @@ class ChatView extends StatelessWidget {
                       child: Stack(
                         children: <Widget>[
                           if (accountConfig.wallpaperUrl != null)
-                            Opacity(
+                            ChatWallpaper(
+                              uri: accountConfig.wallpaperUrl!,
                               opacity: accountConfig.wallpaperOpacity ?? 0.5,
-                              child: ImageFiltered(
-                                imageFilter: ui.ImageFilter.blur(
-                                  sigmaX: accountConfig.wallpaperBlur ?? 0.0,
-                                  sigmaY: accountConfig.wallpaperBlur ?? 0.0,
-                                ),
-                                child: MxcImage(
-                                  cacheKey: accountConfig.wallpaperUrl
-                                      .toString(),
-                                  uri: accountConfig.wallpaperUrl,
-                                  fit: BoxFit.cover,
-                                  height: MediaQuery.sizeOf(context).height,
-                                  width: MediaQuery.sizeOf(context).width,
-                                  isThumbnail: false,
-                                  placeholder: (_) => Container(),
-                                ),
-                              ),
+                              blur: accountConfig.wallpaperBlur ?? 0.0,
                             ),
                           timelineBody,
+                          ChatBridgeNotice(room: controller.room),
                           Positioned(
                             bottom: 0,
                             left: 0,
@@ -516,16 +312,9 @@ class ChatView extends StatelessWidget {
                                             controller.room.membership ==
                                                 Membership.join
                                       ? ConversationTint(
-                                          color:
-                                              controller
-                                                  .selectedEvents
-                                                  .isNotEmpty
-                                              ? theme
-                                                    .colorScheme
-                                                    .tertiaryContainer
-                                              : theme
-                                                    .colorScheme
-                                                    .surfaceContainer,
+                                          color: theme
+                                              .colorScheme
+                                              .surfaceContainer,
                                           borderRadius: BorderRadius.circular(
                                             NotionTokens.radius,
                                           ),
@@ -588,6 +377,24 @@ class ChatView extends StatelessWidget {
                                         )
                                       : SizedBox.shrink(),
                                 ),
+                              ),
+                            ),
+                          ),
+                          // Above the measured composer (reply preview
+                          // included), never over its close button.
+                          PositionedDirectional(
+                            end: 0,
+                            bottom: 0,
+                            child: ConversationJumpButtonSlot(
+                              composerInset: controller.composerInset,
+                              child: ValueListenableBuilder<int>(
+                                valueListenable: controller.newBelow,
+                                builder: (context, count, _) =>
+                                    ConversationJumpButton(
+                                      visible: controller.showScrollDownButton,
+                                      count: count,
+                                      onPressed: controller.scrollDown,
+                                    ),
                               ),
                             ),
                           ),

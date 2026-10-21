@@ -524,7 +524,15 @@ class ConversationSourceChip extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      _glyph(context),
+                      // A new source morphs in (scale + fade), like the
+                      // composer's other glyph swaps.
+                      NotionMorphSwitcher(
+                        rotate: false,
+                        child: KeyedSubtree(
+                          key: ValueKey((network.toLowerCase(), hint)),
+                          child: _glyph(context),
+                        ),
+                      ),
                       if (!compact) ...[
                         const SizedBox(width: 6),
                         Flexible(

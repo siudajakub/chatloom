@@ -36,23 +36,32 @@ class SendLocationDialogState extends State<SendLocationDialog> {
     requestLocation();
   }
 
+  /// Location services, the permission prompt and the fix (up to 60 s) all
+  /// outlive a dialog the user may already have closed.
+  void _update(VoidCallback change) {
+    if (mounted) setState(change);
+  }
+
   Future<void> requestLocation() async {
     if (!(await Geolocator.isLocationServiceEnabled())) {
-      setState(() => disabled = true);
+      _update(() => disabled = true);
       return;
     }
+    if (!mounted) return;
     var permission = await Geolocator.checkPermission();
+    if (!mounted) return;
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        setState(() => denied = true);
+        _update(() => denied = true);
         return;
       }
     }
     if (permission == LocationPermission.deniedForever) {
-      setState(() => denied = true);
+      _update(() => denied = true);
       return;
     }
+    if (!mounted) return;
     try {
       Position position;
       try {
@@ -63,6 +72,7 @@ class SendLocationDialogState extends State<SendLocationDialog> {
           ),
         );
       } on TimeoutException {
+        if (!mounted) return;
         position = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(
             accuracy: LocationAccuracy.medium,
@@ -70,9 +80,9 @@ class SendLocationDialogState extends State<SendLocationDialog> {
           ),
         );
       }
-      setState(() => this.position = position);
+      _update(() => this.position = position);
     } catch (e) {
-      setState(() => error = e);
+      _update(() => error = e);
     }
   }
 

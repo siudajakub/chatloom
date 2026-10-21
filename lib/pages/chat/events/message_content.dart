@@ -7,6 +7,7 @@ import 'dart:math';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/events/poll.dart';
 import 'package:chatloom/pages/chat/events/round_video_bridge_message.dart';
 import 'package:chatloom/pages/chat/events/round_video_message.dart';
@@ -111,34 +112,40 @@ class MessageContent extends StatelessWidget {
           case MessageTypes.Image:
           case MessageTypes.Sticker:
             if (event.redacted) continue textmessage;
-            final maxSize = event.messageType == MessageTypes.Sticker
-                ? 128.0
-                : 256.0;
+            final sticker = event.messageType == MessageTypes.Sticker;
             final w = event.content
                 .tryGetMap<String, Object?>('info')
                 ?.tryGet<int>('w');
             final h = event.content
                 .tryGetMap<String, Object?>('info')
                 ?.tryGet<int>('h');
-            var width = maxSize;
-            var height = maxSize;
-            var fit = event.messageType == MessageTypes.Sticker
-                ? BoxFit.contain
-                : BoxFit.cover;
-            if (w != null && h != null && w > 0 && h > 0) {
-              fit = BoxFit.contain;
-              if (w > h) {
-                width = maxSize;
-                height = max(32, maxSize * (h / w));
-              } else {
-                height = maxSize;
-                width = max(32, maxSize * (w / h));
+            // Photos follow the one media rule (bubble width, aspect kept
+            // within limits, cropped beyond); stickers stay small and whole.
+            final Size box;
+            if (sticker) {
+              const maxSize = 128.0;
+              var width = maxSize;
+              var height = maxSize;
+              if (w != null && h != null && w > 0 && h > 0) {
+                if (w > h) {
+                  height = max(32, maxSize * (h / w));
+                } else {
+                  width = max(32, maxSize * (w / h));
+                }
               }
+              box = Size(width, height);
+            } else {
+              box = ConversationMedia.frame(
+                maxWidth: NotionBubble.mediaMaxWidth,
+                width: w,
+                height: h,
+              );
             }
+            final fit = sticker ? BoxFit.contain : BoxFit.cover;
             return ImageBubble(
               event,
-              width: width,
-              height: height,
+              width: box.width,
+              height: box.height,
               fit: fit,
               borderRadius: borderRadius,
               timeline: timeline,
@@ -152,11 +159,19 @@ class MessageContent extends StatelessWidget {
                 PlatformInfos.isMacOS ||
                 PlatformInfos.isWeb ||
                 PlatformInfos.isLinux) {
-              return AudioPlayerWidget(
-                event,
-                color: textColor,
-                linkColor: linkColor,
-                fontSize: fontSize,
+              // Voice fills the bubble like other media, up to the cap.
+              return ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: NotionBubble.mediaMaxWidth,
+                ),
+                child: AudioPlayerWidget(
+                  event,
+                  color: textColor,
+                  linkColor: linkColor,
+                  fontSize: fontSize,
+                  // Read only when the note ends (voice continuation).
+                  continuationHistory: () => timeline.events,
+                ),
               );
             }
             return MessageDownloadContent(
@@ -185,6 +200,7 @@ class MessageContent extends StatelessWidget {
               textColor: textColor,
               linkColor: linkColor,
               timeline: timeline,
+              borderRadius: borderRadius,
             );
           case MessageTypes.File:
             final download = MessageDownloadContent(

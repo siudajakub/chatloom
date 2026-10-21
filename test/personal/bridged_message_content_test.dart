@@ -1,6 +1,7 @@
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/events/image_bubble.dart';
 import 'package:chatloom/pages/chat/events/message_content.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -43,8 +44,9 @@ void main() {
       (rendered) {
         expect(rendered, isA<ImageBubble>());
         final image = rendered as ImageBubble;
-        expect(image.width, 256);
-        expect(image.height, 256);
+        // The one media rule: a square at the media width.
+        expect(image.width, NotionBubble.mediaMaxWidth);
+        expect(image.height, NotionBubble.mediaMaxWidth);
       },
     );
   });

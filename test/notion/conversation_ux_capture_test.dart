@@ -457,12 +457,9 @@ void main() {
                                 ? chronological[i + 1]
                                 : null,
                             bigEmojis: const {},
-                            onSelect: (_) {},
                             onInfoTab: (_) {},
                             scrollToEventId: (_) {},
                             onSwipe: () {},
-                            onEdit: () {},
-                            singleSelected: false,
                             timeline: timeline,
                             onMention: () {},
                             scrollController: scroll,
@@ -574,7 +571,8 @@ void main() {
       if (c.state == 'select') {
         await tester.longPress(find.text('Exactly. I’ll send you the location.'));
         await tester.pumpAndSettle();
-        expect(find.byTooltip('React 👍'), findsOneWidget);
+        // The long-press overlay: quick reactions above the lifted bubble.
+        expect(find.byKey(const ValueKey('reaction-❤️')), findsOneWidget);
       }
       if (c.state == 'actions') {
         await tester.tap(find.byTooltip('More message actions'));

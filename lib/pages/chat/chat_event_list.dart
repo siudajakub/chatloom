@@ -23,6 +23,7 @@ import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -112,11 +113,11 @@ class _ChatEventListState extends State<ChatEventList> {
   Widget build(BuildContext context) {
     final events = controller.conversationEvents;
 
+    final defaultInset =
+        72.0 + (ChatLoomThemes.isColumnMode(context) ? 16.0 : 0.0);
     if (events == null) {
       return ConversationTimelineSkeleton(
-        bottomInset:
-            controller.inputBarHeight ??
-            (72 + (ChatLoomThemes.isColumnMode(context) ? 16 : 0)),
+        bottomInset: controller.composerInset.value ?? defaultInset,
       );
     }
     final theme = Theme.of(context);
@@ -154,13 +155,13 @@ class _ChatEventListState extends State<ChatEventList> {
         // The first screenful of a freshly opened chat staggers in once.
         child: ConversationEntranceScope(
           child: ListView.custom(
+            // The composer's height is a spacer under the newest row
+            // ([_ComposerSpacer]), not padding: when the reply preview or
+            // the field grows, only the spacer rebuilds, never the rows.
             padding: EdgeInsets.only(
               // Clears the glass header drawn over the timeline.
               top: 8 + MediaQuery.paddingOf(context).top,
-              bottom:
-                  8 +
-                  (controller.inputBarHeight ??
-                      (72 + (ChatLoomThemes.isColumnMode(context) ? 16 : 0))),
+              bottom: 8,
               left: horizontalPadding,
               right: horizontalPadding,
             ),
@@ -176,28 +177,39 @@ class _ChatEventListState extends State<ChatEventList> {
               (BuildContext context, int i) {
                 // Footer to display typing indicator and read receipts:
                 if (i == 0) {
+                  final spacer = _ComposerSpacer(
+                    inset: controller.composerInset,
+                    fallback: defaultInset,
+                  );
                   if (controller.canLoadFuture) {
-                    return Center(
-                      child: TextButton.icon(
-                        onPressed: controller.isLoadingFuture
-                            ? null
-                            : controller.requestFuture,
-                        icon: NotionMorphSwitcher(
-                          rotate: false,
-                          child: controller.isLoadingFuture
-                              ? const NotionDelayedSpinner(
-                                  key: ValueKey('loading'),
-                                  size: NotionSize.iconSm,
-                                )
-                              : const Icon(
-                                  Icons.arrow_downward_outlined,
-                                  key: ValueKey('idle'),
-                                ),
+                    return Column(
+                      mainAxisSize: .min,
+                      children: [
+                        Center(
+                          child: TextButton.icon(
+                            onPressed: controller.isLoadingFuture
+                                ? null
+                                : controller.requestFuture,
+                            icon: NotionMorphSwitcher(
+                              rotate: false,
+                              child: controller.isLoadingFuture
+                                  ? const NotionDelayedSpinner(
+                                      key: ValueKey('loading'),
+                                      size: NotionSize.iconSm,
+                                    )
+                                  : const Icon(
+                                      Icons.arrow_downward_outlined,
+                                      key: ValueKey('idle'),
+                                    ),
+                            ),
+                            label: Text(
+                              controller.historyError ??
+                                  L10n.of(context).loadMore,
+                            ),
+                          ),
                         ),
-                        label: Text(
-                          controller.historyError ?? L10n.of(context).loadMore,
-                        ),
-                      ),
+                        spacer,
+                      ],
                     );
                   }
                   return Column(
@@ -206,6 +218,7 @@ class _ChatEventListState extends State<ChatEventList> {
                       if (events.isNotEmpty) SeenByRow(event: events.first),
                       TypingIndicators(controller),
                       EncryptionInfo(room: controller.room),
+                      spacer,
                     ],
                   );
                 }
@@ -315,18 +328,11 @@ class _ChatEventListState extends State<ChatEventList> {
                           onMention: () => controller.mentionSender(event),
                           highlightMarker:
                               controller.scrollToEventIdMarker == event.eventId,
-                          onSelect: controller.onSelectMessage,
                           scrollToEventId: controller.scrollToEventId,
-                          longPressSelect: controller.selectedEvents.isNotEmpty,
                           readMarkerEventId: controller.readMarkerEventId,
                           textSelectionActive: _textSelectionActive,
-                          selected: controller.selectedEvents.any(
-                            (e) => e.eventId == event.eventId,
-                          ),
-                          singleSelected:
-                              controller.selectedEvents.singleOrNull?.eventId ==
-                              event.eventId,
-                          onEdit: controller.editSelectedEventAction,
+                          menuActions: (event) =>
+                              controller.messageActions(context, event),
                           timeline: controller.timelineFor(event)!,
                           sourceLabel: controller.sourceLabelFor(event),
                           seriesBoundary: controller.seriesBoundary,
@@ -454,10 +460,26 @@ class _TimelineTextScale extends StatelessWidget {
   }
 }
 
+/// Room under the newest message for the composer drawn over the list. It
+/// listens to the measured composer height itself, so a growing reply
+/// preview or field relayouts the list without rebuilding its rows.
+class _ComposerSpacer extends StatelessWidget {
+  final ValueListenable<double?> inset;
+  final double fallback;
+
+  const _ComposerSpacer({required this.inset, required this.fallback});
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<double?>(
+    valueListenable: inset,
+    builder: (context, height, _) => SizedBox(height: height ?? fallback),
+  );
+}
+
 /// The "jump to the newest message" button over a conversation. It stays
 /// mounted and springs in and out (instead of the Scaffold's default FAB
 /// swap); [count] new messages that arrived while scrolled up roll in a
-/// badge.
+/// badge. A round dock-style pill (Telegram's translucent arrow).
 class ConversationJumpButton extends StatelessWidget {
   final bool visible;
   final VoidCallback onPressed;
@@ -474,43 +496,67 @@ class ConversationJumpButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final colors = context.notion.colors;
     return ExcludeSemantics(
       excluding: !visible,
-      child: NotionPop(
-        visible: visible,
-        playOnMount: false,
-        bounce: false,
-        alignment: Alignment.bottomCenter,
-        child: Padding(
-          padding: EdgeInsets.only(
-            bottom: theme.appBarTheme.toolbarHeight ?? kToolbarHeight,
-          ),
+      child: IgnorePointer(
+        ignoring: !visible,
+        child: NotionPop(
+          visible: visible,
+          playOnMount: false,
+          bounce: false,
+          alignment: Alignment.bottomCenter,
           child: Badge(
             isLabelVisible: count > 0,
-            backgroundColor: theme.colorScheme.onSurface,
-            textColor: theme.colorScheme.surface,
+            backgroundColor: colors.text,
+            textColor: colors.background,
             label: NotionAnimatedCount(
               count: count,
               format: (n) => n > 99 ? '99+' : '$n',
             ),
-            child: NotionPressable(
-              scale: NotionMotion.pressIcon,
-              child: FloatingActionButton(
-                onPressed: onPressed,
-                tooltip: tooltip,
-                heroTag: null,
-                mini: true,
-                backgroundColor: theme.colorScheme.surface,
-                foregroundColor: theme.colorScheme.onSurface,
-                child: const Icon(Icons.arrow_downward_outlined),
-              ),
+            // No blur: the button scales in and out (glass never animates).
+            child: NotionGlassPill(
+              key: const ValueKey('conversation-jump'),
+              icon: Icons.keyboard_arrow_down,
+              tooltip: tooltip,
+              onPressed: onPressed,
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// Places the jump button at the end edge just above the measured composer
+/// (reply/edit preview, action tray and emoji picker included), so it never
+/// covers the composer's controls such as the reply close button. Only this
+/// slot follows the composer's height; the page does not rebuild.
+class ConversationJumpButtonSlot extends StatelessWidget {
+  final ValueListenable<double?> composerInset;
+  final Widget child;
+
+  const ConversationJumpButtonSlot({
+    super.key,
+    required this.composerInset,
+    required this.child,
+  });
+
+  /// Composer height before the first measurement.
+  static const double fallbackInset = 72;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<double?>(
+    valueListenable: composerInset,
+    child: child,
+    builder: (context, inset, child) => Padding(
+      padding: EdgeInsetsDirectional.only(
+        end: NotionSpace.md,
+        bottom: (inset ?? fallbackInset) + NotionSpace.xs,
+      ),
+      child: child,
+    ),
+  );
 }
 
 /// The composer card of a conversation: its fill tweens (selection mode

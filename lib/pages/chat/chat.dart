@@ -9,9 +9,12 @@ import 'dart:io';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat_message_actions.dart';
 import 'package:chatloom/pages/chat/chat_view.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart'
     show ConversationSourceChip;
+import 'package:chatloom/pages/chat/conversation_message_menu.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
@@ -30,11 +33,13 @@ import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/personal/seen_chat_notifications.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
+import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
-import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
@@ -185,21 +190,17 @@ class ChatController extends State<ChatPageWithRoom>
     await _pickAttachments(() async => details.files);
   }
 
-  bool get canSaveSelectedEvent =>
-      selectedEvents.length == 1 &&
+  /// Media and files can be saved from the message menu (voice and audio
+  /// included).
+  bool canSaveEvent(Event event) =>
+      !event.redacted &&
       {
         MessageTypes.Video,
         MessageTypes.Image,
         MessageTypes.Sticker,
         MessageTypes.Audio,
         MessageTypes.File,
-      }.contains(selectedEvents.single.messageType);
-
-  void saveSelectedEvent(BuildContext context) =>
-      selectedEvents.single.saveFile(context);
-
-  @override
-  List<Event> selectedEvents = [];
+      }.contains(event.messageType);
 
   final Set<String> unfolded = {};
 
@@ -215,9 +216,6 @@ class ChatController extends State<ChatPageWithRoom>
 
   bool get showScrollDownButton =>
       _scrolledUp || timeline?.allowNewEvent == false;
-
-  @override
-  bool get selectMode => selectedEvents.isNotEmpty;
 
   final int _loadHistoryCount = 100;
 
@@ -239,8 +237,39 @@ class ChatController extends State<ChatPageWithRoom>
   // ConversationTimelineSource: one room, one timeline.
 
   @override
-  List<Event>? get conversationEvents =>
-      timeline?.events.filterByVisibleInGui(threadId: activeThreadId);
+  List<Event>? get conversationEvents {
+    final timeline = this.timeline;
+    if (timeline == null) return null;
+    final events = timeline.events;
+    // The list, its header and the typing row read this several times per
+    // build; filter once per controller rebuild. In-place timeline changes
+    // (decryption, status, redaction) always end in a controller setState.
+    final key = (
+      timeline,
+      _conversationEventsRevision,
+      activeThreadId,
+      events.length,
+      events.firstOrNull,
+      events.firstOrNull?.status,
+      events.lastOrNull,
+    );
+    final cached = _conversationEvents;
+    if (cached != null && _conversationEventsKey == key) return cached;
+    _conversationEventsKey = key;
+    return _conversationEvents = List.unmodifiable(
+      events.filterByVisibleInGui(threadId: activeThreadId),
+    );
+  }
+
+  List<Event>? _conversationEvents;
+  Object? _conversationEventsKey;
+  int _conversationEventsRevision = 0;
+
+  @override
+  void setState(VoidCallback fn) {
+    _conversationEventsRevision++;
+    super.setState(fn);
+  }
 
   @override
   Timeline? timelineFor(Event event) => timeline;
@@ -318,12 +347,10 @@ class ChatController extends State<ChatPageWithRoom>
 
   void enterThread(String eventId) => setState(() {
     activeThreadId = eventId;
-    selectedEvents.clear();
   });
 
   void closeThread() => setState(() {
     activeThreadId = null;
-    selectedEvents.clear();
   });
 
   Future<void> recreateChat() async {
@@ -430,13 +457,13 @@ class ChatController extends State<ChatPageWithRoom>
       return;
     }
     if (!scrollController.hasClients) return;
-    if (timeline?.allowNewEvent == false ||
-        scrollController.position.pixels > 0 && _scrolledUp == false) {
-      setState(() => _scrolledUp = true);
-    } else if (scrollController.position.pixels <= 0 && _scrolledUp == true) {
-      setState(() => _scrolledUp = false);
-      setReadMarker();
-    }
+    // Runs on every scroll notification: rebuild only when the state flips.
+    final scrolledUp =
+        timeline?.allowNewEvent == false ||
+        scrollController.position.pixels > 0;
+    if (scrolledUp == _scrolledUp) return;
+    setState(() => _scrolledUp = scrolledUp);
+    if (!scrolledUp) setReadMarker();
   }
 
   Future<void> _loadDraft() async {
@@ -452,6 +479,7 @@ class ChatController extends State<ChatPageWithRoom>
         await prefs.remove('draft_$roomId');
         draft = legacy;
       }
+      _savedDraft = draft ?? '';
       if (mounted && sendController.text.isEmpty && draft != null) {
         sendController.text = draft;
       }
@@ -576,6 +604,7 @@ class ChatController extends State<ChatPageWithRoom>
     inputFocus = FocusNode(onKeyEvent: _customEnterKeyHandling);
 
     scrollController.addListener(_updateScrollController);
+    scrollController.addListener(_jumpButtonScroll);
     inputFocus.addListener(_inputFocusListener);
 
     sendingClient = widget.room.client;
@@ -604,6 +633,25 @@ class ChatController extends State<ChatPageWithRoom>
         : '';
     WidgetsBinding.instance.addObserver(this);
     _tryLoadTimeline();
+  }
+
+  bool _inviteJoinStarted = false;
+
+  /// Accepts a pending invite once per page. The view asks on every build;
+  /// a rebuild while the join is in flight must not stack another dialog or
+  /// send a parallel join. A failed join is reported once, not retried in a
+  /// loop.
+  void joinInviteOnce() {
+    if (_inviteJoinStarted || room.membership != Membership.invite) return;
+    _inviteJoinStarted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || room.membership != Membership.invite) return;
+      showFutureLoadingDialog(
+        context: context,
+        future: () => room.join(),
+        exceptionContext: ExceptionContext.joinRoom,
+      );
+    });
   }
 
   /// One LiveKit discovery per client and process; failures are retried.
@@ -749,9 +797,60 @@ class ChatController extends State<ChatPageWithRoom>
   @override
   String? animateInEventId;
 
+  /// New messages that arrived below while scrolled up (the jump badge).
+  final ValueNotifier<int> newBelow = ValueNotifier(0);
+
+  /// Telegram's way back: messages a quote jump left, newest last. The jump
+  /// button returns to them before it goes to the latest messages.
+  final List<String> _returnStack = [];
+  bool _returning = false;
+
+  void _jumpButtonScroll() {
+    if (!scrollController.hasClients ||
+        scrollController.position.pixels > 0 ||
+        timeline?.allowNewEvent == false) {
+      return;
+    }
+    newBelow.value = 0;
+    _returnStack.clear();
+  }
+
+  /// Remembers where a jump to [targetId] starts: the built row that quotes
+  /// it (the reply the user tapped).
+  void _rememberJumpOrigin(String targetId) {
+    if (_returning) return;
+    final events = conversationEvents;
+    if (events == null || !scrollController.hasClients) return;
+    final indexes = scrollController.tagMap.keys.toList()..sort();
+    for (final index in indexes) {
+      if (index < 0 || index >= events.length) continue;
+      final event = events[index];
+      if (event.inReplyToEventId(includingFallback: false) != targetId) {
+        continue;
+      }
+      if (_returnStack.lastOrNull != event.eventId) {
+        _returnStack.add(event.eventId);
+        if (_returnStack.length > 8) _returnStack.removeAt(0);
+      }
+      return;
+    }
+  }
+
   Future<void> _insert(int index) async {
     if (index > 0) return;
     final firstEvent = timeline?.events.firstOrNull;
+    if (firstEvent != null &&
+        _scrolledUp &&
+        firstEvent.senderId != firstEvent.room.client.userID &&
+        firstEvent.isVisibleInGui &&
+        {
+          EventTypes.Message,
+          EventTypes.Sticker,
+          EventTypes.Encrypted,
+          PollEventContent.startType,
+        }.contains(firstEvent.type)) {
+      newBelow.value++;
+    }
     final eventId = firstEvent?.transactionId ?? firstEvent?.eventId;
     animateInEventId = eventId;
     await Future.delayed(ChatLoomThemes.animationDuration);
@@ -845,6 +944,11 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      if (mounted) _flushDraft();
+      return;
+    }
     if (state != AppLifecycleState.resumed) return;
     if (!mounted) return;
     setReadMarker();
@@ -854,6 +958,20 @@ class ChatController extends State<ChatPageWithRoom>
   String? personalSeenEventId;
 
   void setReadMarker({String? eventId}) {
+    // Local only (incognito sends no receipt): clears this chat's
+    // notification while its newest message is on screen.
+    if (mounted) {
+      SeenChatNotifications.seen(
+        context,
+        [room],
+        atBottom: () =>
+            !_scrolledUp &&
+            activeThreadId == null &&
+            this.timeline?.allowNewEvent != false &&
+            scrollController.hasClients &&
+            scrollController.position.pixels <= 1,
+      );
+    }
     if (!mounted ||
         !PersonalPrivacy.surfaceUnlocked ||
         ModalRoute.of(context)?.isCurrent != true) {
@@ -973,11 +1091,13 @@ class ChatController extends State<ChatPageWithRoom>
     WidgetsBinding.instance.removeObserver(this);
     timeline?.cancelSubscriptions();
     timeline = null;
-    _storeInputTimeoutTimer?.cancel();
+    _flushDraft();
     typingCoolDown?.cancel();
     typingTimeout?.cancel();
     sendController.dispose();
     scrollController.dispose();
+    composerInset.dispose();
+    newBelow.dispose();
     inputFocus.removeListener(_inputFocusListener);
     inputFocus.dispose();
     _displayChatDetailsColumn.dispose();
@@ -1039,10 +1159,18 @@ class ChatController extends State<ChatPageWithRoom>
         );
       }
     } finally {
-      if (mounted) setState(() => _personalSending = false);
+      if (mounted && _personalSending) {
+        setState(() => _personalSending = false);
+      }
     }
   }
 
+  /// Telegram/Messenger send: the composer empties the moment the message
+  /// is durable in the encrypted outbox (before any network I/O) and is free
+  /// for the next message at once. The local echo shows "Sending…", and the
+  /// network result updates that bubble ("Not sent · Tap to retry"). The
+  /// text stays in the composer only when the outbox could not persist it,
+  /// and an old message is never put back into text the user is typing.
   Future<void> _sendPersonal() async {
     final frozenRoom = room;
     final frozenText = sendController.text;
@@ -1051,7 +1179,6 @@ class ChatController extends State<ChatPageWithRoom>
     final frozenThread = activeThreadId;
     final frozenThreadLast = threadLastEventId;
     final frozenPendingText = pendingText;
-    final frozenValue = sendController.value;
     final privacyGeneration = PersonalPrivacy.surfaceGeneration;
     bool sameContext() =>
         mounted &&
@@ -1083,7 +1210,9 @@ class ChatController extends State<ChatPageWithRoom>
 
     final proceed = await showTrustUserInRoomDialog(context, frozenRoom);
     if (!mounted || !proceed) return;
-    if (!sameContext() || sendController.value != frozenValue) {
+    // Compare the text, not the whole editing value: an IME that finishes
+    // its composing region on the tap changes the value, not the message.
+    if (!sameContext() || sendController.text != frozenText) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -1109,7 +1238,7 @@ class ChatController extends State<ChatPageWithRoom>
         cancelLabel: l10n.cancel,
       );
       if (dialogResult != OkCancelResult.ok) return;
-      if (!sameContext() || sendController.value != frozenValue) return;
+      if (!sameContext() || sendController.text != frozenText) return;
       parseCommands = false;
     }
 
@@ -1119,109 +1248,231 @@ class ChatController extends State<ChatPageWithRoom>
       PersonalPrivacy.setTyping(room, false);
     }
 
-    try {
-      final personal = PersonalClient.of(frozenRoom.client);
-      ImmediateSendResult? result;
-      if (parseCommands && RegExp(r'^/\w+').hasMatch(frozenText)) {
+    final sent = _SentComposer(
+      room: frozenRoom,
+      text: frozenText,
+      reply: frozenReply,
+      edit: frozenEdit,
+      pendingText: frozenPendingText,
+    );
+    if (parseCommands && RegExp(r'^/\w+').hasMatch(frozenText)) {
+      // Commands (/me, /shrug, …) are not outbox messages: the SDK runs them.
+      final draft = _consumeSent(sent);
+      try {
         await frozenRoom.sendTextEvent(
           frozenText,
           inReplyTo: frozenReply,
           editEventId: frozenEdit?.eventId,
           threadRootEventId: frozenThread,
         );
-      } else {
-        result = await personal.sendImmediate(
-          frozenRoom,
-          frozenText,
-          replyTo: frozenReply,
-          editEventId: frozenEdit?.eventId,
-          threadId: frozenThread,
-        );
-        if (result.state != ImmediateSendState.accepted) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Sending was not confirmed. Retrying the same content retains the attempt ID.',
-                ),
-              ),
-            );
-          }
-          return;
-        }
-      }
-      // Transport acceptance is final even if local draft/receipt handling fails.
-      String remainingDraft() =>
-          mounted &&
-              identical(room, frozenRoom) &&
-              (!sameContext() || sendController.value != frozenValue)
-          ? sendController.text
-          : frozenPendingText;
-      var nextText = remainingDraft();
-      var draftStored = false;
-      try {
-        // A save can overlap typing or a reply/edit change. Keep persisting the
-        // latest editor value before retiring the accepted outbox attempt.
-        do {
-          nextText = remainingDraft();
-          await personal.saveDraft(frozenRoom, nextText);
-        } while (mounted &&
-            identical(room, frozenRoom) &&
-            remainingDraft() != nextText);
-        draftStored = true;
+        await draft;
       } catch (_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Message accepted. The draft could not be updated; send state is preserved.',
-              ),
-            ),
-          );
-        }
+        await draft;
+        _giveBack(sent, 'The command did not run.');
       }
-      if (result != null && draftStored) {
-        try {
-          await personal.completeImmediate(result.actionId);
-        } catch (_) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Message accepted. Its send state is retained until local storage is ready.',
-                ),
-              ),
-            );
-          }
-        }
-      }
-      if (!mounted || room != frozenRoom) return;
+      return;
+    }
+
+    final personal = PersonalClient.of(frozenRoom.client);
+    final durable = Completer<void>();
+    Future<bool>? draft;
+    final outcome = personal.sendImmediate(
+      frozenRoom,
+      frozenText,
+      replyTo: frozenReply,
+      editEventId: frozenEdit?.eventId,
+      threadId: frozenThread,
+      onDurable: (_) {
+        draft = _consumeSent(sent);
+        if (!durable.isCompleted) durable.complete();
+      },
+    );
+    // Returns (and frees the composer) as soon as the message is durable;
+    // the network phase finishes in the background.
+    await Future.any<void>([
+      durable.future,
+      outcome.then<void>((_) {}, onError: (Object _) {}),
+    ]);
+    unawaited(_finishSend(personal, sent, outcome, () => draft));
+  }
+
+  /// After the outbox persisted [sent]: empties the composer (keeping only
+  /// what was typed after the tap), ends the reply/edit, frees the send
+  /// button and saves the remaining text as the encrypted draft. Returns
+  /// whether the draft was saved.
+  Future<bool> _consumeSent(_SentComposer sent) {
+    _storeInputTimeoutTimer?.cancel();
+    if (mounted && identical(room, sent.room)) {
+      final current = sendController.text;
+      final edit = sent.edit;
+      final remaining = current == sent.text
+          ? (edit != null ? sent.pendingText : '')
+          : edit == null && current.startsWith(sent.text)
+          ? current.substring(sent.text.length)
+          : null;
       setState(() {
-        // A new draft, selection or IME range belongs to the editor.
-        if (draftStored &&
-            sameContext() &&
-            sendController.value == frozenValue) {
+        if (remaining != null) {
           sendController.value = TextEditingValue(
-            text: nextText,
-            selection: TextSelection.collapsed(offset: nextText.length),
+            text: remaining,
+            selection: TextSelection.collapsed(offset: remaining.length),
           );
-          replyEvent = null;
+        }
+        if (identical(replyEvent, sent.reply)) replyEvent = null;
+        if (edit != null && identical(editEvent, edit)) {
           editEvent = null;
           pendingText = '';
         }
         _inputTextIsEmpty = sendController.text.isEmpty;
+        _personalSending = false;
       });
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Sending was not confirmed. Your draft is preserved. Check the conversation before retrying.',
-            ),
-          ),
-        );
+      // Telegram: sending brings you to your message (not back to a quote).
+      if (_scrolledUp) {
+        _returnStack.clear();
+        unawaited(scrollDown());
       }
     }
+    return _persistDraft(sent.room);
+  }
+
+  /// Saves the editor's text as [target]'s encrypted draft until it is
+  /// stable (typing may continue while a save runs). True on success.
+  Future<bool> _persistDraft(Room target) async {
+    if (kIsWeb) return true;
+    final personal = PersonalClient.of(target.client);
+    bool here() => mounted && identical(room, target);
+    var text = here() ? _draftText : '';
+    try {
+      while (true) {
+        await personal.saveDraft(target, text);
+        _savedDraft = text;
+        if (!here() || _draftText == text) return true;
+        text = _draftText;
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// What the room's draft holds: the editor, or the text an edit replaced.
+  String get _draftText =>
+      editEvent != null ? pendingText : sendController.text;
+
+  Future<void> _finishSend(
+    PersonalClient personal,
+    _SentComposer sent,
+    Future<ImmediateSendResult> outcome,
+    Future<bool>? Function() draft,
+  ) async {
+    ImmediateSendResult? result;
+    try {
+      result = await outcome;
+    } catch (_) {}
+    var drafted = draft();
+    if (drafted == null) {
+      if (result?.state != ImmediateSendState.accepted) {
+        // Never durable: nothing was sent and the text never left the editor.
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'The message could not be saved for sending, so it was not sent. Your text is kept.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      // An attempt left by an earlier session had already delivered it.
+      drafted = _consumeSent(sent);
+    }
+    final stored = await drafted;
+    if (result == null) return;
+    if (result.state == ImmediateSendState.accepted) {
+      // Transport acceptance is final even if local draft handling fails.
+      if (!stored) {
+        _notify(
+          'Message sent. The draft could not be updated; send state is preserved.',
+        );
+        return;
+      }
+      try {
+        await personal.completeImmediate(result.actionId);
+      } catch (_) {
+        _notify(
+          'Message sent. Its send state is retained until local storage is ready.',
+        );
+      }
+      return;
+    }
+    // The bubble shows "Not sent · Tap to retry" with the same attempt.
+    if (personal.localEchoShown(result.transactionId)) return;
+    // Rejected before it reached the timeline: nothing was sent, so the
+    // attempt is retired and the text comes back.
+    unawaited(
+      personal.discardImmediate(result.actionId).catchError((Object _) {}),
+    );
+    _giveBack(sent, switch (result.errorCode) {
+      'bridge_unavailable' =>
+        'This network does not accept this message right now.',
+      'replyUnavailable' => 'The message you replied to is unavailable.',
+      'sourceUnavailable' => 'This chat is unavailable.',
+      _ => 'The message did not reach the server.',
+    });
+  }
+
+  /// A message that failed before it had a bubble returns to the composer
+  /// when the composer is still empty; otherwise the user decides.
+  void _giveBack(_SentComposer sent, String reason) {
+    if (!mounted || !identical(room, sent.room)) return;
+    void restore() {
+      if (!mounted || !identical(room, sent.room)) return;
+      final current = sendController.text;
+      final quiet =
+          (current.isEmpty ||
+              (sent.edit != null && current == sent.pendingText)) &&
+          replyEvent == null &&
+          editEvent == null;
+      setState(() {
+        final text = quiet || current.isEmpty
+            ? sent.text
+            : '${sent.text}\n$current';
+        if (quiet) {
+          replyEvent = sent.reply;
+          if (sent.edit != null) {
+            pendingText = current;
+            editEvent = sent.edit;
+          }
+        }
+        sendController.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+        _inputTextIsEmpty = sendController.text.isEmpty;
+      });
+      unawaited(_persistDraft(sent.room));
+    }
+
+    final current = sendController.text;
+    final empty =
+        current.isEmpty || (sent.edit != null && current == sent.pendingText);
+    if (empty && replyEvent == null && editEvent == null) {
+      restore();
+      _notify('Not sent: $reason It is back in the composer.');
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Not sent: $reason'),
+        action: SnackBarAction(label: 'Restore', onPressed: restore),
+      ),
+    );
+  }
+
+  void _notify(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   FrozenAttachmentContext _captureAttachmentContext() {
@@ -1281,7 +1532,9 @@ class ChatController extends State<ChatPageWithRoom>
       if (!mounted || result == null) return;
       accepted = true;
       if (!frozen.isCurrent()) return;
-      if (sendController.value == originalValue &&
+      // Text, not the editing value: unfocusing for the picker ends the
+      // IME's composing region, which must not keep a sent caption.
+      if (sendController.text == originalValue.text &&
           result.caption == originalValue.text.trim()) {
         // Persist before clearing. A storage error keeps the user's text.
         if (!kIsWeb) {
@@ -1292,7 +1545,7 @@ class ChatController extends State<ChatPageWithRoom>
         }
         if (!mounted) return;
         frozen.validate();
-        if (sendController.value == originalValue) {
+        if (sendController.text == originalValue.text) {
           setState(() {
             sendController.clear();
             _inputTextIsEmpty = true;
@@ -1491,28 +1744,27 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
-  String _getSelectedEventString() {
-    var copyString = '';
-    if (selectedEvents.length == 1) {
-      return selectedEvents.first.getDisplayEvent(timeline!).body;
-    }
-    for (final event in selectedEvents) {
-      if (copyString.isNotEmpty) copyString += '\n\n';
-      copyString += event.getDisplayEvent(timeline!).body;
-    }
-    return copyString;
+  @override
+  List<ConversationMessageAction> messageActions(
+    BuildContext context,
+    Event event,
+  ) => chatMessageActions(this, context, event);
+
+  /// The text a message shows (its newest edit).
+  String eventText(Event event) {
+    final timeline = this.timeline;
+    return (timeline == null ? event : event.getDisplayEvent(timeline)).body;
   }
 
-  void copyEventsAction() {
-    Clipboard.setData(ClipboardData(text: _getSelectedEventString()));
-    setState(() {
-      showEmojiPicker = false;
-      selectedEvents.clear();
-    });
+  void copyEventAction(Event event) {
+    Clipboard.setData(ClipboardData(text: eventText(event)));
+    if (showEmojiPicker) setState(() => showEmojiPicker = false);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(L10n.of(context).copiedToClipboard)));
   }
 
-  Future<void> reportEventAction() async {
-    final event = selectedEvents.single;
+  Future<void> reportEventAction(Event event) async {
     final l10n = L10n.of(context);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     if (!mounted) return;
@@ -1533,27 +1785,22 @@ class ChatController extends State<ChatPageWithRoom>
     );
     if (result.error != null) return;
     if (!mounted) return;
-    setState(() {
-      showEmojiPicker = false;
-      selectedEvents.clear();
-    });
+    setState(() => showEmojiPicker = false);
     scaffoldMessenger.showSnackBar(
       SnackBar(content: Text(l10n.contentHasBeenReported)),
     );
   }
 
-  @override
-  Future<void> deleteErrorEventsAction() async {
+  /// Removes a message that failed to send from the outbox and timeline.
+  Future<void> deleteErrorEventAction(Event event) async {
     try {
-      if (selectedEvents.any((event) => event.status != EventStatus.error)) {
+      if (event.status != EventStatus.error) {
         throw Exception(
-          'Tried to delete failed to send events but one event is not failed to sent',
+          'Tried to delete a failed to send event that did not fail',
         );
       }
-      for (final event in selectedEvents) {
-        await event.cancelSend();
-      }
-      setState(selectedEvents.clear);
+      await event.cancelSend();
+      if (mounted) setState(() {});
     } catch (e, s) {
       if (!mounted) return;
       ErrorReporter(
@@ -1563,8 +1810,8 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
-  Future<void> redactEventsAction() async {
-    final reasonInput = selectedEvents.any((event) => event.status.isSent)
+  Future<void> redactEventAction(Event event) async {
+    final reasonInput = event.status.isSent
         ? await showTextInputDialog(
             context: context,
             title: L10n.of(context).redactMessage,
@@ -1583,37 +1830,31 @@ class ChatController extends State<ChatPageWithRoom>
     if (!mounted) return;
     await showFutureLoadingDialog(
       context: context,
-      futureWithProgress: (onProgress) async {
-        final count = selectedEvents.length;
-        for (final (i, event) in selectedEvents.indexed) {
-          onProgress(i / count);
-          if (event.status.isSent) {
-            if (event.canRedact) {
-              await event.redactEvent(reason: reason);
-            } else {
-              final client = currentRoomBundle.firstWhere(
-                (cl) => selectedEvents.first.senderId == cl!.userID,
-                orElse: () => null,
-              );
-              if (client == null) {
-                return;
-              }
-              final room = client.getRoomById(roomId)!;
-              await Event.fromJson(
-                event.toJson(),
-                room,
-              ).redactEvent(reason: reason);
-            }
+      future: () async {
+        if (event.status.isSent) {
+          if (event.canRedact) {
+            await event.redactEvent(reason: reason);
           } else {
-            await event.cancelSend();
+            final client = currentRoomBundle.firstWhere(
+              (cl) => event.senderId == cl!.userID,
+              orElse: () => null,
+            );
+            if (client == null) {
+              return;
+            }
+            final room = client.getRoomById(roomId)!;
+            await Event.fromJson(
+              event.toJson(),
+              room,
+            ).redactEvent(reason: reason);
           }
+        } else {
+          await event.cancelSend();
         }
       },
     );
-    setState(() {
-      showEmojiPicker = false;
-      selectedEvents.clear();
-    });
+    if (!mounted) return;
+    setState(() => showEmojiPicker = false);
   }
 
   @override
@@ -1623,29 +1864,19 @@ class ChatController extends State<ChatPageWithRoom>
     return clients;
   }
 
-  bool get canRedactSelectedEvents {
-    if (isArchived) return false;
+  bool canRedactEvent(Event event) {
+    if (isArchived || event.redacted || !event.status.isSent) return false;
     final clients = Matrix.of(context).currentBundle;
-    for (final event in selectedEvents) {
-      if (!event.status.isSent) return false;
-      if (event.canRedact == false &&
-          !(clients!.any((cl) => event.senderId == cl!.userID))) {
-        return false;
-      }
-    }
-    return true;
+    return event.canRedact ||
+        (clients?.any((cl) => event.senderId == cl!.userID) ?? false);
   }
 
-  bool get canPinSelectedEvents {
-    if (isArchived ||
-        !room.canChangeStateEvent(EventTypes.RoomPinnedEvents) ||
-        selectedEvents.length != 1 ||
-        !selectedEvents.single.status.isSent ||
-        activeThreadId != null) {
-      return false;
-    }
-    return true;
-  }
+  bool canPinEvent(Event event) =>
+      !isArchived &&
+      !event.redacted &&
+      room.canChangeStateEvent(EventTypes.RoomPinnedEvents) &&
+      event.status.isSent &&
+      activeThreadId == null;
 
   /// Effective mode: the round button only replaces the voice mic when the
   /// room is not known to refuse rounds, so voice notes stay reachable.
@@ -1726,63 +1957,37 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
-  bool get canEditSelectedEvents {
+  bool canEditEvent(Event event) {
     if (isArchived ||
-        selectedEvents.length != 1 ||
-        !selectedEvents.first.status.isSent ||
-        RoundVideoDescriptor.fromContent(selectedEvents.first.content) !=
-            null) {
+        event.redacted ||
+        !event.status.isSent ||
+        RoundVideoDescriptor.fromContent(event.content) != null) {
       return false;
     }
-    return currentRoomBundle.any(
-      (cl) => selectedEvents.first.senderId == cl!.userID,
-    );
+    return currentRoomBundle.any((cl) => event.senderId == cl!.userID);
   }
 
-  @override
-  Future<void> forwardEventsAction() async {
-    if (selectedEvents.isEmpty) return;
+  Future<void> forwardEventAction(Event event) async {
     final timeline = this.timeline;
     if (timeline == null) return;
-
-    final forwardEvents = List<Event>.from(
-      selectedEvents,
-    ).map((event) => event.getDisplayEvent(timeline)).toList();
-    if (forwardEvents.any(
-      (e) => !RoundMediaPolicy.fromContent(e.content).canForward,
-    ))
-      return;
-    if (forwardEvents.any(
-      (e) => RoundVideoDescriptor.fromContent(e.content) != null,
-    )) {
-      if (forwardEvents.length != 1) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Forward one round video at a time.')),
-        );
-        return;
-      }
+    final forward = event.getDisplayEvent(timeline);
+    if (!RoundMediaPolicy.fromContent(forward.content).canForward) return;
+    if (RoundVideoDescriptor.fromContent(forward.content) != null) {
       await TelegramRoundService.of(
-        forwardEvents.single.room.client,
-      ).showForwardPicker(context, forwardEvents.single);
-      if (mounted) setState(() => selectedEvents.clear());
+        forward.room.client,
+      ).showForwardPicker(context, forward);
       return;
     }
-
     await showScaffoldDialog(
       context: context,
       builder: (context) => ShareScaffoldDialog(
-        items: forwardEvents
-            .map((event) => ContentShareItem(event.content.copy()))
-            .toList(),
+        items: [ContentShareItem(forward.content.copy())],
       ),
     );
-    if (!mounted) return;
-    setState(() => selectedEvents.clear());
   }
 
-  @override
-  void sendAgainAction() {
-    final event = selectedEvents.first;
+  /// Sends a failed message (and its failed edits) again.
+  void sendAgainAction(Event event) {
     if (RoundVideoDescriptor.fromContent(event.content) != null) {
       final txid =
           event.unsigned?.tryGet<String>('transaction_id') ?? event.eventId;
@@ -1799,7 +2004,6 @@ class ChatController extends State<ChatPageWithRoom>
             );
           }().catchError((Object _) {}),
         );
-      if (mounted) setState(() => selectedEvents.clear());
       return;
     }
     if (event.status.isError) {
@@ -1811,14 +2015,14 @@ class ChatController extends State<ChatPageWithRoom>
     for (final e in allEditEvents) {
       e.sendAgain();
     }
-    setState(() => selectedEvents.clear());
+    setState(() {});
   }
 
   @override
   void replyAction({Event? replyTo}) {
+    if (replyTo == null) return;
     setState(() {
-      replyEvent = replyTo ?? selectedEvents.first;
-      selectedEvents.clear();
+      replyEvent = replyTo;
     });
     inputFocus.requestFocus();
   }
@@ -1830,18 +2034,8 @@ class ChatController extends State<ChatPageWithRoom>
     bool loadContextIfMissing = true,
   }) async {
     if (!mounted || timeline == null) return;
-    final foundEvent = timeline!.events.firstWhereOrNull(
-      (event) => event.eventId == eventId,
-    );
-
-    final eventIndex = foundEvent == null
-        ? -1
-        : timeline!.events
-              .filterByVisibleInGui(
-                exceptionEventId: eventId,
-                threadId: activeThreadId,
-              )
-              .indexOf(foundEvent);
+    _rememberJumpOrigin(eventId);
+    final eventIndex = _rowIndexFor(eventId);
 
     if (eventIndex == -1) {
       if (!loadContextIfMissing) {
@@ -1876,15 +2070,46 @@ class ChatController extends State<ChatPageWithRoom>
       });
     }
     await scrollController.scrollToIndex(
-      eventIndex + 1,
+      eventIndex,
       duration: ChatLoomThemes.animationDuration,
       preferPosition: AutoScrollPosition.middle,
     );
     _updateScrollController();
   }
 
+  /// Index of the list row (its `AutoScrollTag` index) showing [eventId], or
+  /// -1 when the event is not loaded. A loaded event without a row (reaction,
+  /// edit, hidden state; the read marker often sits on one) maps to the
+  /// nearest older row instead of shifting every index by one.
+  int _rowIndexFor(String eventId) {
+    final events = timeline?.events ?? const <Event>[];
+    final at = events.indexWhere((event) => event.eventId == eventId);
+    if (at == -1) return -1;
+    final rows = conversationEvents ?? const <Event>[];
+    final rowOf = Map<Event, int>.identity();
+    for (var i = 0; i < rows.length; i++) {
+      rowOf[rows[i]] = i;
+    }
+    for (var i = at; i < events.length; i++) {
+      final row = rowOf[events[i]];
+      if (row != null) return row;
+    }
+    return rows.isEmpty ? -1 : rows.length - 1;
+  }
+
   Future<void> scrollDown() async {
     if (timeline == null) return;
+    // Telegram: after a quote jump the arrow first returns to the reply.
+    if (_returnStack.isNotEmpty) {
+      final origin = _returnStack.removeLast();
+      _returning = true;
+      try {
+        await scrollToEventId(origin);
+      } finally {
+        _returning = false;
+      }
+      return;
+    }
     if (!timeline!.allowNewEvent) {
       setState(() {
         timeline?.cancelSubscriptions();
@@ -1900,7 +2125,20 @@ class ChatController extends State<ChatPageWithRoom>
       await loadTimelineFuture;
     }
     if (!mounted || !scrollController.hasClients) return;
-    scrollController.jumpTo(0);
+    final position = scrollController.position;
+    if (position.pixels <= 0 || ConversationMotion.reduced(context)) {
+      scrollController.jumpTo(0);
+      return;
+    }
+    // Near: glide down. Far: jump to one screen above the newest message,
+    // then glide, so a long way is neither slow nor an abrupt cut.
+    final viewport = position.viewportDimension;
+    if (position.pixels > 2 * viewport) scrollController.jumpTo(viewport);
+    await scrollController.animateTo(
+      0,
+      duration: NotionMotion.long,
+      curve: NotionMotion.emphasized,
+    );
   }
 
   @override
@@ -1935,18 +2173,7 @@ class ChatController extends State<ChatPageWithRoom>
       );
   }
 
-  void clearSelectedEvents() => setState(() {
-    selectedEvents.clear();
-    showEmojiPicker = false;
-  });
-
-  void clearSingleSelectedEvent() {
-    if (selectedEvents.length <= 1) {
-      clearSelectedEvents();
-    }
-  }
-
-  void _startEditingEvent(Event event, {bool clearSelection = false}) {
+  void _startEditingEvent(Event event) {
     final timeline = this.timeline;
     if (timeline == null) return;
 
@@ -1967,15 +2194,11 @@ class ChatController extends State<ChatPageWithRoom>
             withSenderNamePrefix: false,
             hideReply: true,
           );
-      if (clearSelection) selectedEvents.clear();
     });
     inputFocus.requestFocus();
   }
 
-  @override
-  void editSelectedEventAction() {
-    _startEditingEvent(selectedEvents.first, clearSelection: true);
-  }
+  void editEventAction(Event event) => _startEditingEvent(event);
 
   void _editLastSentMessage() {
     final timeline = this.timeline;
@@ -2029,20 +2252,6 @@ class ChatController extends State<ChatPageWithRoom>
     context.go('/rooms/${result.result!}');
 
     await showFutureLoadingDialog(context: context, future: room.leave);
-  }
-
-  @override
-  void onSelectMessage(Event event) {
-    if (!event.redacted) {
-      if (selectedEvents.contains(event)) {
-        setState(() => selectedEvents.remove(event));
-      } else {
-        setState(() => selectedEvents.add(event));
-      }
-      selectedEvents.sort(
-        (a, b) => a.originServerTs.compareTo(b.originServerTs),
-      );
-    }
   }
 
   @override
@@ -2128,16 +2337,13 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
-  void pinEvent() {
+  /// Pins [event], or unpins it when it is pinned already.
+  void pinEvent(Event event) {
     final pinnedEventIds = room.pinnedEventIds;
-    final selectedEventIds = selectedEvents.map((e) => e.eventId).toSet();
-    final unpin =
-        selectedEventIds.length == 1 &&
-        pinnedEventIds.contains(selectedEventIds.single);
-    if (unpin) {
-      pinnedEventIds.removeWhere(selectedEventIds.contains);
+    if (pinnedEventIds.contains(event.eventId)) {
+      pinnedEventIds.remove(event.eventId);
     } else {
-      pinnedEventIds.addAll(selectedEventIds);
+      pinnedEventIds.add(event.eventId);
     }
     showFutureLoadingDialog(
       context: context,
@@ -2148,22 +2354,40 @@ class ChatController extends State<ChatPageWithRoom>
   Timer? _storeInputTimeoutTimer;
   static const Duration _storeInputTimeout = Duration(milliseconds: 500);
 
-  @override
-  double? inputBarHeight;
+  /// The text last persisted as this room's draft (null: unknown).
+  String? _savedDraft;
 
+  /// Saves a pending debounced draft now (leaving the chat, app paused), so
+  /// the last 500 ms of typing are never lost. Fire-and-forget: the encrypted
+  /// store keeps its fail-closed semantics; a failure keeps the old draft.
+  void _flushDraft() {
+    if (kIsWeb) return;
+    final pending = _storeInputTimeoutTimer?.isActive ?? false;
+    _storeInputTimeoutTimer?.cancel();
+    _storeInputTimeoutTimer = null;
+    final text = _draftText;
+    if (!pending && (_savedDraft == null || _savedDraft == text)) return;
+    final target = room;
+    unawaited(
+      PersonalClient.of(target.client)
+          .saveDraft(target, text)
+          .then<void>((_) => _savedDraft = text, onError: (Object _) {}),
+    );
+  }
+
+  @override
+  final ValueNotifier<double?> composerInset = ValueNotifier(null);
+
+  double? get inputBarHeight => composerInset.value;
+
+  /// Follows the composer's measured height. Only the list's spacer and the
+  /// jump button listen: a growing reply preview or field never rebuilds
+  /// the page or the timeline rows (it used to, once per animation frame).
   void updateInputBarHeight() {
     if (!mounted) return;
-    RenderBox? renderBox;
-    if (inputBarKey.currentContext?.findRenderObject() != null) {
-      renderBox = inputBarKey.currentContext!.findRenderObject() as RenderBox;
-    }
-
-    final height = renderBox?.size.height ?? 72.0;
-    if (height != inputBarHeight) {
-      setState(() {
-        inputBarHeight = height;
-      });
-    }
+    final box = inputBarKey.currentContext?.findRenderObject();
+    // Not laid out yet (loading): measure again on the next build.
+    if (box is RenderBox && box.hasSize) composerInset.value = box.size.height;
   }
 
   @override
@@ -2175,10 +2399,13 @@ class ChatController extends State<ChatPageWithRoom>
     }
 
     _storeInputTimeoutTimer?.cancel();
-    if (!kIsWeb) {
+    // An edit's text is not a draft: the room keeps the text it replaced.
+    if (!kIsWeb && editEvent == null) {
       _storeInputTimeoutTimer = Timer(_storeInputTimeout, () async {
+        _storeInputTimeoutTimer = null;
         try {
           await PersonalClient.of(room.client).saveDraft(room, text);
+          _savedDraft = text;
         } catch (_) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -2235,8 +2462,7 @@ class ChatController extends State<ChatPageWithRoom>
       {Membership.leave, Membership.ban}.contains(room.membership);
 
   @override
-  void showEventInfo([Event? event]) =>
-      (event ?? selectedEvents.single).showInfoDialog(context);
+  void showEventInfo(Event event) => event.showInfoDialog(context);
 
   @override
   void cancelReplyEventAction() => setState(() {
@@ -2247,6 +2473,16 @@ class ChatController extends State<ChatPageWithRoom>
     replyEvent = null;
     editEvent = null;
   });
+
+  /// System back with a reply or edit open: Telegram cancels it first. A
+  /// changed edit asks before its text is discarded.
+  void cancelReplyOrEditOnBack() {
+    if (editEvent != null) {
+      unawaited(_cancelEditWithConfirmation());
+    } else {
+      cancelReplyEventAction();
+    }
+  }
 
   void startOrJoinVideoCall() {
     Matrix.of(context).activeCallRoomId.value = room.id;
@@ -2273,6 +2509,7 @@ class ChatController extends State<ChatPageWithRoom>
       );
       if (result == OkCancelResult.cancel) return;
     }
+    if (!mounted) return;
 
     cancelReplyEventAction();
   }
@@ -2283,12 +2520,19 @@ class ChatController extends State<ChatPageWithRoom>
     await AppSettings.displayChatDetailsColumn.setItem(
       !_displayChatDetailsColumn.value,
     );
+    if (!mounted) return;
     _displayChatDetailsColumn.value = !_displayChatDetailsColumn.value;
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Size notifications report changes only: measure the first layout.
+    if (composerInset.value == null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => updateInputBarHeight(),
+      );
+    }
     return Actions(
       actions: kIsWeb
           ? {}
@@ -2341,4 +2585,24 @@ enum AddPopupMenuActions {
   videoCamera,
   roundVideoSilent,
   location,
+}
+
+/// What one send took from the composer, so the composer can be emptied
+/// once the outbox has it and the text given back if it failed early.
+class _SentComposer {
+  final Room room;
+  final String text;
+  final Event? reply;
+  final Event? edit;
+
+  /// The draft an edit replaced (restored when the edit is sent).
+  final String pendingText;
+
+  const _SentComposer({
+    required this.room,
+    required this.text,
+    required this.reply,
+    required this.edit,
+    required this.pendingText,
+  });
 }

@@ -165,11 +165,14 @@ class NotionSendButton extends StatelessWidget {
   });
 
   /// Presses with a spring (the send button is a reward element), pulses
-  /// when it becomes enabled, sends with a light haptic tick and morphs
-  /// between the arrow and the busy spinner.
+  /// when it becomes enabled and sends with a light haptic tick. While the
+  /// message is being stored (a few milliseconds) it keeps its look and
+  /// ignores taps; a spinner appears only if that takes longer than the
+  /// loader grace, so a normal send never flashes grey or a spinner.
   @override
   Widget build(BuildContext context) {
     final send = busy ? null : onPressed;
+    const arrow = Icon(Icons.arrow_upward, key: ValueKey('send'), size: 24);
     // Springs when it turns enabled (first character typed) or back.
     return NotionPop(
       playOnMount: false,
@@ -191,28 +194,26 @@ class NotionSendButton extends StatelessWidget {
             minimumSize: const Size.square(48),
             backgroundColor: Theme.of(context).colorScheme.onSurface,
             foregroundColor: Theme.of(context).colorScheme.surface,
-            disabledBackgroundColor: Theme.of(
-              context,
-            ).colorScheme.onSurface.withAlpha(90),
+            // Busy keeps the enabled colour: no grey flash on every send.
+            disabledBackgroundColor: busy && onPressed != null
+                ? Theme.of(context).colorScheme.onSurface
+                : Theme.of(context).colorScheme.onSurface.withAlpha(90),
             disabledForegroundColor: Theme.of(context).colorScheme.surface,
             shape: const CircleBorder(),
           ),
-          icon: NotionMorphSwitcher(
-            child: busy
-                ? SizedBox.square(
+          icon: busy
+              ? NotionDelayedReveal(
+                  placeholder: arrow,
+                  child: SizedBox.square(
                     key: const ValueKey('busy'),
                     dimension: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
                       color: Theme.of(context).colorScheme.surface,
                     ),
-                  )
-                : const Icon(
-                    Icons.arrow_upward,
-                    key: ValueKey('send'),
-                    size: 24,
                   ),
-          ),
+                )
+              : arrow,
         ),
       ),
     );
@@ -259,6 +260,11 @@ class NotionAudioFileBlock extends StatefulWidget {
   final VoidCallback? onSpeed;
   final double speed;
   final Widget? speedAction;
+
+  /// The second row (skips, speed, save). Telegram shows one row and the
+  /// speed chip only for the note that is playing or paused: callers pass
+  /// whether this note is the active one.
+  final bool controls;
   const NotionAudioFileBlock({
     super.key,
     required this.duration,
@@ -277,6 +283,7 @@ class NotionAudioFileBlock extends StatefulWidget {
     this.onSpeed,
     this.speed = 1,
     this.speedAction,
+    this.controls = true,
   });
 
   @override
@@ -373,52 +380,56 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 36,
-                        trackShape: NotionWaveformTrackShape(widget.waveform),
-                        activeTrackColor: foreground,
-                        inactiveTrackColor: foreground.withValues(alpha: .55),
-                        disabledActiveTrackColor: foreground,
-                        disabledInactiveTrackColor: foreground.withValues(
-                          alpha: .55,
+                    RepaintBoundary(
+                      child: SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 36,
+                          trackShape: NotionWaveformTrackShape(widget.waveform),
+                          activeTrackColor: foreground,
+                          inactiveTrackColor: foreground.withValues(alpha: .55),
+                          disabledActiveTrackColor: foreground,
+                          disabledInactiveTrackColor: foreground.withValues(
+                            alpha: .55,
+                          ),
+                          thumbColor: foreground,
+                          overlayColor: foreground.withValues(alpha: .12),
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 5,
+                            disabledThumbRadius: 0,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 12,
+                          ),
+                          showValueIndicator:
+                              ShowValueIndicator.onlyForContinuous,
+                          valueIndicatorColor: foreground,
+                          valueIndicatorTextStyle: TextStyle(
+                            color: foreground.computeLuminance() > .179
+                                ? const Color(0xFF242424)
+                                : Colors.white,
+                          ),
                         ),
-                        thumbColor: foreground,
-                        overlayColor: foreground.withValues(alpha: .12),
-                        thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 5,
-                          disabledThumbRadius: 0,
-                        ),
-                        overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 12,
-                        ),
-                        showValueIndicator:
-                            ShowValueIndicator.onlyForContinuous,
-                        valueIndicatorColor: foreground,
-                        valueIndicatorTextStyle: TextStyle(
-                          color: foreground.computeLuminance() > .179
-                              ? const Color(0xFF242424)
-                              : Colors.white,
-                        ),
-                      ),
-                      child: MergeSemantics(
-                        child: Semantics(
-                          label: 'Audio position',
-                          child: Slider(
-                            key: const ValueKey('voice-waveform'),
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            value: progress,
-                            label: seekTime(progress),
-                            semanticFormatterCallback: seekTime,
-                            onChanged: enabledSeek == null
-                                ? null
-                                : (value) => setState(() => _preview = value),
-                            onChangeEnd: enabledSeek == null
-                                ? null
-                                : (value) {
-                                    setState(() => _preview = null);
-                                    widget.onSeek?.call(value);
-                                  },
+                        child: MergeSemantics(
+                          child: Semantics(
+                            label: 'Audio position',
+                            child: Slider(
+                              key: const ValueKey('voice-waveform'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              value: progress,
+                              label: seekTime(progress),
+                              semanticFormatterCallback: seekTime,
+                              onChanged: enabledSeek == null
+                                  ? null
+                                  : (value) => setState(() => _preview = value),
+                              onChangeEnd: enabledSeek == null
+                                  ? null
+                                  : (value) {
+                                      setState(() => _preview = null);
+                                      widget.onSeek?.call(value);
+                                    },
+                            ),
                           ),
                         ),
                       ),
@@ -441,49 +452,52 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
               ),
             ],
           ),
-          Wrap(
-            spacing: 0,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              IconButton(
-                tooltip: 'Rewind 10 seconds',
-                style: buttonStyle,
-                onPressed: widget.downloading ? null : widget.onSeekBack,
-                icon: const Icon(Icons.replay_10_rounded, size: 22),
-              ),
-              IconButton(
-                tooltip: 'Forward 10 seconds',
-                style: buttonStyle,
-                onPressed: widget.downloading ? null : widget.onSeekForward,
-                icon: const Icon(Icons.forward_10_rounded, size: 22),
-              ),
-              widget.speedAction ??
-                  TextButton(
-                    onPressed: widget.downloading ? null : widget.onSpeed,
-                    style: TextButton.styleFrom(
-                      foregroundColor: foreground,
-                      disabledForegroundColor: foreground.withValues(
-                        alpha: .38,
-                      ),
-                      minimumSize: const Size(48, 48),
-                    ),
-                    child: Tooltip(
-                      message: 'Playback speed',
-                      child: Text(
-                        speedLabel,
-                        textDirection: TextDirection.ltr,
-                        semanticsLabel: 'Playback speed $speedLabel',
-                      ),
-                    ),
-                  ),
-              if (widget.onDownload != null)
+          NotionSizeReveal(
+            visible: widget.controls,
+            child: Wrap(
+              spacing: 0,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
                 IconButton(
-                  tooltip: 'Download audio',
+                  tooltip: 'Rewind 10 seconds',
                   style: buttonStyle,
-                  onPressed: widget.onDownload,
-                  icon: const Icon(Icons.download_rounded, size: 20),
+                  onPressed: widget.downloading ? null : widget.onSeekBack,
+                  icon: const Icon(Icons.replay_10_rounded, size: 22),
                 ),
-            ],
+                IconButton(
+                  tooltip: 'Forward 10 seconds',
+                  style: buttonStyle,
+                  onPressed: widget.downloading ? null : widget.onSeekForward,
+                  icon: const Icon(Icons.forward_10_rounded, size: 22),
+                ),
+                widget.speedAction ??
+                    TextButton(
+                      onPressed: widget.downloading ? null : widget.onSpeed,
+                      style: TextButton.styleFrom(
+                        foregroundColor: foreground,
+                        disabledForegroundColor: foreground.withValues(
+                          alpha: .38,
+                        ),
+                        minimumSize: const Size(48, 48),
+                      ),
+                      child: Tooltip(
+                        message: 'Playback speed',
+                        child: Text(
+                          speedLabel,
+                          textDirection: TextDirection.ltr,
+                          semanticsLabel: 'Playback speed $speedLabel',
+                        ),
+                      ),
+                    ),
+                if (widget.onDownload != null)
+                  IconButton(
+                    tooltip: 'Download audio',
+                    style: buttonStyle,
+                    onPressed: widget.onDownload,
+                    icon: const Icon(Icons.download_rounded, size: 20),
+                  ),
+              ],
+            ),
           ),
         ],
       ),
