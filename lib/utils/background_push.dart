@@ -93,6 +93,13 @@ class BackgroundPush {
     return view.description;
   }
 
+  /// Current setup phase of [client]'s notifications (inbox status row);
+  /// `unknown` where automatic push is not used.
+  PushRegistrationPhase registrationPhase(Client client) =>
+      !firebaseEnabled || upAction
+      ? PushRegistrationPhase.unknown
+      : _pusherPhases[client] ?? _registration.phase;
+
   void _changed() => registrationChanges.value++;
 
   Future<void> _acceptFcmToken(String token) {

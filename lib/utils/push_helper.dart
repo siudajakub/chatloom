@@ -16,6 +16,7 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/message_notification.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/notification_eligibility.dart';
+import 'package:chatloom/personal/notification_reply.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -23,6 +24,7 @@ import 'package:chatloom/personal/private_avatar.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
 import 'package:chatloom/personal/reminder_notification.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
+import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/utils/call_kit_params.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
@@ -362,9 +364,14 @@ Future<PushOutcome> _tryPushHelper(
       event.tryParseRtcNotificationContent()?.notificationType == .ring &&
       PlatformInfos.isMobile;
 
+  // A merged person page shows its rooms without one room id in the route.
+  // Behind the app lock the open chat is not visible, so it still alerts
+  // (and is cleared locally once the chat is seen after unlocking).
   if (!run.test &&
       !incomingCall &&
-      activeRoomId == event.room.id &&
+      (activeRoomId == event.room.id ||
+          SeenChatNotifications.isOpen(client.clientName, event.room.id)) &&
+      PersonalPrivacy.surfaceUnlocked &&
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
     Logs().v('Room is in foreground. Stop push helper here.');
     return PushOutcome.activeRoom;
@@ -446,23 +453,39 @@ String? _chatName(InboxProjection projection, Room room) {
 String _personKey(String senderId) =>
     sha256.convert(utf8.encode(senderId)).toString().substring(0, 16);
 
-List<AndroidNotificationAction> _messageActions() =>
-    AppSettings.personalIncognito.value
-    // Incognito never sends a read receipt from a notification.
-    ? [
-        AndroidNotificationAction(
+/// Inline Reply only where the notification names the chat (previews on, no
+/// app lock) and the account can write there; never on the diagnostics test.
+/// The reply itself is user-initiated and goes through the durable outbox
+/// (`notification_reply.dart`).
+bool _offersReply(Room? room, {required bool previews, required bool test}) =>
+    previews && !test && room != null && room.canSendDefaultMessages;
+
+List<AndroidNotificationAction> _messageActions({required bool reply}) => [
+  if (reply)
+    AndroidNotificationAction(
+      ChatLoomNotificationActions.reply.name,
+      notificationReplyActionLabel,
+      inputs: const [
+        AndroidNotificationActionInput(label: notificationReplyInputLabel),
+      ],
+      semanticAction: SemanticAction.reply,
+      // The notification shows Android's sending state until the outcome
+      // replaces or removes it.
+      cancelNotification: false,
+    ),
+  AppSettings.personalIncognito.value
+      // Incognito never sends a read receipt from a notification.
+      ? AndroidNotificationAction(
           ChatLoomNotificationActions.dismiss.name,
           'Dismiss',
           cancelNotification: true,
-        ),
-      ]
-    : [
-        AndroidNotificationAction(
+        )
+      : AndroidNotificationAction(
           ChatLoomNotificationActions.markAsRead.name,
           'Mark as read',
           cancelNotification: true,
         ),
-      ];
+];
 
 AndroidNotificationDetails _messageDetails({
   required String clientName,
@@ -470,6 +493,7 @@ AndroidNotificationDetails _messageDetails({
   int? unread,
   DateTime? when,
   Uint8List? largeIcon,
+  bool reply = false,
 }) => AndroidNotificationDetails(
   PersonalNotificationChannels.messagesId,
   PersonalNotificationChannels.messagesName,
@@ -484,7 +508,7 @@ AndroidNotificationDetails _messageDetails({
   styleInformation: style,
   when: when?.millisecondsSinceEpoch,
   largeIcon: largeIcon == null ? null : ByteArrayAndroidBitmap(largeIcon),
-  actions: _messageActions(),
+  actions: _messageActions(reply: reply),
 );
 
 /// Avatars of one message notification; null parts were unavailable in time.
@@ -680,6 +704,7 @@ Future<void> _showMessageNotification({
           unread: unread,
           when: event.originServerTs,
           largeIcon: avatars.chat,
+          reply: _offersReply(room, previews: previews, test: test),
         ),
         iOS: DarwinNotificationDetails(
           threadIdentifier: '${client.clientName}_${room.id}',
@@ -715,8 +740,9 @@ Future<void> _showFallback(
 ) async {
   final budget = PushWorkBudget(limit: _fallbackReserve);
   final locked = await budget.wait(personalAppLockConfigured);
+  final previews = AppSettings.personalNotificationPreviews.value;
   final text = messageNotificationText(
-    previews: AppSettings.personalNotificationPreviews.value,
+    previews: previews,
     chatName: target.chatName,
     senderName: null,
     preview: null,
@@ -734,6 +760,11 @@ Future<void> _showFallback(
         android: _messageDetails(
           clientName: target.client.clientName,
           unread: target.unread,
+          reply: _offersReply(
+            target.client.getRoomById(target.roomId),
+            previews: previews && !locked,
+            test: target.test,
+          ),
         ),
         iOS: DarwinNotificationDetails(
           threadIdentifier: '${target.client.clientName}_${target.roomId}',

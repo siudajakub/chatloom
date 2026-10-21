@@ -6,6 +6,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/message_notification.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
 import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/push_helper.dart';
@@ -263,7 +264,7 @@ void main() {
   );
 
   test('message preview: sender title, decrypted text, private visibility, '
-      'Messages channel and incognito Dismiss action', () async {
+      'Messages channel, inline Reply and incognito Dismiss action', () async {
     final f = fixture();
     f.client.fetch = () async => f.event();
     await f.push();
@@ -274,8 +275,45 @@ void main() {
     expect(android.channelId, 'fluffychat_push');
     expect(android.channelName, 'Messages');
     expect(android.visibility, NotificationVisibility.private);
-    expect(android.actions!.single.id, 'dismiss');
-    expect(android.actions!.single.title, 'Dismiss');
+    expect(android.actions!.map((a) => a.id), ['reply', 'dismiss']);
+    final reply = android.actions!.first;
+    expect(reply.title, 'Reply');
+    expect(reply.inputs.single.label, 'Message');
+    expect(reply.semanticAction, SemanticAction.reply);
+    expect(reply.showsUserInterface, isFalse);
+    // Android's sending state stays until the outcome replaces it.
+    expect(reply.cancelNotification, isFalse);
+    expect(android.actions!.last.title, 'Dismiss');
+  });
+
+  test('no inline Reply where the account cannot write or on the '
+      'diagnostics test', () async {
+    final f = fixture();
+    f.room.setState(
+      Event(
+        room: f.room,
+        type: EventTypes.RoomPowerLevels,
+        stateKey: '',
+        eventId: r'$synthetic-power-levels',
+        senderId: _peer,
+        originServerTs: DateTime.utc(2026, 10, 17),
+        content: {
+          'events_default': 50,
+          'users': {_peer: 100},
+        },
+      ),
+    );
+    f.client.fetch = () async => f.event();
+    await f.push();
+    expect(f.plugin.shown.last.details!.android!.actions!.map((a) => a.id), [
+      'dismiss',
+    ]);
+    final g = fixture();
+    g.client.fetch = () async => g.event();
+    await g.push(test: true);
+    expect(g.plugin.shown.last.details!.android!.actions!.map((a) => a.id), [
+      'dismiss',
+    ]);
   });
 
   test('previews off keep the generic text; read receipts only without '
@@ -288,6 +326,7 @@ void main() {
     final shown = f.plugin.shown.single;
     expect(shown.title, 'ChatLoom');
     expect(shown.body, 'Open the app to read your message.');
+    // Without previews the chat is not named, so there is no blind Reply.
     expect(shown.details!.android!.actions!.single.id, 'markAsRead');
   });
 
@@ -303,6 +342,8 @@ void main() {
     final android = shown.details!.android!;
     expect(android.styleInformation, isNull);
     expect(android.visibility, NotificationVisibility.private);
+    // The app lock requires opening (and unlocking) the app to reply.
+    expect(android.actions!.map((a) => a.id), ['dismiss']);
     expect(await _lastOutcome(), PushOutcome.shown);
   });
 
@@ -413,6 +454,38 @@ void main() {
     await f.push();
     expect(f.plugin.shown, hasLength(1));
     expect(await _lastOutcome(), PushOutcome.seen);
+  });
+
+  testWidgets('a push for a room shown on an open merged person page stays '
+      'silent, like the open single chat', (tester) async {
+    final f = fixture();
+    SeenChatNotifications.debugSurfaceVisible = () => true;
+    addTearDown(() {
+      SeenChatNotifications.debugSurfaceVisible = null;
+      SeenChatNotifications.debugReset();
+    });
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    late BuildContext page;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            page = context;
+            return const SizedBox.expand();
+          },
+        ),
+      ),
+    );
+    // The merged page reports its source rooms; the route has no room id.
+    SeenChatNotifications.seen(page, [f.room], atBottom: () => false);
+    f.client.fetch = () async => f.event();
+    await tester.runAsync(f.push);
+    expect(f.plugin.shown, isEmpty);
+    expect(await tester.runAsync(_lastOutcome), PushOutcome.activeRoom);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(f.push);
+    expect(f.plugin.shown, hasLength(1));
   });
 
   test(

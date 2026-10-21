@@ -6,15 +6,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:math';
 import 'dart:ui';
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/notification_reply.dart';
 import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/push_helper.dart';
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:go_router/go_router.dart';
@@ -81,6 +85,74 @@ Future<bool> waitForPushIsolateDone({
   }
 }
 
+/// Key in a forwarded reply's `data`: the name of its claim port.
+const _replyClaimKey = 'chatloom_reply_claim';
+
+/// How long a reply forwarded to the running app may wait to be taken.
+@visibleForTesting
+Duration notificationReplyClaimTimeout = const Duration(seconds: 10);
+
+bool _isReply(NotificationResponse response) =>
+    response.notificationResponseType ==
+        NotificationResponseType.selectedNotificationAction &&
+    response.actionId == ChatLoomNotificationActions.reply.name;
+
+/// Hands a typed reply to the running app exactly once. The app takes it by
+/// removing the claim port's name ([claimNotificationReply]). If it does not
+/// within [notificationReplyClaimTimeout] (a stale port of a UI engine that
+/// is gone, or a stuck start), this isolate removes the name itself and the
+/// caller reports "not sent": opening a second client next to a possibly
+/// live one could corrupt the encryption state, and a silent loss is worse.
+/// Returns whether the running app took the reply.
+@visibleForTesting
+Future<bool> forwardNotificationReply(
+  SendPort main,
+  NotificationResponse response,
+) async {
+  final claim = ReceivePort();
+  final name =
+      'chatloom_reply_${DateTime.now().microsecondsSinceEpoch}_'
+      '${Random.secure().nextInt(1 << 32)}';
+  if (!IsolateNameServer.registerPortWithName(claim.sendPort, name)) {
+    claim.close();
+    return false;
+  }
+  try {
+    main.send(
+      NotificationResponse(
+        notificationResponseType: response.notificationResponseType,
+        id: response.id,
+        actionId: response.actionId,
+        input: response.input,
+        payload: response.payload,
+        data: {...response.data, _replyClaimKey: name},
+      ).toJsonString(),
+    );
+    await claim.first.timeout(notificationReplyClaimTimeout);
+    return true;
+  } on TimeoutException {
+    // Whoever removes the name owns the reply.
+    return !IsolateNameServer.removePortNameMapping(name);
+  } finally {
+    IsolateNameServer.removePortNameMapping(name);
+    claim.close();
+  }
+}
+
+/// Takes a reply forwarded by [forwardNotificationReply]. False when the
+/// background isolate already gave up on it (and told the user).
+@visibleForTesting
+bool claimNotificationReply(NotificationResponse response) {
+  final name = response.data[_replyClaimKey];
+  if (name is! String) return true;
+  final port = IsolateNameServer.lookupPortByName(name);
+  if (port == null || !IsolateNameServer.removePortNameMapping(name)) {
+    return false;
+  }
+  port.send(true);
+  return true;
+}
+
 @pragma('vm:entry-point')
 Future<void> notificationTapBackground(
   NotificationResponse notificationResponse,
@@ -90,6 +162,24 @@ Future<void> notificationTapBackground(
     AppConfig.mainIsolatePortName,
   );
   if (sendPort != null) {
+    if (_isReply(notificationResponse)) {
+      if (!await forwardNotificationReply(sendPort, notificationResponse)) {
+        final id = notificationResponse.id;
+        final payload = ChatLoomPushPayload.fromString(
+          notificationResponse.payload ?? '',
+        );
+        if (id != null) {
+          await showNotificationReplyResult(
+            plugin: FlutterLocalNotificationsPlugin(),
+            id: id,
+            outcome: NotificationReplyOutcome.unavailable,
+            clientName: payload.clientName,
+            roomId: payload.roomId,
+          );
+        }
+      }
+      return;
+    }
     sendPort.send(notificationResponse.toJsonString());
     Logs().i('Notification tap sent to main isolate!');
     return;
@@ -120,7 +210,16 @@ Future<void> notificationTapBackground(
   );
   if (payload.roomId == null) return;
   if (action == ChatLoomNotificationActions.reply &&
-      (notificationResponse.input?.isEmpty ?? true)) {
+      (notificationResponse.input?.trim().isEmpty ?? true)) {
+    // Nothing to send: end Android's sending state without opening storage.
+    final id = notificationResponse.id;
+    if (id != null) {
+      await showNotificationReplyResult(
+        plugin: FlutterLocalNotificationsPlugin(),
+        id: id,
+        outcome: NotificationReplyOutcome.empty,
+      );
+    }
     return;
   }
 
@@ -163,6 +262,8 @@ Future<void> notificationTapBackground(
     Logs().w('[Push] background_action_failed', error.runtimeType.toString());
   } finally {
     try {
+      // A reply opened the encrypted private store of this temporary client.
+      if (client != null) PersonalClient.of(client).dispose();
       await client?.dispose();
     } finally {
       if (IsolateNameServer.lookupPortByName(AppConfig.pushIsolatePortName) ==
@@ -196,6 +297,22 @@ Future<void> notificationTap(
     isLoggedIn: (client) => client.isLogged(),
   );
   if (client == null || !client.isLogged()) return;
+  // Take a forwarded reply before any other work.
+  if (_isReply(notificationResponse) &&
+      !claimNotificationReply(notificationResponse)) {
+    return;
+  }
+  // Opening a chat from its notification clears it (Android's auto-cancel
+  // does on tap; explicit for every platform and the summary below).
+  if (notificationResponse.notificationResponseType ==
+          NotificationResponseType.selectedNotification &&
+      !payload.reminder) {
+    try {
+      await FlutterLocalNotificationsPlugin().cancel(
+        id: messageNotificationId(client.clientName, payload.roomId!),
+      );
+    } catch (_) {}
+  }
 
   try {
     await updateSummaryNotification(
@@ -248,14 +365,22 @@ Future<void> notificationTap(
       if (roomId == null) {
         throw Exception('Selected notification with action but no payload');
       }
+      if (actionType == ChatLoomNotificationActions.reply) {
+        // Typed by the user: the durable outbox, a kept draft on failure.
+        await sendNotificationReply(
+          client: client,
+          roomId: roomId,
+          input: notificationResponse.input,
+          plugin: FlutterLocalNotificationsPlugin(),
+        );
+        return;
+      }
       await client.roomsLoading;
       await client.accountDataLoading;
       await client.userDeviceKeysLoading;
       final room = client.getRoomById(roomId);
       if (room == null) {
-        throw Exception(
-          'Selected notification with action but unknown room $roomId',
-        );
+        throw Exception('Selected notification with action but unknown room');
       }
       switch (actionType) {
         case ChatLoomNotificationActions.markAsRead:
@@ -264,18 +389,8 @@ Future<void> notificationTap(
             await PersonalPrivacy.markRead(room, readEvent, manual: true);
           }
         case ChatLoomNotificationActions.reply:
-          final input = notificationResponse.input;
-          if (input == null || input.isEmpty) {
-            throw Exception(
-              'Selected notification with reply action but without input',
-            );
-          }
-
-          await room.sendTextEvent(
-            input,
-            parseCommands: false,
-            displayPendingEvent: false,
-          );
+          // Handled above, never straight to the room.
+          return;
         case ChatLoomNotificationActions.dismiss:
         case ChatLoomNotificationActions.mute:
           // Handled above: never a receipt and never a server push rule.
