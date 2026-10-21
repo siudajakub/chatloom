@@ -1878,26 +1878,9 @@ class ChatController extends State<ChatPageWithRoom>
       event.status.isSent &&
       activeThreadId == null;
 
-  /// Effective mode: the round button only replaces the voice mic when the
-  /// room is not known to refuse rounds, so voice notes stay reachable.
-  @override
-  bool get roundRecordingMode =>
-      PlatformInfos.isAndroid &&
-      PersonalClient.networkOf(room) == 'telegram' &&
-      AppSettings.personalRoundRecordingMode.value &&
-      roundAvailability.canRecord;
-
   /// Cached per room/sync/trust change; display only, never authorizes.
   @override
   RoundAvailability get roundAvailability => RoundAvailability.of(room);
-
-  @override
-  Future<void> toggleRoundRecordingMode() async {
-    await AppSettings.personalRoundRecordingMode.setItem(
-      !AppSettings.personalRoundRecordingMode.value,
-    );
-    if (mounted) setState(() {});
-  }
 
   @override
   bool get canRecordRoundSilently =>

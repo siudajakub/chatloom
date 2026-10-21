@@ -23,6 +23,12 @@ class CompactComposer extends StatefulWidget {
   /// Legacy custom "+" control. Ignored when [actions] is provided.
   final Widget? addAction;
   final Widget primaryAction;
+
+  /// A second action beside [primaryAction] on its start side, for example
+  /// the round video button next to the voice mic. Null hides it: the slot
+  /// shrinks and fades out (and grows back) while the primary action morphs,
+  /// so the editor gains the room smoothly. Its slot is always in the row.
+  final Widget? secondaryAction;
   final double sourceWidth;
   final Widget? contextPreview;
 
@@ -49,6 +55,7 @@ class CompactComposer extends StatefulWidget {
     required this.source,
     this.addAction,
     required this.primaryAction,
+    this.secondaryAction,
     this.sourceWidth = 0,
     this.contextPreview,
     this.actions,
@@ -85,6 +92,9 @@ class _CompactComposerState extends State<CompactComposer>
   bool _expanded = false;
   String _lastText = '';
 
+  /// The last [CompactComposer.secondaryAction], kept while its slot closes.
+  Widget? _secondary;
+
   bool get _hasActions =>
       widget.actions != null &&
       widget.actions!.isNotEmpty &&
@@ -95,11 +105,13 @@ class _CompactComposerState extends State<CompactComposer>
     super.initState();
     _lastText = widget.collapseOnText?.text ?? '';
     widget.collapseOnText?.addListener(_textChanged);
+    _secondary = widget.secondaryAction;
   }
 
   @override
   void didUpdateWidget(CompactComposer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _secondary = widget.secondaryAction ?? _secondary;
     if (!identical(oldWidget.collapseOnText, widget.collapseOnText)) {
       oldWidget.collapseOnText?.removeListener(_textChanged);
       _lastText = widget.collapseOnText?.text ?? '';
@@ -187,9 +199,19 @@ class _CompactComposerState extends State<CompactComposer>
           constraints.maxWidth >=
           measuredSourceWidth + _rowChrome + _fieldChrome + _editorMin;
       final actions = widget.actions ?? const <ComposerAction>[];
+      // The secondary action only takes room from the editor. It never moves
+      // the source out of line: the composer would change height as the
+      // first letter hides it. It shows only while the editor is empty.
+      final secondaryWidth = widget.secondaryAction == null
+          ? 0.0
+          : NotionSize.touchTarget;
       double roomBeside(double source) => math.max(
         0.0,
-        constraints.maxWidth - _rowChrome - source - _fieldChrome,
+        constraints.maxWidth -
+            _rowChrome -
+            secondaryWidth -
+            source -
+            _fieldChrome,
       );
       int slotsIn(double room) => math.max(
         0,
@@ -319,8 +341,13 @@ class _CompactComposerState extends State<CompactComposer>
                   ),
                 ),
                 const SizedBox(width: NotionSpace.xxs),
-                // Mic ↔ send ↔ round and disabled → enabled morph with a
-                // small spring (key each state's widget).
+                // Always present so the editor keeps its index in this row.
+                _SecondaryAction(
+                  visible: widget.secondaryAction != null,
+                  child: _secondary,
+                ),
+                // Mic ↔ send and disabled → enabled morph with a small
+                // spring (key each state's widget).
                 SizedBox.square(
                   dimension: NotionSize.touchTarget,
                   child: NotionMorphSwitcher(
@@ -334,6 +361,34 @@ class _CompactComposerState extends State<CompactComposer>
         ),
       );
     },
+  );
+}
+
+/// The [CompactComposer.secondaryAction] slot: a 48 dp target that grows in
+/// and out horizontally (size + fade, reduced motion aware). While it closes
+/// it ignores touches and screen readers.
+class _SecondaryAction extends StatelessWidget {
+  final bool visible;
+  final Widget? child;
+
+  const _SecondaryAction({required this.visible, required this.child});
+
+  @override
+  Widget build(BuildContext context) => NotionSizeReveal(
+    visible: visible && child != null,
+    axis: Axis.horizontal,
+    alignment: AlignmentDirectional.centerEnd,
+    duration: NotionMotion.short,
+    child: IgnorePointer(
+      ignoring: !visible,
+      child: ExcludeSemantics(
+        excluding: !visible,
+        child: SizedBox.square(
+          dimension: NotionSize.touchTarget,
+          child: child ?? const SizedBox.shrink(),
+        ),
+      ),
+    ),
   );
 }
 

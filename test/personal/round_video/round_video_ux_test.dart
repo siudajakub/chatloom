@@ -184,7 +184,7 @@ void main() {
     );
     final tooltip = tester.widget<Tooltip>(find.byType(Tooltip));
     expect(tooltip.triggerMode, TooltipTriggerMode.manual);
-    expect(tooltip.message, 'Record a round video');
+    expect(tooltip.message, RoundRecordButton.defaultTapHint);
     expect(
       find.bySemanticsLabel(RegExp('^Record a round video')),
       findsOneWidget,

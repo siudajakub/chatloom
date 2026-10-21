@@ -3,28 +3,35 @@ import 'dart:async';
 
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart' show kPrimaryButton;
-import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:material_ui/material_ui.dart';
 
 import 'round_capture_controller.dart';
 
-/// The composer's record button in video mode, with Telegram's gestures:
+/// The composer's round video button, shown beside the voice mic when round
+/// video is available (both stay visible; there is no voice ↔ video mode).
+/// Telegram's hold gestures:
 ///
-/// * a quick tap (released before [RoundCaptureGestureController.holdDelay])
-///   switches back to voice messages ([onToggleMode]);
-/// * holding records a round video; the pointer keeps driving the
-///   [RoundCaptureGestureController] while the recorder route is on top:
-///   slide toward the start edge to cancel, swipe up to lock, release to send.
+/// * holding past [RoundCaptureGestureController.holdDelay] records a round
+///   video; the pointer keeps driving the [RoundCaptureGestureController]
+///   while the recorder route is on top: slide toward the start edge to
+///   cancel, swipe up to lock, release to send;
+/// * a quicker tap records nothing and shows [tapHint] in a small tooltip
+///   above the button, never a snackbar over the chat.
 ///
-/// Without [onToggleMode] a tap records hands-free. Screen readers always get
-/// hands-free recording on activation and a separate "switch" action.
+/// Screen readers get hands-free recording on activation.
 class RoundRecordButton extends StatefulWidget {
   final Future<void> Function(RoundCaptureGestureController gesture) onRecord;
-  final VoidCallback? onToggleMode;
+
+  /// Explains how to record after a quick tap.
+  final String tapHint;
+
+  static const String defaultTapHint =
+      'Hold to record a round video, release to send.';
+
   const RoundRecordButton({
     super.key,
     required this.onRecord,
-    this.onToggleMode,
+    this.tapHint = defaultTapHint,
   });
   @override
   State<RoundRecordButton> createState() => _RoundRecordButtonState();
@@ -32,6 +39,7 @@ class RoundRecordButton extends StatefulWidget {
 
 class _RoundRecordButtonState extends State<RoundRecordButton> {
   RoundCaptureGestureController? _gesture;
+  final GlobalKey<TooltipState> _tooltip = GlobalKey<TooltipState>();
   Timer? _holdTimer;
   int? _pointer;
   Offset _origin = Offset.zero;
@@ -121,13 +129,8 @@ class _RoundRecordButtonState extends State<RoundRecordButton> {
     if (timer != null) {
       timer.cancel();
       _holdTimer = null;
-      final toggle = widget.onToggleMode;
-      if (toggle != null) {
-        NotionHaptics.longPress();
-        toggle();
-      } else {
-        unawaited(_begin(false));
-      }
+      // Telegram's small hint; the next touch anywhere hides it.
+      _tooltip.currentState?.ensureTooltipVisible();
       return;
     }
     if (_heldPointerActive) _gesture?.release();
@@ -149,25 +152,19 @@ class _RoundRecordButtonState extends State<RoundRecordButton> {
     final colors = Theme.of(context).colorScheme;
     final active = !_busy && _pressed || _heldPointerActive;
     final duration = NotionMotion.of(context, NotionMotion.quick);
-    final toggle = widget.onToggleMode;
     return Semantics(
       label:
           'Record a round video. Hold to record and release to send, '
-          'slide up to lock.'
-          '${toggle == null ? '' : ' Tap to switch to voice messages.'}',
+          'slide up to lock.',
       button: true,
       enabled: !_busy,
       onTap: _busy ? null : () => unawaited(_begin(false)),
-      customSemanticsActions: toggle == null || _busy
-          ? null
-          : {
-              const CustomSemanticsAction(label: 'Switch to voice messages'):
-                  toggle,
-            },
       excludeSemantics: true,
       child: Tooltip(
-        message: 'Record a round video',
-        // Long press records; the tooltip must never cover the capture.
+        key: _tooltip,
+        message: widget.tapHint,
+        // Shown only after a quick tap; a long press records and the
+        // tooltip must never cover the capture.
         triggerMode: TooltipTriggerMode.manual,
         child: Listener(
           behavior: HitTestBehavior.opaque,

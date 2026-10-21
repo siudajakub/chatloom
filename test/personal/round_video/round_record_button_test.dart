@@ -10,21 +10,25 @@ import 'package:material_ui/material_ui.dart';
 
 Widget app(
   Future<void> Function(RoundCaptureGestureController) onRecord, {
-  VoidCallback? onToggleMode,
   TextDirection direction = TextDirection.ltr,
 }) => MaterialApp(
   home: Directionality(
     textDirection: direction,
     child: Scaffold(
-      body: Center(
-        child: RoundRecordButton(
-          onRecord: onRecord,
-          onToggleMode: onToggleMode,
-        ),
-      ),
+      body: Center(child: RoundRecordButton(onRecord: onRecord)),
     ),
   ),
 );
+
+/// A screen reader activation: hands-free recording. A pointer tap only
+/// shows the hold hint.
+Future<void> accessibleTap(WidgetTester tester) async {
+  final semantics = tester.ensureSemantics();
+  await tester.pump();
+  final node = tester.getSemantics(find.byType(RoundRecordButton));
+  node.owner!.performAction(node.id, ui.SemanticsAction.tap);
+  semantics.dispose();
+}
 
 void main() {
   testWidgets(
@@ -132,14 +136,14 @@ void main() {
           deliveredTo = frozenSource;
         }),
       );
-      await tester.tap(find.byType(RoundRecordButton));
+      await accessibleTap(tester);
       await tester.pump();
       await tester.pumpWidget(
         app((gesture) async {
           callbacks.add('synthetic-source-B');
         }),
       );
-      await tester.tap(find.byType(RoundRecordButton));
+      await accessibleTap(tester);
       await tester.pump();
       expect(callbacks, ['synthetic-source-A']);
       expect(signal!.phase, RoundCaptureGesturePhase.locked);
@@ -161,7 +165,7 @@ void main() {
           await permission.future;
         }),
       );
-      await tester.tap(find.byType(RoundRecordButton));
+      await accessibleTap(tester);
       await tester.pump();
       expect(signal!.phase, RoundCaptureGesturePhase.locked);
       await tester.pumpWidget(const SizedBox());
@@ -202,20 +206,24 @@ void main() {
       expect(tester.takeException(), isNull);
     }
 
-    testWidgets('a tap under 150 ms switches to voice and records nothing', (
+    testWidgets('a tap under 150 ms records nothing and shows a small hint', (
       tester,
     ) async {
       reset();
-      var toggles = 0;
-      await tester.pumpWidget(app(onRecord, onToggleMode: () => toggles++));
+      await tester.pumpWidget(app(onRecord));
       final pointer = await tester.startGesture(
         tester.getCenter(find.byType(RoundRecordButton)),
       );
       await tester.pump(const Duration(milliseconds: 100));
       await pointer.up();
       await tester.pump(const Duration(milliseconds: 200));
-      expect(toggles, 1);
       expect(gestures, isEmpty);
+      // The tooltip above the button, never a snackbar over the chat.
+      expect(find.text(RoundRecordButton.defaultTapHint), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      await tester.tapAt(const Offset(5, 5));
+      await tester.pumpAndSettle();
+      expect(find.text(RoundRecordButton.defaultTapHint), findsNothing);
       await finish(tester);
     });
 
@@ -223,7 +231,7 @@ void main() {
       tester,
     ) async {
       reset();
-      await tester.pumpWidget(app(onRecord, onToggleMode: () {}));
+      await tester.pumpWidget(app(onRecord));
       final pointer = await tester.startGesture(
         tester.getCenter(find.byType(RoundRecordButton)),
       );
@@ -247,7 +255,7 @@ void main() {
 
     testWidgets('swipe up 57 dp locks, 50 dp does not', (tester) async {
       reset();
-      await tester.pumpWidget(app(onRecord, onToggleMode: () {}));
+      await tester.pumpWidget(app(onRecord));
       final pointer = await hold(tester);
       final gesture = gestures.single;
       await pointer.moveBy(const Offset(0, -50));
@@ -268,7 +276,7 @@ void main() {
     ) async {
       reset();
       await tester.pumpWidget(
-        app(onRecord, onToggleMode: () {}, direction: TextDirection.rtl),
+        app(onRecord, direction: TextDirection.rtl),
       );
       final pointer = await hold(tester);
       final gesture = gestures.single;
@@ -291,7 +299,7 @@ void main() {
       tester,
     ) async {
       reset();
-      await tester.pumpWidget(app(onRecord, onToggleMode: () {}));
+      await tester.pumpWidget(app(onRecord));
       var pointer = await hold(tester);
       await pointer.cancel();
       await tester.pump();
@@ -308,24 +316,15 @@ void main() {
       await finish(tester);
     });
 
-    testWidgets('screen readers record hands-free or switch mode', (
+    testWidgets('screen readers record hands-free; no mode switch action', (
       tester,
     ) async {
       reset();
       final semantics = tester.ensureSemantics();
-      var toggles = 0;
-      await tester.pumpWidget(app(onRecord, onToggleMode: () => toggles++));
+      await tester.pumpWidget(app(onRecord));
       final node = tester.getSemantics(find.byType(RoundRecordButton));
-      expect(node.label, contains('Tap to switch to voice messages'));
-      final data = node.getSemanticsData();
-      node.owner!.performAction(
-        node.id,
-        ui.SemanticsAction.customAction,
-        data.customSemanticsActionIds!.single,
-      );
-      await tester.pump();
-      expect(toggles, 1);
-      expect(gestures, isEmpty);
+      expect(node.label, isNot(contains('switch')));
+      expect(node.getSemanticsData().customSemanticsActionIds ?? [], isEmpty);
       node.owner!.performAction(node.id, ui.SemanticsAction.tap);
       await tester.pump();
       expect(gestures.single.phase, RoundCaptureGesturePhase.locked);

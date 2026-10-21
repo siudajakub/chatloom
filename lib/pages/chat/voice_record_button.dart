@@ -4,7 +4,6 @@ import 'dart:async';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart' show kPrimaryButton, kTouchSlop;
 import 'package:flutter/scheduler.dart' show SchedulerPhase;
-import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:material_ui/material_ui.dart';
 
 import 'conversation_motion.dart';
@@ -172,10 +171,11 @@ class VoiceRecordHold extends ChangeNotifier {
 /// [VoiceRecordHold.minimumDuration]), slide toward the start edge to cancel,
 /// slide up to lock.
 ///
-/// With [onToggleMode] (round video is available) recording starts only after
-/// [holdDelay]; a quicker tap switches to video messages instead. Without it
-/// recording starts on touch, and a quick tap is discarded with [onTapHint].
-/// Screen readers start hands-free recording on activation.
+/// Recording starts on touch. A quick tap records nothing and shows [tapHint]
+/// in a small tooltip above the button (Telegram's hint), never a snackbar
+/// over the chat. Round video has its own button beside this one
+/// (`RoundRecordButton`), so there is no mode to switch. Screen readers start
+/// hands-free recording on activation.
 class VoiceRecordButton extends StatefulWidget {
   final VoiceRecordHold hold;
 
@@ -193,17 +193,14 @@ class VoiceRecordButton extends StatefulWidget {
   final Duration Function()? recorded;
   final bool enabled;
 
-  /// Tap switches the composer to round video messages.
-  final VoidCallback? onToggleMode;
+  /// Explains how to record after a quick tap recorded nothing.
+  final String tapHint;
 
-  /// A quick tap recorded nothing: explain how to record.
-  final VoidCallback? onTapHint;
+  static const String defaultTapHint =
+      'Hold to record a voice message, release to send.';
 
   /// A press released sooner than this without moving counts as a tap.
   static const Duration tapTimeout = Duration(milliseconds: 250);
-
-  /// With [onToggleMode], a press held this long records (Telegram: 150 ms).
-  static const Duration holdDelay = Duration(milliseconds: 150);
 
   const VoiceRecordButton({
     super.key,
@@ -213,8 +210,7 @@ class VoiceRecordButton extends StatefulWidget {
     required this.onCancel,
     this.recorded,
     this.enabled = true,
-    this.onToggleMode,
-    this.onTapHint,
+    this.tapHint = defaultTapHint,
   });
 
   @override
@@ -224,12 +220,12 @@ class VoiceRecordButton extends StatefulWidget {
 class _VoiceRecordButtonState extends State<VoiceRecordButton> {
   final OverlayPortalController _portal = OverlayPortalController();
   final LayerLink _link = LayerLink();
+  final GlobalKey<TooltipState> _tooltip = GlobalKey<TooltipState>();
   int? _pointer;
   Offset _origin = Offset.zero;
   Duration _downAt = Duration.zero;
   bool _moved = false;
   bool _running = false;
-  Timer? _holdTimer;
 
   VoiceRecordHold get _hold => widget.hold;
 
@@ -268,7 +264,6 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
 
   @override
   void dispose() {
-    _holdTimer?.cancel();
     _hold.removeListener(_syncPortal);
     if (_hold.capturing) {
       final hold = _hold;
@@ -335,22 +330,12 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
     _hold.cancelDistance = VoiceRecordHold.cancelDistanceFor(
       MediaQuery.sizeOf(context).width,
     );
-    if (widget.onToggleMode != null) {
-      // Telegram waits before recording so a tap can switch the mode.
-      _holdTimer = Timer(VoiceRecordButton.holdDelay, _beginHold);
-    } else {
-      _beginHold();
-    }
-  }
-
-  void _beginHold() {
-    _holdTimer = null;
-    if (_pointer == null || !mounted || _hold.phase != VoiceRecordPhase.idle) {
-      return;
-    }
     _hold.begin();
     unawaited(_start());
   }
+
+  /// Telegram's small hint above the button; the next touch anywhere hides it.
+  void _showTapHint() => _tooltip.currentState?.ensureTooltipVisible();
 
   void _move(PointerMoveEvent event) {
     if (event.pointer != _pointer || !_hold.capturing) return;
@@ -376,20 +361,13 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
   void _up(PointerUpEvent event) {
     if (event.pointer != _pointer) return;
     _pointer = null;
-    if (_holdTimer != null) {
-      _holdTimer!.cancel();
-      _holdTimer = null;
-      NotionHaptics.longPress();
-      widget.onToggleMode?.call();
-      return;
-    }
     final tap =
         !_moved && event.timeStamp - _downAt < VoiceRecordButton.tapTimeout;
     switch (_hold.phase) {
       case VoiceRecordPhase.starting:
         // The recorder is not ready yet: nothing worth sending.
         _hold.cancel();
-        if (tap) widget.onTapHint?.call();
+        if (tap) _showTapHint();
       case VoiceRecordPhase.holding:
         if (_hold.releaseCancels) {
           _discard();
@@ -404,7 +382,7 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
         } else {
           // Too short: discarded silently, like Telegram.
           _discard();
-          if (tap) widget.onTapHint?.call();
+          if (tap) _showTapHint();
         }
       case VoiceRecordPhase.idle:
       case VoiceRecordPhase.locked:
@@ -419,8 +397,6 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
   void _cancelPointer(PointerCancelEvent event) {
     if (event.pointer != _pointer) return;
     _pointer = null;
-    _holdTimer?.cancel();
-    _holdTimer = null;
     if (_hold.phase == VoiceRecordPhase.holding) {
       _discard();
     } else {
@@ -517,25 +493,19 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final toggle = widget.enabled ? widget.onToggleMode : null;
     return Semantics(
       container: true,
       button: true,
       enabled: widget.enabled,
       label:
           'Record a voice message. Hold to record and release to send, '
-          'slide up to lock.'
-          '${toggle == null ? '' : ' Tap to switch to video messages.'}',
+          'slide up to lock.',
       onTap: widget.enabled ? _tapHandsFree : null,
-      customSemanticsActions: toggle == null
-          ? null
-          : {
-              const CustomSemanticsAction(label: 'Switch to video messages'):
-                  toggle,
-            },
       excludeSemantics: true,
       child: Tooltip(
-        message: 'Record a voice message',
+        key: _tooltip,
+        message: widget.tapHint,
+        // Shown only after a quick tap; a long press records instead.
         triggerMode: TooltipTriggerMode.manual,
         child: Listener(
           behavior: HitTestBehavior.opaque,

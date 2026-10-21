@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:flutter/gestures.dart';
 import 'package:go_router/go_router.dart';
@@ -28,6 +29,12 @@ class EncryptionInfo extends StatefulWidget {
 /// depends on can have changed: another room, encryption or membership
 /// counts, a device-list change from sync, a return from the "Check" page,
 /// or at most every [_maxAge] otherwise (verification done elsewhere).
+///
+/// Bridged chats never show it: their other members are the bridge bot and
+/// puppets of the remote people, whose devices can never be cross-signed, so
+/// the count was permanent noise in every chat. Nothing is loaded for them.
+/// Encryption is unchanged; the user's own unverified sessions are reported
+/// by the E2EE health notice (`lib/personal/encryption/e2ee_health.dart`).
 class _EncryptionInfoState extends State<EncryptionInfo> {
   static const _maxAge = Duration(seconds: 30);
   Future<int>? _count;
@@ -76,6 +83,7 @@ class _EncryptionInfoState extends State<EncryptionInfo> {
 
   static Object _inputsOf(Room room) => (
     room.id,
+    isBridgedRoom(room),
     room.encrypted,
     room.summary.mJoinedMemberCount,
     room.summary.mInvitedMemberCount,
@@ -92,7 +100,7 @@ class _EncryptionInfoState extends State<EncryptionInfo> {
   }
 
   Future<int> _unverifiedDevices() async {
-    if (!room.encrypted) return 0;
+    if (!room.encrypted || isBridgedRoom(room)) return 0;
     final users = await room.requestParticipants();
     final devicesKeysLists = users
         .map((user) => room.client.userDeviceKeys[user.id])
@@ -117,6 +125,7 @@ class _EncryptionInfoState extends State<EncryptionInfo> {
 
   @override
   Widget build(BuildContext context) {
+    if (isBridgedRoom(room)) return const SizedBox.shrink();
     final theme = Theme.of(context);
     return AnimatedSize(
       duration: ChatLoomThemes.animationDuration,

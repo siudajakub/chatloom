@@ -41,7 +41,6 @@ enum AppSettings<T> {
   hideUnknownEvents<bool>('chat.fluffy.hideUnknownEvents', true),
   autoplayImages<bool>('chat.fluffy.autoplay_images', true),
   personalIncognito<bool>('pl.personal.incognito', true),
-  personalRoundRecordingMode<bool>('pl.personal.round_recording_mode', false),
 
   /// Prefetch voice notes and round videos (ciphertext into the encrypted
   /// media cache) as soon as a chat is open, so playback starts instantly.

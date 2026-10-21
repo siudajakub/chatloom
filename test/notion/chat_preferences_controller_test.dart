@@ -221,7 +221,7 @@ void main() {
   );
 
   test(
-    'Telegram groups stay separate through pins, drafts, new activity and due reminders',
+    'Telegram groups stay separate through drafts, new activity and due reminders; a pin keeps them on the main list',
     () {
       final client = _Client();
       final direct = room(client, 'direct');
@@ -236,6 +236,8 @@ void main() {
         'conversation': personal.ref(group).toJson(),
         'dueAt': DateTime.utc(2026, 10, 16).toIso8601String(),
       };
+      expect(InboxProjection(personal).rooms(client.rooms), [group, direct]);
+      personal.values.remove('org:${group.id}');
       expect(InboxProjection(personal).rooms(client.rooms), [direct]);
       expect(
         InboxProjection(
@@ -548,7 +550,6 @@ void main() {
             NotionInboxPage(
               rows: const [ListTile(title: Text('Fictional private chat'))],
               pins: const [],
-              onCompose: () {},
               onSettings: () {},
               onSearch: () {},
               selectedNetwork: 'telegram',

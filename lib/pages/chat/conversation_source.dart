@@ -138,10 +138,8 @@ abstract interface class ConversationComposerHost {
     Future<Uint8List?> Function(String)? readRecording,
   });
 
-  // Round video.
-  bool get roundRecordingMode;
+  // Round video (its button sits beside the mic; there is no record mode).
   RoundAvailability get roundAvailability;
-  Future<void> toggleRoundRecordingMode();
   bool get canRecordRoundSilently;
   Future<void> recordRound(
     RoundCaptureGestureController gesture, {

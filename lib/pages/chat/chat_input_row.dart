@@ -3,8 +3,6 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:async';
-
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart';
@@ -13,6 +11,8 @@ import 'package:chatloom/pages/chat/recording_input_row.dart';
 import 'package:chatloom/pages/chat/recording_view_model.dart';
 import 'package:chatloom/pages/chat/voice_record_button.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/round_video/round_availability.dart'
+    show RoundAvailability;
 import 'package:chatloom/personal/round_video/round_outbox_panel.dart';
 import 'package:chatloom/personal/round_video/round_record_button.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -28,6 +28,26 @@ import 'chat.dart' show AddPopupMenuActions;
 import 'conversation_source.dart';
 import 'conversation_source_picker.dart' show ConversationSourceHintHost;
 import 'input_bar.dart';
+
+/// Which record buttons the composer shows: the voice mic while the editor
+/// is empty, not editing and enabled on a platform that records; the round
+/// video button beside it when [round] (null outside Android Telegram chats)
+/// can record, except while a voice message is held.
+@visibleForTesting
+({bool voice, bool round}) composerRecordButtons({
+  required bool platformCanRecord,
+  required bool editing,
+  required bool enabled,
+  required bool hasText,
+  required bool holdingVoice,
+  required RoundAvailability? round,
+}) {
+  final voice = platformCanRecord && !editing && enabled && !hasText;
+  return (
+    voice: voice,
+    round: voice && !holdingVoice && (round?.canRecord ?? false),
+  );
+}
 
 /// The composer of a conversation: one room ([ChatController]) or the
 /// selected source of a merged person chat.
@@ -183,8 +203,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
 
   List<ComposerAction> _actions(BuildContext context) {
     final matrix = Matrix.of(context);
-    // Round video has no separate toggle: like Telegram, a tap on the record
-    // button switches voice ↔ video (see [_primary]).
+    // Round video has its own button beside the mic (see [_roundAction]).
     return [
       if (controller.editEvent == null)
         ComposerAction(
@@ -212,10 +231,41 @@ class _ChatInputRowState extends State<ChatInputRow> {
     ];
   }
 
-  /// Each state is keyed so the composer morphs between them (mic ↔ send,
-  /// voice ↔ round). A disabled send button stays the same widget and
-  /// springs when it becomes enabled.
-  Widget _primary(RecordingViewModelState recording) {
+  /// Round video in this chat, or null outside Android Telegram chats.
+  /// Display only: `TelegramRoundService.captureAndSend` re-checks it.
+  RoundAvailability? get _round =>
+      PlatformInfos.isAndroid &&
+          PersonalClient.networkOf(controller.room) == 'telegram'
+      ? controller.roundAvailability
+      : null;
+
+  ({bool voice, bool round}) get _recordButtons => composerRecordButtons(
+    platformCanRecord: PlatformInfos.platformCanRecord,
+    editing: controller.editEvent != null,
+    enabled: controller.composerEnabled,
+    hasText: controller.sendController.text.trim().isNotEmpty,
+    holdingVoice: _holding,
+    round: _round,
+  );
+
+  /// The round video button beside the mic (see [composerRecordButtons]).
+  /// Both stay visible, so there is no voice ↔ video mode to switch and no
+  /// notice about switching.
+  Widget? _roundAction(({bool voice, bool round}) record) {
+    if (!record.round) return null;
+    return RoundRecordButton(
+      key: const ValueKey('composer-round'),
+      onRecord: controller.recordRound,
+    );
+  }
+
+  /// Each state is keyed so the composer morphs between them (mic ↔ send).
+  /// A disabled send button stays the same widget and springs when it
+  /// becomes enabled.
+  Widget _primary(
+    RecordingViewModelState recording,
+    ({bool voice, bool round}) record,
+  ) {
     final enabled = controller.composerEnabled;
     if (controller.sendController.text.trim().isNotEmpty) {
       return NotionSendButton(
@@ -224,41 +274,21 @@ class _ChatInputRowState extends State<ChatInputRow> {
         onPressed: enabled ? controller.send : null,
       );
     }
-    if (!PlatformInfos.platformCanRecord ||
-        controller.editEvent != null ||
-        !enabled) {
+    if (!record.voice) {
       return NotionSendButton(
         key: const ValueKey('primary-send'),
         busy: controller.composerBusy,
       );
     }
-    // Telegram's single record button: a tap switches voice ↔ video when
-    // round video is available here, a hold records in the current mode.
-    final round =
-        PlatformInfos.isAndroid &&
-            PersonalClient.networkOf(controller.room) == 'telegram'
-        ? controller.roundAvailability
-        : null;
-    if (controller.roundRecordingMode) {
-      return RoundRecordButton(
-        key: const ValueKey('primary-round'),
-        onRecord: controller.recordRound,
-        onToggleMode: () => _switchRecordMode(video: false),
-      );
-    }
+    final round = _round;
     return VoiceRecordButton(
       key: const ValueKey('primary-voice'),
       hold: _hold,
-      onToggleMode: round != null && round.canRecord
-          ? () => _switchRecordMode(video: true)
-          : null,
-      // Unavailable round video explains why on the same tap.
-      onTapHint: () => showComposerNotice(
-        context,
-        round == null || round.canRecord
-            ? 'Hold to record a voice message, release to send.'
-            : 'Hold to record a voice message. ${round.message}',
-      ),
+      // A Telegram chat without round video says why on a quick tap, in the
+      // button's small tooltip.
+      tapHint: round == null || round.canRecord
+          ? VoiceRecordButton.defaultTapHint
+          : 'Hold to record a voice message. ${round.reason}',
       recorded: () => recording.elapsed,
       onStart: () async {
         await recording.startRecording(controller.room);
@@ -270,17 +300,6 @@ class _ChatInputRowState extends State<ChatInputRow> {
       onCancel: () {
         if (recording.mounted) recording.cancel();
       },
-    );
-  }
-
-  /// Persists the mode (global setting) and says how to record in it.
-  void _switchRecordMode({required bool video}) {
-    unawaited(controller.toggleRoundRecordingMode());
-    showComposerNotice(
-      context,
-      video
-          ? 'Hold to record a video message. Tap to switch to voice.'
-          : 'Hold to record a voice message. Tap to switch to video.',
     );
   }
 
@@ -316,6 +335,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
                 ),
               );
             }
+            final record = _recordButtons;
             return TextFieldTapRegion(
               child: CompactComposer(
                 input: InputBar(
@@ -387,7 +407,8 @@ class _ChatInputRowState extends State<ChatInputRow> {
                       )
                     : null,
                 source: controller.buildComposerSource(context),
-                primaryAction: _primary(recordingViewModel),
+                secondaryAction: _roundAction(record),
+                primaryAction: _primary(recordingViewModel, record),
               ),
             );
           },

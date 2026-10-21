@@ -32,8 +32,6 @@ void main() {
   Widget shell({
     TextDirection direction = TextDirection.ltr,
     bool reduceMotion = false,
-    VoidCallback? onToggleMode,
-    VoidCallback? onTapHint,
   }) => MaterialApp(
     theme: ThemeData.dark(),
     builder: (context, child) => MediaQuery(
@@ -66,8 +64,6 @@ void main() {
                 onSend: recorder.send,
                 onCancel: recorder.cancel,
                 recorded: () => recorder.recorded,
-                onToggleMode: onToggleMode,
-                onTapHint: onTapHint,
               ),
             ],
           ),
@@ -197,48 +193,44 @@ void main() {
     await gesture.up(timeStamp: const Duration(seconds: 4));
   });
 
-  testWidgets('a quick tap records nothing and shows the hold hint', (
-    tester,
-  ) async {
-    var hints = 0;
-    await tester.pumpWidget(shell(onTapHint: () => hints++));
-    final gesture = await tester.startGesture(tester.getCenter(button()));
-    await tester.pump();
-    await gesture.up(timeStamp: const Duration(milliseconds: 100));
-    await tester.pump();
-    expect(recorder.starts, 1);
-    expect(recorder.sends, 0);
-    expect(recorder.cancels, 1);
-    expect(hold.phase, VoiceRecordPhase.idle);
-    expect(hints, 1);
-  });
-
   testWidgets(
-    'with video available a tap switches mode and only a 150 ms hold records',
+    'a quick tap records nothing and shows the hint in a small tooltip',
     (tester) async {
-      var toggles = 0;
-      await tester.pumpWidget(shell(onToggleMode: () => toggles++));
-      var gesture = await tester.startGesture(tester.getCenter(button()));
-      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpWidget(shell());
+      final gesture = await tester.startGesture(tester.getCenter(button()));
+      await tester.pump();
       await gesture.up(timeStamp: const Duration(milliseconds: 100));
       await tester.pump();
-      expect(toggles, 1);
-      expect(recorder.starts, 0);
-      expect(hold.phase, VoiceRecordPhase.idle);
-
-      gesture = await tester.startGesture(tester.getCenter(button()));
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(recorder.starts, 0);
-      await tester.pump(const Duration(milliseconds: 60));
       expect(recorder.starts, 1);
-      expect(hold.phase, VoiceRecordPhase.holding);
-      recorder.recorded = const Duration(seconds: 1);
-      await gesture.up(timeStamp: const Duration(seconds: 2));
-      await tester.pump();
-      expect(toggles, 1);
-      expect(recorder.sends, 1);
+      expect(recorder.sends, 0);
+      expect(recorder.cancels, 1);
+      expect(hold.phase, VoiceRecordPhase.idle);
+      await tester.pump(const Duration(milliseconds: 200));
+      // Telegram's hint above the button, never a snackbar over the chat.
+      expect(find.text(VoiceRecordButton.defaultTapHint), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      final hint = tester.getRect(find.text(VoiceRecordButton.defaultTapHint));
+      expect(hint.height, lessThan(48));
+      // The next touch anywhere hides it.
+      await tester.tapAt(const Offset(5, 5));
+      await tester.pumpAndSettle();
+      expect(find.text(VoiceRecordButton.defaultTapHint), findsNothing);
     },
   );
+
+  testWidgets('recording starts on touch: no mode-switch delay', (
+    tester,
+  ) async {
+    await tester.pumpWidget(shell());
+    final gesture = await tester.startGesture(tester.getCenter(button()));
+    await tester.pump();
+    expect(recorder.starts, 1);
+    expect(hold.phase, VoiceRecordPhase.holding);
+    recorder.recorded = const Duration(seconds: 1);
+    await gesture.up(timeStamp: const Duration(seconds: 2));
+    await tester.pump();
+    expect(recorder.sends, 1);
+  });
 
   testWidgets('release while the recorder is still starting discards it', (
     tester,
@@ -285,24 +277,14 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('screen readers get a switch action when video is available', (
+  testWidgets('screen readers get no voice ↔ video switch action', (
     tester,
   ) async {
     final semantics = tester.ensureSemantics();
-    var toggles = 0;
-    await tester.pumpWidget(shell(onToggleMode: () => toggles++));
+    await tester.pumpWidget(shell());
     final node = tester.getSemantics(button());
-    expect(node.label, contains('Tap to switch to video messages'));
-    final data = node.getSemanticsData();
-    expect(data.customSemanticsActionIds, hasLength(1));
-    node.owner!.performAction(
-      node.id,
-      ui.SemanticsAction.customAction,
-      data.customSemanticsActionIds!.single,
-    );
-    await tester.pump();
-    expect(toggles, 1);
-    expect(recorder.starts, 0);
+    expect(node.label, isNot(contains('switch')));
+    expect(node.getSemanticsData().customSemanticsActionIds ?? [], isEmpty);
     semantics.dispose();
   });
 

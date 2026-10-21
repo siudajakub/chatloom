@@ -29,8 +29,8 @@ enum RoundCaptureGesturePhase { idle, holding, locked, released, canceled }
 /// less than [releaseCancelProgress] slide progress left to cancel, swipe up
 /// [lockDistance] to lock (ignored once slid past [lockMinSlideProgress]).
 class RoundCaptureGestureController extends ChangeNotifier {
-  /// A press held this long records; a quicker release is a tap that
-  /// switches between voice and video mode.
+  /// A press held this long records; a quicker release is a tap that only
+  /// shows the hold hint.
   static const holdDelay = Duration(milliseconds: 150);
 
   /// Upward travel that locks the recording (hands-free).
