@@ -478,7 +478,8 @@ void main() {
   test(
     'quick-like fallback preserves explicit custom emoji and disabled preference',
     () async {
-      expect(AppSettings.doubleTapReaction.defaultValue, '👍');
+      // Empty: automatic, the network's first quick reaction.
+      expect(AppSettings.doubleTapReaction.defaultValue, isEmpty);
       await AppSettings.doubleTapReaction.setItem('❤️');
       expect(AppSettings.doubleTapReaction.value, '❤️');
       await AppSettings.doubleTapToReact.setItem(false);

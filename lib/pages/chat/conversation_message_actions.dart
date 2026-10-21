@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'dart:convert';
-
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -18,30 +19,66 @@ enum ConversationReactionResult {
   failed,
 }
 
+/// Identity of one reaction intent: account, source room, target event,
+/// emoji, and whether it is a removal. A record, so lookups never encode or
+/// decode JSON.
+typedef ConversationReactionKey = ({
+  String? account,
+  String room,
+  String event,
+  String emoji,
+  bool removal,
+});
+
+/// The message a set of reaction intents belongs to.
+typedef ConversationReactionScope = ({
+  String? account,
+  String room,
+  String event,
+});
+
 /// One intent survives SDK completion until sync proves its result. An unknown
 /// transport result is reconciled from aggregates, never automatically retried.
+/// Keys are value-comparable objects ([ConversationReactionKey] in the app).
 class ConversationReactionCoordinator extends ChangeNotifier {
-  final _states = <String, ConversationReactionState>{};
-  ConversationReactionState state(String key) =>
+  final _states = <Object, ConversationReactionState>{};
+  ConversationReactionState state(Object key) =>
       _states[key] ?? ConversationReactionState.idle;
 
-  Iterable<String> get trackedKeys => _states.keys.toList(growable: false);
+  Iterable<Object> get trackedKeys => _states.keys.toList(growable: false);
 
-  bool unresolved(String key) => {
+  static const _unresolved = {
     ConversationReactionState.pending,
     ConversationReactionState.awaitingEcho,
     ConversationReactionState.unknown,
-  }.contains(state(key));
+  };
 
-  void reconcile(String key, {required bool present}) {
+  bool unresolved(Object key) => _unresolved.contains(state(key));
+
+  /// Tracked intents of one message (usually none; a few right after a tap).
+  Iterable<ConversationReactionKey> keysFor(ConversationReactionScope scope) =>
+      _states.keys.whereType<ConversationReactionKey>().where(
+        (key) =>
+            key.event == scope.event &&
+            key.room == scope.room &&
+            key.account == scope.account,
+      );
+
+  /// States of the tracked intents of one message.
+  Set<ConversationReactionState> statesFor(ConversationReactionScope scope) => {
+    for (final key in keysFor(scope)) state(key),
+  };
+
+  void reconcile(Object key, {required bool present}) {
     if (present &&
         _states[key] != ConversationReactionState.pending &&
-        _states.remove(key) != null)
+        _states.remove(key) != null) {
       notifyListeners();
+    }
   }
 
   Future<ConversationReactionResult> perform({
-    required String key,
+    required Object key,
     required bool Function() exists,
     bool Function()? confirmed,
     required bool Function() allowed,
@@ -54,8 +91,9 @@ class ConversationReactionCoordinator extends ChangeNotifier {
     if (!removeExisting) reconcile(key, present: confirmed?.call() ?? false);
     if (state(key) == ConversationReactionState.pending ||
         state(key) == ConversationReactionState.awaitingEcho ||
-        state(key) == ConversationReactionState.unknown)
+        state(key) == ConversationReactionState.unknown) {
       return ConversationReactionResult.pending;
+    }
     if (!removeExisting && present) return ConversationReactionResult.existing;
     if (!allowed()) return ConversationReactionResult.denied;
     _states[key] = ConversationReactionState.pending;
@@ -92,11 +130,12 @@ class ConversationReactionCoordinator extends ChangeNotifier {
     }
   }
 
-  void reconcileRemoval(String key, {required bool present}) {
+  void reconcileRemoval(Object key, {required bool present}) {
     if (!present &&
         state(key) != ConversationReactionState.pending &&
-        _states.remove(key) != null)
+        _states.remove(key) != null) {
       notifyListeners();
+    }
   }
 }
 
@@ -104,17 +143,34 @@ class ConversationReactionCoordinator extends ChangeNotifier {
 abstract final class ConversationMessageActions {
   static final _coordinators = Expando<ConversationReactionCoordinator>();
   static final _removalEvidence =
-      Expando<Map<String, ({Timeline timeline, List<Event> originals})>>();
+      Expando<
+        Map<
+          ConversationReactionKey,
+          ({Timeline timeline, List<Event> originals})
+        >
+      >();
   static ConversationReactionCoordinator coordinator(Event event) =>
       _coordinators[event.room.client] ??= ConversationReactionCoordinator();
-  static String key(Event event, String emoji, {bool removal = false}) =>
-      jsonEncode([
-        event.room.client.userID,
-        event.room.id,
-        event.eventId,
-        emoji,
-        if (removal) 'remove',
-      ]);
+
+  /// The message [event] as a reaction scope.
+  static ConversationReactionScope scope(Event event) => (
+    account: event.room.client.userID,
+    room: event.room.id,
+    event: event.eventId,
+  );
+
+  static ConversationReactionKey key(
+    Event event,
+    String emoji, {
+    bool removal = false,
+  }) => (
+    account: event.room.client.userID,
+    room: event.room.id,
+    event: event.eventId,
+    emoji: emoji,
+    removal: removal,
+  );
+
   static List<Event> ownReactions(
     Event event,
     Timeline timeline,
@@ -132,16 +188,38 @@ abstract final class ConversationMessageActions {
       )
       .toList();
 
+  /// Reaction keys this account gave to [event] (not redacted).
+  static Set<String> ownReactionKeys(Event event, Timeline timeline) => {
+    for (final e in event.aggregatedEvents(
+      timeline,
+      RelationshipTypes.reaction,
+    ))
+      if (!e.redacted && e.senderId == event.room.client.userID)
+        ?e.content
+            .tryGetMap<String, Object?>('m.relates_to')
+            ?.tryGet<String>('key'),
+  };
+
+  /// Cheap value of this account's reactions on [event] (ids, status,
+  /// redaction): reconciling is only needed when it changes.
+  static Object ownReactionSignature(Event event, Timeline timeline) =>
+      Object.hashAll([
+        for (final e in event.aggregatedEvents(
+          timeline,
+          RelationshipTypes.reaction,
+        ))
+          if (e.senderId == event.room.client.userID) ...[
+            e.eventId,
+            e.status,
+            e.redacted,
+          ],
+      ]);
+
   static void reconcile(Event event, Timeline timeline) {
     final manager = coordinator(event);
-    for (final tracked in manager.trackedKeys) {
-      final parts = jsonDecode(tracked) as List;
-      if (parts[0] != event.room.client.userID ||
-          parts[1] != event.room.id ||
-          parts[2] != event.eventId)
-        continue;
-      final own = ownReactions(event, timeline, parts[3] as String);
-      if (parts.length > 4) {
+    for (final tracked in manager.keysFor(scope(event)).toList()) {
+      final own = ownReactions(event, timeline, tracked.emoji);
+      if (tracked.removal) {
         final evidence = _removalEvidence[manager]?[tracked];
         final redactionProven =
             evidence != null &&
@@ -162,8 +240,9 @@ abstract final class ConversationMessageActions {
           tracked,
           present: !(redactionProven || acceptedAbsence),
         );
-        if (manager.state(tracked) == ConversationReactionState.idle)
+        if (manager.state(tracked) == ConversationReactionState.idle) {
           _removalEvidence[manager]?.remove(tracked);
+        }
       } else {
         manager.reconcile(
           tracked,
@@ -171,6 +250,68 @@ abstract final class ConversationMessageActions {
         );
       }
     }
+  }
+
+  /// Whether [event] can be replied to (swipe, menu): sent, readable, the
+  /// room accepts messages and its bridge does not refuse replies. [strict]
+  /// sources (merged chats) need the reply feature verified.
+  static bool canReply(Event event, {bool strict = false}) {
+    final room = event.room;
+    if (event.redacted ||
+        // Its reply fallback would quote the SDK's decryption error.
+        isUndecryptable(event) ||
+        !event.status.isSent ||
+        room.membership != Membership.join ||
+        !room.canSendDefaultMessages) {
+      return false;
+    }
+    final capability = RoomCapabilities.forFeature(
+      BridgeFeature.reply,
+      room,
+      event: event,
+    );
+    return strict
+        ? capability.allowed
+        : capability.status != CapabilityStatus.unavailable;
+  }
+
+  /// The reaction capability of [event] in general (not one emoji): the bar
+  /// and double tap are offered only when this holds.
+  static bool canReactAtAll(Event event, {bool strict = false}) {
+    final room = event.room;
+    if (event.redacted ||
+        !event.eventId.startsWith(r'$') ||
+        !event.status.isSent ||
+        room.membership != Membership.join ||
+        !room.canSendDefaultMessages ||
+        !room.canSendEvent(EventTypes.Reaction)) {
+      return false;
+    }
+    final result = RoomCapabilities.forFeature(
+      BridgeFeature.reaction,
+      room,
+      event: event,
+    );
+    return result.allowed ||
+        (!strict && result.status == CapabilityStatus.unverified);
+  }
+
+  static CapabilityResult _reactionCapability(
+    Event event,
+    Timeline timeline,
+    String emoji,
+  ) {
+    final room = event.room;
+    return RoomCapabilities.forFeature(
+      BridgeFeature.reaction,
+      room,
+      event: event,
+      reaction: emoji,
+      reactionCount: event
+          .aggregatedEvents(timeline, RelationshipTypes.reaction)
+          .where((e) => !e.redacted && e.senderId == room.client.userID)
+          .length,
+    );
   }
 
   static bool canReact(
@@ -184,24 +325,101 @@ abstract final class ConversationMessageActions {
     if (event.redacted ||
         !event.eventId.startsWith(r'$') ||
         !event.status.isSent ||
-        room.membership != Membership.join)
+        room.membership != Membership.join) {
       return false;
-    if (removing)
+    }
+    if (removing) {
       return ownReactions(event, timeline, emoji).every((e) => e.canRedact);
-    if (!room.canSendDefaultMessages || !room.canSendEvent(EventTypes.Reaction))
+    }
+    if (!room.canSendDefaultMessages ||
+        !room.canSendEvent(EventTypes.Reaction)) {
       return false;
-    final result = RoomCapabilities.forFeature(
-      BridgeFeature.reaction,
-      room,
-      event: event,
-      reaction: emoji,
-      reactionCount: event
-          .aggregatedEvents(timeline, RelationshipTypes.reaction)
-          .where((e) => !e.redacted && e.senderId == room.client.userID)
-          .length,
-    );
+    }
+    final result = _reactionCapability(event, timeline, emoji);
     return result.allowed ||
         (!strict && result.status == CapabilityStatus.unverified);
+  }
+
+  /// Whether a toggle of [emoji] would add a reaction now (not remove one,
+  /// not wait for a pending one, not be refused): the double-tap burst plays
+  /// at once only then.
+  static bool wouldAdd(
+    Event event,
+    Timeline timeline,
+    String emoji, {
+    bool strict = false,
+  }) {
+    final manager = coordinator(event);
+    if (manager.keysFor(scope(event)).any(manager.unresolved)) return false;
+    return ownReactions(event, timeline, emoji).isEmpty &&
+        canReact(event, timeline, emoji, strict: strict);
+  }
+
+  /// The quick reactions of [room] (the long-press bar), Messenger's order
+  /// with the heart first. A network that declares `allowed_reactions` keeps
+  /// only the allowed ones, in this order and in the network's spelling;
+  /// when none of them is allowed, the network's own first reactions.
+  static List<String> quickReactions(Room room) {
+    final allowed = _allowedReactions(room);
+    if (allowed == null) return NotionReactions.defaults;
+    final byKey = <String, String>{
+      for (final key in allowed.reversed) NotionReactions.normalize(key): key,
+    };
+    final kept = [
+      for (final emoji in NotionReactions.defaults)
+        ?byKey[NotionReactions.normalize(emoji)],
+    ];
+    if (kept.isNotEmpty) return kept;
+    return allowed
+        .where((key) => !key.startsWith('mxc://'))
+        .take(NotionReactions.defaults.length)
+        .toList(growable: false);
+  }
+
+  /// The double-tap reaction of [room]: the emoji the user picked in the
+  /// settings when the network allows it, otherwise the first quick reaction
+  /// (a heart wherever the network has one).
+  static String doubleTapReaction(Room room) {
+    final quick = quickReactions(room);
+    final picked = AppSettings.doubleTapReaction.value;
+    if (picked.isNotEmpty) {
+      final allowed = _allowedReactions(room);
+      if (allowed == null) return picked;
+      final match = allowed.firstWhere(
+        (key) =>
+            NotionReactions.normalize(key) == NotionReactions.normalize(picked),
+        orElse: () => '',
+      );
+      if (match.isNotEmpty) return match;
+    }
+    return quick.isEmpty ? NotionReactions.defaults.first : quick.first;
+  }
+
+  /// The `allowed_reactions` the room's bridge declares, or null when it
+  /// declares none (any emoji). Picks the declaration exactly like
+  /// [RoomCapabilities.declared]: the single one of the room's bridge, or the
+  /// only one; several unrelated declarations count as none (the capability
+  /// check, which refuses them, stays the authority when sending).
+  static List<String>? _allowedReactions(Room room) {
+    final states = room.states[bridgeFeaturesEventType];
+    if (states == null || states.isEmpty) return null;
+    final bridgeKeys = <String>{
+      for (final type in const [
+        'm.bridge',
+        'uk.half-shot.bridge',
+        'com.beeper.bridge',
+      ])
+        ...?room.states[type]?.keys,
+    };
+    final matches = states.keys.where(bridgeKeys.contains).toList();
+    final content = matches.length == 1
+        ? states[matches.single]?.content
+        : matches.isEmpty && states.length == 1
+        ? states.values.single.content
+        : null;
+    final allowed = content?['allowed_reactions'];
+    if (allowed is! List || allowed.any((e) => e is! String)) return null;
+    return allowed.cast<String>();
   }
 
   static Future<bool> react(
@@ -219,13 +437,9 @@ abstract final class ConversationMessageActions {
     bool present() => ownReactions(event, timeline, emoji).isNotEmpty;
     reconcile(event, timeline);
     // Local echo counts for dedup, but only synced aggregate releases a barrier.
-    final unresolvedSource = manager.trackedKeys.any((tracked) {
-      final parts = jsonDecode(tracked) as List;
-      return parts[0] == event.room.client.userID &&
-          parts[1] == event.room.id &&
-          parts[2] == event.eventId &&
-          manager.unresolved(tracked);
-    });
+    final unresolvedSource = manager
+        .keysFor(scope(event))
+        .any(manager.unresolved);
     if (unresolvedSource) {
       _notice(
         context,
@@ -263,14 +477,16 @@ abstract final class ConversationMessageActions {
               ownReactions(event, timeline, emoji).every((e) => e.canRedact)),
       add: () async {
         final id = await event.room.sendReaction(event.eventId, emoji);
-        if (id == null || !id.startsWith(r'$'))
+        if (id == null || !id.startsWith(r'$')) {
           throw StateError('Reaction acceptance unknown');
+        }
       },
       remove: () async {
         for (final reaction in ownReactions(event, timeline, emoji)) {
           final id = await reaction.redactEvent();
-          if (id == null || !id.startsWith(r'$'))
+          if (id == null || !id.startsWith(r'$')) {
             throw StateError('Reaction removal unknown');
+          }
         }
       },
       definitiveFailure: (error) {
@@ -285,9 +501,18 @@ abstract final class ConversationMessageActions {
     if (context.mounted) {
       switch (result) {
         case ConversationReactionResult.denied:
+          // The network's own reason (a limit, an emoji it does not have)
+          // says more than a generic refusal.
+          final capability = removing
+              ? null
+              : _reactionCapability(event, timeline, emoji);
           _notice(
             context,
-            'Reactions are unavailable for this source message.',
+            capability != null &&
+                    capability.status == CapabilityStatus.unavailable &&
+                    capability.reason.isNotEmpty
+                ? capability.reason
+                : 'Reactions are unavailable for this source message.',
           );
         case ConversationReactionResult.pending:
         case ConversationReactionResult.unknown:
@@ -308,58 +533,123 @@ abstract final class ConversationMessageActions {
   }
 
   static void _notice(BuildContext context, String text) {
-    if (context.mounted)
+    if (context.mounted) {
       ScaffoldMessenger.maybeOf(
         context,
       )?.showSnackBar(SnackBar(content: Text(text)));
+    }
+  }
+}
+
+/// Reconciles [event]'s tracked reaction intents after a frame, only while
+/// some are tracked and only when this account's reactions on it changed.
+/// Shared by the footer feedback and the chips, so a row never schedules
+/// work on ordinary rebuilds.
+class ConversationReactionReconciler {
+  Object? _signature;
+
+  void didBuild(BuildContext context, Event event, Timeline timeline) {
+    final manager = ConversationMessageActions.coordinator(event);
+    if (manager.keysFor(ConversationMessageActions.scope(event)).isEmpty) {
+      _signature = null;
+      return;
+    }
+    final signature = (
+      timeline,
+      ConversationMessageActions.ownReactionSignature(event, timeline),
+    );
+    if (signature == _signature) return;
+    _signature = signature;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (context.mounted) {
+        ConversationMessageActions.reconcile(event, timeline);
+      }
+    });
   }
 }
 
 /// Persistent, content-free result state, including when no chip has echoed yet.
-class ConversationReactionFeedback extends StatelessWidget {
+/// Rebuilds only when the state of this message's intents changes, not on
+/// every reaction elsewhere in the account.
+class ConversationReactionFeedback extends StatefulWidget {
   final Event event;
   final Timeline timeline;
   const ConversationReactionFeedback(this.event, this.timeline, {super.key});
+
+  @override
+  State<ConversationReactionFeedback> createState() =>
+      _ConversationReactionFeedbackState();
+}
+
+class _ConversationReactionFeedbackState
+    extends State<ConversationReactionFeedback> {
+  final _reconciler = ConversationReactionReconciler();
+  ConversationReactionCoordinator? _manager;
+  String? _text;
+
+  @override
+  void initState() {
+    super.initState();
+    _listen();
+  }
+
+  @override
+  void didUpdateWidget(ConversationReactionFeedback oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.event.room.client, widget.event.room.client)) {
+      _listen();
+    }
+    _text = _compute();
+  }
+
+  void _listen() {
+    _manager?.removeListener(_changed);
+    _manager = ConversationMessageActions.coordinator(widget.event)
+      ..addListener(_changed);
+    _text = _compute();
+  }
+
+  String? _compute() {
+    final states = _manager!.statesFor(
+      ConversationMessageActions.scope(widget.event),
+    );
+    if (states.isEmpty) return null;
+    return states.contains(ConversationReactionState.unknown)
+        ? 'Reaction confirmation unknown · waiting for source sync'
+        : states.contains(ConversationReactionState.pending) ||
+              states.contains(ConversationReactionState.awaitingEcho)
+        ? 'Reaction pending source confirmation'
+        : states.contains(ConversationReactionState.failed)
+        ? 'Reaction rejected · use menu to retry'
+        : null;
+  }
+
+  void _changed() {
+    if (!mounted) return;
+    final text = _compute();
+    if (text != _text) setState(() => _text = text);
+  }
+
+  @override
+  void dispose() {
+    _manager?.removeListener(_changed);
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final manager = ConversationMessageActions.coordinator(event);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (context.mounted)
-        ConversationMessageActions.reconcile(event, timeline);
-    });
-    return AnimatedBuilder(
-      animation: manager,
-      builder: (context, _) {
-        final states = manager.trackedKeys
-            .where((key) {
-              final parts = jsonDecode(key) as List;
-              return parts[0] == event.room.client.userID &&
-                  parts[1] == event.room.id &&
-                  parts[2] == event.eventId;
-            })
-            .map(manager.state)
-            .toSet();
-        final text = states.contains(ConversationReactionState.unknown)
-            ? 'Reaction confirmation unknown · waiting for source sync'
-            : states.contains(ConversationReactionState.pending) ||
-                  states.contains(ConversationReactionState.awaitingEcho)
-            ? 'Reaction pending source confirmation'
-            : states.contains(ConversationReactionState.failed)
-            ? 'Reaction rejected · use menu to retry'
-            : null;
-        return text == null
-            ? const SizedBox.shrink()
-            : Semantics(
-                liveRegion: true,
-                child: Text(
-                  text,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              );
-      },
-    );
+    _reconciler.didBuild(context, widget.event, widget.timeline);
+    final text = _text;
+    return text == null
+        ? const SizedBox.shrink()
+        : Semantics(
+            liveRegion: true,
+            child: Text(
+              text,
+              style: NotionType.micro.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          );
   }
 }

@@ -1,20 +1,99 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/physics.dart';
-import 'package:flutter/semantics.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'conversation_motion.dart';
 
-/// Touch gestures for an otherwise non-interactive message surface.
+/// What a double tap would do right now: react with [emoji]; [adds] is true
+/// when that adds a reaction (not removes one), so the burst plays at once.
+typedef ConversationQuickLike = ({String emoji, bool adds});
+
+/// The finger that opened a message menu, while it stays down: the menu
+/// follows it to choose an emoji (Messenger's slide to react).
+class ConversationMenuPointer extends ChangeNotifier {
+  Offset? _position;
+  bool _released = false;
+
+  /// Global position, or null once the pointer was cancelled.
+  Offset? get position => _position;
+
+  /// The finger lifted (or was cancelled; then [position] is null).
+  bool get released => _released;
+
+  void move(Offset position) {
+    if (_released) return;
+    _position = position;
+    notifyListeners();
+  }
+
+  void release(Offset position) {
+    if (_released) return;
+    _position = position;
+    _released = true;
+    notifyListeners();
+  }
+
+  void cancel() {
+    if (_released) return;
+    _position = null;
+    _released = true;
+    notifyListeners();
+  }
+}
+
+/// A recognised long-press (or secondary click, or the accessibility action)
+/// on a message surface: everything the message menu needs to lift a copy of
+/// the bubble from where it is drawn.
+@immutable
+class ConversationMessagePress {
+  const ConversationMessagePress({
+    required this.position,
+    required this.rect,
+    required this.visualRect,
+    this.snapshot,
+    this.pointer,
+  });
+
+  /// Global touch point.
+  final Offset position;
+
+  /// Global rect of the surface at its natural size.
+  final Rect rect;
+
+  /// Global rect as drawn at the press (sunk by the press feedback).
+  final Rect visualRect;
+
+  /// The surface rendered at natural size, owned by whoever shows the menu.
+  final ui.Image? snapshot;
+
+  /// The finger, while it is still down.
+  final ConversationMenuPointer? pointer;
+}
+
+/// Touch gestures of one message surface, the single owner of how a bubble
+/// reacts to a finger (Telegram/Messenger):
+///
+/// * horizontal swipe → [onReply] on every message kind. Controls inside
+///   the bubble that drag horizontally themselves (an active voice note's
+///   waveform, a code block) win the gesture arena where they are touched;
+/// * double tap → [onLike] (the network's first quick reaction). Only on the
+///   bubble's chrome and plain text: a double tap that lands on a button,
+///   link, slider or media tap target is left to it, so single taps there
+///   are never delayed;
+/// * long-press (also a secondary click and the "Message actions"
+///   accessibility action) → [onLongPress] with a [ConversationMessagePress];
+///   while held, the bubble sinks slightly.
 ///
 /// The controller owns authorization and reaction deduplication. A true result
 /// from [onLike] means a new intention was accepted, not delivery confirmation.
-/// Set [interactiveContent] for links, play/seek, media and form controls, and
-/// [enabled] false during text selection. Both retain their existing actions.
+/// Set [enabled] false during text selection: swipe and double tap pause, the
+/// long-press stays.
 class ConversationMessageGestures extends StatefulWidget {
   const ConversationMessageGestures({
     super.key,
@@ -22,26 +101,42 @@ class ConversationMessageGestures extends StatefulWidget {
     required this.identity,
     this.onReply,
     this.onLike,
+    this.likePreview,
+    this.onLongPress,
     this.enabled = true,
     this.swipeRightToLeft = false,
     this.quickLikeEnabled = true,
-    this.interactiveContent = false,
+    this.pressAlignment = Alignment.center,
     this.likeLabel = 'Like message',
     this.likeEmoji = '👍',
     this.replyLabel = 'Reply',
+    this.menuLabel = 'Message actions',
   });
 
   final Widget child;
   final Object identity;
   final VoidCallback? onReply;
   final Future<bool> Function()? onLike;
+
+  /// Resolves the double tap before [onLike] runs; when it [adds], the burst
+  /// and haptic play immediately instead of after the network accepted.
+  final ConversationQuickLike Function()? likePreview;
+  final void Function(ConversationMessagePress press)? onLongPress;
   final bool enabled;
   final bool swipeRightToLeft;
   final bool quickLikeEnabled;
-  final bool interactiveContent;
+
+  /// Fixed point of the press sink (the bubble's sender-side edge).
+  final Alignment pressAlignment;
   final String likeLabel;
+
+  /// Burst glyph when no [likePreview] names one.
   final String likeEmoji;
   final String replyLabel;
+  final String menuLabel;
+
+  /// Scale a held bubble sinks to before the menu opens.
+  static const double pressScale = NotionMotion.pressButton;
 
   @override
   State<ConversationMessageGestures> createState() =>
@@ -59,17 +154,20 @@ class _ConversationMessageGesturesState
     damping: 34,
   );
 
-  late final AnimationController _return =
-      AnimationController.unbounded(vsync: this)
-        ..addListener(_springTick)
-        ..addStatusListener(_springStatus);
-  late final AnimationController _badge = AnimationController(
-    vsync: this,
-    duration: NotionMotion.short,
-    reverseDuration: NotionMotion.quick,
-  );
+  // A quick tap (or the start of a scroll) shows nothing; the bubble starts
+  // sinking once the touch is clearly a hold.
+  static const _sinkCurve = Interval(.2, 1, curve: Curves.easeOut);
+
+  // Controllers exist only once a row is touched, never per built row.
+  AnimationController? _return;
+  AnimationController? _sinkController;
+  AnimationController? _burst;
+  final ValueNotifier<double> _sink = ValueNotifier(1);
+  final _boundary = _BoundaryHandle();
   final Set<int> _pointers = {};
   Offset? _downPosition;
+  Offset? _sinkOrigin;
+  Offset? _tapPosition;
   double _offset = 0;
   double _rawDistance = 0;
   double _dragBase = 0;
@@ -78,12 +176,20 @@ class _ConversationMessageGesturesState
   bool _hapticSent = false;
   bool _likePending = false;
   int _identityGeneration = 0;
+  String? _burstEmoji;
+  Offset _burstAt = Offset.zero;
+  ConversationMenuPointer? _menuPointer;
 
-  bool get _touchEnabled => widget.enabled && !widget.interactiveContent;
+  bool get _touchEnabled => widget.enabled;
   double get _direction {
     final rtl = Directionality.of(context) == TextDirection.rtl;
     return widget.swipeRightToLeft != rtl ? -1 : 1;
   }
+
+  AnimationController get _returnController =>
+      _return ??= AnimationController.unbounded(vsync: this)
+        ..addListener(_springTick)
+        ..addStatusListener(_springStatus);
 
   @override
   void initState() {
@@ -105,15 +211,19 @@ class _ConversationMessageGesturesState
       _likePending = false;
       _blocked = true;
       _downPosition = null;
-      _return.stop();
-      _badge.value = 0;
+      _return?.stop();
       _offset = 0;
       _armed = false;
+      _releaseSink(immediate: true);
+      _endBurst();
+      _menuPointer?.cancel();
+      _menuPointer = null;
     } else if (!_touchEnabled ||
         (oldWidget.onReply != widget.onReply && widget.onReply == null) ||
         oldWidget.swipeRightToLeft != widget.swipeRightToLeft) {
       _cancel();
     }
+    if (widget.onLongPress == null) _releaseSink(immediate: true);
   }
 
   @override
@@ -124,11 +234,13 @@ class _ConversationMessageGesturesState
   }
 
   void _stopMotion() {
-    if (_return.isAnimating) {
-      _return.stop();
+    final spring = _return;
+    if (spring != null && spring.isAnimating) {
+      spring.stop();
       _offset = 0;
     }
-    _badge.value = 0;
+    _releaseSink(immediate: true);
+    _endBurst();
   }
 
   bool _pointerAllowed(PointerDownEvent event) {
@@ -143,20 +255,57 @@ class _ConversationMessageGesturesState
         event.position.dx < media.size.width - right;
   }
 
-  void _pointerDown(PointerDownEvent event) {
-    if (event.kind != PointerDeviceKind.touch) return;
-    if (_pointers.isEmpty) {
-      _blocked = !_touchEnabled;
-      _downPosition = event.position;
-      _dragBase = _unresisted(_offset.abs());
-      _hapticSent = false;
-      _armed = false;
+  bool _doubleTapAllowed(PointerDownEvent event) =>
+      _pointerAllowed(event) && !_onInteractiveChild(event.position);
+
+  /// Whether [position] lands on something inside the surface that handles
+  /// pointers itself: a gesture detector or button, a link span, a control
+  /// with a click cursor (sliders, ink). Plain text, captions and the
+  /// bubble's padding are chrome.
+  bool _onInteractiveChild(Offset position) {
+    final root = _boundary.box;
+    if (root == null || !root.attached || !root.hasSize) return false;
+    final result = BoxHitTestResult();
+    root.hitTest(result, position: root.globalToLocal(position));
+    for (final entry in result.path) {
+      final target = entry.target;
+      if (identical(target, root)) break;
+      if (target is RenderPointerListener && target.onPointerDown != null) {
+        return true;
+      }
+      if (target is RenderMouseRegion &&
+          target.cursor == SystemMouseCursors.click) {
+        return true;
+      }
+      if (target is TextSpan && target.recognizer != null) return true;
     }
+    return false;
+  }
+
+  void _pointerDown(PointerDownEvent event) {
+    if (_pointers.isEmpty) {
+      _startSink(event);
+      if (event.kind == PointerDeviceKind.touch) {
+        _blocked = !_touchEnabled;
+        _downPosition = event.position;
+        _dragBase = _unresisted(_offset.abs());
+        _hapticSent = false;
+        _armed = false;
+      }
+    }
+    if (event.kind != PointerDeviceKind.touch) return;
     _pointers.add(event.pointer);
-    if (_pointers.length > 1) _cancel();
+    if (_pointers.length > 1) {
+      _cancel();
+      _releaseSink();
+    }
   }
 
   void _pointerMove(PointerMoveEvent event) {
+    final origin = _sinkOrigin;
+    if (origin != null && (event.position - origin).distance > kTouchSlop) {
+      _releaseSink();
+    }
     final start = _downPosition;
     if (_blocked || start == null) return;
     final delta = event.position - start;
@@ -169,12 +318,116 @@ class _ConversationMessageGesturesState
 
   void _pointerUp(PointerEvent event) {
     _pointers.remove(event.pointer);
+    _releaseSink();
   }
 
   void _pointerCancel(PointerCancelEvent event) {
     _pointers.remove(event.pointer);
     _cancel();
+    _releaseSink();
+    _menuPointer?.cancel();
+    _menuPointer = null;
   }
+
+  // ------------------------------------------------------------ press sink
+
+  void _startSink(PointerDownEvent event) {
+    if (widget.onLongPress == null || ConversationMotion.reduced(context)) {
+      return;
+    }
+    _sinkOrigin = event.position;
+    final controller = _sinkController ??= AnimationController.unbounded(
+      vsync: this,
+      value: _sink.value,
+    )..addListener(() => _sink.value = _sinkController!.value);
+    controller.animateTo(
+      ConversationMessageGestures.pressScale,
+      duration: kLongPressTimeout,
+      curve: _sinkCurve,
+    );
+  }
+
+  void _releaseSink({bool immediate = false}) {
+    _sinkOrigin = null;
+    final controller = _sinkController;
+    if (controller == null) return;
+    if (immediate || controller.value == 1 || !mounted) {
+      controller.stop();
+      controller.value = 1;
+      return;
+    }
+    controller.animateWith(
+      NotionMotion.springTo(
+        NotionMotion.snappy,
+        controller.value,
+        1,
+        velocity: controller.velocity,
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ long-press
+
+  void _longPressStart(LongPressStartDetails details) {
+    if (widget.onLongPress == null) return;
+    _cancel();
+    NotionHaptics.longPress();
+    final pointer = _menuPointer = ConversationMenuPointer();
+    _openMenu(details.globalPosition, pointer);
+  }
+
+  void _longPressMove(LongPressMoveUpdateDetails details) =>
+      _menuPointer?.move(details.globalPosition);
+
+  void _longPressEnd(LongPressEndDetails details) {
+    _menuPointer?.release(details.globalPosition);
+    _menuPointer = null;
+  }
+
+  void _secondaryTap(TapUpDetails details) =>
+      _openMenu(details.globalPosition, null);
+
+  void _semanticsMenu() => _openMenu(null, null);
+
+  void _openMenu(Offset? position, ConversationMenuPointer? pointer) {
+    final onLongPress = widget.onLongPress;
+    final own = context.findRenderObject();
+    if (onLongPress == null || own is! RenderBox || !own.hasSize) return;
+    final rect = MatrixUtils.transformRect(
+      own.getTransformTo(null),
+      Offset.zero & own.size,
+    );
+    final boundary = _boundary.box;
+    var visual = rect;
+    ui.Image? snapshot;
+    if (boundary != null && boundary.attached && boundary.hasSize) {
+      visual = MatrixUtils.transformRect(
+        boundary.getTransformTo(null),
+        Offset.zero & boundary.size,
+      );
+      try {
+        snapshot = boundary.toImageSync(
+          pixelRatio: MediaQuery.devicePixelRatioOf(context),
+        );
+      } catch (_) {
+        // Not painted yet: the menu opens without the lifted copy.
+        snapshot = null;
+      }
+    }
+    // The lifted copy takes over the press feedback.
+    _releaseSink(immediate: true);
+    onLongPress(
+      ConversationMessagePress(
+        position: position ?? rect.center,
+        rect: rect,
+        visualRect: visual,
+        snapshot: snapshot,
+        pointer: pointer,
+      ),
+    );
+  }
+
+  // ----------------------------------------------------------------- swipe
 
   static double _resisted(double distance) => distance <= _armDistance
       ? distance
@@ -187,7 +440,8 @@ class _ConversationMessageGesturesState
 
   void _dragStart(DragStartDetails details) {
     if (_blocked) return;
-    _return.stop();
+    _return?.stop();
+    _releaseSink();
   }
 
   void _dragUpdate(DragUpdateDetails details) {
@@ -236,20 +490,20 @@ class _ConversationMessageGesturesState
   }
 
   void _settle(double velocity) {
-    _return.stop();
+    _return?.stop();
     if (_offset == 0) return;
     if (ConversationMotion.reduced(context)) {
       setState(() => _offset = 0);
       return;
     }
-    _return.value = _offset;
-    _return.animateWith(
+    final spring = _returnController..value = _offset;
+    spring.animateWith(
       SpringSimulation(_spring, _offset, 0, velocity.clamp(-1200.0, 1200.0)),
     );
   }
 
   void _springTick() {
-    if (mounted) setState(() => _offset = _return.value);
+    if (mounted) setState(() => _offset = _return!.value);
   }
 
   void _springStatus(AnimationStatus status) {
@@ -259,6 +513,8 @@ class _ConversationMessageGesturesState
       setState(() => _offset = 0);
     }
   }
+
+  // ------------------------------------------------------------ quick like
 
   Future<void> _like() async {
     final onLike = widget.onLike;
@@ -270,6 +526,13 @@ class _ConversationMessageGesturesState
     }
     _likePending = true;
     final generation = _identityGeneration;
+    final at = _tapPosition;
+    final preview = widget.likePreview?.call();
+    final emoji = preview?.emoji ?? widget.likeEmoji;
+    // An add the controller already allows celebrates at once (Instagram);
+    // anything else waits for the result.
+    final optimistic = preview?.adds ?? false;
+    if (optimistic) _celebrate(emoji, at);
     try {
       final accepted = await onLike();
       if (!mounted ||
@@ -278,11 +541,7 @@ class _ConversationMessageGesturesState
           !widget.enabled) {
         return;
       }
-      HapticFeedback.lightImpact();
-      if (!ConversationMotion.reduced(context)) {
-        await _badge.forward(from: 0).orCancel;
-        if (mounted && generation == _identityGeneration) _badge.reverse();
-      }
+      if (!optimistic && preview == null) _celebrate(emoji, at);
     } catch (_) {
       // The shared action handler owns safe error/pending presentation. A
       // failed action must not produce a success badge or an unhandled Future.
@@ -290,6 +549,36 @@ class _ConversationMessageGesturesState
       if (mounted && generation == _identityGeneration) _likePending = false;
     }
   }
+
+  void _celebrate(String emoji, Offset? at) {
+    NotionHaptics.light();
+    if (!mounted || ConversationMotion.reduced(context)) return;
+    final box = context.findRenderObject();
+    final size = box is RenderBox && box.hasSize ? box.size : Size.zero;
+    final burst = _burst ??= AnimationController(
+      vsync: this,
+      duration: NotionReactions.burst,
+    )..addStatusListener(_burstStatus);
+    setState(() {
+      _burstEmoji = emoji;
+      _burstAt = at ?? size.center(Offset.zero);
+    });
+    burst.forward(from: 0);
+  }
+
+  void _burstStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed && mounted) {
+      setState(() => _burstEmoji = null);
+    }
+  }
+
+  void _endBurst() {
+    _burst?.stop();
+    _burstEmoji = null;
+  }
+
+  void _doubleTapDown(TapDownDetails details) =>
+      _tapPosition = details.localPosition;
 
   void _doubleTap() {
     if (_touchEnabled && !_blocked) _like();
@@ -299,8 +588,11 @@ class _ConversationMessageGesturesState
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _identityGeneration++;
-    _return.dispose();
-    _badge.dispose();
+    _menuPointer?.cancel();
+    _return?.dispose();
+    _sinkController?.dispose();
+    _burst?.dispose();
+    _sink.dispose();
     super.dispose();
   }
 
@@ -309,11 +601,15 @@ class _ConversationMessageGesturesState
     final reply = widget.enabled ? widget.onReply : null;
     final like =
         widget.enabled && widget.quickLikeEnabled && widget.onLike != null;
+    final menu = widget.onLongPress != null;
+    final burstEmoji = _burstEmoji;
+    final burst = _burst;
     return Semantics(
       customSemanticsActions: {
-        if (reply != null)
-          CustomSemanticsAction(label: widget.replyLabel): reply,
+        CustomSemanticsAction(label: widget.replyLabel): ?reply,
         if (like) CustomSemanticsAction(label: widget.likeLabel): _like,
+        if (menu)
+          CustomSemanticsAction(label: widget.menuLabel): _semanticsMenu,
       },
       child: Listener(
         onPointerDown: _pointerDown,
@@ -343,9 +639,29 @@ class _ConversationMessageGesturesState
                   GestureRecognizerFactoryWithHandlers<
                     _MessageDoubleTapRecognizer
                   >(
-                    () => _MessageDoubleTapRecognizer(_pointerAllowed),
-                    (recognizer) => recognizer..onDoubleTap = _doubleTap,
+                    () => _MessageDoubleTapRecognizer(_doubleTapAllowed),
+                    (recognizer) => recognizer
+                      ..onDoubleTapDown = _doubleTapDown
+                      ..onDoubleTap = _doubleTap,
                   ),
+            if (menu) ...{
+              LongPressGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<
+                    LongPressGestureRecognizer
+                  >(
+                    () => LongPressGestureRecognizer(debugOwner: this),
+                    (recognizer) => recognizer
+                      ..onLongPressStart = _longPressStart
+                      ..onLongPressMoveUpdate = _longPressMove
+                      ..onLongPressEnd = _longPressEnd,
+                  ),
+              TapGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                    () => TapGestureRecognizer(debugOwner: this),
+                    (recognizer) =>
+                        recognizer..onSecondaryTapUp = _secondaryTap,
+                  ),
+            },
           },
           child: Stack(
             clipBehavior: Clip.none,
@@ -369,56 +685,77 @@ class _ConversationMessageGesturesState
                   ),
                 ),
               Transform.translate(
+                key: const ValueKey('message-surface'),
                 offset: Offset(_offset, 0),
-                child: widget.child,
-              ),
-              PositionedDirectional(
-                end: 8,
-                bottom: 2,
-                child: IgnorePointer(
-                  child: ExcludeSemantics(
-                    child: AnimatedBuilder(
-                      animation: _badge,
-                      builder: (context, child) => Opacity(
-                        opacity: _badge.value,
-                        child: Transform.scale(
-                          scale:
-                              .85 +
-                              .15 * Curves.easeOut.transform(_badge.value),
-                          child: child,
-                        ),
-                      ),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.surfaceContainerHigh,
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(5),
-                          child: widget.likeEmoji.startsWith('mxc://')
-                              ? const Icon(
-                                  Icons.add_reaction_outlined,
-                                  size: 18,
-                                )
-                              : Text(
-                                  widget.likeEmoji,
-                                  style: const TextStyle(fontSize: 18),
-                                  maxLines: 1,
-                                ),
-                        ),
-                      ),
-                    ),
+                // A held bubble sinks a little until the long-press opens
+                // the menu (no rebuild per tick).
+                child: ValueListenableBuilder<double>(
+                  valueListenable: _sink,
+                  child: _SurfaceBoundary(
+                    handle: _boundary,
+                    child: widget.child,
+                  ),
+                  builder: (context, scale, child) => Transform.scale(
+                    scale: scale,
+                    alignment: widget.pressAlignment,
+                    child: child,
                   ),
                 ),
               ),
+              if (burstEmoji != null && burst != null)
+                Positioned(
+                  left: _burstAt.dx - NotionReactions.burstEmoji,
+                  top: _burstAt.dy - NotionReactions.burstEmoji,
+                  width: NotionReactions.burstEmoji * 2,
+                  height: NotionReactions.burstEmoji * 2,
+                  child: NotionReactionBurst(
+                    animation: burst,
+                    child: Center(
+                      child: burstEmoji.startsWith('mxc://')
+                          ? const Icon(
+                              Icons.add_reaction_outlined,
+                              size: NotionReactions.burstEmoji,
+                            )
+                          : Text(
+                              burstEmoji,
+                              maxLines: 1,
+                              style: const TextStyle(
+                                fontSize: NotionReactions.burstEmoji,
+                              ),
+                            ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+/// The render object the surface is drawn into: probed for interactive
+/// children and snapshotted for the menu's lifted copy.
+class _BoundaryHandle {
+  RenderRepaintBoundary? box;
+}
+
+/// A repaint boundary around the surface. It also isolates the surface from
+/// row repaints, so swipe and press transforms only recomposite.
+class _SurfaceBoundary extends SingleChildRenderObjectWidget {
+  const _SurfaceBoundary({required this.handle, super.child});
+
+  final _BoundaryHandle handle;
+
+  @override
+  RenderRepaintBoundary createRenderObject(BuildContext context) =>
+      handle.box = RenderRepaintBoundary();
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    RenderRepaintBoundary renderObject,
+  ) => handle.box = renderObject;
 }
 
 class _MessageHorizontalDragRecognizer extends HorizontalDragGestureRecognizer {

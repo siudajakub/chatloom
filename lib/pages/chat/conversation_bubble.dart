@@ -219,8 +219,12 @@ class ConversationBubble extends StatelessWidget {
                   ),
                   child: Padding(
                     padding: media ? EdgeInsets.zero : NotionBubble.padding,
+                    // Wrapped text sizes to its longest line, so the fill
+                    // shrink-wraps the text instead of keeping the ragged
+                    // gap at line ends (Telegram, Messenger, WhatsApp).
                     child: DefaultTextStyle.merge(
                       style: TextStyle(color: colors.text),
+                      textWidthBasis: TextWidthBasis.longestLine,
                       child: body,
                     ),
                   ),
@@ -298,7 +302,24 @@ class ConversationBubble extends StatelessWidget {
                   Flexible(child: content),
                 ],
               ),
-              if (reactions != null || footer != null)
+              // Reaction chips overlap the bubble's bottom edge on the
+              // sender side (Messenger), slightly inset from its corner.
+              if (reactions != null)
+                NotionReactionOverlap(
+                  child: Padding(
+                    padding: EdgeInsetsDirectional.only(
+                      start: outgoing ? 0 : avatarSlot + NotionSpace.xs,
+                      end: outgoing ? NotionSpace.xs : 0,
+                    ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: math.max(0.0, maxWidth - NotionSpace.xs),
+                      ),
+                      child: reactions,
+                    ),
+                  ),
+                ),
+              if (footer != null)
                 Padding(
                   padding: EdgeInsetsDirectional.only(
                     start: outgoing ? 0 : avatarSlot,
@@ -311,16 +332,7 @@ class ConversationBubble extends StatelessWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: crossAxis,
-                        children: [
-                          ?reactions,
-                          if (footer != null)
-                            Padding(
-                              padding: EdgeInsets.only(
-                                top: reactions == null ? 0 : 3,
-                              ),
-                              child: footer,
-                            ),
-                        ],
+                        children: [footer!],
                       ),
                     ),
                   ),
@@ -531,6 +543,7 @@ class ConversationReplyQuote extends StatelessWidget {
                     text,
                     maxLines: NotionBubble.quoteMaxLines,
                     overflow: TextOverflow.ellipsis,
+                    textWidthBasis: TextWidthBasis.longestLine,
                     style: NotionType.callout.copyWith(color: textColor),
                   ),
                 ),
@@ -607,4 +620,42 @@ class ConversationMetaChip extends StatelessWidget {
       child: Padding(padding: NotionBubble.metaChipPadding, child: child),
     );
   }
+}
+
+/// The one size rule for media inside a bubble (images, videos, Instagram
+/// reels shared through the Meta bridge, which arrive as `m.video`): the
+/// frame fills the bubble's width up to [NotionBubble.mediaMaxWidth] and
+/// keeps the media's aspect ratio between [NotionBubble.mediaMinAspect] and
+/// [NotionBubble.mediaMaxAspect]; whatever lies beyond is cropped
+/// (`BoxFit.cover`), like Messenger. Unknown dimensions give a square.
+/// Pure arithmetic: nothing is measured or laid out twice.
+abstract final class ConversationMedia {
+  static Size frame({
+    required double maxWidth,
+    num? width,
+    num? height,
+    double maxHeight = double.infinity,
+  }) {
+    final frameWidth = math.max(
+      0.0,
+      math.min(maxWidth, NotionBubble.mediaMaxWidth),
+    );
+    final aspect = width != null && height != null && width > 0 && height > 0
+        ? (height / width).clamp(
+            NotionBubble.mediaMinAspect,
+            NotionBubble.mediaMaxAspect,
+          )
+        : 1.0;
+    final frameHeight = math.min(frameWidth * aspect, maxHeight);
+    return Size(frameWidth, math.max(0.0, frameHeight));
+  }
+
+  /// Height limit of a frame: a share of the viewport, and the incoming
+  /// [constraints] (grid tiles).
+  static double maxHeightOf(BuildContext context, BoxConstraints constraints) =>
+      math.min(
+        MediaQuery.sizeOf(context).height *
+            NotionBubble.mediaMaxViewportFraction,
+        constraints.maxHeight,
+      );
 }

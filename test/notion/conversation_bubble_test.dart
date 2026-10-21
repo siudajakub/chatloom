@@ -187,9 +187,10 @@ void main() {
       );
       final surface = tester.getRect(fill('media'));
       expect(tester.getRect(find.byKey(const Key('photo'))), surface);
+      // Reactions overlap the bubble's bottom edge (Messenger).
       expect(
         tester.getRect(find.text('👍 2')).top,
-        greaterThan(surface.bottom),
+        closeTo(surface.bottom - NotionReactions.overlap, .01),
       );
       expect(
         tester.getRect(find.text('Sending · 16:40')).top,

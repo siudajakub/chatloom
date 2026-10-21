@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/pages/chat/notion_conversation.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,9 +15,10 @@ Future<void> _mount(
   WidgetTester tester, {
   VoidCallback? onReply,
   Future<bool> Function()? onLike,
+  ConversationQuickLike Function()? likePreview,
+  void Function(ConversationMessagePress press)? onLongPress,
   Object identity = 'fictional-source-event',
   bool enabled = true,
-  bool interactive = false,
   bool quickLike = true,
   bool rightToLeft = false,
   bool reduced = false,
@@ -36,11 +39,12 @@ Future<void> _mount(
             child: ConversationMessageGestures(
               identity: identity,
               enabled: enabled,
-              interactiveContent: interactive,
               quickLikeEnabled: quickLike,
               swipeRightToLeft: rightToLeft,
               onReply: onReply,
               onLike: onLike,
+              likePreview: likePreview,
+              onLongPress: onLongPress,
               child: SizedBox(
                 key: _surface,
                 width: width,
@@ -212,35 +216,231 @@ void main() {
     expect(haptics, isEmpty);
   });
 
-  testWidgets('selection mode and interactive content keep child controls', (
+  testWidgets('disabled (text selection) keeps child controls only', (
     tester,
   ) async {
     var replies = 0;
     var likes = 0;
     var plays = 0;
-    for (final interactive in [false, true]) {
+    await _mount(
+      tester,
+      enabled: false,
+      onReply: () => replies++,
+      onLike: () async {
+        likes++;
+        return true;
+      },
+      child: TextButton(onPressed: () => plays++, child: const Text('Play')),
+    );
+    await _doubleTap(tester);
+    final drag = await tester.startGesture(
+      tester.getCenter(find.byKey(_surface)),
+    );
+    await drag.moveBy(const Offset(90, 0));
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(replies, 0);
+    expect(likes, 0);
+    expect(plays, 2);
+  });
+
+  testWidgets(
+    'buttons keep immediate single taps; double tap there is theirs; swipe still replies',
+    (tester) async {
+      var replies = 0;
+      var likes = 0;
+      var plays = 0;
       await _mount(
         tester,
-        enabled: interactive,
-        interactive: interactive,
         onReply: () => replies++,
         onLike: () async {
           likes++;
           return true;
         },
-        child: TextButton(onPressed: () => plays++, child: const Text('Play')),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: TextButton(
+            onPressed: () => plays++,
+            child: const Text('Play'),
+          ),
+        ),
       );
-      await _doubleTap(tester);
+      // A single tap on the button lands at once, without waiting out the
+      // double-tap window.
+      await tester.tap(find.text('Play'));
+      await tester.pump();
+      expect(plays, 1);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.text('Play'));
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tap(find.text('Play'));
+      await tester.pumpAndSettle();
+      expect(plays, 3);
+      expect(likes, 0);
+      // The bubble's chrome around the button still double-taps.
+      final surface = tester.getRect(find.byKey(_surface));
+      final chrome = surface.bottomRight - const Offset(20, 20);
+      await tester.tapAt(chrome);
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tapAt(chrome);
+      await tester.pumpAndSettle();
+      expect(likes, 1);
+      // A swipe that starts on the button replies (the drag wins the arena).
       final drag = await tester.startGesture(
-        tester.getCenter(find.byKey(_surface)),
+        tester.getCenter(find.text('Play')),
       );
-      await drag.moveBy(const Offset(90, 0));
+      await drag.moveBy(const Offset(24, 0));
+      await drag.moveBy(const Offset(70, 0));
       await drag.up();
       await tester.pumpAndSettle();
-    }
-    expect(replies, 0);
+      expect(replies, 1);
+      expect(plays, 3);
+    },
+  );
+
+  testWidgets('links and ink inside text keep their taps from double tap', (
+    tester,
+  ) async {
+    var likes = 0;
+    var opened = 0;
+    final link = TapGestureRecognizer()..onTap = () => opened++;
+    addTearDown(link.dispose);
+    await _mount(
+      tester,
+      onLike: () async {
+        likes++;
+        return true;
+      },
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: Text.rich(
+          TextSpan(
+            text: 'Fictional ',
+            children: [TextSpan(text: 'link', recognizer: link)],
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Fictional link', findRichText: true));
+    await tester.pump();
+    final linkRect = tester.getRect(
+      find.text('Fictional link', findRichText: true),
+    );
+    final onLink = linkRect.centerRight - const Offset(8, 0);
+    await tester.tapAt(onLink);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tapAt(onLink);
+    await tester.pumpAndSettle();
     expect(likes, 0);
-    expect(plays, 4);
+    expect(opened, greaterThanOrEqualTo(2));
+    final onWord = linkRect.centerLeft + const Offset(8, 0);
+    await tester.tapAt(onWord);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tapAt(onWord);
+    await tester.pumpAndSettle();
+    expect(likes, 1);
+  });
+
+  testWidgets(
+    'an inactive voice note replies from its waveform; an active one scrubs',
+    (tester) async {
+      var replies = 0;
+      final seeks = <double>[];
+      for (final active in [false, true]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 320,
+                  child: ConversationMessageGestures(
+                    identity: 'fictional-voice-$active',
+                    onReply: () => replies++,
+                    child: NotionAudioFileBlock(
+                      duration: '0:18 / 1:06',
+                      progress: .27,
+                      seekDuration: const Duration(seconds: 66),
+                      onPlay: () {},
+                      onSeek: active ? seeks.add : null,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        final waveform = tester.getRect(
+          find.byKey(const ValueKey('voice-waveform')),
+        );
+        final drag = await tester.startGesture(
+          Offset(waveform.left + waveform.width * .3, waveform.center.dy),
+        );
+        await drag.moveBy(const Offset(24, 0));
+        await drag.moveBy(const Offset(70, 0));
+        await drag.up();
+        await tester.pumpAndSettle();
+      }
+      expect(replies, 1);
+      expect(seeks, hasLength(1));
+    },
+  );
+
+  testWidgets('long-press sinks the bubble, then reports its rect and finger', (
+    tester,
+  ) async {
+    final presses = <ConversationMessagePress>[];
+    final positions = <Offset?>[];
+    await _mount(
+      tester,
+      onReply: () {},
+      onLongPress: (press) {
+        presses.add(press);
+        press.pointer?.addListener(
+          () => positions.add(press.pointer!.position),
+        );
+      },
+    );
+    final rect = tester.getRect(find.byKey(_surface));
+    final finger = await tester.startGesture(rect.center);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    // Sinking toward the press scale while held.
+    expect(tester.getRect(find.byKey(_surface)).width, lessThan(rect.width));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(presses, hasLength(1));
+    expect(haptics, ['HapticFeedbackType.lightImpact']);
+    final press = presses.single;
+    expect(press.rect, rect);
+    expect(press.visualRect.width, lessThanOrEqualTo(rect.width));
+    expect(press.pointer, isNotNull);
+    // The menu takes over: the list bubble is back at rest at once.
+    await tester.pump();
+    expect(tester.getRect(find.byKey(_surface)), rect);
+    await finger.moveBy(const Offset(10, -40));
+    await finger.up();
+    await tester.pump();
+    expect(positions, hasLength(2));
+    expect(press.pointer!.released, isTrue);
+    press.snapshot?.dispose();
+  });
+
+  testWidgets('a previewed add bursts at the finger before the result', (
+    tester,
+  ) async {
+    final response = Completer<bool>();
+    await _mount(
+      tester,
+      onLike: () => response.future,
+      likePreview: () => (emoji: '❤️', adds: true),
+    );
+    await _doubleTap(tester);
+    expect(haptics, ['HapticFeedbackType.lightImpact']);
+    expect(find.text('❤️'), findsOneWidget);
+    expect(find.byType(NotionReactionBurst), findsOneWidget);
+    response.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.byType(NotionReactionBurst), findsNothing);
+    expect(haptics, hasLength(1));
   });
 
   testWidgets('mouse double click belongs to the child', (tester) async {
