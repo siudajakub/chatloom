@@ -30,7 +30,7 @@ MARKER = HARNESS / '.notion-ui-harness'
 # Every lib/ui/notion/*.dart file is added in prepare(); new primitives need no
 # edit here. Motion packages (flutter_animate, skeletonizer) are pinned below.
 SOURCES = (
- 'lib/widgets/pulsating_widget.dart', 'lib/widgets/typing_animation.dart',
+ 'lib/widgets/pulsating_widget.dart',
  'lib/personal/encryption/key_recovery_stage.dart',
  'lib/pages/chat/events/waiting_message_view.dart', 'lib/pages/chat/undecryptable_chat_hint.dart',
  'lib/personal/ui/inbox_health_notice.dart',
@@ -109,7 +109,12 @@ def prepare(flutter):
                     'composer_send_test.dart',
                     'conversation_bubble_layout_test.dart',
                     'conversation_message_menu_test.dart',
-                    'composer_record_buttons_test.dart'}
+                    'composer_record_buttons_test.dart',
+                    # Wave 4: they import app code outside the harness
+                    # (inbox controller, outgoing media, chat list view).
+                    'desktop_column_layout_test.dart',
+                    'inbox_controller_latency_test.dart',
+                    'send_status_test.dart'}
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion').glob('*_test.dart')) if not path.name.endswith(('_controller_test.dart', '_adapter_test.dart')) and path.name not in full_graph_only]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'assets/notion').rglob('*')) if path.is_file()]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion/goldens').rglob('*.png'))]
