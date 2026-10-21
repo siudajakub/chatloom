@@ -1105,10 +1105,9 @@ class Room {
               .unsigned![fileSendingStatusKey] =
           FileSendingStatus.generatingThumbnail.name;
       try {
-        thumbnail ??= await file.generateThumbnail(
-          nativeImplementations: client.nativeImplementations,
-          customImageResizer: client.customImageResizer,
-        );
+        // Local patch (ChatLoom): shrink first, then derive the thumbnail
+        // from the shrunk image. Same files, but a full-resolution photo is
+        // decoded once instead of twice.
         if (shrinkImageMaxDimension != null) {
           file = await MatrixImageFile.shrink(
             bytes: file.bytes,
@@ -1118,6 +1117,10 @@ class Room {
             nativeImplementations: client.nativeImplementations,
           );
         }
+        thumbnail ??= await file.generateThumbnail(
+          nativeImplementations: client.nativeImplementations,
+          customImageResizer: client.customImageResizer,
+        );
 
         if (thumbnail != null && file.size < thumbnail.size) {
           thumbnail = null; // in this case, the thumbnail is not usefull
@@ -1261,18 +1264,30 @@ class Room {
     while (uploadResp == null ||
         (uploadThumbnail != null && thumbnailUploadResp == null)) {
       try {
-        uploadResp = await client.uploadContent(
-          uploadFile.bytes,
-          filename: uploadFile.name,
-          contentType: uploadFile.mimeType,
-        );
-        thumbnailUploadResp = uploadThumbnail != null
-            ? await client.uploadContent(
-                uploadThumbnail.bytes,
-                filename: uploadThumbnail.name,
-                contentType: uploadThumbnail.mimeType,
-              )
+        // Local patch (ChatLoom): the file and its thumbnail upload
+        // concurrently (one round trip fewer), and a retry uploads only the
+        // part that is still missing. Same requests, same content.
+        final pendingFile = uploadResp == null
+            ? client
+                  .uploadContent(
+                    uploadFile.bytes,
+                    filename: uploadFile.name,
+                    contentType: uploadFile.mimeType,
+                  )
+                  .then((uri) => uploadResp = uri)
             : null;
+        final thumbnailFile = uploadThumbnail;
+        final pendingThumbnail =
+            thumbnailFile != null && thumbnailUploadResp == null
+            ? client
+                  .uploadContent(
+                    thumbnailFile.bytes,
+                    filename: thumbnailFile.name,
+                    contentType: thumbnailFile.mimeType,
+                  )
+                  .then((uri) => thumbnailUploadResp = uri)
+            : null;
+        await Future.wait([?pendingFile, ?pendingThumbnail]);
       } on MatrixException catch (_) {
         syncUpdate
                 .rooms!

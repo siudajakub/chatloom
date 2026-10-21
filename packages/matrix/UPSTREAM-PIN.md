@@ -68,3 +68,25 @@ declare kinds keep the complete-member-list heuristic. Presentation only:
 native `m.direct`, merge authorization, transport and cryptography are
 unchanged. Regression: app `test/personal/conversation_kind_networks_test.dart`
 and `test/personal/merge_conversations_test.dart`.
+
+### 2026-10-21 — `sendFileEvent`: one full-resolution decode, concurrent uploads
+
+Two scheduling changes in `Room.sendFileEvent`, both after the local echo
+exists, so they only shorten the time until the message is delivered:
+
+- An image is shrunk (`shrinkImageMaxDimension`) first and its thumbnail is
+  derived from the shrunk image. Upstream generated the thumbnail from the
+  original and then shrank the original again, so a 12 MP photo was decoded
+  and resampled twice on the calling isolate (the app's resizer is
+  synchronous FFI after the codec decode). The files produced are the same
+  kind (a ≤ shrink-size JPEG and a ≤ 800 px thumbnail with blurhash).
+- The file and its thumbnail upload concurrently, and a retry inside the
+  transport loop uploads only the part that is still missing (upstream
+  re-uploaded the file when only the thumbnail had failed). Same requests,
+  same encrypted payloads, same event content; the loop's timeout and the
+  `MatrixException` handling are unchanged.
+
+Transaction IDs, the event content, encryption (`MatrixFile.encrypt`) and
+the server requests are unchanged. Regression: app
+`test/personal/outgoing_media_test.dart` (send order and retries through the
+app's media queue) and `test/notion/attachment_flow_test.dart`.
