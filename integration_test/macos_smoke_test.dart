@@ -4,7 +4,8 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:chatloom/personal/storage/sql_cipher_json_database.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:chatloom/personal/storage/storage_failure.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:integration_test/integration_test.dart';
@@ -16,7 +17,7 @@ void main() {
   testWidgets('macOS native crypto, Keychain and encrypted restart', (_) async {
     expect(Platform.isMacOS, isTrue);
     await vod.init();
-    const storage = FlutterSecureStorage();
+    const storage = personalSecureStorage;
     final marker = 'chatloom-ci-${DateTime.now().microsecondsSinceEpoch}';
     final cipher = base64Url.encode(
       List<int>.generate(32, (_) => Random.secure().nextInt(256)),
@@ -36,6 +37,17 @@ void main() {
         utf8.decode(await File(path).readAsBytes(), allowMalformed: true),
         isNot(contains('synthetic-ci-canary')),
       );
+      database = await SqlCipherJsonDatabase.open(path: path, cipher: cipher);
+      expect(await database.get('fixture'), {'value': 'synthetic-ci-canary'});
+      await database.close();
+      database = null;
+      final beforeWrongKey = await File(path).readAsBytes();
+      final wrongCipher = base64Url.encode(List<int>.filled(32, 7));
+      await expectLater(
+        SqlCipherJsonDatabase.open(path: path, cipher: wrongCipher),
+        throwsA(isA<StorageFailure>()),
+      );
+      expect(await File(path).readAsBytes(), beforeWrongKey);
       database = await SqlCipherJsonDatabase.open(path: path, cipher: cipher);
       expect(await database.get('fixture'), {'value': 'synthetic-ci-canary'});
     } finally {

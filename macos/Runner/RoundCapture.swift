@@ -36,6 +36,7 @@ final class RoundCapture: NSObject, FlutterTexture,
   private var interrupted = false
   private var revision = 0
   private var observers: [NSObjectProtocol] = []
+  private var sessionObserver: NSObjectProtocol?
 
   init(registrar: FlutterPluginRegistrar) {
     textures = registrar.textures
@@ -215,9 +216,9 @@ final class RoundCapture: NSObject, FlutterTexture,
       }
       capture.commitConfiguration()
       session = capture; movie = recording; videoInput = input
-      observers.append(NotificationCenter.default.addObserver(
+      sessionObserver = NotificationCenter.default.addObserver(
         forName: AVCaptureSession.runtimeErrorNotification, object: capture, queue: nil
-      ) { [weak self] _ in self?.interrupt() })
+      ) { [weak self] _ in self?.interrupt() }
       capture.startRunning()
       DispatchQueue.main.async {
         self.textureID = self.textures.register(self)
@@ -455,6 +456,9 @@ final class RoundCapture: NSObject, FlutterTexture,
   }
 
   private func cleanup() {
+    if let observer = sessionObserver {
+      NotificationCenter.default.removeObserver(observer); sessionObserver = nil
+    }
     session?.stopRunning(); session = nil; movie = nil; videoInput = nil
     for url in segments { try? FileManager.default.removeItem(at: url) }
     segments = []; recorded = .zero; stopAction = nil

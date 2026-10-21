@@ -17,11 +17,11 @@ import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/flutter_error_routing.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:material_ui/material_ui.dart';
@@ -290,7 +290,7 @@ Future<void> startGui(
   if (PlatformInfos.supportsAppLock) {
     try {
       // Independent keystore reads; either failure still blocks the GUI.
-      const storage = FlutterSecureStorage();
+      const storage = personalSecureStorage;
       final values = await Future.wait([
         storage.read(key: 'chat.fluffy.app_lock'),
         storage.read(key: 'chat.fluffy.use_biometrics'),

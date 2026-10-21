@@ -5,10 +5,10 @@
 
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/encryption.dart';
@@ -94,7 +94,7 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
       }
       if (supportsSecureStorage) {
         try {
-          final keyFromSecureStorage = await FlutterSecureStorage().read(
+          final keyFromSecureStorage = await personalSecureStorage.read(
             key: _secureStorageKey,
           );
           if (keyFromSecureStorage != null) {
@@ -218,7 +218,7 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
       value.unlockWithError = e;
       notifyListeners();
       if (supportsSecureStorage) {
-        await FlutterSecureStorage().delete(key: _secureStorageKey);
+        await personalSecureStorage.delete(key: _secureStorageKey);
       }
       return;
     }
@@ -294,12 +294,12 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
 
   Future<void> toggleRecoveryKeyStoredInSecureStorage(bool? stored) async {
     if (stored == true) {
-      await FlutterSecureStorage().write(
+      await personalSecureStorage.write(
         key: _secureStorageKey,
         value: value.recoveryKey,
       );
     } else {
-      await FlutterSecureStorage().delete(key: _secureStorageKey);
+      await personalSecureStorage.delete(key: _secureStorageKey);
     }
     value.recoveryKeyStoredInSecureStorage = stored == true;
     notifyListeners();

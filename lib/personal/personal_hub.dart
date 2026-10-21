@@ -22,13 +22,13 @@ import 'package:chatloom/personal/ui/sync_changes_section.dart';
 import 'package:chatloom/personal/ui/transcription_settings.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/background_push.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/notion_room_actions.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -414,7 +414,7 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
     final push = BackgroundPush(Matrix.of(context));
     push.beginRegistrationUpdate();
     try {
-      await const FlutterSecureStorage().write(
+      await personalSecureStorage.write(
         key: 'personal_gateway_nonce',
         value: nonce,
       );
@@ -467,7 +467,7 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
     final token = push.fcmToken;
     final revision = push.registrationRevision;
     final device = widget.client.deviceID;
-    final nonce = await const FlutterSecureStorage().read(
+    final nonce = await personalSecureStorage.read(
       key: 'personal_gateway_nonce',
     );
     if (!mounted ||

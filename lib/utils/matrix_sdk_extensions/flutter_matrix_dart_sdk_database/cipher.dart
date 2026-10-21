@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/personal/storage/cipher_policy.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -26,15 +27,17 @@ class _SecureKeyVault implements KeyVault {
 
   static const _options = IOSOptions(groupId: 'group.im.fluffychat.app');
 
-  FlutterSecureStorage get _storage =>
-      const FlutterSecureStorage(iOptions: _options);
+  FlutterSecureStorage get _storage => const FlutterSecureStorage(
+    iOptions: _options,
+    mOptions: personalMacStorageOptions,
+  );
 
   @override
   Future<String?> read(String key) async {
     final value = await _storage.read(key: key, iOptions: _options);
     if (value != null || !PlatformInfos.isIOS) return value;
     // Preserve the legacy key as well: migration is a copy, never deletion.
-    final legacy = await const FlutterSecureStorage().read(key: key);
+    final legacy = await personalSecureStorage.read(key: key);
     if (legacy != null) {
       await _storage.write(key: key, value: legacy, iOptions: _options);
     }

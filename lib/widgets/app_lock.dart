@@ -9,8 +9,8 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/widgets/lock_screen.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
@@ -113,7 +113,7 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
   bool get isLocked => _isLocked;
 
   Future<void> changeUseBiometrics(bool useBiometrics) async {
-    await const FlutterSecureStorage().write(
+    await personalSecureStorage.write(
       key: 'chat.fluffy.use_biometrics',
       value: useBiometrics.toString(),
     );
@@ -122,7 +122,7 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
   }
 
   Future<void> changePincode(String? pincode) async {
-    await const FlutterSecureStorage().write(
+    await personalSecureStorage.write(
       key: 'chat.fluffy.app_lock',
       value: pincode,
     );

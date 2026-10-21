@@ -14,10 +14,10 @@ library;
 import 'dart:async';
 
 import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart';
 
 const genericNotificationTitle = 'ChatLoom';
@@ -43,7 +43,7 @@ Future<bool> personalAppLockConfigured() {
   if (override != null) return override();
   if (!PlatformInfos.supportsAppLock) return Future.value(false);
   return appLockPinConfigured(
-    () => const FlutterSecureStorage().read(key: appLockStorageKey),
+    () => personalSecureStorage.read(key: appLockStorageKey),
   );
 }
 

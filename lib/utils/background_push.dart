@@ -21,13 +21,13 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
 import 'package:chatloom/personal/push_registration.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/push_helper.dart';
 import 'package:chatloom/widgets/chatloom_app.dart';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
 import 'package:fcm_shared_isolate/fcm_shared_isolate.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -194,7 +194,7 @@ class BackgroundPush {
     _tokenPersistence = _tokenPersistence.catchError((Object _) {}).then((
       _,
     ) async {
-      const storage = FlutterSecureStorage();
+      const storage = personalSecureStorage;
       final fingerprint = sha256.convert(utf8.encode(token)).toString();
       final previous = await storage.read(
         key: 'personal_fcm_token_fingerprint',
@@ -525,7 +525,7 @@ class BackgroundPush {
           pushers = await client.getPushers() ?? [];
           if (!current()) return;
           nonce = ownFcmGateway
-              ? await const FlutterSecureStorage().read(
+              ? await personalSecureStorage.read(
                   key: 'personal_gateway_nonce',
                 )
               : null;
@@ -533,7 +533,7 @@ class BackgroundPush {
           if (automatic) {
             if (!validGatewayNonce(nonce)) {
               nonce = newPushNonce();
-              await const FlutterSecureStorage().write(
+              await personalSecureStorage.write(
                 key: 'personal_gateway_nonce',
                 value: nonce,
               );
@@ -779,7 +779,7 @@ class BackgroundPush {
     final gateway = gatewayUrl;
     String? nonce;
     try {
-      nonce = await const FlutterSecureStorage().read(
+      nonce = await personalSecureStorage.read(
         key: 'personal_gateway_nonce',
       );
     } catch (_) {

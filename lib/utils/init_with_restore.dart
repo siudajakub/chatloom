@@ -10,6 +10,7 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:matrix/matrix.dart';
@@ -96,7 +97,7 @@ class SessionBackupWriter {
 extension InitWithRestoreExtension on Client {
   static Future<void> deleteSessionBackup(String clientName) async {
     final storage = PlatformInfos.isMobile || PlatformInfos.isLinux
-        ? const FlutterSecureStorage()
+        ? personalSecureStorage
         : null;
     if (storage == null) return;
     await SessionBackupWriter.delete(
@@ -112,7 +113,7 @@ extension InitWithRestoreExtension on Client {
     final storageKey =
         '${AppConfig.legacyStorageAppName}_session_backup_$clientName';
     final storage = PlatformInfos.isMobile || PlatformInfos.isLinux
-        ? const FlutterSecureStorage()
+        ? personalSecureStorage
         : null;
     void onInitState(InitState state) {
       if (state == InitState.migratingDatabase) onMigration?.call();
