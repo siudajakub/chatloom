@@ -10,11 +10,17 @@ import 'package:chatloom/pages/chat/chat_app_bar_list_tile.dart';
 import 'package:chatloom/pages/chat/chat_emoji_picker.dart';
 import 'package:chatloom/pages/chat/chat_event_list.dart';
 import 'package:chatloom/pages/chat/chat_input_row.dart';
+import 'package:chatloom/pages/chat/chat_message_actions.dart';
+import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart';
 import 'package:chatloom/pages/chat/composer_keyboard.dart';
+import 'package:chatloom/pages/chat/conversation_message_actions.dart';
+import 'package:chatloom/pages/chat/conversation_message_menu.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/conversation_source_picker.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
+import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
 import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/pages/chat/reply_display.dart';
 import 'package:chatloom/pages/chat/send_file_dialog.dart';
@@ -30,6 +36,7 @@ import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/media/immediate_media_outbox.dart';
+import 'package:chatloom/personal/person_group_identity.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_hub.dart'
@@ -44,6 +51,8 @@ import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/scheduled_composer.dart';
+import 'package:chatloom/personal/seen_chat_notifications.dart';
+import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
@@ -58,7 +67,6 @@ import 'package:chatloom/utils/show_scaffold_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
@@ -173,7 +181,10 @@ class _MergedChatView extends StatefulWidget {
 
 class _MergedChatPageState extends State<_MergedChatView>
     with WidgetsBindingObserver
-    implements ConversationTimelineSource, ConversationComposerHost {
+    implements
+        ConversationTimelineSource,
+        ConversationComposerHost,
+        ConversationSourceHintHost {
   late final PersonalClient personal = widget.personal;
   PersonGroup get group => widget.group;
 
@@ -194,7 +205,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   final AutoScrollController scrollController = AutoScrollController();
   final GlobalKey inputBarKey = GlobalKey();
   @override
-  double? inputBarHeight;
+  final ValueNotifier<double?> composerInset = ValueNotifier(null);
 
   int _generation = 0;
   final viewed = <String, Event>{};
@@ -234,8 +245,6 @@ class _MergedChatPageState extends State<_MergedChatView>
   String? readMarkerEventId;
   @override
   String? scrollToEventIdMarker;
-  @override
-  final List<Event> selectedEvents = [];
   @override
   final Set<String> expandedEventIds = const {};
   @override
@@ -283,13 +292,16 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   void didUpdateWidget(_MergedChatView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.group, widget.group)) {
+    // The store hands out a new group object on every read; only a change of
+    // the sources is worth re-merging the history (and rebuilding the rows).
+    if (!samePersonMembers(oldWidget.group, widget.group)) {
       final members = {for (final m in widget.group.members) m.roomId};
       for (final roomId in timelines.keys.toList()) {
         if (!members.contains(roomId)) {
           timelines.remove(roomId)?.cancelSubscriptions();
         }
       }
+      _dropRemovedSources();
       _recomputeMerged();
       _markSeen();
       // A source added to the person loads like the first ones.
@@ -756,6 +768,15 @@ class _MergedChatPageState extends State<_MergedChatView>
   /// event per room. Rows built ahead in the cache extent are not visible
   /// and are picked up by the scroll-driven pass once they appear.
   void _observeVisibleRows() {
+    // Local only: clears every member's notification at the newest message.
+    if (mounted) {
+      SeenChatNotifications.seen(
+        context,
+        [for (final timeline in timelines.values) timeline.room],
+        atBottom: () =>
+            scrollController.hasClients && scrollController.offset <= 1,
+      );
+    }
     if (!mounted ||
         !PersonalPrivacy.surfaceUnlocked ||
         WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
@@ -840,6 +861,33 @@ class _MergedChatPageState extends State<_MergedChatView>
           .map((m) => personal.client.getRoomById(m.roomId))
           .whereType<Room>()
           .firstOrNull;
+
+  /// A source removed from the person must not stay the send target: the
+  /// router refuses non-members (an exception in every build) and a saved
+  /// draft target would send outside the person.
+  void _dropRemovedSources() {
+    final members = group.members;
+    if (selectedNetwork != null && !members.contains(selectedNetwork)) {
+      selectedNetwork = null;
+    }
+    final confirmed = _confirmedOutgoing;
+    if (confirmed != null && !members.contains(confirmed.source.conversation)) {
+      _confirmedOutgoing = null;
+    }
+    final reply = replyEvent;
+    if (reply != null && !members.contains(personal.ref(reply.room))) {
+      replyEvent = null;
+    }
+    final draft = _draftTarget;
+    if (draft != null && !members.contains(draft.conversation)) {
+      _draftTarget = null;
+      if (sendController.text.isNotEmpty) {
+        _needsNetworkChoice = true;
+        problem =
+            'This draft belongs to a source outside this person. Choose a network before sending.';
+      }
+    }
+  }
 
   void _rememberAccepted(SendTarget target, String eventId, DateTime at) {
     if (!eventId.startsWith(r'$')) return;
@@ -1029,36 +1077,7 @@ class _MergedChatPageState extends State<_MergedChatView>
       sendController.text += '${event.senderFromMemoryOrFallback.mention} ';
 
   @override
-  void onSelectMessage(Event event) {
-    if (event.redacted) return;
-    setState(() {
-      if (selectedEvents.contains(event)) {
-        selectedEvents.remove(event);
-      } else {
-        selectedEvents.add(event);
-      }
-      selectedEvents.sort(
-        (a, b) => a.originServerTs.compareTo(b.originServerTs),
-      );
-      _listRevision++;
-    });
-  }
-
-  void clearSelectedEvents() => setState(() {
-    selectedEvents.clear();
-    showEmojiPicker = false;
-    _listRevision++;
-  });
-
-  void clearSingleSelectedEvent() {
-    if (selectedEvents.length <= 1 && selectedEvents.isNotEmpty) {
-      clearSelectedEvents();
-    }
-  }
-
-  @override
-  void showEventInfo([Event? event]) =>
-      (event ?? selectedEvents.single).showInfoDialog(context);
+  void showEventInfo(Event event) => event.showInfoDialog(context);
 
   @override
   Future<void> scrollToEventId(
@@ -1122,7 +1141,8 @@ class _MergedChatPageState extends State<_MergedChatView>
   bool get strictCapabilities => true;
 
   // ---------------------------------------------------------------------
-  // Selection actions (reply, edit, delete, copy, forward, retry).
+  // Message actions (reply, edit, delete, copy, forward, retry), one message
+  // at a time from its long-press menu.
 
   void _lockTo(Room room) {
     _draftTarget = SendTarget(
@@ -1133,7 +1153,7 @@ class _MergedChatPageState extends State<_MergedChatView>
 
   @override
   void replyAction({Event? replyTo}) {
-    final event = replyTo ?? selectedEvents.firstOrNull;
+    final event = replyTo;
     if (event == null) return;
     final room = personal.client.getRoomById(event.room.id);
     if (room == null ||
@@ -1155,8 +1175,6 @@ class _MergedChatPageState extends State<_MergedChatView>
       }
       replyEvent = event;
       _lockTo(room);
-      selectedEvents.clear();
-      _listRevision++;
     });
     inputFocus.requestFocus();
     unawaited(_draft());
@@ -1186,37 +1204,29 @@ class _MergedChatPageState extends State<_MergedChatView>
         editCount: _editCount(event),
       ).allowed;
 
-  bool get _canEditSelected =>
-      selectedEvents.length == 1 && _canEdit(selectedEvents.single);
+  bool _canRedact(Event event) =>
+      !event.redacted &&
+      event.senderId == personal.client.userID &&
+      (!event.status.isSent ||
+          (event.canRedact &&
+              RoomCapabilities.forFeature(
+                BridgeFeature.delete,
+                event.room,
+                event: event,
+              ).allowed));
 
-  bool get _canRedactSelected =>
-      selectedEvents.isNotEmpty &&
-      selectedEvents.every(
-        (event) =>
-            event.senderId == personal.client.userID &&
-            (!event.status.isSent ||
-                (event.canRedact &&
-                    RoomCapabilities.forFeature(
-                      BridgeFeature.delete,
-                      event.room,
-                      event: event,
-                    ).allowed)),
-      );
-
-  bool get _canSaveSelected =>
-      selectedEvents.length == 1 &&
+  bool _canSave(Event event) =>
+      !event.redacted &&
       {
         MessageTypes.Video,
         MessageTypes.Image,
         MessageTypes.Sticker,
         MessageTypes.Audio,
         MessageTypes.File,
-      }.contains(selectedEvents.single.messageType);
+      }.contains(event.messageType);
 
-  @override
-  void editSelectedEventAction() {
-    final event = selectedEvents.firstOrNull;
-    if (event == null || !_canEdit(event)) return;
+  void editEventAction(Event event) {
+    if (!_canEdit(event)) return;
     final timeline = timelineFor(event);
     if (timeline == null) return;
     setState(() {
@@ -1231,8 +1241,6 @@ class _MergedChatPageState extends State<_MergedChatView>
             hideReply: true,
           );
       _inputEmpty = sendController.text.isEmpty;
-      selectedEvents.clear();
-      _listRevision++;
     });
     inputFocus.requestFocus();
   }
@@ -1251,23 +1259,19 @@ class _MergedChatPageState extends State<_MergedChatView>
     unawaited(_draft());
   }
 
-  String _selectedText() => selectedEvents
-      .map((event) {
-        final timeline = timelineFor(event);
-        return (timeline == null ? event : event.getDisplayEvent(timeline))
-            .body;
-      })
-      .join('\n\n');
-
-  void _copySelected() {
-    Clipboard.setData(ClipboardData(text: _selectedText()));
-    clearSelectedEvents();
+  Event _display(Event event) {
+    final timeline = timelineFor(event);
+    return timeline == null ? event : event.getDisplayEvent(timeline);
   }
 
-  Future<void> _redactSelected() async {
-    final events = List<Event>.of(selectedEvents);
+  void _copy(Event event) {
+    Clipboard.setData(ClipboardData(text: _display(event).body));
+    _notify(L10n.of(context).copiedToClipboard);
+  }
+
+  Future<void> _redact(Event event) async {
     final l10n = L10n.of(context);
-    final reasonInput = events.any((event) => event.status.isSent)
+    final reasonInput = event.status.isSent
         ? await showTextInputDialog(
             context: context,
             title: l10n.redactMessage,
@@ -1285,79 +1289,49 @@ class _MergedChatPageState extends State<_MergedChatView>
     final reason = reasonInput.isEmpty ? null : reasonInput;
     await showFutureLoadingDialog(
       context: context,
-      futureWithProgress: (onProgress) async {
-        for (final (i, event) in events.indexed) {
-          onProgress(i / events.length);
-          if (event.status.isSent) {
-            await event.redactEvent(reason: reason);
-          } else {
-            await event.cancelSend();
-          }
+      future: () async {
+        if (event.status.isSent) {
+          await event.redactEvent(reason: reason);
+        } else {
+          await event.cancelSend();
         }
       },
     );
-    if (mounted) clearSelectedEvents();
   }
 
-  @override
-  Future<void> deleteErrorEventsAction() async {
-    final events = List<Event>.of(selectedEvents);
-    if (events.any((event) => event.status != EventStatus.error)) return;
+  /// Removes a message that failed to send.
+  Future<void> deleteErrorEventAction(Event event) async {
+    if (event.status != EventStatus.error) return;
     try {
-      for (final event in events) {
-        await event.cancelSend();
-      }
+      await event.cancelSend();
     } catch (_) {
       _notify('The unsent message could not be removed.');
     }
-    if (mounted) clearSelectedEvents();
+    if (mounted) setState(() => _listRevision++);
   }
 
-  @override
-  Future<void> forwardEventsAction() async {
-    final events = List<Event>.of(selectedEvents);
-    if (events.isEmpty) return;
-    final forward = [
-      for (final event in events)
-        switch (timelineFor(event)) {
-          final Timeline timeline => event.getDisplayEvent(timeline),
-          null => event,
-        },
-    ];
-    if (forward.any(
-      (e) => !RoundMediaPolicy.fromContent(e.content).canForward,
-    )) {
+  Future<void> _forward(Event event) async {
+    final forward = _display(event);
+    if (!RoundMediaPolicy.fromContent(forward.content).canForward) {
       _notify('This message cannot be forwarded.');
       return;
     }
-    if (forward.any(
-      (e) => RoundVideoDescriptor.fromContent(e.content) != null,
-    )) {
-      if (forward.length != 1) {
-        _notify('Forward one round video at a time.');
-        return;
-      }
+    if (RoundVideoDescriptor.fromContent(forward.content) != null) {
       await TelegramRoundService.of(
-        forward.single.room.client,
-      ).showForwardPicker(context, forward.single);
-      if (mounted) clearSelectedEvents();
+        forward.room.client,
+      ).showForwardPicker(context, forward);
       return;
     }
     await showScaffoldDialog(
       context: context,
       builder: (context) => ShareScaffoldDialog(
-        items: [
-          for (final event in forward) ContentShareItem(event.content.copy()),
-        ],
+        items: [ContentShareItem(forward.content.copy())],
       ),
     );
-    if (mounted) clearSelectedEvents();
   }
 
-  @override
-  void sendAgainAction() {
-    final event = selectedEvents.firstOrNull;
-    if (event == null) return;
+  /// Sends a failed message (and its failed edits) again.
+  void sendAgainAction(Event event) {
     if (RoundVideoDescriptor.fromContent(event.content) != null) {
       final txid =
           event.unsigned?.tryGet<String>('transaction_id') ?? event.eventId;
@@ -1369,7 +1343,6 @@ class _MergedChatPageState extends State<_MergedChatView>
               .then<void>((_) {}, onError: (Object _) {}),
         );
       }
-      clearSelectedEvents();
       return;
     }
     if (event.status.isError) event.sendAgain();
@@ -1382,7 +1355,7 @@ class _MergedChatPageState extends State<_MergedChatView>
         edit.sendAgain();
       }
     }
-    clearSelectedEvents();
+    setState(() => _listRevision++);
   }
 
   Future<void> _bookmark(Event event) async {
@@ -1402,22 +1375,108 @@ class _MergedChatPageState extends State<_MergedChatView>
     personSourceChatLocation(group.id, event.room.id, eventId: event.eventId),
   );
 
-  Future<void> _selectionMenu(String action) async {
-    final event = selectedEvents.singleOrNull;
-    if (event == null) return;
-    switch (action) {
-      case 'source':
-        clearSelectedEvents();
-        _openSource(event);
-      case 'bookmark':
-        clearSelectedEvents();
-        await _bookmark(event);
-      case 'save':
-        event.saveFile(context);
-      case 'info':
-        clearSelectedEvents();
-        showEventInfo(event);
-    }
+  /// The long-press menu of one merged row: the actions its own source
+  /// network allows (strict capabilities), plus open-in-source and bookmark.
+  @override
+  List<ConversationMessageAction> messageActions(
+    BuildContext context,
+    Event event,
+  ) {
+    final l10n = L10n.of(context);
+    final display = _display(event);
+    final failed = event.status.isError || display.status.isError;
+    final sent = event.status.isSent;
+    return [
+      if (failed) ...[
+        ConversationMessageAction(
+          icon: Icons.send_outlined,
+          label: l10n.tryToSendAgain,
+          // Through the outbox attempt (same transaction ID), like the
+          // bubble's own failure line.
+          onSelected: () {
+            final timeline = timelineFor(event);
+            if (timeline == null) return sendAgainAction(event);
+            unawaited(MessageDeliveryActions.retry(context, event, timeline));
+          },
+        ),
+        ConversationMessageAction(
+          icon: Icons.delete_forever_outlined,
+          label: l10n.delete,
+          destructive: true,
+          onSelected: () {
+            final timeline = timelineFor(event);
+            if (timeline == null) {
+              unawaited(deleteErrorEventAction(event));
+              return;
+            }
+            unawaited(MessageDeliveryActions.delete(context, event, timeline));
+          },
+        ),
+      ],
+      if (ConversationMessageActions.canReply(event, strict: true))
+        ConversationMessageAction(
+          icon: Icons.reply_rounded,
+          label: l10n.reply,
+          onSelected: () => replyAction(replyTo: event),
+        ),
+      if (_canEdit(event))
+        ConversationMessageAction(
+          icon: Icons.edit_outlined,
+          label: l10n.edit,
+          onSelected: () => editEventAction(event),
+        ),
+      if (conversationMessageHasText(display))
+        ConversationMessageAction(
+          icon: Icons.copy_outlined,
+          label: l10n.copy,
+          onSelected: () => _copy(event),
+        ),
+      if (conversationMessageSelectable(display))
+        ConversationMessageAction(
+          icon: Icons.text_fields_rounded,
+          label: 'Select text',
+          onSelected: () =>
+              showConversationTextSelection(this.context, display.body),
+        ),
+      if (sent &&
+          !event.redacted &&
+          RoundMediaPolicy.fromContent(display.content).canForward)
+        ConversationMessageAction(
+          icon: Icons.forward_outlined,
+          label: l10n.forward,
+          onSelected: () => _forward(event),
+        ),
+      if (sent)
+        ConversationMessageAction(
+          icon: Icons.open_in_new_outlined,
+          label: 'Open in source chat',
+          onSelected: () => _openSource(event),
+        ),
+      if (sent && !event.redacted)
+        ConversationMessageAction(
+          icon: Icons.bookmark_outline,
+          label: 'Bookmark',
+          onSelected: () => _bookmark(event),
+        ),
+      if (_canSave(display))
+        ConversationMessageAction(
+          icon: Icons.download_outlined,
+          label: l10n.downloadFile,
+          onSelected: () => display.saveFile(this.context),
+        ),
+      ConversationMessageAction(
+        icon: Icons.info_outlined,
+        label: l10n.messageInfo,
+        onSelected: () => showEventInfo(event),
+      ),
+      if (!failed && _canRedact(event))
+        ConversationMessageAction(
+          icon: Icons.delete_outlined,
+          label: l10n.delete,
+          destructive: true,
+          onSelected: () => _redact(event),
+        ),
+    ];
   }
 
   // ---------------------------------------------------------------------
@@ -1466,11 +1525,17 @@ class _MergedChatPageState extends State<_MergedChatView>
     );
   }
 
+  /// One picker at a time: a second tap before the sheet is up is ignored.
+  bool _choosingSource = false;
+
   Future<void> _chooseSource() async {
-    if (replyEvent != null || editEvent != null || sending) return;
+    if (_choosingSource || replyEvent != null || editEvent != null || sending) {
+      return;
+    }
     final frozenGroup = group;
     final frozenReply = replyEvent;
     final wasFocused = inputFocus.hasFocus;
+    _choosingSource = true;
     final value = await showConversationSourcePicker(
       context,
       selected: _needsNetworkChoice ? null : target.conversation,
@@ -1497,10 +1562,18 @@ class _MergedChatPageState extends State<_MergedChatView>
             unavailableReason: 'Source disconnected or sending unavailable',
           ),
       ],
-    );
+    ).whenComplete(() => _choosingSource = false);
+    // The keyboard stays up across the switch (Telegram, Messenger).
+    if (wasFocused && mounted && !inputFocus.hasFocus) {
+      inputFocus.requestFocus();
+    }
+    // Store notifications re-read the person while the picker is open (a new
+    // object for the same group); only a change of its sources voids the
+    // choice. Dropping it on identity made a tap on a network do nothing.
     if (value == null ||
         !mounted ||
-        !identical(widget.group, frozenGroup) ||
+        widget.group.id != frozenGroup.id ||
+        !samePersonMembers(widget.group, frozenGroup) ||
         !identical(widget.personal, personal) ||
         !identical(Matrix.of(context).client, personal.client) ||
         replyEvent != frozenReply ||
@@ -1517,6 +1590,13 @@ class _MergedChatPageState extends State<_MergedChatView>
         !room.canSendDefaultMessages) {
       return;
     }
+    // Choosing the network already in use changes nothing: no rebuild, no
+    // private-store write, no journal publication.
+    if (!_needsNetworkChoice &&
+        selectedNetwork == value &&
+        _draftTarget?.conversation == value) {
+      return;
+    }
     setState(() {
       selectedNetwork = value;
       _draftTarget = SendTarget(
@@ -1526,8 +1606,17 @@ class _MergedChatPageState extends State<_MergedChatView>
       if (_needsNetworkChoice) problem = null;
       _needsNetworkChoice = false;
     });
-    if (wasFocused) inputFocus.requestFocus();
+    // The previous network must not keep showing "typing…".
+    if (_typingRoom != null && _typingRoom!.id != value.roomId) _stopTyping();
     await _draft();
+  }
+
+  /// The editor hint names the network the next message goes to, so a
+  /// switch is confirmed where the user is about to type.
+  @override
+  String get composerHint {
+    if (_needsNetworkChoice || _targetRoom == null) return 'Message…';
+    return 'Message via ${notionNetworkLabel(target.conversation.network)}';
   }
 
   @override
@@ -1632,6 +1721,11 @@ class _MergedChatPageState extends State<_MergedChatView>
     inputFocus.requestFocus();
   }
 
+  /// Telegram/Messenger send (see `ChatController._sendPersonal`): the
+  /// composer empties once the outbox persisted the message, before any
+  /// network I/O, and is free for the next message; the source's local echo
+  /// shows the network result with Retry. Text stays only when the outbox
+  /// could not persist it.
   @override
   Future<void> send() async {
     if (!composerEnabled ||
@@ -1639,19 +1733,28 @@ class _MergedChatPageState extends State<_MergedChatView>
         !PersonalPrivacy.surfaceUnlocked)
       return;
     final frozen = target;
-    final valueAtSend = sendController.value;
-    final text = valueAtSend.text;
+    final text = sendController.text;
     final replyAtSend = replyEvent;
     final editAtSend = editEvent;
     final privacyGeneration = PersonalPrivacy.surfaceGeneration;
     final draftKey = 'draft:person:${group.id}';
+    final sent = _MergedSent(
+      target: frozen,
+      draftKey: draftKey,
+      text: text,
+      reply: replyAtSend,
+      edit: editAtSend,
+      pendingText: _pendingText,
+    );
     bool activeAccount() =>
         _stillHere() && draftKey == 'draft:person:${group.id}';
+    // The text, not the whole editing value: an IME that finishes its
+    // composing region on the tap does not change the message.
     bool consumeOriginal() =>
         activeAccount() &&
         PersonalPrivacy.surfaceUnlocked &&
         PersonalPrivacy.surfaceGeneration == privacyGeneration &&
-        sendController.value == valueAtSend &&
+        sendController.text == text &&
         identical(replyEvent, replyAtSend) &&
         identical(editEvent, editAtSend) &&
         target.conversation == frozen.conversation;
@@ -1665,68 +1768,208 @@ class _MergedChatPageState extends State<_MergedChatView>
       _notify('Editing is not available for this message in its network.');
       return;
     }
-    var accepted = false;
     setState(() => sending = true);
+    final durable = Completer<void>();
+    Future<bool>? draft;
+    Future<ImmediateSendResult>? outcome;
     try {
       final proceed = await showTrustUserInRoomDialog(context, room);
       if (!proceed || !consumeOriginal()) return;
       _stopTyping();
-      final result = await personal.sendImmediate(
+      outcome = personal.sendImmediate(
         room,
         text,
         replyTo: replyAtSend,
         editEventId: editAtSend?.eventId,
+        onDurable: (_) {
+          draft = _consumeSent(sent);
+          if (!durable.isCompleted) durable.complete();
+        },
       );
-      if (!activeAccount()) return;
-      if (result.state != ImmediateSendState.accepted) {
+      // Free the composer as soon as the message is durable.
+      await Future.any<void>([
+        durable.future,
+        outcome.then<void>((_) {}, onError: (Object _) {}),
+      ]);
+    } catch (_) {
+      _notify(
+        'Sending was not confirmed. Your draft is preserved. Check the source before retrying.',
+      );
+    } finally {
+      if (mounted && sending) setState(() => sending = false);
+    }
+    final pending = outcome;
+    if (pending != null) {
+      unawaited(_finishSend(sent, pending, () => draft));
+    }
+  }
+
+  /// Empties the composer after the outbox persisted [sent] (keeping only
+  /// text typed after the tap), ends its reply/edit, frees the send button
+  /// and saves the remaining draft. Returns whether the draft was saved.
+  Future<bool> _consumeSent(_MergedSent sent) {
+    _draftTimer?.cancel();
+    if (_stillHere() && sent.draftKey == 'draft:person:${group.id}') {
+      final current = sendController.text;
+      final edit = sent.edit;
+      final remaining = current == sent.text
+          ? (edit != null ? sent.pendingText : '')
+          : edit == null && current.startsWith(sent.text)
+          ? current.substring(sent.text.length)
+          : null;
+      setState(() {
+        if (remaining != null) {
+          sendController.value = TextEditingValue(
+            text: remaining,
+            selection: TextSelection.collapsed(offset: remaining.length),
+          );
+        }
+        if (identical(replyEvent, sent.reply)) replyEvent = null;
+        if (edit != null && identical(editEvent, edit)) {
+          editEvent = null;
+          _pendingText = '';
+        }
+        _inputEmpty = sendController.text.isEmpty;
+        if (sendController.text.isEmpty) _draftTarget = null;
+        sending = false;
+      });
+      // Telegram: sending brings you to your message.
+      if (_scrolledUp && scrollController.hasClients) {
+        unawaited(_jumpToLatest());
+      }
+    }
+    return _persistSentDraft(sent.draftKey);
+  }
+
+  /// Saves the editor's text as the person's draft until it is stable.
+  Future<bool> _persistSentDraft(String draftKey) async {
+    bool here() => _stillHere() && draftKey == 'draft:person:${group.id}';
+    String current() => editEvent != null ? _pendingText : sendController.text;
+    try {
+      while (here()) {
+        final text = current();
+        await personal.savePersonalDraft(
+          draftKey,
+          _draftTarget ?? target,
+          text,
+        );
+        _savedDraftText = text;
+        if (!here() || current() == text) break;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _finishSend(
+    _MergedSent sent,
+    Future<ImmediateSendResult> outcome,
+    Future<bool>? Function() draft,
+  ) async {
+    ImmediateSendResult? result;
+    try {
+      result = await outcome;
+    } catch (_) {}
+    var drafted = draft();
+    if (drafted == null) {
+      if (result?.state != ImmediateSendState.accepted) {
+        // Never durable: nothing was sent and the text never left.
         _notify(
-          'Sending was not confirmed. Retrying retains the same attempt.',
+          result == null
+              ? 'Sending was not confirmed. Your draft is preserved. Check the source before retrying.'
+              : 'The message could not be saved for sending, so it was not sent. Your text is kept.',
         );
         return;
       }
-      accepted = true;
-      if (result.eventId != null && editAtSend == null) {
-        _rememberAccepted(frozen, result.eventId!, DateTime.now());
-      }
-      while (activeAccount()) {
-        _draftTimer?.cancel();
-        final currentValue = sendController.value;
-        final currentReply = replyEvent;
-        final currentEdit = editEvent;
-        final currentTarget = target;
-        final consume = consumeOriginal();
-        final remaining = consume
-            ? (editAtSend == null ? '' : _pendingText)
-            : currentValue.text;
-        await personal.savePersonalDraft(draftKey, currentTarget, remaining);
-        if (!activeAccount()) return;
-        if (sendController.value != currentValue ||
-            !identical(replyEvent, currentReply) ||
-            !identical(editEvent, currentEdit) ||
-            target.conversation != currentTarget.conversation ||
-            consume != consumeOriginal())
-          continue;
-        _savedDraftText = remaining;
-        if (consume) {
-          sendController.text = remaining;
-          replyEvent = null;
-          editEvent = null;
-          _pendingText = '';
-          _inputEmpty = remaining.isEmpty;
-          if (remaining.isEmpty) _draftTarget = null;
-        }
-        await personal.completeImmediate(result.actionId);
-        break;
-      }
-    } catch (_) {
-      _notify(
-        accepted
-            ? 'Message accepted. Your draft and send state are retained until saving is confirmed.'
-            : 'Sending was not confirmed. Your draft is preserved. Check the source before retrying.',
-      );
-    } finally {
-      if (mounted) setState(() => sending = false);
+      // An attempt of an earlier session had already delivered it.
+      drafted = _consumeSent(sent);
     }
+    final stored = await drafted;
+    if (result == null) return;
+    if (result.state == ImmediateSendState.accepted) {
+      if (mounted && result.eventId != null && sent.edit == null) {
+        _rememberAccepted(sent.target, result.eventId!, DateTime.now());
+      }
+      if (!stored) {
+        _notify(
+          'Message accepted. Your draft and send state are retained until saving is confirmed.',
+        );
+        return;
+      }
+      try {
+        await personal.completeImmediate(result.actionId);
+      } catch (_) {
+        _notify(
+          'Message accepted. Its send state is retained until local storage is ready.',
+        );
+      }
+      return;
+    }
+    // The source's bubble shows "Not sent · Tap to retry".
+    if (personal.localEchoShown(result.transactionId)) return;
+    // Rejected before it reached a timeline: nothing was sent.
+    unawaited(
+      personal.discardImmediate(result.actionId).catchError((Object _) {}),
+    );
+    _giveBack(sent, switch (result.errorCode) {
+      'bridge_unavailable' =>
+        'This network does not accept this message right now.',
+      'replyUnavailable' => 'The message you replied to is unavailable.',
+      'sourceUnavailable' => 'This source is unavailable.',
+      _ => 'The message did not reach the server.',
+    });
+  }
+
+  /// A message that failed before it had a bubble returns to an empty
+  /// composer; text the user is typing is never overwritten silently.
+  void _giveBack(_MergedSent sent, String reason) {
+    if (!_stillHere() || sent.draftKey != 'draft:person:${group.id}') return;
+    bool quiet() {
+      final current = sendController.text;
+      return (current.isEmpty ||
+              (sent.edit != null && current == sent.pendingText)) &&
+          replyEvent == null &&
+          editEvent == null;
+    }
+
+    void restore() {
+      if (!_stillHere()) return;
+      final calm = quiet();
+      final current = sendController.text;
+      setState(() {
+        final value = calm || current.isEmpty
+            ? sent.text
+            : '${sent.text}\n$current';
+        if (calm) {
+          replyEvent = sent.reply;
+          if (sent.edit != null) {
+            _pendingText = current;
+            editEvent = sent.edit;
+          } else if (sent.reply == null) {
+            _draftTarget = sent.target;
+          }
+        }
+        sendController.value = TextEditingValue(
+          text: value,
+          selection: TextSelection.collapsed(offset: value.length),
+        );
+        _inputEmpty = sendController.text.isEmpty;
+      });
+      unawaited(_persistSentDraft(sent.draftKey));
+    }
+
+    if (quiet()) {
+      restore();
+      _notify('Not sent: $reason It is back in the composer.');
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Not sent: $reason'),
+        action: SnackBarAction(label: 'Restore', onPressed: restore),
+      ),
+    );
   }
 
   /// Files go through the source-bound media dialog: it checks the bridge's
@@ -1992,9 +2235,6 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
   }
 
-  @override
-  bool get selectMode => selectedEvents.isNotEmpty;
-
   // ---------------------------------------------------------------------
   // Header actions.
 
@@ -2175,11 +2415,31 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
   }
 
+  /// Only the list's spacer and the jump button follow the composer's
+  /// height; the page and the rows do not rebuild while it animates.
   void _updateInputBarHeight() {
     if (!mounted) return;
     final box = inputBarKey.currentContext?.findRenderObject();
-    final height = box is RenderBox && box.hasSize ? box.size.height : 72.0;
-    if (height != inputBarHeight) setState(() => inputBarHeight = height);
+    // Not laid out yet (loading): measure again on the next build.
+    if (box is RenderBox && box.hasSize) composerInset.value = box.size.height;
+  }
+
+  /// The jump button and sending: glide when near, otherwise jump to one
+  /// screen above the newest message and glide from there.
+  Future<void> _jumpToLatest() async {
+    if (!scrollController.hasClients) return;
+    final position = scrollController.position;
+    if (position.pixels <= 0 || ConversationMotion.reduced(context)) {
+      scrollController.jumpTo(0);
+      return;
+    }
+    final viewport = position.viewportDimension;
+    if (position.pixels > 2 * viewport) scrollController.jumpTo(viewport);
+    await scrollController.animateTo(
+      0,
+      duration: NotionMotion.long,
+      curve: NotionMotion.emphasized,
+    );
   }
 
   @override
@@ -2211,67 +2471,27 @@ class _MergedChatPageState extends State<_MergedChatView>
     inputFocus.dispose();
     sendController.dispose();
     scrollController.dispose();
+    composerInset.dispose();
     super.dispose();
   }
 
   // ---------------------------------------------------------------------
   // Build.
 
-  List<Widget> _selectionActions(BuildContext context) {
-    final l10n = L10n.of(context);
-    final single = selectedEvents.length == 1;
-    PopupMenuItem<String> item(String value, IconData icon, String label) =>
-        PopupMenuItem(
-          value: value,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            spacing: NotionSpace.sm,
-            children: [Icon(icon), Text(label)],
-          ),
-        );
-    return [
-      if (_canEditSelected)
-        IconButton(
-          icon: const Icon(Icons.edit_outlined),
-          tooltip: l10n.edit,
-          onPressed: editSelectedEventAction,
-        ),
-      IconButton(
-        icon: const Icon(Icons.copy_outlined),
-        tooltip: l10n.copyToClipboard,
-        onPressed: _copySelected,
-      ),
-      if (_canRedactSelected)
-        IconButton(
-          icon: const Icon(Icons.delete_outlined),
-          tooltip: l10n.redactMessage,
-          onPressed: _redactSelected,
-        ),
-      if (single)
-        PopupMenuButton<String>(
-          useRootNavigator: true,
-          tooltip: 'More message actions',
-          onSelected: _selectionMenu,
-          itemBuilder: (context) => [
-            item('source', Icons.open_in_new_outlined, 'Open in source chat'),
-            item('bookmark', Icons.bookmark_outline, 'Bookmark'),
-            if (_canSaveSelected)
-              item('save', Icons.download_outlined, l10n.downloadFile),
-            item('info', Icons.info_outlined, l10n.messageInfo),
-          ],
-        ),
-    ];
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Size notifications report changes only: measure the first layout.
+    if (composerInset.value == null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _updateInputBarHeight(),
+      );
+    }
     final columns = ChatLoomThemes.isColumnMode(context);
     final projection = InboxProjection.snapshot(personal);
     final person = projection.metadataForEntity('person:${group.id}');
     final displayName = person.nickname ?? group.name;
     final anyRoom = _anyRoom;
-    final selecting = selectedEvents.isNotEmpty;
     final background = conversationPalette.theme?.backgroundColor;
     final notice = problem;
     final wallpaper = personal.client.applicationAccountConfig;
@@ -2284,14 +2504,18 @@ class _MergedChatPageState extends State<_MergedChatView>
         : 0.0;
     final bottomHeight =
         (notice == null ? 0.0 : ChatAppBarListTile.fixedHeight) + hintHeight;
-    return PopScope(
-      canPop: !selecting && !showEmojiPicker,
+    final page = PopScope(
+      canPop:
+          !showEmojiPicker &&
+          // Telegram: back cancels a reply or edit before leaving the chat.
+          replyEvent == null &&
+          editEvent == null,
       onPopInvokedWithResult: (pop, _) {
         if (pop) return;
-        if (selecting) {
-          clearSelectedEvents();
-        } else if (showEmojiPicker) {
+        if (showEmojiPicker) {
           emojiPickerAction();
+        } else if (replyEvent != null || editEvent != null) {
+          cancelReplyEventAction();
         }
       },
       child: Scaffold(
@@ -2300,9 +2524,7 @@ class _MergedChatPageState extends State<_MergedChatView>
         extendBodyBehindAppBar: true,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
-          flexibleSpace: NotionGlassBar(
-            tint: selecting ? theme.colorScheme.tertiaryContainer : null,
-          ),
+          flexibleSpace: const NotionGlassBar(),
           toolbarHeight: NotionTokens.headerHeight,
           elevation: 0,
           scrolledUnderElevation: 0,
@@ -2310,14 +2532,7 @@ class _MergedChatPageState extends State<_MergedChatView>
             bottom: BorderSide(color: theme.colorScheme.outlineVariant),
           ),
           automaticallyImplyLeading: false,
-          leading: selecting
-              ? IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: clearSelectedEvents,
-                  tooltip: L10n.of(context).close,
-                  color: theme.colorScheme.onTertiaryContainer,
-                )
-              : columns
+          leading: columns
               ? null
               : IconButton(
                   icon: const Icon(Icons.chevron_left),
@@ -2325,52 +2540,30 @@ class _MergedChatPageState extends State<_MergedChatView>
                   onPressed: () => Navigator.maybePop(context),
                 ),
           titleSpacing: columns ? NotionSpace.xl : 0,
-          // Selection count and header cross-fade; the count rolls.
-          title: NotionFadeThrough(
-            duration: NotionMotion.short,
-            alignment: AlignmentDirectional.centerStart,
-            child: selecting
-                ? NotionAnimatedCount(
-                    key: const ValueKey('selection'),
-                    count: selectedEvents.length,
-                  )
-                : NotionCompactChatHeader(
-                    key: const ValueKey('header'),
-                    avatar: personalConversationAvatar(
-                      personal,
-                      entityId: 'person:${group.id}',
-                      avatar: projection.avatarForGroup(group),
-                      name: displayName,
-                      size: NotionSize.avatarSm,
-                    ),
-                    name: displayName,
-                    onDetails: () => showNotionMergedChatDetails(
-                      context,
-                      personal: personal,
-                      group: group,
-                    ),
-                  ),
+          title: NotionCompactChatHeader(
+            avatar: personalConversationAvatar(
+              personal,
+              entityId: 'person:${group.id}',
+              avatar: projection.avatarForGroup(group),
+              name: displayName,
+              size: NotionSize.avatarSm,
+            ),
+            name: displayName,
+            status: ConnectionStatusLine(client: personal.client),
+            onDetails: () => showNotionMergedChatDetails(
+              context,
+              personal: personal,
+              group: group,
+            ),
           ),
           actions: [
-            NotionFadeThrough(
-              duration: NotionMotion.short,
-              alignment: AlignmentDirectional.centerEnd,
-              child: Row(
-                key: ValueKey(selecting),
-                mainAxisSize: MainAxisSize.min,
-                children: selecting
-                    ? _selectionActions(context)
-                    : [
-                        PopupMenuButton<String>(
-                          tooltip: 'Conversation actions',
-                          icon: const Icon(Icons.more_horiz),
-                          onSelected: _quickAction,
-                          itemBuilder: (_) => conversationQuickActions(
-                            merged: true,
-                            editing: editEvent != null,
-                          ),
-                        ),
-                      ],
+            PopupMenuButton<String>(
+              tooltip: 'Conversation actions',
+              icon: const Icon(Icons.more_horiz),
+              onSelected: _quickAction,
+              itemBuilder: (_) => conversationQuickActions(
+                merged: true,
+                editing: editEvent != null,
               ),
             ),
           ],
@@ -2422,15 +2615,6 @@ class _MergedChatPageState extends State<_MergedChatView>
                   ),
                 ),
         ),
-        floatingActionButton: ConversationJumpButton(
-          visible: _scrolledUp && !selecting,
-          count: _newBelow,
-          onPressed: () => scrollController.animateTo(
-            0,
-            duration: NotionMotion.long,
-            curve: NotionMotion.emphasized,
-          ),
-        ),
         body: anyRoom == null
             ? loading
                   ? const ConversationTimelineSkeleton()
@@ -2456,33 +2640,19 @@ class _MergedChatPageState extends State<_MergedChatView>
                   child: Stack(
                     children: [
                       if (wallpaper.wallpaperUrl != null)
-                        Opacity(
+                        ChatWallpaper(
+                          uri: wallpaper.wallpaperUrl!,
                           opacity: wallpaper.wallpaperOpacity ?? 0.5,
-                          child: MxcImage(
-                            cacheKey: wallpaper.wallpaperUrl.toString(),
-                            uri: wallpaper.wallpaperUrl,
-                            fit: BoxFit.cover,
-                            height: MediaQuery.sizeOf(context).height,
-                            width: MediaQuery.sizeOf(context).width,
-                            isThumbnail: false,
-                            placeholder: (_) => const SizedBox.shrink(),
-                          ),
                         ),
                       // Composer keystrokes, notices and send state rebuild
                       // this page; the gate hands back the previous list
                       // subtree unless something the rows render changed.
                       _MergedListGate(
-                        revision: (
-                          _listRevision,
-                          inputBarHeight,
-                          anyRoom.id,
-                          theme,
-                        ),
-                        child: GestureDetector(
-                          onTap: clearSingleSelectedEvent,
-                          child: ChatEventList(controller: this),
-                        ),
+                        revision: (_listRevision, anyRoom.id, theme),
+                        child: ChatEventList(controller: this),
                       ),
+                      // The send target's bridge (merged chats send per source).
+                      ChatBridgeNotice(room: room),
                       Positioned(
                         bottom: 0,
                         left: 0,
@@ -2499,9 +2669,7 @@ class _MergedChatPageState extends State<_MergedChatView>
                                 maxWidth: ChatLoomThemes.maxTimelineWidth,
                               ),
                               child: ConversationTint(
-                                color: selecting
-                                    ? theme.colorScheme.tertiaryContainer
-                                    : theme.colorScheme.surfaceContainer,
+                                color: theme.colorScheme.surfaceContainer,
                                 borderRadius: NotionRadius.mdAll,
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
@@ -2516,12 +2684,28 @@ class _MergedChatPageState extends State<_MergedChatView>
                           ),
                         ),
                       ),
+                      // Above the measured composer (reply preview
+                      // included), never over its close button.
+                      PositionedDirectional(
+                        end: 0,
+                        bottom: 0,
+                        child: ConversationJumpButtonSlot(
+                          composerInset: composerInset,
+                          child: ConversationJumpButton(
+                            visible: _scrolledUp,
+                            count: _newBelow,
+                            onPressed: _jumpToLatest,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
       ),
     );
+    // One backdrop read for the glass header and composer (DESIGN.md "Glass").
+    return BackdropGroup(child: page);
   }
 }
 
@@ -2548,4 +2732,25 @@ class _MergedListGateState extends State<_MergedListGate> {
 
   @override
   Widget build(BuildContext context) => _child;
+}
+
+/// What one merged send took from the composer (see `_MergedChatPageState`).
+class _MergedSent {
+  final SendTarget target;
+  final String draftKey;
+  final String text;
+  final Event? reply;
+  final Event? edit;
+
+  /// The draft an edit replaced (restored when the edit is sent).
+  final String pendingText;
+
+  const _MergedSent({
+    required this.target,
+    required this.draftKey,
+    required this.text,
+    required this.reply,
+    required this.edit,
+    required this.pendingText,
+  });
 }

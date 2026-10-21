@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
+import 'package:chatloom/personal/person_group_identity.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -60,12 +61,14 @@ class _PersonChatRoutePageState extends State<PersonChatRoutePage> {
     super.dispose();
   }
 
-  /// Rebuild only when this group appears, changes or disappears.
+  /// Rebuild only when this group appears, changes or disappears. The store
+  /// parses a new [PersonGroup] on every read, so identity is not a change:
+  /// an unchanged group keeps its instance and the conversation below is not
+  /// rebuilt (drafts, acknowledgements and heartbeats notify often).
   PersonGroup? _lastGroup;
   void _changed() {
     if (!mounted) return;
-    final group = _resolve();
-    if (!identical(group, _lastGroup)) setState(() {});
+    if (!samePersonGroup(_resolve(), _lastGroup)) setState(() {});
   }
 
   PersonGroup? _resolve() {
@@ -81,7 +84,10 @@ class _PersonChatRoutePageState extends State<PersonChatRoutePage> {
   @override
   Widget build(BuildContext context) {
     final personal = _personal!;
-    final group = _lastGroup = _resolve();
+    final resolved = _resolve();
+    final group = _lastGroup = samePersonGroup(resolved, _lastGroup)
+        ? _lastGroup
+        : resolved;
     if (group != null) {
       return MergedChatPage(
         personal: personal,

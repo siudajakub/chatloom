@@ -4,12 +4,14 @@ import 'dart:typed_data';
 import 'package:chatloom/personal/round_video/round_availability.dart';
 import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show ChatTheme;
 import 'package:scroll_to_index/scroll_to_index.dart';
 
 import 'chat.dart' show AddPopupMenuActions;
+import 'conversation_message_menu.dart' show ConversationMessageAction;
 
 /// What [ChatEventList] renders and what its rows invoke. The ordinary chat
 /// ([ChatController]) serves one room timeline; the merged person chat serves
@@ -36,13 +38,15 @@ abstract interface class ConversationTimelineSource {
   ({ChatTheme? theme}) get conversationPalette;
 
   AutoScrollController get scrollController;
-  double? get inputBarHeight;
+
+  /// Measured height of the composer drawn over the list (null before the
+  /// first layout). A listenable, so composer growth never rebuilds rows.
+  ValueListenable<double?> get composerInset;
   String? get activeThreadId;
   String? get animateInEventId;
   String? get readMarkerEventId;
   String? get scrollToEventIdMarker;
   Set<String> get bigEmojis;
-  List<Event> get selectedEvents;
   Set<String> get expandedEventIds;
 
   // Older history (top of the reversed list).
@@ -62,12 +66,17 @@ abstract interface class ConversationTimelineSource {
 
   // Row callbacks.
   void replyAction({Event? replyTo});
-  void showEventInfo([Event? event]);
+  void showEventInfo(Event event);
   void mentionSender(Event event);
-  void onSelectMessage(Event event);
   Future<void> scrollToEventId(String eventId, {bool highlightEvent = true});
-  void editSelectedEventAction();
   void expandEventsFrom(Event event, bool expand);
+
+  /// The long-press menu of [event]: every action that applies to this one
+  /// message (there is no multi-selection), in menu order.
+  List<ConversationMessageAction> messageActions(
+    BuildContext context,
+    Event event,
+  );
   int? findChildIndexCallback(Key key, Map<String, int> thisEventsKeyMap);
 
   /// Opens a thread from its root, or null where threads are unavailable.
@@ -139,13 +148,7 @@ abstract interface class ConversationComposerHost {
     bool silent = false,
   });
 
-  // Selection bar in place of the field.
-  bool get selectMode;
-  List<Event> get selectedEvents;
-  Future<void> deleteErrorEventsAction();
-  Future<void> forwardEventsAction();
   void replyAction({Event? replyTo});
-  void sendAgainAction();
 
   /// Whether the composer may offer another account of the bundle (the
   /// ordinary chat); the row still checks the bundle itself.

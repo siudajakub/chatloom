@@ -2,7 +2,6 @@
 // Parity of the merged person chat with the ordinary chat: both render the
 // same timeline (ChatEventList/Message) and composer (ChatInputRow/InputBar).
 // Fictional offline fixtures only.
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat.dart';
@@ -323,7 +322,7 @@ void main() {
   });
 
   testWidgets(
-    'merged selection offers the full reaction row, edit and delete',
+    'merged long-press offers the quick reactions, edit and delete per message',
     (tester) async {
       final client = ConversationClient();
       final rooms = _fixture(client);
@@ -339,23 +338,26 @@ void main() {
       );
       final l10n = L10n.of(tester.element(find.byType(ChatEventList)));
 
-      // Long press selects, as in ordinary chats; the reaction row appears.
+      // Long press opens the reaction bar and the message's own actions;
+      // there is no selection mode (no count, no selection bar).
       await tester.longPress(find.text('Unread fictional message'));
       await tester.pumpAndSettle();
-      expect(find.text('1'), findsOneWidget);
-      for (final emoji in AppConfig.defaultReactions) {
-        expect(find.byTooltip('React $emoji'), findsOneWidget);
+      expect(find.text('1'), findsNothing);
+      for (final emoji in NotionReactions.defaults) {
+        expect(find.byKey(ValueKey('reaction-$emoji')), findsOneWidget);
       }
-      expect(find.byTooltip(l10n.edit), findsNothing);
-      await tester.tap(find.byTooltip('React ❤️'));
+      expect(find.text(l10n.reply), findsOneWidget);
+      expect(find.text('Open in source chat'), findsOneWidget);
+      expect(find.text(l10n.edit), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('reaction-❤️')));
       await tester.pumpAndSettle();
       expect(rooms.a.sentEmoji, ['❤️']);
 
       // An own message: edit in the composer, delete in its source.
       await tester.longPress(find.text('Own fictional message'));
       await tester.pumpAndSettle();
-      expect(find.byTooltip(l10n.redactMessage), findsOneWidget);
-      await tester.tap(find.byTooltip(l10n.edit));
+      expect(find.text(l10n.delete), findsOneWidget);
+      await tester.tap(find.text(l10n.edit));
       await tester.pumpAndSettle();
       final editor = tester.widget<TextField>(find.byType(TextField));
       expect(editor.controller!.text, 'Own fictional message');

@@ -9,6 +9,13 @@ import 'package:personal_core/personal_core.dart';
 
 import 'conversation_motion.dart';
 
+/// Optional for a composer host that sends through a chosen source (the
+/// merged person chat): the editor hint names that source, for example
+/// "Message via Telegram". Other hosts keep the plain hint.
+abstract interface class ConversationSourceHintHost {
+  String get composerHint;
+}
+
 /// A real source, including the account and room identity used by the caller.
 /// Titles/subtitles are display names; raw source identifiers are never shown.
 class ConversationSourceOption {
@@ -35,12 +42,15 @@ Future<ConversationRef?> showConversationSourcePicker(
   ConversationRef? selected,
 }) {
   final options = List<ConversationSourceOption>.unmodifiable(sources);
-  final media = MediaQuery.of(context);
   Widget contents(BuildContext context) {
-    final media = MediaQuery.of(context);
+    // Only the values used: the whole MediaQuery would rebuild the list on
+    // every unrelated change (for example each frame of the keyboard).
     final maxHeight = math.max(
       120.0,
-      media.size.height - media.viewInsets.bottom - media.padding.vertical - 48,
+      MediaQuery.sizeOf(context).height -
+          MediaQuery.viewInsetsOf(context).bottom -
+          MediaQuery.paddingOf(context).vertical -
+          48,
     );
     return TextFieldTapRegion(
       child: ConstrainedBox(
@@ -50,16 +60,16 @@ Future<ConversationRef?> showConversationSourcePicker(
     );
   }
 
-  if (media.size.width < 600) {
+  if (MediaQuery.sizeOf(context).width < 600) {
     return showModalBottomSheet<ConversationRef>(
       context: context,
       useRootNavigator: true,
       requestFocus: false,
       isScrollControlled: true,
       useSafeArea: true,
-      sheetAnimationStyle: ConversationMotion.reduced(context)
-          ? AnimationStyle.noAnimation
-          : null,
+      // The design system's sheet motion (a quick plain slide under reduced
+      // motion), as every other Notion sheet.
+      sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
       // A glass sheet in the dock's language (DESIGN.md "Glass").
       backgroundColor: Colors.transparent,
       elevation: 0,
