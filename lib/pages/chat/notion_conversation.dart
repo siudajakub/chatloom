@@ -322,184 +322,196 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
     );
     final speedLabel =
         '${widget.speed.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '')}×';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              SizedBox.square(
-                dimension: 48,
-                // Loading ↔ play pops in place (the old state leaves at once).
-                child: ConversationSlotMorph(
-                  child: widget.downloading
-                      ? Semantics(
-                          key: const ValueKey('audio-loading'),
-                          label: 'Loading audio',
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: foreground,
-                              value: widget.downloadProgress?.clamp(0.0, 1.0),
+    // Player labels are message chrome: double tap belongs to reactions.
+    return SelectionContainer.disabled(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox.square(
+                  dimension: 48,
+                  // Loading ↔ play pops in place (the old state leaves at once).
+                  child: ConversationSlotMorph(
+                    child: widget.downloading
+                        ? Semantics(
+                            key: const ValueKey('audio-loading'),
+                            label: 'Loading audio',
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: foreground,
+                                value: widget.downloadProgress?.clamp(0.0, 1.0),
+                              ),
+                            ),
+                          )
+                        : IconButton(
+                            key: const ValueKey('audio-play'),
+                            tooltip: widget.playing
+                                ? 'Pause audio'
+                                : 'Play audio',
+                            style: buttonStyle.copyWith(
+                              backgroundColor: WidgetStatePropertyAll(
+                                foreground,
+                              ),
+                              foregroundColor: WidgetStatePropertyAll(
+                                foreground.computeLuminance() > .179
+                                    ? const Color(0xFF242424)
+                                    : Colors.white,
+                              ),
+                              shape: const WidgetStatePropertyAll(
+                                CircleBorder(),
+                              ),
+                            ),
+                            onPressed: widget.onPlay,
+                            icon: NotionMorphSwitcher(
+                              child: Icon(
+                                widget.playing
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                key: ValueKey(widget.playing),
+                                size: 28,
+                              ),
                             ),
                           ),
-                        )
-                      : IconButton(
-                          key: const ValueKey('audio-play'),
-                          tooltip: widget.playing
-                              ? 'Pause audio'
-                              : 'Play audio',
-                          style: buttonStyle.copyWith(
-                            backgroundColor: WidgetStatePropertyAll(foreground),
-                            foregroundColor: WidgetStatePropertyAll(
-                              foreground.computeLuminance() > .179
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      RepaintBoundary(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 36,
+                            trackShape: NotionWaveformTrackShape(
+                              widget.waveform,
+                            ),
+                            activeTrackColor: foreground,
+                            inactiveTrackColor: foreground.withValues(
+                              alpha: .55,
+                            ),
+                            disabledActiveTrackColor: foreground,
+                            disabledInactiveTrackColor: foreground.withValues(
+                              alpha: .55,
+                            ),
+                            thumbColor: foreground,
+                            overlayColor: foreground.withValues(alpha: .12),
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 5,
+                              disabledThumbRadius: 0,
+                            ),
+                            overlayShape: const RoundSliderOverlayShape(
+                              overlayRadius: 12,
+                            ),
+                            showValueIndicator:
+                                ShowValueIndicator.onlyForContinuous,
+                            valueIndicatorColor: foreground,
+                            valueIndicatorTextStyle: TextStyle(
+                              color: foreground.computeLuminance() > .179
                                   ? const Color(0xFF242424)
                                   : Colors.white,
                             ),
-                            shape: const WidgetStatePropertyAll(CircleBorder()),
                           ),
-                          onPressed: widget.onPlay,
-                          icon: NotionMorphSwitcher(
-                            child: Icon(
-                              widget.playing
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow_rounded,
-                              key: ValueKey(widget.playing),
-                              size: 28,
-                            ),
-                          ),
-                        ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    RepaintBoundary(
-                      child: SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          trackHeight: 36,
-                          trackShape: NotionWaveformTrackShape(widget.waveform),
-                          activeTrackColor: foreground,
-                          inactiveTrackColor: foreground.withValues(alpha: .55),
-                          disabledActiveTrackColor: foreground,
-                          disabledInactiveTrackColor: foreground.withValues(
-                            alpha: .55,
-                          ),
-                          thumbColor: foreground,
-                          overlayColor: foreground.withValues(alpha: .12),
-                          thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 5,
-                            disabledThumbRadius: 0,
-                          ),
-                          overlayShape: const RoundSliderOverlayShape(
-                            overlayRadius: 12,
-                          ),
-                          showValueIndicator:
-                              ShowValueIndicator.onlyForContinuous,
-                          valueIndicatorColor: foreground,
-                          valueIndicatorTextStyle: TextStyle(
-                            color: foreground.computeLuminance() > .179
-                                ? const Color(0xFF242424)
-                                : Colors.white,
-                          ),
-                        ),
-                        child: MergeSemantics(
-                          child: Semantics(
-                            label: 'Audio position',
-                            child: Slider(
-                              key: const ValueKey('voice-waveform'),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
+                          child: MergeSemantics(
+                            child: Semantics(
+                              label: 'Audio position',
+                              child: Slider(
+                                key: const ValueKey('voice-waveform'),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                value: progress,
+                                label: seekTime(progress),
+                                semanticFormatterCallback: seekTime,
+                                onChanged: enabledSeek == null
+                                    ? null
+                                    : (value) =>
+                                          setState(() => _preview = value),
+                                onChangeEnd: enabledSeek == null
+                                    ? null
+                                    : (value) {
+                                        setState(() => _preview = null);
+                                        widget.onSeek?.call(value);
+                                      },
                               ),
-                              value: progress,
-                              label: seekTime(progress),
-                              semanticFormatterCallback: seekTime,
-                              onChanged: enabledSeek == null
-                                  ? null
-                                  : (value) => setState(() => _preview = value),
-                              onChangeEnd: enabledSeek == null
-                                  ? null
-                                  : (value) {
-                                      setState(() => _preview = null);
-                                      widget.onSeek?.call(value);
-                                    },
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: Text(
-                        time,
-                        textDirection: TextDirection.ltr,
-                        style: TextStyle(
-                          fontSize: 13,
-                          height: 1.3,
-                          color: foreground,
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          NotionSizeReveal(
-            visible: widget.controls,
-            child: Wrap(
-              spacing: 0,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                IconButton(
-                  tooltip: 'Rewind 10 seconds',
-                  style: buttonStyle,
-                  onPressed: widget.downloading ? null : widget.onSeekBack,
-                  icon: const Icon(Icons.replay_10_rounded, size: 22),
-                ),
-                IconButton(
-                  tooltip: 'Forward 10 seconds',
-                  style: buttonStyle,
-                  onPressed: widget.downloading ? null : widget.onSeekForward,
-                  icon: const Icon(Icons.forward_10_rounded, size: 22),
-                ),
-                widget.speedAction ??
-                    TextButton(
-                      onPressed: widget.downloading ? null : widget.onSpeed,
-                      style: TextButton.styleFrom(
-                        foregroundColor: foreground,
-                        disabledForegroundColor: foreground.withValues(
-                          alpha: .38,
-                        ),
-                        minimumSize: const Size(48, 48),
-                      ),
-                      child: Tooltip(
-                        message: 'Playback speed',
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
                         child: Text(
-                          speedLabel,
+                          time,
                           textDirection: TextDirection.ltr,
-                          semanticsLabel: 'Playback speed $speedLabel',
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.3,
+                            color: foreground,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
                         ),
                       ),
-                    ),
-                if (widget.onDownload != null)
-                  IconButton(
-                    tooltip: 'Download audio',
-                    style: buttonStyle,
-                    onPressed: widget.onDownload,
-                    icon: const Icon(Icons.download_rounded, size: 20),
+                    ],
                   ),
+                ),
               ],
             ),
-          ),
-        ],
+            NotionSizeReveal(
+              visible: widget.controls,
+              child: Wrap(
+                spacing: 0,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  IconButton(
+                    tooltip: 'Rewind 10 seconds',
+                    style: buttonStyle,
+                    onPressed: widget.downloading ? null : widget.onSeekBack,
+                    icon: const Icon(Icons.replay_10_rounded, size: 22),
+                  ),
+                  IconButton(
+                    tooltip: 'Forward 10 seconds',
+                    style: buttonStyle,
+                    onPressed: widget.downloading ? null : widget.onSeekForward,
+                    icon: const Icon(Icons.forward_10_rounded, size: 22),
+                  ),
+                  widget.speedAction ??
+                      TextButton(
+                        onPressed: widget.downloading ? null : widget.onSpeed,
+                        style: TextButton.styleFrom(
+                          foregroundColor: foreground,
+                          disabledForegroundColor: foreground.withValues(
+                            alpha: .38,
+                          ),
+                          minimumSize: const Size(48, 48),
+                        ),
+                        child: Tooltip(
+                          message: 'Playback speed',
+                          child: Text(
+                            speedLabel,
+                            textDirection: TextDirection.ltr,
+                            semanticsLabel: 'Playback speed $speedLabel',
+                          ),
+                        ),
+                      ),
+                  if (widget.onDownload != null)
+                    IconButton(
+                      tooltip: 'Download audio',
+                      style: buttonStyle,
+                      onPressed: widget.onDownload,
+                      icon: const Icon(Icons.download_rounded, size: 20),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

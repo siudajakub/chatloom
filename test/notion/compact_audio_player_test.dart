@@ -39,6 +39,52 @@ void main() {
     },
   );
 
+  testWidgets('double tap voice duration reacts without selecting text', (
+    tester,
+  ) async {
+    var likes = 0;
+    var plays = 0;
+    String? selected;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SelectionArea(
+            onSelectionChanged: (value) => selected = value?.plainText,
+            child: Center(
+              child: SizedBox(
+                width: 320,
+                child: ConversationMessageGestures(
+                  identity: 'voice',
+                  onLike: () async {
+                    likes++;
+                    return true;
+                  },
+                  child: NotionAudioFileBlock(
+                    duration: '1:06',
+                    progress: 0,
+                    controls: false,
+                    onPlay: () => plays++,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('1:06'));
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tap(find.text('1:06'));
+    await tester.pumpAndSettle();
+    expect(likes, 1);
+    expect(selected, isNull);
+    await tester.tap(find.byTooltip('Play audio'));
+    await tester.pumpAndSettle();
+    expect(plays, 1);
+    expect(likes, 1);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'drag previews time and commits once on release without replying',
     (tester) async {
