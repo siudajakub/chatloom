@@ -475,8 +475,9 @@ class _NotionPopState extends State<NotionPop> with TickerProviderStateMixin {
 }
 
 /// Flashes a soft `selected` background behind [child] when [trigger]
-/// changes (not on first build): a conversation that just moved to the top,
-/// a setting that was just applied. Paint only, no layout.
+/// changes (not on first build unless [playOnMount]): a conversation that
+/// just moved to the top, a setting that was just applied, a row a merge
+/// just created. Paint only, no layout.
 ///
 /// ```dart
 /// NotionRowHighlight(trigger: room.lastEventId, child: row)
@@ -488,9 +489,14 @@ class NotionRowHighlight extends StatefulWidget {
     required this.child,
     this.color,
     this.borderRadius = NotionRadius.mdAll,
+    this.playOnMount = false,
   });
 
   final Object? trigger;
+
+  /// Flash once when first built too (never for rows built by scrolling:
+  /// the caller passes true only for a row an action just produced).
+  final bool playOnMount;
   final Widget child;
 
   /// Defaults to `context.notion.colors.selected`.
@@ -524,6 +530,18 @@ class _NotionRowHighlightState extends State<NotionRowHighlight>
       weight: 55,
     ),
   ]);
+
+  bool _mounted = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_mounted) return;
+    _mounted = true;
+    if (widget.playOnMount && !NotionMotion.reduced(context)) {
+      _controller.forward(from: 0);
+    }
+  }
 
   @override
   void didUpdateWidget(NotionRowHighlight oldWidget) {

@@ -57,12 +57,28 @@ bool notionGlassEnabled(BuildContext context) {
   }
 }
 
+/// The opaque stand-in for the glass [tint]: the tint composited over the
+/// page background, i.e. exactly what the glass shows over an empty page.
+///
+/// Every fallback (no Impeller, high contrast, reduced motion, a
+/// [NotionGlassScope] forced off, `blur: false`, an overlay while its route
+/// animates) paints this colour, so switching between glass and fallback, or
+/// an overlay settling into its blur, never changes the surface's tone: only
+/// the blurred content behind it appears or goes. (Painting the tint at full
+/// alpha made the dock and pills a lighter grey than their glass, and a
+/// popover visibly darkened and turned translucent when it settled.)
+Color notionGlassOpaque(BuildContext context, Color tint) => tint.a >= 1
+    ? tint
+    : Color.alphaBlend(tint, context.notion.colors.background);
+
 /// The only glass primitive: a translucent, backdrop-blurred fill.
 ///
 /// Use it for fixed chrome (header, floating dock, composer) above scrolling
 /// content and, with [overlay], for menus, popovers, dialogs and sheets.
-/// Without glass support it paints the same tint fully opaque, so layout and
-/// contrast never depend on the blur. Never inside a scrolling list item.
+/// Without glass support it paints the tint opaque over the page background
+/// ([notionGlassOpaque]), so layout, tone and contrast never depend on the
+/// blur. Never inside a
+/// scrolling list item.
 ///
 /// Bars on one page share a single backdrop read when an ancestor
 /// [BackdropGroup] exists ([BackdropFilter.grouped]).
@@ -79,8 +95,8 @@ class NotionGlassSurface extends StatelessWidget {
   /// A modal surface (menu, popover, dialog, sheet): uses
   /// [NotionGlass.overlayTint] and blurs only once its route has settled.
   /// While the route animates (enter, exit, drag-to-dismiss) it paints the
-  /// opaque fallback, so the blur is never animated and never sits inside the
-  /// route's fade.
+  /// opaque fallback ([notionGlassOpaque], the same tone), so the blur is
+  /// never animated and never sits inside the route's fade.
   final bool overlay;
   final BorderRadius borderRadius;
 
@@ -126,7 +142,7 @@ class NotionGlassSurface extends StatelessWidget {
     final square = borderRadius == BorderRadius.zero; // design-lint: allow bars
     Widget surface = DecoratedBox(
       decoration: BoxDecoration(
-        color: enabled ? fill : fill.withValues(alpha: 1),
+        color: enabled ? fill : notionGlassOpaque(context, fill),
         borderRadius: square ? null : borderRadius,
         border: border,
       ),

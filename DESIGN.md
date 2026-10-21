@@ -66,6 +66,19 @@ the original. A reply always starts a new group. Quote colours come from
 halfway from the original's bubble to the chat background, with text that
 reaches 4.5:1 (it also covers private chat palettes).
 
+Reactions follow Messenger: one pill per emoji (`NotionReactionChip`, no
+square frame) in `NotionReactionOverlap`, which lifts the row over the
+bubble's bottom edge by `NotionReactions.overlap` on the sender side. A
+ring of the chat background separates the chip from the bubble; own
+reactions get a soft tint and hairline. Long-press any message opens
+`showConversationMessageMenu` (`lib/pages/chat/conversation_message_menu.dart`):
+a scrim, a lifted copy of the bubble at its own place, the
+`NotionReactionBar` above (quick reactions of the network, "+" for the full
+picker, slide-to-react while still holding) and a `NotionGlassPanel` card of
+`NotionGlassMenuRow` actions below. Double tap reacts with the network's
+first quick reaction and plays `NotionReactionBurst` at the finger. There is
+no multi-selection.
+
 Text on colours you do not control (private chat palettes, chat
 backgrounds) goes through `NotionContrast`: `on(bg)` for body text,
 `readable(bg, preferred)` for muted text, never a hard-coded black or white.
@@ -156,6 +169,7 @@ in new code; read `context.notion` instead.
 | `ConversationBubble(quote:)`, `ConversationReplyQuote`, `ConversationReplyCaption`, `ConversationMetaChip` | message bubbles and Messenger-style replies (`lib/pages/chat/conversation_bubble.dart`, see Message bubbles) |
 | `NotionTextField(label:, hint:, helper:, error:, ...)` | text input with the label above |
 | `NotionCompactChatHeader`, `NotionInitialAvatar` | chat header, letter avatar |
+| `NotionReactionChip`, `NotionReactionOverlap`, `NotionReactionBar`, `NotionReactionBurst` | reaction pills under a bubble, the long-press reaction pill, the double-tap burst (`notion_reactions.dart`, tokens `NotionReactions.*`) |
 | `NotionGlassSurface`, `NotionGlassBar`, `NotionGlassScope` | glass chrome and overlays (see Glass) |
 | `NotionGlassPanel`, `NotionGlassMenuRow`, `NotionGlassDivider`, `NotionGlassPill` | the dock's language: glass menus, dialogs, sheets, pill buttons (see Glass) |
 | `NotionPressable`, `NotionEntrance`, `NotionSkeleton`, `NotionFadeThrough`, `NotionPop`, ... | motion (see Motion) |
@@ -186,8 +200,15 @@ surfaces that stay still while content moves beneath them:
 
 Overlays (`overlay: true`, the default of `NotionGlassPanel`) blur only once
 their route has settled: while a dialog grows, a sheet slides or is dragged,
-or anything leaves, they paint the opaque tint. The blur is therefore never
-animated, never sits inside a route's fade and costs nothing per frame.
+or anything leaves, they paint the opaque fallback tone (below). The blur is
+therefore never animated, never sits inside a route's fade and costs nothing
+per frame; settling changes no colour, only lets the blurred content appear.
+
+A glass surface is one surface: anything attached to it (a popover pointer,
+a tab, a badge that overlaps its edge) either lives inside the same
+`NotionGlassSurface` clip or is opaque. A separate translucent shape next to
+glass shows unblurred content and a second tint. Menus and popovers have no
+pointer (Telegram, Messenger); they grow from their anchor instead.
 
 Never blur inside scrolling content (rows, bubbles, cards, chips, grid
 tiles): use the opaque roles plus the hairline, `NotionGlassPanel(blur:
@@ -234,7 +255,11 @@ Rules:
 - The fallback is automatic: when the renderer is not Impeller
   (`ImageFilter.isShaderFilterSupported` is false: Skia, web, tests), when
   high contrast or reduced motion is on, or with
-  `--dart-define=PERSONAL_GLASS=false`, the same tint is painted opaque.
+  `--dart-define=PERSONAL_GLASS=false`, the tint is painted opaque over the
+  page background (`notionGlassOpaque(context, tint)`), i.e. the exact tone
+  the glass shows over an empty page. The same tone is used by `blur: false`
+  panels and pills and by overlays while their route animates, so glass and
+  fallback never differ in colour.
   `NotionGlassScope(mode: NotionGlassMode.off)` forces the fallback for a
   subtree (low-end flag); `.on` forces glass (goldens).
 - Text on glass uses the normal text roles; never lower its contrast to
@@ -271,6 +296,7 @@ dialogs and sheets never bounce.
 | `short` | 200 ms | fades, badges, small reveals (= `ChatLoomThemes.animationDuration`) |
 | `medium` | 260 ms | entrances, dialogs, size reveals |
 | `long` | 320 ms | sheets, page push (`forward`); pop is `reverse` 220 ms |
+| `gestureTravel` · `gestureCommit` | 1.0 · `easeOutQuad` | Android predictive back: the page follows the finger, a release continues from there (see Page motion) |
 | `stagger` / `staggerCap` | 28 ms / 10 | per-item delay, never more than 10 steps |
 | `loaderGrace` | 250 ms | a loader stays invisible this long |
 | `standard` | `Cubic(.2, 0, 0, 1)` | general tweens (= `ChatLoomThemes.animationCurve`) |
@@ -304,6 +330,7 @@ default.
 | `NotionAnimatedCount(count:, style:, format:)` | numbers that change: rolls up/down | `NotionAnimatedCount(count: unread, style: NotionType.micro)` |
 | `NotionSizeReveal(visible:, child:, axis:)` | single element appearing/disappearing with size + fade (callout, reply preview, typing row) | `NotionSizeReveal(visible: error != null, child: NotionCallout(...))` |
 | `NotionPop(child:, trigger:, visible:, bounce:)` | badges, reaction chips, dots: spring in, pulse on `trigger`, pop out | `NotionPop(trigger: count, child: badge)` |
+| `NotionReactionBar(entrance:)`, `NotionReactionBurst(animation:)` | reward motion of reactions, driven by a route or controller animation: the bar springs out of the bubble corner (`barFrom` → 1, bouncy) and its emoji pop in staggered; the burst pops at the finger and floats away | `NotionReactionBar(reactions: r, entrance: route.animation, onSelected: react)` |
 | `NotionShake(trigger:, child:)` | rejected input (wrong PIN) | `NotionShake(trigger: errors, child: field)` |
 | `NotionRowHighlight(trigger:, child:)` | one-shot `selected` flash of a row that moved or changed (inbox reorder is not animated) | `NotionRowHighlight(trigger: room.lastEventId, child: row)` |
 | `NotionSkeleton(enabled:, child:)`, `.sliver`, `NotionSkeletonRow()`, `NotionSkeleton.keep/ignore/unite` | loading state with the final layout; cross-fades to content | `NotionSkeleton(enabled: loading, child: Column(children: [for (var i = 0; i < 8; i++) const NotionSkeletonRow()]))` |
@@ -312,6 +339,7 @@ default.
 | `showNotionCustomDialog(context:, builder:)`, `NotionDialogRoute`, `NotionDialogTransition` | any dialog: barrier fade, scale .94 → 1 on `smoothCurve`, faster exit | `showNotionCustomDialog(context: context, builder: (_) => NotionDialog(...))` |
 | `showNotionPopover(context:, builder:, alignment:)`, `NotionPopoverRoute` | anchored panels/menus that grow from their anchor | `showNotionPopover(context: context, alignment: Alignment.bottomRight, builder: panel)` |
 | `AfterRouteTransition(child:)` | heavy content after the push; now fades the child in | as before |
+| `NotionMediaRoute(builder:)`, `NotionMediaHero(tag:, sourceRadius:)`, `NotionDismissDrag`, `NotionDismissTransform`, `NotionMediaBackdrop`, `NotionMediaChrome`, `NotionDoubleTapZoom`, `notionFitMedia(...)` | full-screen media (Telegram): the photo flies out of its thumbnail and back (straight path, corners square off), follows a downward swipe with the backdrop and chrome fading and springs back below the threshold, double tap zooms into the tapped point, a tap toggles the chrome. A thumbnail that opens the viewer is a `Hero(tag:, createRectTween: NotionMediaHero.rectTween)` | `showImageViewer(context, event, heroTag: ('details-media', id), sourceRadius: NotionRadius.smAll)` |
 
 Built in: `NotionButton`, `NotionIconButton`, `NotionListRow` and
 `NotionPropertyRow` press with `NotionPressable`; `NotionButton(busy:)`
@@ -323,6 +351,25 @@ icon and staggers its text; tab indicators move elastically.
 so the ~56 legacy `Animated*` widgets got the new timing for free.
 `PulsatingWidget` and `TypingAnimation` are shims over `NotionPulse` and
 `NotionTypingDots`.
+
+### Page motion and predictive back
+
+Pages (`NotionPageTransitionsBuilder`, `notion_motion.dart`) push with an
+8 % slide and a quick fade while the page underneath drifts 6 % the other
+way under a light scrim; pop mirrors it faster. Two-column panes and reduced
+motion are instant (`lib/config/routes.dart`).
+
+Android predictive back is Telegram style: the top page follows the finger
+1:1 towards the edge it is dragged to (left-edge swipe → right, right-edge
+swipe → left), stays opaque, and the page underneath slides from its
+parallax offset back to rest while its scrim lifts. A release past the
+system threshold continues from the current position off the screen
+(`gestureCommit` over `reverse`); a cancel returns to rest. Nothing jumps:
+both pages move monotonically and the page underneath never passes its rest
+(`test/notion/predictive_back_test.dart`). Exactly one page route takes the
+gesture; a dialog, sheet or popover on top, a `PopScope(canPop: false)` or an
+instant route declines it, so nothing moves and the release is an ordinary
+back (the sheet closes with its own motion, the `PopScope` callback runs).
 
 ### Instead of X, use Y (motion)
 

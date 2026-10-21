@@ -166,6 +166,18 @@ abstract final class NotionBubble {
   static const double avatar = 28;
   static const double maxWidthFraction = .78;
 
+  /// Media (images, videos, reels, files, voice) fill the bubble's width up
+  /// to this cap, so wide screens do not show poster-sized thumbnails.
+  static const double mediaMaxWidth = 360;
+
+  /// Height/width limits of a media frame: taller media (9:16 reels) is
+  /// cropped to 3:4, wider media (panoramas) to 5:2, like Messenger.
+  static const double mediaMaxAspect = 4 / 3;
+  static const double mediaMinAspect = .4;
+
+  /// A media frame never takes more than this share of the viewport height.
+  static const double mediaMaxViewportFraction = .6;
+
   static const double sm = NotionSpace.sm;
   static const double xs = NotionSpace.xs;
 }
@@ -244,6 +256,10 @@ abstract final class NotionMediaColors {
 
   /// Barrier behind an enlarged video; white controls sit on it (72 % black).
   static const stageScrim = Color(0xB8000000);
+
+  /// Backdrop of the full-screen photo/video viewer (95 % black, like
+  /// Telegram and Messenger); fades with the route and a dismiss swipe.
+  static const viewer = Color(0xF2000000);
 
   /// Text, icons and rings on [scrim] / [stageScrim].
   static const onScrim = Color(0xFFFFFFFF);

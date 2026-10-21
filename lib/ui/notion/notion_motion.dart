@@ -188,8 +188,15 @@ abstract final class NotionMotion {
   /// Horizontal drift of the page underneath while another page covers it.
   static const double parallaxOffset = -0.06;
 
-  /// Distance an outgoing page travels while it follows a back gesture.
-  static const double gestureOffset = 0.3;
+  /// Distance an outgoing page travels per unit of Android back progress:
+  /// 1.0 follows the finger across the width (Telegram style), see
+  /// [NotionPageTransition].
+  static const double gestureTravel = 1.0;
+
+  /// Curve of the rest of a committed back gesture: leaves at about twice
+  /// the average speed and decelerates, so the release never stalls or
+  /// jumps.
+  static const Curve gestureCommit = Curves.easeOutQuad;
 
   /// Strength of the scrim over a covered page, relative to the theme scrim.
   static const double coveredScrim = 0.35;
@@ -452,8 +459,13 @@ class _AfterRouteTransitionState extends State<AfterRouteTransition>
 
 /// The Notion page transition for Android, desktop and web.
 ///
-/// Supports Android predictive back: the top page follows the back gesture
-/// and the page underneath is revealed, then the gesture commits or cancels.
+/// Supports Android predictive back (Telegram style): the top page follows
+/// the finger across the width while the page underneath slides back into
+/// place from its parallax offset and its scrim lifts. Releasing past the
+/// system threshold lets the page continue from where the finger left it and
+/// leave the screen ([NotionMotion.gestureCommit]); cancelling (the system
+/// first animates the progress back to zero) returns it to rest. Neither
+/// path ever jumps, and the page underneath never moves past its rest.
 class NotionPageTransitionsBuilder extends PageTransitionsBuilder {
   const NotionPageTransitionsBuilder();
 
@@ -559,51 +571,55 @@ class _NotionPageTransitionState extends State<NotionPageTransition> {
     if (mounted) setState(() {});
   }
 
-  /// Linear while a finger drives the route; during the commit animation the
-  /// framework restarts the controller from 1.0, so continue from the value
-  /// the gesture was released at.
-  double _gestureValue(double raw, double? commitFrom) {
-    if (commitFrom == null) return raw;
-    return commitFrom * (1 - Curves.easeOutCubic.transform(1 - raw));
-  }
-
   @override
   Widget build(BuildContext context) {
     final navigator = route.navigator;
-    final gesture = navigator?.userGestureInProgress ?? false;
-    final commitFrom = gesture
-        ? _NotionBackGestures.instance.commitFrom(navigator!)
+    final gesture = (navigator?.userGestureInProgress ?? false)
+        ? _NotionBackGestures.instance.gestureOf(navigator!)
         : null;
     final reduced = NotionMotion.reduced(context);
     final rtl = Directionality.maybeOf(context) == TextDirection.rtl;
     var dx = 0.0;
     var opacity = 1.0;
     var cover = 0.0;
-    if (!instant) {
-      final primary = gesture
-          ? _gestureValue(widget.animation.value, commitFrom)
-          : _primary.value;
-      final secondary = gesture
-          ? _gestureValue(widget.secondaryAnimation.value, commitFrom)
-          : _secondary.value;
+    if (!instant && gesture != null) {
+      // The finger drives exactly one route: this page when it is the one
+      // being dragged, or the page right underneath it through its
+      // secondary animation. Everything else stays at rest.
+      final own = identical(gesture.route, route);
+      final primary = own
+          ? gesture.value(widget.animation)
+          : widget.animation.value;
+      final secondary = gesture.value(widget.secondaryAnimation);
+      if (reduced) {
+        opacity = (Curves.easeOut.transform(primary) / 0.4).clamp(0.0, 1.0);
+      } else {
+        // Physical direction: towards the edge the finger moves to.
+        dx =
+            gesture.direction *
+            ((1 - primary) * NotionMotion.gestureTravel +
+                secondary * NotionMotion.parallaxOffset);
+        cover = secondary;
+      }
+    } else if (!instant) {
       if (reduced) {
         // A plain short fade: the emphasized page curve would make it a cut.
-        final raw = gesture ? primary : widget.animation.value;
-        opacity = (Curves.easeOut.transform(raw) / 0.4).clamp(0.0, 1.0);
+        opacity = (Curves.easeOut.transform(widget.animation.value) / 0.4)
+            .clamp(0.0, 1.0);
       } else {
+        final primary = _primary.value;
+        final secondary = _secondary.value;
         opacity = (primary / NotionMotion.pageFadeWindow).clamp(0.0, 1.0);
-        dx =
-            (1 - primary) *
-                (gesture
-                    ? NotionMotion.gestureOffset
-                    : NotionMotion.incomingOffset) +
+        final logical =
+            (1 - primary) * NotionMotion.incomingOffset +
             secondary * NotionMotion.parallaxOffset;
+        dx = rtl ? -logical : logical;
         cover = secondary;
       }
     }
     final scrim = Theme.of(context).colorScheme.scrim;
     return FractionalTranslation(
-      translation: Offset(rtl ? -dx : dx, 0),
+      translation: Offset(dx, 0),
       child: Opacity(
         opacity: opacity,
         child: DecoratedBox(
@@ -622,6 +638,41 @@ class _NotionPageTransitionState extends State<NotionPageTransition> {
   }
 }
 
+/// One predictive back gesture of a navigator, read by its Notion pages.
+final class _BackGesture {
+  _BackGesture(this.route, this.direction);
+
+  /// The page the finger drags.
+  final PageRoute<dynamic> route;
+
+  /// +1 when the page leaves to the right (swipe from the left edge), -1 to
+  /// the left (swipe from the right edge).
+  final double direction;
+
+  /// The route animation value at release, while the commit runs.
+  double? commitFrom;
+
+  /// The visible value of [animation] (the dragged route's animation, or the
+  /// secondary animation of the page underneath, which proxies it).
+  ///
+  /// While the finger is down the framework sets the controller directly,
+  /// so the value is used as is. On commit the framework pops the route and
+  /// restarts its controller from 1.0 (`reverse(from: upperBound)`); that
+  /// restart is remapped to continue from [commitFrom]. Only an animation
+  /// that runs in reverse is driven by the commit; a page further down (its
+  /// secondary animation completed) and the page underneath's own primary
+  /// animation keep their values. Applying the remap to those made the page
+  /// underneath jump past its rest and snap back when the pop finished.
+  double value(Animation<double> animation) {
+    final raw = animation.value;
+    final from = commitFrom;
+    if (from == null || animation.status != AnimationStatus.reverse) {
+      return raw;
+    }
+    return from * (1 - NotionMotion.gestureCommit.transform(1 - raw));
+  }
+}
+
 /// Routes Android predictive back gestures to exactly one Notion page route.
 ///
 /// Flutter calls every [WidgetsBindingObserver]; with nested navigators
@@ -629,18 +680,18 @@ class _NotionPageTransitionState extends State<NotionPageTransition> {
 /// deepest frontmost page, escalates from a first page to the page hosting
 /// its navigator, and declines whenever something else (a dialog, sheet,
 /// [PopScope] veto or instant route) should receive the back event, in which
-/// case the framework falls back to an ordinary pop.
+/// case the framework falls back to an ordinary pop on release: a sheet or
+/// dialog closes with its own motion, a [PopScope] with `canPop: false` gets
+/// its callback and nothing moves while the finger is down.
 final class _NotionBackGestures with WidgetsBindingObserver {
   _NotionBackGestures._();
   static final instance = _NotionBackGestures._();
 
   final Set<_NotionPageTransitionState> _clients = {};
   _NotionPageTransitionState? _active;
-  final Expando<double> _commitFrom = Expando();
-  final Expando<bool> _committing = Expando();
+  final Expando<_BackGesture> _gestures = Expando('Notion back gesture');
 
-  double? commitFrom(NavigatorState navigator) =>
-      _committing[navigator] == true ? _commitFrom[navigator] : null;
+  _BackGesture? gestureOf(NavigatorState navigator) => _gestures[navigator];
 
   void add(_NotionPageTransitionState client) {
     if (_clients.isEmpty) WidgetsBinding.instance.addObserver(this);
@@ -714,8 +765,10 @@ final class _NotionBackGestures with WidgetsBindingObserver {
     if (target == null) return false;
     final navigator = target.route.navigator;
     if (navigator == null) return false;
-    _committing[navigator] = null;
-    _commitFrom[navigator] = null;
+    _gestures[navigator] = _BackGesture(
+      target.route,
+      backEvent.swipeEdge == SwipeEdge.right ? -1 : 1,
+    );
     _active = target;
     target.route.handleStartBackGesture(progress: 1 - backEvent.progress);
     target.gestureChanged();
@@ -736,6 +789,8 @@ final class _NotionBackGestures with WidgetsBindingObserver {
     final target = _active;
     _active = null;
     if (target == null || !target.mounted) return;
+    final navigator = target.route.navigator;
+    if (navigator != null) _gestures[navigator]?.commitFrom = null;
     target.route.handleCancelBackGesture();
     target.gestureChanged();
   }
@@ -747,8 +802,7 @@ final class _NotionBackGestures with WidgetsBindingObserver {
     if (target == null || !target.mounted) return;
     final navigator = target.route.navigator;
     if (navigator != null) {
-      _commitFrom[navigator] = target.route.animation?.value ?? 1;
-      _committing[navigator] = true;
+      _gestures[navigator]?.commitFrom = target.route.animation?.value ?? 1;
     }
     target.route.handleCommitBackGesture();
     target.gestureChanged();

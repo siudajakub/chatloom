@@ -12,11 +12,14 @@ export 'notion_contrast.dart';
 export 'notion_entrance.dart';
 export 'notion_glass.dart';
 export 'notion_loops.dart';
+export 'notion_media_viewer.dart';
 export 'notion_modal_routes.dart';
 export 'notion_motion.dart';
 export 'notion_pressable.dart';
 export 'notion_primitives.dart';
+export 'notion_reactions.dart';
 export 'notion_skeleton.dart';
+export 'notion_status_line.dart';
 export 'notion_switchers.dart';
 export 'notion_tokens.dart';
 
@@ -220,11 +223,15 @@ class NotionCompactChatHeader extends StatelessWidget {
   final Widget avatar;
   final String name;
   final VoidCallback? onDetails;
+
+  /// Optional line under the name (connection status, `NotionStatusLine`).
+  final Widget? status;
   const NotionCompactChatHeader({
     super.key,
     required this.avatar,
     required this.name,
     required this.onDetails,
+    this.status,
   });
   @override
   Widget build(BuildContext context) => Semantics(
@@ -250,14 +257,21 @@ class NotionCompactChatHeader extends StatelessWidget {
             avatar,
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  ?status,
+                ],
               ),
             ),
           ],

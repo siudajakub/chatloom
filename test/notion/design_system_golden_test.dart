@@ -57,6 +57,62 @@ Widget _page(List<Widget> children) => Scaffold(
   ),
 );
 
+/// Reactions: pill chips overlapping the bubble edge, the long-press bar.
+Widget _reactions() => Builder(
+  builder: (context) {
+    final background = context.notion.colors.background;
+    Widget chips(List<(String, int, bool)> items) => Wrap(
+      spacing: NotionSpace.xxs,
+      children: [
+        for (final (emoji, count, own) in items)
+          NotionReactionChip(
+            emoji: Text(emoji),
+            semanticLabel: emoji,
+            count: count,
+            own: own,
+            ring: background,
+            onTap: _noop,
+          ),
+      ],
+    );
+    return Scaffold(
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.symmetric(horizontal: NotionSpace.sm),
+          children: [
+            const SizedBox(height: NotionSpace.md),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: NotionReactionBar(
+                reactions: NotionReactions.defaults,
+                selected: const {'❤️'},
+                onSelected: (_) {},
+                onMore: _noop,
+              ),
+            ),
+            ConversationBubble(
+              outgoing: false,
+              avatar: const NotionInitialAvatar(name: 'Anna', size: 28),
+              body: const Text('Widzimy się o ósmej?'),
+              reactions: chips([('❤️', 2, true), ('😂', 1, false)]),
+            ),
+            ConversationBubble(
+              outgoing: true,
+              body: const Text('Tak, będę'),
+              reactions: chips([('👍', 1, false)]),
+            ),
+            ConversationBubble(
+              outgoing: true,
+              body: const Text('ok'),
+              reactions: chips([('🔥', 3, false), ('😮', 1, true)]),
+            ),
+          ],
+        ),
+      ),
+    );
+  },
+);
+
 /// Messenger-like bubbles: grouped corners, pills, replies with a quote.
 Widget _bubbles({Color? page, Color? incoming, Color? outgoing}) => Builder(
   builder: (context) {
@@ -643,6 +699,15 @@ void main() {
         incoming: const Color(0xFFDBE6F5),
         outgoing: const Color(0xFFDFEBDB),
       ),
+    ),
+  );
+  testWidgets(
+    'reactions',
+    (tester) => _golden(
+      tester,
+      'reactions-dark',
+      _reactions(),
+      size: const Size(390, 360),
     ),
   );
   testWidgets(
