@@ -2,6 +2,14 @@
 
 Najpierw przeczytaj `../AGENTS.md` (granice produktu, `rtk`, izolowany toolchain, brak commitów bez zlecenia).
 
+## Platformy i gałąź
+
+Android i macOS rozwijamy razem na `main`. Wspólna aplikacja pozostaje w `lib/`
+i `packages/`; projekty natywne w `android/` oraz `macos/`. Skrypty wydania są
+w `scripts/android/` i `scripts/macos/`, natywne testy macOS w `integration_test/macos/`.
+Mapa i komendy: `README.personal.md`, `android/README.personal.md`, `macos/README.personal.md`.
+Nie twórz osobnych trwałych gałęzi ani kopii wspólnego klienta dla platform.
+
 ## UI
 
 Każda zmiana UI w `client/` przestrzega [`DESIGN.md`](DESIGN.md) (Notion dark v2).

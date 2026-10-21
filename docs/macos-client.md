@@ -19,7 +19,12 @@ database. It also loads synthetic Opus/CAF audio and H.264/AAC video through the
 real native players, without playing sound. It creates and removes only its own
 random synthetic fixtures.
 
-Pushes to `codex/macos-client` run this workflow when build inputs change. The
+Android and macOS share the `main` branch, `lib/` and `packages/`. Native projects
+stay in `android/` and `macos/`; build helpers are grouped under `scripts/android/`
+and `scripts/macos/`. The native smoke suite and its synthetic fixtures live in
+`integration_test/macos/`.
+
+Pushes to `main` run this workflow when build inputs change. The
 workflow also supports `workflow_dispatch` once registered on the repository's
 default branch. Runs have a 45-minute limit; the native smoke step has a
 20-minute limit. A newer run cancels an older run on the same branch. Artifacts
@@ -37,7 +42,7 @@ scoped CMake adapter to add two existing upstream P-256 assembly files omitted
 from `webcrypto` 0.6.1's Apple source list. The adapter verifies the package's
 CMake hash and leaves dependency caches, cryptographic source code and native
 hook source files unchanged. The smoke suite exercises P-256 key agreement.
-`flutter-queue.py` and the release wrapper select this adapter on Intel Macs.
+`flutter-queue.py` and `scripts/macos/build.py` select this adapter on Intel Macs.
 
 Extract the application ZIP with Archive Utility and copy `Personal Chat.app`
 to Applications. Its visible name is ChatLoom; the existing bundle identifier
@@ -53,8 +58,8 @@ request, export or upload those credentials.
 For a local Mac build, use the project's isolated Flutter SDK and run:
 
 ```sh
-rtk python3 scripts/build-personal-macos.py --smoke-test
-rtk python3 scripts/build-personal-macos.py
+rtk python3 scripts/macos/build.py --smoke-test
+rtk python3 scripts/macos/build.py
 ```
 
 The script requires full Xcode and 10 GiB free disk space. It uses a temporary

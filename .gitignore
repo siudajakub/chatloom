@@ -205,3 +205,6 @@ web/e2ee.worker.dart.js.deps
 web/e2ee.worker.dart.js.map
 # Private macOS build output and synthetic captures.
 /artifacts/macos*
+
+# Generated golden comparison images; preserve locally, never publish as source.
+/test/notion/failures/

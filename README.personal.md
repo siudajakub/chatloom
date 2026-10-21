@@ -2,6 +2,26 @@
 
 ChatLoom (dawniej „Personal Chat”) to prywatna marka tego klienta. Logo i ikony generuje `scripts/render-chatloom-logo.py`.
 
+## Android i macOS na jednej gałęzi
+
+Obie wersje rozwijamy w jednym projekcie Flutter na `main`. Wspólne ekrany,
+Matrix/E2EE, SQLCipher, outbox i logika produktu pozostają w `lib/` i `packages/`.
+Kod natywny i narzędzia budowania mają osobne katalogi:
+
+| Zakres | Android | macOS |
+|---|---|---|
+| Projekt natywny i konfiguracja | [`android/`](android/README.personal.md) | [`macos/`](macos/README.personal.md) |
+| Budowanie i kontrola artefaktów | `scripts/android/build.py` | `scripts/macos/build.py` |
+| Natywne narzędzia pomocnicze | `scripts/android/` | `scripts/macos/` |
+| Testy natywne macOS | — | `integration_test/macos/` |
+| GitHub Actions z `main` | `personal-checks.yml` | `personal-macos.yml` |
+
+Wspólne testy komponentów i adapterów są w `test/`. Skrypty kolejki, analizy
+i weryfikacji wspólnego kodu pozostają w `scripts/`. Dotychczasowe komendy
+`scripts/build-personal-release.py` i `scripts/build-personal-macos.py` działają
+jako wejścia zgodności. Nie kopiujemy całej aplikacji dla każdej platformy.
+macOS działa bez powiadomień systemowych; konfiguracja push Androida pozostaje osobna.
+
 Prywatny fork FluffyChat v2.10.0 dla Androida i macOS, z zachowanym transportem Matrix. Źródła upstream i ich licencje pozostają w repo; nasze moduły używają AGPL-3.0-or-later. To lokalna implementacja do odbioru, nie potwierdzony zamiennik oficjalnego Beepera.
 
 ## Uruchomienie
