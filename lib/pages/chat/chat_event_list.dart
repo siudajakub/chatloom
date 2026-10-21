@@ -505,11 +505,13 @@ class ConversationJumpButton extends StatelessWidget {
 class ConversationJumpButtonSlot extends StatelessWidget {
   final ValueListenable<double?> composerInset;
   final Widget child;
+  final double endInset;
 
   const ConversationJumpButtonSlot({
     super.key,
     required this.composerInset,
     required this.child,
+    this.endInset = NotionSpace.md,
   });
 
   /// Composer height before the first measurement.
@@ -521,7 +523,7 @@ class ConversationJumpButtonSlot extends StatelessWidget {
     child: child,
     builder: (context, inset, child) => Padding(
       padding: EdgeInsetsDirectional.only(
-        end: NotionSpace.md,
+        end: endInset,
         bottom: (inset ?? fallbackInset) + NotionSpace.xs,
       ),
       child: child,

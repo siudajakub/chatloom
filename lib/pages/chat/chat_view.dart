@@ -6,6 +6,7 @@
 import 'dart:async';
 
 import 'package:async/async.dart';
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat.dart';
@@ -13,6 +14,7 @@ import 'package:chatloom/pages/chat/chat_app_bar_list_tile.dart';
 import 'package:chatloom/pages/chat/chat_app_bar_title.dart';
 import 'package:chatloom/pages/chat/chat_event_list.dart';
 import 'package:chatloom/pages/chat/chat_wallpaper.dart';
+import 'package:chatloom/pages/chat/conversation_read_button.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
 import 'package:chatloom/pages/chat/pinned_events.dart';
 import 'package:chatloom/pages/chat/reply_display.dart';
@@ -46,7 +48,9 @@ class ChatView extends StatelessWidget {
     final theme = Theme.of(context);
     final hasActiveGroupCall = controller.room.hasActiveMatrixRtcCall;
     controller.joinInviteOnce();
-    final bottomSheetPadding = ChatLoomThemes.isColumnMode(context) ? 16.0 : 12.0;
+    final bottomSheetPadding = ChatLoomThemes.isColumnMode(context)
+        ? 16.0
+        : 12.0;
     final scrollUpBannerEventId = controller.scrollUpBannerEventId;
 
     final accountConfig = Matrix.of(context).client.applicationAccountConfig;
@@ -387,14 +391,27 @@ class ChatView extends StatelessWidget {
                             bottom: 0,
                             child: ConversationJumpButtonSlot(
                               composerInset: controller.composerInset,
-                              child: ValueListenableBuilder<int>(
-                                valueListenable: controller.newBelow,
-                                builder: (context, count, _) =>
-                                    ConversationJumpButton(
-                                      visible: controller.showScrollDownButton,
-                                      count: count,
-                                      onPressed: controller.scrollDown,
+                              endInset: bottomSheetPadding + NotionSpace.xs,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  ValueListenableBuilder<int>(
+                                    valueListenable: controller.newBelow,
+                                    builder: (context, count, _) =>
+                                        ConversationJumpButton(
+                                          visible:
+                                              controller.showScrollDownButton,
+                                          count: count,
+                                          onPressed: controller.scrollDown,
+                                        ),
+                                  ),
+                                  if (AppSettings.personalIncognito.value) ...[
+                                    const SizedBox(height: NotionSpace.xs),
+                                    ConversationReadButton(
+                                      rooms: [controller.room],
                                     ),
+                                  ],
+                                ],
                               ),
                             ),
                           ),

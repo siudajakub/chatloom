@@ -17,6 +17,7 @@ import 'package:chatloom/pages/chat/composer_keyboard.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/pages/chat/conversation_read_button.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/conversation_source_picker.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
@@ -2685,10 +2686,31 @@ class _MergedChatPageState extends State<_MergedChatView>
                         bottom: 0,
                         child: ConversationJumpButtonSlot(
                           composerInset: composerInset,
-                          child: ConversationJumpButton(
-                            visible: _scrolledUp,
-                            count: _newBelow,
-                            onPressed: _jumpToLatest,
+                          endInset:
+                              (columns ? NotionSpace.lg : NotionSpace.md) +
+                              NotionSpace.xs,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ConversationJumpButton(
+                                visible: _scrolledUp,
+                                count: _newBelow,
+                                onPressed: _jumpToLatest,
+                              ),
+                              if (AppSettings.personalIncognito.value) ...[
+                                const SizedBox(height: NotionSpace.xs),
+                                ConversationReadButton(
+                                  rooms: [
+                                    for (final member in group.members)
+                                      if (personal.client.getRoomById(
+                                            member.roomId,
+                                          )
+                                          case final Room room)
+                                        room,
+                                  ],
+                                ),
+                              ],
+                            ],
                           ),
                         ),
                       ),

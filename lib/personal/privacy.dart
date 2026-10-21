@@ -47,6 +47,9 @@ abstract final class PersonalPrivacy {
     String eventId, {
     bool manual = false,
     bool acceptedReply = false,
+    // Only an explicit manual action can override the automatic receipt
+    // preference. It still uses the exact room/event transport grant.
+    bool publicReceipt = false,
   }) async {
     if (!policy.allowRead(manual: manual, acceptedReply: acceptedReply)) return;
     if (!eventId.startsWith(r'$')) return;
@@ -59,7 +62,9 @@ abstract final class PersonalPrivacy {
       () => room.setReadMarker(
         eventId,
         mRead: eventId,
-        public: AppSettings.sendPublicReadReceipts.value,
+        public:
+            (manual && publicReceipt) ||
+            AppSettings.sendPublicReadReceipts.value,
       ),
     );
   }
