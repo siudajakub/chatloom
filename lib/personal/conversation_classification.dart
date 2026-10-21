@@ -2,6 +2,7 @@
 import 'package:matrix/matrix.dart';
 
 const _bridgeTypes = ['m.bridge', 'uk.half-shot.bridge', 'com.beeper.bridge'];
+const _roomFeaturesType = 'com.beeper.room_features';
 
 String? canonicalNetwork(Object? value) {
   if (value is! String) return null;
@@ -28,6 +29,12 @@ Iterable<StrippedStateEvent> _infos(Room room) sync* {
 
 class ConversationClassification {
   final String network;
+
+  /// Not a one-to-one conversation: a group, group DM, channel, broadcast or
+  /// community room. Same answer as [Room.isDirectChatForDisplay]: the
+  /// bridge's own room kind declaration first (bridgev2 leaves groups and
+  /// channels undeclared), then native `m.direct`, then, for bridges that
+  /// never declare kinds, a complete member list with one contact.
   final bool isGroup;
   final bool technical;
   const ConversationClassification(this.network, this.isGroup, this.technical);
@@ -48,8 +55,16 @@ class ConversationClassifier {
   /// Classifications computed (not served from the memo); tests only.
   static int debugComputations = 0;
 
+  /// Per client: how many bridge bots were known to declare room kinds when
+  /// this classifier was built (see [Room.bridgeBotsDeclaringRoomKinds]).
+  final _kindDeclarers = <Client, int>{};
+
   ConversationClassifier(Iterable<Room> rooms) {
     for (final room in rooms) {
+      _kindDeclarers.putIfAbsent(
+        room.client,
+        () => Room.bridgeBotsDeclaringRoomKinds(room.client).length,
+      );
       for (final info in _infos(room)) {
         final bot = info.content['bridgebot'];
         if (bot is String && bot.isValidMatrixIdStrict())
@@ -69,8 +84,13 @@ class ConversationClassifier {
   }
 
   /// Whether this classifier already knows every service member [room]
-  /// declares, i.e. a changed [room] cannot change other rooms' results.
+  /// declares and no bridge started declaring room kinds since it was built,
+  /// i.e. a changed [room] cannot change other rooms' results.
   bool covers(Room room) {
+    if (_kindDeclarers[room.client] !=
+        Room.bridgeBotsDeclaringRoomKinds(room.client).length) {
+      return false;
+    }
     for (final info in _infos(room)) {
       final bot = info.content['bridgebot'];
       if (bot is String &&
@@ -115,6 +135,11 @@ class ConversationClassifier {
       memberStates?.length,
       members,
       for (final info in _infos(room)) identityHashCode(info),
+      for (final features
+          in room.states[_roomFeaturesType]?.values ??
+              const <StrippedStateEvent>[])
+        identityHashCode(features),
+      Room.bridgeBotsDeclaringRoomKinds(room.client).length,
       identityHashCode(room.getState('io.element.functional_members')),
       identityHashCode(room.getState(EventTypes.RoomCreate)),
     ]);
@@ -165,8 +190,20 @@ class ConversationClassifier {
         (room.summary.mHeroes ?? []).every(
           (id) => id == room.client.userID || _serviceMembers.contains(id),
         );
+    // A bridge portal (bridge info naming a remote chat, sent by its bot) is a
+    // real conversation even when no remote member is loaded: Telegram Saved
+    // Messages, a WhatsApp channel posting as the bot, a Signal DM before the
+    // contact's ACI is known. Bridge management rooms carry no bridge info.
+    final portal = infos.any((info) {
+      final channel = info.content['channel'];
+      final id = channel is Map ? channel['id'] : null;
+      return info.senderId == info.content['bridgebot'] &&
+          id is String &&
+          id.trim().isNotEmpty;
+    });
     final technical =
         !room.isSpace &&
+        !portal &&
         ((complete &&
                 peers.isNotEmpty &&
                 peers.every(_serviceMembers.contains)) ||

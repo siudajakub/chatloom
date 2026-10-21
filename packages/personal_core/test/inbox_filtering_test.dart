@@ -188,4 +188,28 @@ void main() {
     expect(projectInbox([record]), isEmpty);
     expect(projectInbox([record], filter: InboxFilter.lowPriority), [record]);
   });
+
+  test('a pinned group placed under Groups stays on the main list', () {
+    InboxRecord group(String id, {int? pin}) {
+      final base = fixture(id, group: true, pin: pin, network: 'Telegram');
+      return InboxRecord(
+        representativeRoomId: id,
+        entityId: id,
+        displayName: base.displayName,
+        metadata: base.metadata,
+        networks: base.networks,
+        isGroup: true,
+        placement: ChatPlacement.groups,
+        lastActivity: now,
+      );
+    }
+
+    final pinned = group('pinned', pin: 0);
+    final plain = group('plain');
+    expect(projectInbox([pinned, plain]), [pinned]);
+    expect(projectInbox([pinned, plain], filter: InboxFilter.groups), [
+      pinned,
+      plain,
+    ]);
+  });
 }

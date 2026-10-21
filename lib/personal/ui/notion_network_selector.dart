@@ -156,7 +156,7 @@ Future<String?> showNotionNetworkSelector(
   ValueChanged<InboxFilter>? onViewSelected,
   VoidCallback? onManageNetworks,
 }) {
-  // Grow from the dock pill: the scale origin is the middle of the pill's
+  // Grow from the dock pill: the reveal origin is the middle of the pill's
   // top edge, in the root navigator's coordinates (the same space as
   // [anchor]).
   final root = Navigator.of(context, rootNavigator: true).context;
@@ -212,12 +212,11 @@ Future<String?> showNotionNetworkSelector(
                   },
                   child: Focus(
                     autofocus: true,
-                    // One glass surface: tint, hairline and blur once the
-                    // popover has grown (DESIGN.md "Glass"). No pointer, like
-                    // Telegram and Messenger menus: the panel grows from the
-                    // dock pill, and a separate pointer could not share the
-                    // panel's blur (it painted a translucent, unblurred patch
-                    // over the dock).
+                    // One glass surface: tint, hairline and blur from the
+                    // first frame; the glass grows out of the dock pill and
+                    // the rows fade in inside it (NotionGlassReveal, DESIGN.md
+                    // "Glass"). No pointer, like Telegram and Messenger menus:
+                    // a separate pointer could not share the panel's blur.
                     child: NotionGlassPanel(
                       child: ConstrainedBox(
                         constraints: BoxConstraints(maxHeight: maxHeight),

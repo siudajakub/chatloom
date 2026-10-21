@@ -50,3 +50,21 @@ loop, and a dropped request's failure no longer sets `_lastSyncFailed` or emits
 transport and cryptography are unchanged. Regression: app
 `test/personal/sync_network_restart_test.dart` (plus
 `test/personal/resource_optimization_test.dart`).
+
+### 2026-10-21 — undeclared rooms of kind-declaring bridges are groups
+
+mautrix bridgev2 writes `com.beeper.room_type.v2` only for `dm`, `group_dm`
+and `space`; groups, channels and broadcasts (`RoomTypeDefault`) carry no
+room type at all. The bridge-aware presentation used to fall back to member
+counting for such rooms, so a Telegram channel (owner + bridge bot + channel
+ghost), a hidden-member supergroup with one synced sender, a 2-member group
+or a WhatsApp status broadcast with one poster showed as a DM. `Room` now
+treats a bridged room without a declaration as a group when its bridge is
+known to declare kinds: the bridge bot sent `com.beeper.room_features` under
+the same state key (every bridgev2 portal), or the same bot sent a declaration
+in another room of the client (`Room.bridgeBotsDeclaringRoomKinds`, filled in
+`setState`, grows only, bot-sent declarations only). Bridges that never
+declare kinds keep the complete-member-list heuristic. Presentation only:
+native `m.direct`, merge authorization, transport and cryptography are
+unchanged. Regression: app `test/personal/conversation_kind_networks_test.dart`
+and `test/personal/merge_conversations_test.dart`.

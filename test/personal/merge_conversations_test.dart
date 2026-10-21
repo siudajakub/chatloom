@@ -63,6 +63,7 @@ Room _room(
   bool technical = false,
   int minute = 0,
   String bridgeSender = _bot,
+  String bot = _bot,
 }) {
   final room = Room(
     id: '!$id:example.invalid',
@@ -77,14 +78,14 @@ Room _room(
     room,
     'm.bridge',
     {
-      'bridgebot': _bot,
+      'bridgebot': bot,
       'protocol': {'id': network},
       'com.beeper.room_type.v2': ?kind,
     },
     key: 'fixture',
-    sender: bridgeSender,
+    sender: bridgeSender == _bot ? bot : bridgeSender,
   );
-  final members = [_owner, _bot, if (!technical) _peer];
+  final members = [_owner, bot, if (!technical) _peer];
   for (final member in members) {
     _state(room, EventTypes.RoomMember, {'membership': 'join'}, key: member);
   }
@@ -261,13 +262,32 @@ void main() {
   });
 
   test('a 2-member bridged group without a room type never merges', () {
+    // Its bot declares the DMs (`dm`) elsewhere, as every bridgev2 bridge
+    // does; it leaves groups and channels undeclared.
     final pair = _room(client, 'pair', network: 'telegram', kind: null);
-    expect(pair.isDirectChatForDisplay, isTrue); // legacy display heuristic
+    expect(pair.isDirectChatForDisplay, isFalse);
     expect(InboxProjection.mergeable(pair), isFalse);
     expect(
       () => planMerge(personal, [whatsapp, pair], anchor: whatsapp),
       throwsArgumentError,
     );
+    // A stale native m.direct entry does not turn it into a DM either.
+    client.direct[_peer] = [pair.id];
+    expect(pair.isDirectChatForDisplay, isFalse);
+    expect(InboxProjection.mergeable(pair), isFalse);
+  });
+
+  test('a bridge that never declares kinds keeps the legacy rule', () {
+    const legacyBot = '@legacy-bridge:example.invalid';
+    final pair = _room(
+      client,
+      'legacy',
+      network: 'telegram',
+      kind: null,
+      bot: legacyBot,
+    );
+    expect(pair.isDirectChatForDisplay, isTrue); // complete member list
+    expect(InboxProjection.mergeable(pair), isFalse);
     // A native m.direct mapping keeps such a chat mergeable.
     client.direct[_peer] = [pair.id];
     expect(InboxProjection.mergeable(pair), isTrue);

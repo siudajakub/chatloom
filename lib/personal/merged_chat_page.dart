@@ -2154,24 +2154,6 @@ class _MergedChatPageState extends State<_MergedChatView>
   }
 
   @override
-  bool get roundRecordingMode {
-    final room = _targetRoom;
-    return room != null &&
-        PlatformInfos.isAndroid &&
-        PersonalClient.networkOf(room) == 'telegram' &&
-        AppSettings.personalRoundRecordingMode.value &&
-        roundAvailability.canRecord;
-  }
-
-  @override
-  Future<void> toggleRoundRecordingMode() async {
-    await AppSettings.personalRoundRecordingMode.setItem(
-      !AppSettings.personalRoundRecordingMode.value,
-    );
-    if (mounted) setState(() {});
-  }
-
-  @override
   bool get canRecordRoundSilently {
     final room = _targetRoom;
     return room != null &&

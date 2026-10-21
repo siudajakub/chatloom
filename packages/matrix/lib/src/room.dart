@@ -156,8 +156,43 @@ class Room {
     }
 
     (states[state.type] ??= {})[stateKey] = state;
+    _noteBridgeKindDeclaration(state);
 
     client.onRoomState.add((roomId: id, state: state));
+  }
+
+  static const _bridgeInfoTypes = [
+    'm.bridge',
+    'uk.half-shot.bridge',
+    'com.beeper.bridge',
+  ];
+
+  /// Bridge bots per client seen declaring a room kind
+  /// (`com.beeper.room_type.v2` / legacy `com.beeper.room_type`) in bridge
+  /// info they sent themselves. Only grows: a bridge that declares kinds
+  /// keeps doing so.
+  static final _kindDeclaringBots = Expando<Set<String>>(
+    'bridge room kind declarations',
+  );
+
+  /// Bridge bots of [client] known to declare the kind of their rooms. Such a
+  /// bridge (mautrix bridgev2, legacy mautrix Go bridges) declares every DM,
+  /// so one of its rooms without a declaration is a group, channel or
+  /// broadcast. Grows only; presentation evidence, never an authorization.
+  static Set<String> bridgeBotsDeclaringRoomKinds(Client client) =>
+      UnmodifiableSetView(_kindDeclaringBots[client] ?? const <String>{});
+
+  void _noteBridgeKindDeclaration(StrippedStateEvent state) {
+    if (!_bridgeInfoTypes.contains(state.type)) return;
+    final content = state.content;
+    final bot = content['bridgebot'];
+    if (bot is! String || state.senderId != bot) return;
+    bool declared(Object? value) => value is String && value.trim().isNotEmpty;
+    if (!declared(content['com.beeper.room_type.v2']) &&
+        !declared(content['com.beeper.room_type'])) {
+      return;
+    }
+    (_kindDeclaringBots[client] ??= <String>{}).add(bot);
   }
 
   /// ID of the fully read marker event.
@@ -362,13 +397,23 @@ class Room {
     return bridge == null ? directChatMatrixID : bridge.partnerId;
   }
 
+  /// Whether the bridge behind [info] declares the kind of every room it
+  /// creates: a mautrix bridgev2 portal (its bot sent
+  /// `com.beeper.room_features` under the same state key as this bridge info)
+  /// or a bot seen declaring a kind in another room of this client.
+  bool _bridgeDeclaresRoomKinds(StrippedStateEvent info) {
+    final bot = info.content['bridgebot'];
+    final key = info.stateKey;
+    final features = key == null
+        ? null
+        : states['com.beeper.room_features']?[key];
+    if (features != null && features.senderId == bot) return true;
+    return _kindDeclaringBots[client]?.contains(bot) ?? false;
+  }
+
   _BridgePresentation? get _bridgePresentation {
     final infos = <StrippedStateEvent>[];
-    for (final type in [
-      'm.bridge',
-      'uk.half-shot.bridge',
-      'com.beeper.bridge',
-    ]) {
+    for (final type in _bridgeInfoTypes) {
       for (final event in states[type]?.values ?? <StrippedStateEvent>[]) {
         final protocol = event.content['protocol'];
         final bot = event.content['bridgebot'];
@@ -412,7 +457,13 @@ class Room {
         )
         .whereType<String>()
         .toSet();
-    final explicitGroup = types.any((type) => type != 'dm');
+    // bridgev2 declares DMs (`dm`) and group DMs (`group_dm`) but leaves
+    // groups, channels and broadcasts undeclared (`RoomTypeDefault` is ""). A
+    // room left undeclared by a bridge that declares kinds is therefore never
+    // a DM, whatever its loaded member count or `m.direct` suggests.
+    final undeclaredGroup =
+        types.isEmpty && infos.any(_bridgeDeclaresRoomKinds);
+    final explicitGroup = undeclaredGroup || types.any((type) => type != 'dm');
     final direct = directChatMatrixID;
     String? partner;
     if (!explicitGroup && direct != null && !serviceMembers.contains(direct)) {

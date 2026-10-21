@@ -62,7 +62,10 @@ List<InboxRecord> projectInbox(
 }) {
   final terms = query.toLowerCase().trim().split(RegExp(r'\s+'));
   final result = records.where((record) {
-    final placement = record.metadata.placement ?? record.placement;
+    var placement = record.metadata.placement ?? record.placement;
+    // A pinned group stays on the main list as well as under Groups.
+    if (placement == ChatPlacement.groups && record.metadata.isPinned)
+      placement = ChatPlacement.inbox;
     final ignored =
         record.metadata.ignored || placement == ChatPlacement.ignored;
     if (record.technical)
