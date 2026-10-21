@@ -270,6 +270,7 @@ String syncEntityTitle(
 
 const _fieldLabels = <String, String>{
   'auto': 'Automatic transcription',
+  'outgoing': 'Your messages',
   'defaultLanguage': 'Default language',
   'maxSeconds': 'Maximum length',
   'dailyBudgetUsd': 'Daily limit',
