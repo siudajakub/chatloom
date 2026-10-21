@@ -8,6 +8,7 @@ import 'package:chatloom/personal/storage/sql_cipher_json_database.dart';
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:integration_test/integration_test.dart';
 import 'package:just_audio/just_audio.dart';
@@ -24,6 +25,9 @@ void main() {
     expect(Platform.isMacOS, isTrue);
     await vod.init();
     const storage = personalSecureStorage;
+    const otherService = FlutterSecureStorage(
+      mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+    );
     final marker = 'chatloom-ci-${DateTime.now().microsecondsSinceEpoch}';
     final cipher = base64Url.encode(
       List<int>.generate(32, (_) => Random.secure().nextInt(256)),
@@ -33,8 +37,11 @@ void main() {
     final path = '${directory.path}/smoke.db';
     SqlCipherJsonDatabase? database;
     try {
+      await otherService.write(key: marker, value: 'synthetic-other-service');
+      expect(await storage.read(key: marker), isNull);
       await storage.write(key: marker, value: cipher);
       expect(await storage.read(key: marker), cipher);
+      expect(await otherService.read(key: marker), 'synthetic-other-service');
       database = await SqlCipherJsonDatabase.open(path: path, cipher: cipher);
       await database.put('fixture', {'value': 'synthetic-ci-canary'});
       await database.close();
@@ -59,6 +66,7 @@ void main() {
     } finally {
       await database?.close();
       await storage.delete(key: marker);
+      await otherService.delete(key: marker);
       await directory.delete(recursive: true);
     }
   });

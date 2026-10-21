@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/config/app_config.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Private desktop distribution does not use Keychain Sharing or provisioning.
@@ -7,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// the same namespace, including app lock, session restore and database keys.
 /// An unavailable Keychain still fails closed; this is not a file fallback.
 const personalMacStorageOptions = MacOsOptions(
+  accountName: AppConfig.appId,
   usesDataProtectionKeychain: false,
 );
 

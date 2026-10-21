@@ -74,7 +74,9 @@ but cannot compile this macOS target.
 
 All secure-storage consumers use the same macOS login Keychain options. This
 uses the platform's Keychain without Keychain Sharing or a provisioning profile,
-as supported by `flutter_secure_storage`. Android and iOS storage options stay
+as supported by `flutter_secure_storage`. Its service is scoped to
+`pl.personal.chat`, separating it from other Flutter applications. The smoke
+test verifies isolation from the plugin's default service. Android and iOS storage options stay
 unchanged. SQLCipher's existing key-preservation and fail-closed behavior stay
 in force. No app data, existing keys or sessions are reset by this change. An
 old installation using another Keychain namespace requires explicit recovery;
