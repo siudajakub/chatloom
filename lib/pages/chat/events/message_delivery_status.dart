@@ -5,6 +5,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
+import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
@@ -162,6 +163,20 @@ abstract final class MessageDeliveryActions {
         'The message did not reach the server. Retry sends the same attempt, '
         'so it is never delivered twice.';
     for (final failed in failedEvents(event, timeline)) {
+      final round = TelegramRoundService.actionOf(failed);
+      if (round != null && _isRound(failed)) {
+        try {
+          return await TelegramRoundService.of(
+            failed.room.client,
+          ).failureReason(round);
+        } catch (_) {
+          return generic;
+        }
+      }
+      final media = OutgoingMedia.failureOf(
+        failed.transactionId ?? failed.eventId,
+      );
+      if (media != null) return media;
       final action = PersonalClient.immediateActionOf(failed);
       if (action == null) continue;
       try {
@@ -203,16 +218,14 @@ abstract final class MessageDeliveryActions {
     var ok = true;
     for (final e in failed) {
       try {
-        final round = RoundVideoDescriptor.fromContent(e.content) != null;
-        final txid = e.transactionId ?? e.eventId;
-        final roundMatch = RegExp(
-          r'^round-([A-Za-z0-9_-]{1,128})$',
-        ).firstMatch(txid);
+        final round = TelegramRoundService.actionOf(e);
         final immediate = PersonalClient.immediateActionOf(e);
-        if (round && roundMatch != null) {
+        if (round != null && _isRound(e)) {
+          // The bubble shows the upload again; leaving the chat does not
+          // stop it.
           unawaited(
             TelegramRoundService.of(e.room.client)
-                .retry(roundMatch[1]!, stillCurrent: () => context.mounted)
+                .retry(round, room: e.room)
                 .then<void>((_) {}, onError: (Object _) {}),
           );
         } else if (immediate != null) {
@@ -224,13 +237,15 @@ abstract final class MessageDeliveryActions {
           );
         } else {
           unawaited(
-            e.sendAgain().then<void>(
+            sendAgain(e).then<void>(
               (_) {},
-              onError: (Object _) {
+              onError: (Object error) {
                 if (context.mounted) {
                   _notify(
                     context,
-                    'The message could not be sent again. Send it as a new message.',
+                    error is OutgoingMediaUnavailable
+                        ? 'This file is no longer on this device. Delete it and send it again.'
+                        : 'The message could not be sent again. Send it as a new message.',
                   );
                 }
               },
@@ -258,6 +273,12 @@ abstract final class MessageDeliveryActions {
     for (final e in failedEvents(event, timeline)) {
       try {
         final immediate = PersonalClient.immediateActionOf(e);
+        final round = TelegramRoundService.actionOf(e);
+        // A round's attempt is retired first: it must never be sent after
+        // its bubble is gone.
+        if (round != null && _isRound(e)) {
+          await TelegramRoundService.of(e.room.client).discard(round);
+        }
         await e.cancelSend();
         if (immediate != null) {
           await PersonalClient.of(e.room.client).discardImmediate(immediate);
@@ -269,6 +290,26 @@ abstract final class MessageDeliveryActions {
     if (!ok && context.mounted) {
       _notify(context, 'The unsent message could not be removed.');
     }
+  }
+
+  static bool _isRound(Event event) =>
+      RoundVideoDescriptor.fromContent(event.content) != null;
+
+  /// Sends one failed event again with its original transaction: files
+  /// (photos, videos, voice) through [OutgoingMedia], so the bubble shows
+  /// the upload again; everything else through the SDK.
+  static Future<void> sendAgain(Event event) async {
+    if (!_isRound(event) &&
+        {
+          MessageTypes.Image,
+          MessageTypes.Video,
+          MessageTypes.Audio,
+          MessageTypes.File,
+        }.contains(event.messageType)) {
+      await OutgoingMedia.retry(event);
+      return;
+    }
+    await event.sendAgain();
   }
 
   /// A bridge rejected the message: send its text again as a new message
@@ -285,11 +326,14 @@ abstract final class MessageDeliveryActions {
     final proceed = await showTrustUserInRoomDialog(context, room);
     if (!context.mounted || !proceed) return;
     final replyId = event.inReplyToEventId(includingFallback: false);
-    final reply = replyId == null ? null : await timeline.getEventById(replyId);
     final thread = event.relationshipType == RelationshipTypes.thread
         ? event.relationshipEventId
         : null;
     try {
+      // The quoted message may have to be fetched from the server.
+      final reply = replyId == null
+          ? null
+          : await timeline.getEventById(replyId);
       final result = await PersonalClient.of(
         room.client,
       ).sendImmediate(room, text, replyTo: reply, threadId: thread);

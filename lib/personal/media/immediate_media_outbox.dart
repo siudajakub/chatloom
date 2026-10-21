@@ -128,6 +128,10 @@ class ImmediateMediaOutbox {
   }) : _newActionId = newActionId ?? _randomId,
        _now = now ?? DateTime.now;
 
+  /// A fresh action ID, reserved by the caller before [stage] so the bubble
+  /// (`round-<id>`) can be shown before the draft is committed.
+  String newActionId() => _newActionId();
+
   /// Drops in-memory drafts (one, or all). Durable records are unaffected; a
   /// later dispatch reads, verifies and, if needed, encrypts from storage.
   void releaseStaged([String? actionId]) {
@@ -234,6 +238,7 @@ class ImmediateMediaOutbox {
     required Uint8List bytes,
     Uint8List? thumbnailBytes,
     String? actionId,
+    String? reservedActionId,
     bool encryptWhileStaging = false,
   }) async {
     _pruneStaged();
@@ -284,7 +289,7 @@ class ImmediateMediaOutbox {
             return _result(matched);
           }
         }
-        final id = _newActionId();
+        final id = reservedActionId ?? _newActionId();
         final record = PendingMediaRecord(
           actionId: id,
           bytes: frozenBytes,
@@ -700,6 +705,65 @@ class ImmediateMediaOutbox {
     );
     await store.remove(actionId);
   });
+
+  /// The user deleted an unsent round from its bubble. Unlike [cancel],
+  /// this also retires an attempt whose outcome is unknown: the bubble told
+  /// the user the server may already have it, and the attempt is never
+  /// sent again. An accepted round cannot be discarded.
+  Future<void> discard(String actionId) => _serialize(actionId, () async {
+    _staged.remove(actionId);
+    final record = await store.get(actionId);
+    if (record == null) return;
+    if (!_owns(record)) {
+      throw const PendingMediaFailure('differentSessionNeedsReconciliation');
+    }
+    if ({'matrixAccepted', 'completed'}.contains(record.metadata['state'])) {
+      throw const PendingMediaFailure('alreadyAccepted');
+    }
+    await _saveMetadata(
+      record.withMetadata({...record.metadata, 'state': 'cancelled'}),
+    );
+    await store.remove(actionId);
+  });
+
+  /// Drops the tombstone of a completed round whose bytes are already
+  /// released (its event is on the server; nothing can resend it).
+  Future<void> forgetCompleted(String actionId) =>
+      _serialize(actionId, () async {
+        _staged.remove(actionId);
+        final record = await store.get(actionId);
+        if (record == null ||
+            !_owns(record) ||
+            record.metadata['state'] != 'completed' ||
+            record.metadata['bytesReleased'] != true) {
+          return;
+        }
+        await store.remove(actionId);
+      });
+
+  /// The server's copy of an attempt whose response was lost arrived in
+  /// sync (own event, this transaction ID): it was accepted after all.
+  /// Returns whether the record moved to `matrixAccepted`.
+  Future<bool> confirmAccepted(String actionId, String eventId) =>
+      _serialize(actionId, () async {
+        if (!eventId.startsWith(r'$')) return false;
+        final record = await store.get(actionId);
+        if (record == null ||
+            !_owns(record) ||
+            !{'unknown', 'inFlight'}.contains(record.metadata['state'])) {
+          return false;
+        }
+        await _saveMetadata(
+          record.withMetadata({
+            ...record.metadata,
+            'state': 'matrixAccepted',
+            'eventId': eventId,
+            'errorCode': null,
+          }),
+        );
+        return true;
+      });
+
   Future<ImmediateMediaResult> _saveFailure(
     PendingMediaRecord? record,
     String actionId,

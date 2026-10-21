@@ -20,7 +20,10 @@ class MemoryStore {
       rejectAcceptedWrite = false;
       throw StateError('secret-canary store failure');
     }
-    if (value['state'] == 'prepared' && rejectPreparedWrite) {
+    // The first write of a new attempt (its record, created inFlight).
+    if (rejectPreparedWrite &&
+        value.containsKey('payload') &&
+        records[key]?['actionId'] != value['actionId']) {
       throw StateError('secret-canary store failure');
     }
     records[key] = Map<String, dynamic>.from(

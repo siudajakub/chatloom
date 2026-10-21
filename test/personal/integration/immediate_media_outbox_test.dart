@@ -603,10 +603,103 @@ Future<void> main() async {
       !recoveredUpload.toString().contains('fixture-key'),
       'Result leaks descriptors',
     );
+
+    // Wave 4 send-status: the bubble shows before staging, so the action ID
+    // is reserved first; Delete in the bubble retires even an unknown
+    // attempt (never sent again); the server copy arriving in sync confirms
+    // a lost response; a released tombstone can be dropped.
+    Future<ImmediateMediaResult> stageVariant(
+      ImmediateMediaOutbox outbox,
+      int marker, {
+      String? reserved,
+    }) => outbox.stage(
+      target: target,
+      descriptor: descriptor,
+      profile: profile,
+      bytes: Uint8List.fromList([marker, ...bytes.skip(1)]),
+      thumbnailBytes: thumb,
+      reservedActionId: reserved,
+    );
+    final reserved = o.newActionId();
+    final reservedStage = await stageVariant(o, 201, reserved: reserved);
+    check(
+      reservedStage.actionId == reserved &&
+          reservedStage.transactionId == 'round-$reserved',
+      'Reserved action ID not used for the staged draft',
+    );
+    loseAck = true;
+    final lostForDelete = await o.dispatch(reserved);
+    check(
+      lostForDelete.state == ImmediateMediaState.unknown,
+      'Lost ACK was not reported as unknown',
+    );
+    var cancelRefused = false;
+    try {
+      await o.cancel(reserved);
+    } on PendingMediaFailure {
+      cancelRefused = true;
+    }
+    check(cancelRefused, 'cancel retired an unknown attempt');
+    await o.discard(reserved);
+    check(
+      await database.get(reserved) == null,
+      'Discarded attempt kept its record',
+    );
+    final requestsAfterDiscard = requests;
+    final afterDiscard = await o.dispatch(reserved);
+    check(
+      afterDiscard.state == ImmediateMediaState.failed &&
+          requests == requestsAfterDiscard,
+      'A discarded attempt was sent',
+    );
+    final syncStage = await stageVariant(o, 202);
+    loseAck = true;
+    final syncLost = await o.dispatch(syncStage.actionId);
+    check(
+      syncLost.state == ImmediateMediaState.unknown,
+      'Lost ACK was not reported as unknown',
+    );
+    final serverCopy = delivered[syncStage.transactionId]!;
+    check(
+      await o.confirmAccepted(syncStage.actionId, serverCopy),
+      'The synced server copy did not confirm the attempt',
+    );
+    check(
+      !await o.confirmAccepted(syncStage.actionId, serverCopy),
+      'An accepted attempt was confirmed twice',
+    );
+    final requestsAfterConfirm = requests;
+    final confirmed = await o.dispatch(syncStage.actionId);
+    check(
+      confirmed.state == ImmediateMediaState.matrixAccepted &&
+          confirmed.eventId == serverCopy &&
+          requests == requestsAfterConfirm,
+      'A confirmed attempt was sent again',
+    );
+    var discardRefused = false;
+    try {
+      await o.discard(syncStage.actionId);
+    } on PendingMediaFailure {
+      discardRefused = true;
+    }
+    check(discardRefused, 'An accepted round was discarded');
+    await o.complete(syncStage.actionId);
+    await o.forgetCompleted(syncStage.actionId);
+    check(
+      await database.get(syncStage.actionId) != null,
+      'A tombstone was dropped before its bytes were released',
+    );
+    await o.purgeAcceptedMedia(syncStage.actionId);
+    await o.forgetCompleted(syncStage.actionId);
+    check(
+      await database.get(syncStage.actionId) == null,
+      'A released tombstone was kept',
+    );
     stdout.writeln(
       'PASS SQLCipher media outbox offline stage, double tap, canonical encrypted '
       'content/relations, lost ACK/restart/stable keys+txid, account/device guards, '
-      'disk faults, upload checkpoint, distinct delivery and safe tombstone cleanup',
+      'disk faults, upload checkpoint, distinct delivery, safe tombstone cleanup, '
+      'reserved bubble IDs, bubble delete of unknown attempts and sync confirmation',
     );
   } finally {
     await database.close();

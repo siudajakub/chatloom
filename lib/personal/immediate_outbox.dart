@@ -270,6 +270,11 @@ class ImmediateOutbox {
           return _failure(id, 'actionIdAlreadyUsed');
         }
         await put('immediate:action:$id', {'indexKey': key});
+        // Created in its pre-transport state: [_transmit] then needs no
+        // second write before the bubble and the network (one durable
+        // commit fewer per message; same crash and retry semantics, since
+        // a resumed record is re-sent with its own transaction ID either
+        // way).
         await put(key, {
           'schema': 1,
           'actionId': id,
@@ -277,7 +282,7 @@ class ImmediateOutbox {
           'deviceId': deviceId,
           'canonical': canonical,
           'payload': frozen,
-          'state': 'prepared',
+          'state': 'inFlight',
         });
         _created.add(id);
         return (key, id);
@@ -305,8 +310,10 @@ class ImmediateOutbox {
       if (record['state'] == 'accepted') return _result(record);
       // Explicit same-device retry of unknown/in-flight uses the exact same
       // Matrix transaction ID. Never retry automatically in a background loop.
-      record = {...record, 'state': 'inFlight'};
-      await put(key, record);
+      if (record['state'] != 'inFlight') {
+        record = {...record, 'state': 'inFlight'};
+        await put(key, record);
+      }
       final transactionId = record['transactionId'] as String;
       if (onDurable != null) {
         try {
