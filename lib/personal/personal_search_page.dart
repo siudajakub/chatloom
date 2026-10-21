@@ -10,6 +10,58 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
+/// One search hit with everything its row needs, computed once per result
+/// set instead of once per row build.
+@immutable
+class PersonalSearchHit {
+  const PersonalSearchHit({
+    required this.event,
+    required this.display,
+    required this.source,
+    required this.timestamp,
+    this.transcript,
+  });
+
+  final Event event;
+  final Event display;
+  final SourceEventRef source;
+  final DateTime timestamp;
+  final String? transcript;
+
+  /// Newest first; equal times by source key (precomputed, so sorting never
+  /// rebuilds keys).
+  static int compare(PersonalSearchHit a, PersonalSearchHit b) {
+    final byTime = b.timestamp.compareTo(a.timestamp);
+    return byTime != 0 ? byTime : a.source.key.compareTo(b.source.key);
+  }
+}
+
+/// Keeps one computed value while its signature is unchanged (records and
+/// lists of plain values compare by value).
+final class PersonalSearchMemo<T> {
+  Object? _signature;
+  T? _value;
+  bool _has = false;
+
+  /// How often [resolve] had to compute (for tests).
+  int computations = 0;
+
+  T resolve(Object? signature, T Function() compute) {
+    if (_has && _signature == signature) return _value as T;
+    computations++;
+    _signature = signature;
+    _value = compute();
+    _has = true;
+    return _value as T;
+  }
+
+  void clear() {
+    _has = false;
+    _signature = null;
+    _value = null;
+  }
+}
+
 class _SearchScope {
   final String key;
   final String name;
@@ -22,12 +74,30 @@ class _SearchScope {
 class PersonalSearchPage extends StatefulWidget {
   final PersonalClient personal;
   const PersonalSearchPage({super.key, required this.personal});
+
+  /// Number of result scans so far (tests check typing is debounced and
+  /// unrelated rebuilds reuse the memoised results).
+  @visibleForTesting
+  static int debugScans = 0;
   @override
   State<PersonalSearchPage> createState() => _PersonalSearchPageState();
 }
 
 class _PersonalSearchPageState extends State<PersonalSearchPage> {
+  /// Typing applies to the results after this pause (Telegram filters as
+  /// you type; one scan per pause instead of one per keystroke).
+  static const typingDebounce = Duration(milliseconds: 150);
+
   final query = TextEditingController();
+
+  /// The query text the results use; follows [query] after [typingDebounce].
+  String _appliedText = '';
+  Timer? _typing;
+
+  /// Bumped when a loaded timeline or the personal store (bookmarks,
+  /// transcripts) changes, so the memoised results are recomputed only then.
+  int _timelineRevision = 0, _personalRevision = 0;
+  final _resultsMemo = PersonalSearchMemo<List<PersonalSearchHit>>();
   final timelines = <String, Timeline>{};
   final unavailable = <String>{};
   String? selectedScope, loadedScope, network, mediaType;
@@ -43,11 +113,28 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
   @override
   void initState() {
     super.initState();
+    personal.addListener(_personalChanged);
     PersonalPageLoad.request(context, personal);
+  }
+
+  void _personalChanged() => _personalRevision++;
+
+  void _typed(String _) {
+    _typing?.cancel();
+    _typing = Timer(typingDebounce, _applyTyping);
+  }
+
+  void _applyTyping() {
+    _typing?.cancel();
+    _typing = null;
+    if (!mounted || _appliedText == query.text) return;
+    setState(() => _appliedText = query.text);
   }
 
   @override
   void dispose() {
+    _typing?.cancel();
+    personal.removeListener(_personalChanged);
     generation++;
     for (final t in timelines.values) {
       t.cancelSubscriptions();
@@ -127,7 +214,9 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
         final timeline = await room.getTimeline(
           limit: 100,
           onUpdate: () {
-            if (mounted && generation == current) setState(() {});
+            if (mounted && generation == current) {
+              setState(() => _timelineRevision++);
+            }
           },
         );
         if (!mounted || generation != current) {
@@ -168,6 +257,7 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
         }
       }
       pages++;
+      _timelineRevision++;
     } catch (_) {
       problem = 'Could not load more history. Try again.';
     } finally {
@@ -196,7 +286,7 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
     }
     final before = beforeDay;
     return PersonalSearchQuery(
-      text: query.text,
+      text: _appliedText,
       networks: network == null ? [] : [network!],
       messageTypes: mediaType == null ? [] : [mediaType!],
       outgoing: outgoing,
@@ -208,10 +298,29 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
     );
   }
 
-  List<Event> _results() {
-    if (loadedScope != selectedScope) return [];
+  /// The hits for the current query and filters, memoised on everything
+  /// they depend on: rebuilds for other reasons (focus, progress, a busy
+  /// flag) reuse the last list.
+  List<PersonalSearchHit> _results() => _resultsMemo.resolve((
+    loadedScope,
+    selectedScope,
+    _appliedText,
+    network,
+    mediaType,
+    outgoing,
+    bookmarksOnly,
+    afterDay,
+    beforeDay,
+    _timelineRevision,
+    _personalRevision,
+    generation,
+  ), _computeResults);
+
+  List<PersonalSearchHit> _computeResults() {
+    PersonalSearchPage.debugScans++;
+    if (loadedScope != selectedScope) return const [];
     final search = _query();
-    if (search == null) return [];
+    if (search == null) return const [];
     final bookmarked = <String>{};
     for (final value in personal.values.entries.where(
       (e) => e.key.startsWith('bookmark:'),
@@ -230,15 +339,16 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
       ))
         j.source.key: j.text,
     };
-    final events = <Event>[];
+    const searchable = {
+      EventTypes.Message,
+      EventTypes.Sticker,
+      EventTypes.Encrypted,
+    };
+    final hits = <PersonalSearchHit>[];
     final seen = <String>{};
     for (final timeline in timelines.values) {
       for (final source in timeline.events) {
-        if (!{
-              EventTypes.Message,
-              EventTypes.Sticker,
-              EventTypes.Encrypted,
-            }.contains(source.type) ||
+        if (!searchable.contains(source.type) ||
             source.relationshipType == RelationshipTypes.edit ||
             source.redacted) {
           continue;
@@ -255,29 +365,32 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
           MessageTypes.Sticker => 'image',
           _ => 'text',
         };
+        final transcript = transcripts[ref.key];
         if (search.matchesMessage(
           MessageSearchEntry(
             source: ref,
             timestamp: source.originServerTs,
             text: display.text,
-            transcript: transcripts[ref.key],
+            transcript: transcript,
             fileName: filename is String ? filename : null,
             messageType: type,
             isOutgoing: source.senderId == personal.client.userID,
             bookmarked: bookmarked.contains(ref.key),
           ),
         )) {
-          events.add(source);
+          hits.add(
+            PersonalSearchHit(
+              event: source,
+              display: display,
+              source: ref,
+              timestamp: source.originServerTs,
+              transcript: transcript,
+            ),
+          );
         }
       }
     }
-    events.sort((a, b) {
-      final byTime = b.originServerTs.compareTo(a.originServerTs);
-      return byTime != 0
-          ? byTime
-          : personal.source(a).key.compareTo(personal.source(b).key);
-    });
-    return events;
+    return hits..sort(PersonalSearchHit.compare);
   }
 
   String _dateLabel(DateTime? value, String empty) => value == null
@@ -316,260 +429,285 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 800),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      DropdownButtonFormField<String>(
-                        initialValue: selected?.key,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'Person or conversation',
-                        ),
-                        items: [
-                          for (final item in scopes)
-                            DropdownMenuItem(
-                              value: item.key,
-                              child: Text(
-                                item.name,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                        ],
-                        onChanged: busy
-                            ? null
-                            : (value) => setState(() {
-                                selectedScope = value;
-                                network = null;
-                              }),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: query,
-                        onChanged: (_) => setState(() {}),
-                        onSubmitted: (_) => _search(),
-                        decoration: const InputDecoration(
-                          labelText: 'Text, transcript or filename',
-                          prefixIcon: Icon(Icons.search),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
+            // The filters scroll in at most half the height, so the page
+            // never overflows with the keyboard up and results stay visible
+            // while typing.
+            child: LayoutBuilder(
+              builder: (context, constraints) => Column(
+                children: [
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: constraints.maxHeight / 2,
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          DropdownButton<String>(
-                            hint: const Text('All networks'),
-                            value: networks.contains(network) ? network : null,
-                            items: [
-                              const DropdownMenuItem(
-                                value: null,
-                                child: Text('All networks'),
-                              ),
-                              for (final value in networks)
-                                DropdownMenuItem(
-                                  value: value,
-                                  child: Text(value),
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              children: [
+                                DropdownButtonFormField<String>(
+                                  initialValue: selected?.key,
+                                  isExpanded: true,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Person or conversation',
+                                  ),
+                                  items: [
+                                    for (final item in scopes)
+                                      DropdownMenuItem(
+                                        value: item.key,
+                                        child: Text(
+                                          item.name,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                  ],
+                                  onChanged: busy
+                                      ? null
+                                      : (value) => setState(() {
+                                          selectedScope = value;
+                                          network = null;
+                                        }),
                                 ),
-                            ],
-                            onChanged: busy
-                                ? null
-                                : (value) => setState(() {
-                                    network = value;
-                                    loadedScope = null;
-                                    searched = false;
-                                  }),
-                          ),
-                          DropdownButton<bool>(
-                            hint: const Text('Sent & received'),
-                            value: outgoing,
-                            items: const [
-                              DropdownMenuItem(
-                                value: null,
-                                child: Text('Sent & received'),
-                              ),
-                              DropdownMenuItem(
-                                value: true,
-                                child: Text('Sent'),
-                              ),
-                              DropdownMenuItem(
-                                value: false,
-                                child: Text('Received'),
-                              ),
-                            ],
-                            onChanged: (value) =>
-                                setState(() => outgoing = value),
-                          ),
-                          DropdownButton<String>(
-                            hint: const Text('All types'),
-                            value: mediaType,
-                            items: [
-                              const DropdownMenuItem(
-                                value: null,
-                                child: Text('All types'),
-                              ),
-                              for (final entry in const {
-                                'text': 'Text',
-                                'image': 'Photos',
-                                'video': 'Videos',
-                                'audio': 'Audio',
-                                'file': 'Files',
-                              }.entries)
-                                DropdownMenuItem(
-                                  value: entry.key,
-                                  child: Text(entry.value),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: query,
+                                  onChanged: _typed,
+                                  onSubmitted: (_) {
+                                    _applyTyping();
+                                    _search();
+                                  },
+                                  decoration: const InputDecoration(
+                                    labelText: 'Text, transcript or filename',
+                                    prefixIcon: Icon(Icons.search),
+                                  ),
                                 ),
-                            ],
-                            onChanged: (value) =>
-                                setState(() => mediaType = value),
-                          ),
-                          FilterChip(
-                            label: const Text('Bookmarks'),
-                            selected: bookmarksOnly,
-                            onSelected: (value) =>
-                                setState(() => bookmarksOnly = value),
-                          ),
-                          TextButton(
-                            onPressed: () => _date(true),
-                            child: Text(_dateLabel(afterDay, 'From date')),
-                          ),
-                          TextButton(
-                            onPressed: () => _date(false),
-                            child: Text(_dateLabel(beforeDay, 'To date')),
-                          ),
-                          if (afterDay != null || beforeDay != null)
-                            IconButton(
-                              tooltip: 'Clear date range',
-                              onPressed: () => setState(() {
-                                afterDay = null;
-                                beforeDay = null;
-                              }),
-                              icon: const Icon(Icons.close),
-                            ),
-                          FilledButton.icon(
-                            onPressed:
-                                busy || selected == null || _query() == null
-                                ? null
-                                : _search,
-                            icon: const Icon(Icons.search),
-                            label: const Text('Search'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                // Quick searches never flash a bar; the slot is reserved.
-                if (busy)
-                  const NotionDelayedReveal(
-                    placeholder: SizedBox(height: 4),
-                    child: LinearProgressIndicator(),
-                  ),
-                NotionSizeReveal(
-                  visible: _query() == null,
-                  child: const ListTile(
-                    title: Text('The start date must be before the end date.'),
-                  ),
-                ),
-                NotionSizeReveal(
-                  visible: problem != null,
-                  child: ListTile(
-                    leading: const Icon(Icons.info_outline),
-                    title: Text(_shownProblem = problem ?? _shownProblem ?? ''),
-                  ),
-                ),
-                ListTile(
-                  title: Text(
-                    loadedScope == selectedScope && loadedScope != null
-                        ? 'Loaded history: $loaded events, ${timelines.length} sources'
-                        : 'Choose a person or conversation, then select Search.',
-                  ),
-                  subtitle: const Text(
-                    'Results cover loaded history only. No results does not mean the source network has no matching messages.',
-                  ),
-                ),
-                // Results fade through when the query or filters change; the
-                // first screenful of a new result set rises in once.
-                Expanded(
-                  child: NotionFadeThrough(
-                    alignment: Alignment.topCenter,
-                    child: results.isEmpty
-                        ? NotionEmptyState(
-                            key: ValueKey(('empty', emptyTitle)),
-                            icon: searched && loadedScope == selectedScope
-                                ? Icons.search_off
-                                : Icons.manage_search,
-                            title: emptyTitle,
-                          )
-                        : NotionEntranceScope(
-                            key: ValueKey(('results', resultsKey)),
-                            child: ListView.builder(
-                              itemCount: results.length,
-                              itemBuilder: (context, index) {
-                                final original = results[index];
-                                final display = original.getDisplayEvent(
-                                  timelines[original.room.id]!,
-                                );
-                                final ref = personal.source(original);
-                                final transcript = personal.transcripts.values
-                                    .where(
-                                      (j) =>
-                                          j.source.key == ref.key &&
-                                          j.state == JobState.done,
-                                    )
-                                    .firstOrNull
-                                    ?.text;
-                                return NotionEntrance(
-                                  playKey: original.eventId,
-                                  rise: NotionMotion.riseList,
-                                  child: ListTile(
-                                    title: Text(
-                                      RoundVideoDescriptor.fromContent(
-                                                display.content,
-                                                redacted: display.redacted,
-                                              ) !=
-                                              null
-                                          ? transcript == null
-                                                ? 'Video message'
-                                                : 'Video message · $transcript'
-                                          : display.text.isEmpty
-                                          ? transcript ?? 'Attachment'
-                                          : display.text,
-                                      maxLines: 3,
-                                      overflow: TextOverflow.ellipsis,
+                                const SizedBox(height: 12),
+                                Wrap(
+                                  spacing: 12,
+                                  runSpacing: 8,
+                                  children: [
+                                    DropdownButton<String>(
+                                      hint: const Text('All networks'),
+                                      value: networks.contains(network)
+                                          ? network
+                                          : null,
+                                      items: [
+                                        const DropdownMenuItem(
+                                          value: null,
+                                          child: Text('All networks'),
+                                        ),
+                                        for (final value in networks)
+                                          DropdownMenuItem(
+                                            value: value,
+                                            child: Text(value),
+                                          ),
+                                      ],
+                                      onChanged: busy
+                                          ? null
+                                          : (value) => setState(() {
+                                              network = value;
+                                              loadedScope = null;
+                                              searched = false;
+                                            }),
                                     ),
-                                    subtitle: Text(
-                                      '${InboxProjection(personal).displayName(original.room)} · ${PersonalClient.networkOf(original.room)} · ${MaterialLocalizations.of(context).formatShortDate(original.originServerTs.toLocal())}',
+                                    DropdownButton<bool>(
+                                      hint: const Text('Sent & received'),
+                                      value: outgoing,
+                                      items: const [
+                                        DropdownMenuItem(
+                                          value: null,
+                                          child: Text('Sent & received'),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: true,
+                                          child: Text('Sent'),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: false,
+                                          child: Text('Received'),
+                                        ),
+                                      ],
+                                      onChanged: (value) =>
+                                          setState(() => outgoing = value),
                                     ),
-                                    onTap: () => Navigator.push(
-                                      context,
-                                      MaterialPageRoute<void>(
-                                        builder: (_) =>
-                                            SourceChatPage(source: ref),
+                                    DropdownButton<String>(
+                                      hint: const Text('All types'),
+                                      value: mediaType,
+                                      items: [
+                                        const DropdownMenuItem(
+                                          value: null,
+                                          child: Text('All types'),
+                                        ),
+                                        for (final entry in const {
+                                          'text': 'Text',
+                                          'image': 'Photos',
+                                          'video': 'Videos',
+                                          'audio': 'Audio',
+                                          'file': 'Files',
+                                        }.entries)
+                                          DropdownMenuItem(
+                                            value: entry.key,
+                                            child: Text(entry.value),
+                                          ),
+                                      ],
+                                      onChanged: (value) =>
+                                          setState(() => mediaType = value),
+                                    ),
+                                    FilterChip(
+                                      label: const Text('Bookmarks'),
+                                      selected: bookmarksOnly,
+                                      onSelected: (value) =>
+                                          setState(() => bookmarksOnly = value),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => _date(true),
+                                      child: Text(
+                                        _dateLabel(afterDay, 'From date'),
                                       ),
                                     ),
-                                  ),
-                                );
-                              },
+                                    TextButton(
+                                      onPressed: () => _date(false),
+                                      child: Text(
+                                        _dateLabel(beforeDay, 'To date'),
+                                      ),
+                                    ),
+                                    if (afterDay != null || beforeDay != null)
+                                      IconButton(
+                                        tooltip: 'Clear date range',
+                                        onPressed: () => setState(() {
+                                          afterDay = null;
+                                          beforeDay = null;
+                                        }),
+                                        icon: const Icon(Icons.close),
+                                      ),
+                                    FilledButton.icon(
+                                      onPressed:
+                                          busy ||
+                                              selected == null ||
+                                              _query() == null
+                                          ? null
+                                          : _search,
+                                      icon: const Icon(Icons.search),
+                                      label: const Text('Search'),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
                           ),
-                  ),
-                ),
-                if (loadedScope == selectedScope && more)
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: TextButton(
-                      onPressed: busy || pages >= 10 ? null : _older,
-                      child: Text(
-                        pages >= 10
-                            ? 'Search session limit reached'
-                            : 'Load 50 more events per source',
+                          // Quick searches never flash a bar; the slot is reserved.
+                          if (busy)
+                            const NotionDelayedReveal(
+                              placeholder: SizedBox(height: 4),
+                              child: LinearProgressIndicator(),
+                            ),
+                          NotionSizeReveal(
+                            visible: _query() == null,
+                            child: const ListTile(
+                              title: Text(
+                                'The start date must be before the end date.',
+                              ),
+                            ),
+                          ),
+                          NotionSizeReveal(
+                            visible: problem != null,
+                            child: ListTile(
+                              leading: const Icon(Icons.info_outline),
+                              title: Text(
+                                _shownProblem = problem ?? _shownProblem ?? '',
+                              ),
+                            ),
+                          ),
+                          ListTile(
+                            title: Text(
+                              loadedScope == selectedScope &&
+                                      loadedScope != null
+                                  ? 'Loaded history: $loaded events, ${timelines.length} sources'
+                                  : 'Choose a person or conversation, then select Search.',
+                            ),
+                            subtitle: const Text(
+                              'Results cover loaded history only. No results does not mean the source network has no matching messages.',
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-              ],
+                  // Results fade through when the query or filters change; the
+                  // first screenful of a new result set rises in once.
+                  Expanded(
+                    child: NotionFadeThrough(
+                      alignment: Alignment.topCenter,
+                      child: results.isEmpty
+                          ? NotionEmptyState(
+                              key: ValueKey(('empty', emptyTitle)),
+                              icon: searched && loadedScope == selectedScope
+                                  ? Icons.search_off
+                                  : Icons.manage_search,
+                              title: emptyTitle,
+                            )
+                          : NotionEntranceScope(
+                              key: ValueKey(('results', resultsKey)),
+                              child: ListView.builder(
+                                itemCount: results.length,
+                                itemBuilder: (context, index) {
+                                  final hit = results[index];
+                                  final original = hit.event;
+                                  final display = hit.display;
+                                  final ref = hit.source;
+                                  final transcript = hit.transcript;
+                                  return NotionEntrance(
+                                    playKey: original.eventId,
+                                    rise: NotionMotion.riseList,
+                                    child: ListTile(
+                                      title: Text(
+                                        RoundVideoDescriptor.fromContent(
+                                                  display.content,
+                                                  redacted: display.redacted,
+                                                ) !=
+                                                null
+                                            ? transcript == null
+                                                  ? 'Video message'
+                                                  : 'Video message · $transcript'
+                                            : display.text.isEmpty
+                                            ? transcript ?? 'Attachment'
+                                            : display.text,
+                                        maxLines: 3,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      subtitle: Text(
+                                        '${InboxProjection(personal).displayName(original.room)} · ${PersonalClient.networkOf(original.room)} · ${MaterialLocalizations.of(context).formatShortDate(original.originServerTs.toLocal())}',
+                                      ),
+                                      onTap: () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute<void>(
+                                          builder: (_) =>
+                                              SourceChatPage(source: ref),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                    ),
+                  ),
+                  if (loadedScope == selectedScope && more)
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: TextButton(
+                        onPressed: busy || pages >= 10 ? null : _older,
+                        child: Text(
+                          pages >= 10
+                              ? 'Search session limit reached'
+                              : 'Load 50 more events per source',
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
