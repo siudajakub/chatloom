@@ -341,8 +341,15 @@ class RoundCaptureController extends ChangeNotifier {
     _changed();
   }
 
+  /// Ticks every 100 ms while recording, for the clock and progress ring
+  /// only. Listeners of the controller itself hear state changes, not time:
+  /// the recorder page around the camera preview is not rebuilt per tick.
+  Listenable get elapsed => _elapsed;
+  final _elapsed = _Tick();
+
   void _subscribeTicker() {
     _ticker?.cancel();
+    var couldPause = canPause;
     _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (_closed || state != RoundCaptureState.recording) return;
       if (_clock.elapsedMilliseconds >= autoStopMs) {
@@ -352,7 +359,12 @@ class RoundCaptureController extends ChangeNotifier {
         locked = true;
         unawaited(finish());
       }
-      _changed();
+      _elapsed.tick();
+      // Pause disappears in the last second: that is a state change.
+      if (canPause != couldPause) {
+        couldPause = canPause;
+        _changed();
+      }
     });
   }
 
@@ -695,8 +707,13 @@ class RoundCaptureController extends ChangeNotifier {
     _closed = true;
     _generation++;
     _ticker?.cancel();
+    _elapsed.dispose();
     unawaited(_subscription?.cancel());
     unawaited(backend.dispose(keepPrepared: _transferred));
     super.dispose();
   }
+}
+
+class _Tick extends ChangeNotifier {
+  void tick() => notifyListeners();
 }

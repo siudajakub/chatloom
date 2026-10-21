@@ -2,10 +2,20 @@
 import 'dart:async';
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/events/audio_player.dart';
 import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/personal/round_video/round_playback_queue.dart';
+import 'package:chatloom/personal/transcript_panel.dart';
+import 'package:chatloom/personal/voice_playback.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';
@@ -37,7 +47,24 @@ class _Player implements AudioPlayer {
   final states = StreamController<PlayerState>.broadcast(sync: true);
   final durations = StreamController<Duration?>.broadcast(sync: true);
   final speeds = StreamController<double>.broadcast(sync: true);
+  final processing = StreamController<ProcessingState>.broadcast(sync: true);
+  // Live subscriptions across every stream, to catch leaked ones.
+  int listeners = 0;
+  int progressStreams = 0;
+  Stream<T> _counted<T>(Stream<T> source) => Stream<T>.multi((controller) {
+    listeners++;
+    final subscription = source.listen(
+      controller.addSync,
+      onError: controller.addErrorSync,
+      onDone: controller.closeSync,
+    );
+    controller.onCancel = () {
+      listeners--;
+      return subscription.cancel();
+    };
+  }, isBroadcast: true);
   final seeks = <Duration>[];
+  int stops = 0;
   Completer<void>? pauseGate;
   int pauses = 0;
   @override
@@ -51,13 +78,26 @@ class _Player implements AudioPlayer {
   @override
   ProcessingState processingState = ProcessingState.ready;
   @override
-  Stream<Duration> get positionStream => positions.stream;
+  Stream<Duration> get positionStream => _counted(positions.stream);
   @override
-  Stream<PlayerState> get playerStateStream => states.stream;
+  Stream<PlayerState> get playerStateStream => _counted(states.stream);
   @override
-  Stream<Duration?> get durationStream => durations.stream;
+  Stream<Duration?> get durationStream => _counted(durations.stream);
   @override
-  Stream<double> get speedStream => speeds.stream;
+  Stream<double> get speedStream => _counted(speeds.stream);
+  @override
+  Stream<ProcessingState> get processingStateStream => processing.stream;
+  @override
+  Stream<Duration> createPositionStream({
+    int steps = 800,
+    Duration minPeriod = const Duration(milliseconds: 200),
+    Duration maxPeriod = const Duration(milliseconds: 200),
+  }) {
+    progressStreams++;
+    expect(minPeriod, greaterThanOrEqualTo(const Duration(milliseconds: 100)));
+    return _counted(positions.stream);
+  }
+
   @override
   Future<void> seek(Duration? value, {int? index}) async {
     position = value ?? Duration.zero;
@@ -80,9 +120,14 @@ class _Player implements AudioPlayer {
   }
 
   @override
-  Future<void> stop() async => playing = false;
+  Future<void> stop() async {
+    stops++;
+    playing = false;
+  }
+
   @override
   Future<void> dispose() async {
+    await processing.close();
     await positions.close();
     await states.close();
     await durations.close();
@@ -100,6 +145,8 @@ class _Matrix extends MatrixState {
   late BuildContext viewContext;
   int resumes = 0;
   _Matrix(this.source, this.preferences);
+  @override
+  bool get mounted => true;
   @override
   Client get client => source;
   @override
@@ -127,14 +174,20 @@ void main() {
   });
   tearDown(() => PathProviderPlatform.instance = originalPaths);
 
+  // Drive the row like the timeline does: rebuilds and recycling.
+  late ValueNotifier<int> rebuild;
+  late ValueNotifier<bool> shown;
+  late Event voice;
   Future<(_Player, _Matrix)> mount(
     WidgetTester tester, {
     bool playing = false,
   }) async {
+    rebuild = ValueNotifier(0);
+    shown = ValueNotifier(true);
     // Synthetic identity; path access fails before any store or key is opened.
     final client = _Client();
     final room = Room(id: '!voice:example.invalid', client: client);
-    final event = Event(
+    final event = voice = Event(
       room: room,
       eventId: r'$voice-fixture',
       type: EventTypes.Message,
@@ -161,13 +214,18 @@ void main() {
             body: Builder(
               builder: (context) {
                 matrix.viewContext = context;
-                return SizedBox(
-                  width: 300,
-                  child: AudioPlayerWidget(
-                    event,
-                    color: Colors.black,
-                    linkColor: Colors.black,
-                    fontSize: 15,
+                return ListenableBuilder(
+                  listenable: Listenable.merge([rebuild, shown]),
+                  builder: (context, _) => SizedBox(
+                    width: 300,
+                    child: shown.value
+                        ? AudioPlayerWidget(
+                            event,
+                            color: Colors.black,
+                            linkColor: Colors.black,
+                            fontSize: 15,
+                          )
+                        : const SizedBox.shrink(),
                   ),
                 );
               },
@@ -276,4 +334,213 @@ void main() {
     expect(matrix.resumes, 1);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'position ticks rebuild only the transport; subscriptions do not grow',
+    (tester) async {
+      final (player, _) = await mount(tester, playing: true);
+      // Progress, state, duration and speed: one subscription each.
+      expect(player.listeners, 4);
+      expect(player.progressStreams, 1);
+      final transcript = tester.widget(find.byType(TranscriptPanel));
+      for (var second = 19; second <= 23; second++) {
+        player.position = Duration(seconds: second);
+        player.positions.add(player.position);
+        await tester.pump();
+      }
+      expect(find.text('0:23 / 1:06'), findsOneWidget);
+      // The transcript (and caption) were not rebuilt by the ticks.
+      expect(tester.widget(find.byType(TranscriptPanel)), same(transcript));
+      for (var i = 0; i < 6; i++) {
+        rebuild.value++;
+        await tester.pump();
+      }
+      expect(player.listeners, 4);
+      expect(player.progressStreams, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('only the active note shows skips, speed and save', (
+    tester,
+  ) async {
+    final (_, matrix) = await mount(tester);
+    expect(find.byTooltip('Rewind 10 seconds'), findsOneWidget);
+    expect(find.byTooltip('Playback speed'), findsOneWidget);
+    expect(find.byTooltip('Download audio'), findsOneWidget);
+    matrix.voiceMessageEventId.value = r'$another-voice';
+    await tester.pump();
+    await tester.pump(NotionMotion.long);
+    expect(find.byTooltip('Rewind 10 seconds'), findsNothing);
+    expect(find.byTooltip('Playback speed'), findsNothing);
+    expect(find.byTooltip('Download audio'), findsNothing);
+    expect(find.byTooltip('Play audio'), findsOneWidget);
+    matrix.voiceMessageEventId.value = voice.eventId;
+    await tester.pump();
+    await tester.pump(NotionMotion.long);
+    expect(find.byTooltip('Playback speed'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a paused note keeps its player and position when recycled', (
+    tester,
+  ) async {
+    final (player, matrix) = await mount(tester);
+    shown.value = false;
+    await tester.pump();
+    await tester.pump();
+    expect(matrix.audioPlayer, same(player));
+    expect(matrix.voiceMessageEventId.value, voice.eventId);
+    expect(player.stops, 0);
+    shown.value = true;
+    await tester.pump();
+    expect(find.text('0:18 / 1:06'), findsOneWidget);
+    expect(player.listeners, 4);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'an ended note is released after the frame, not while unmounting',
+    (tester) async {
+      final (player, matrix) = await mount(tester);
+      player.position = player.duration!;
+      final phases = <SchedulerPhase>[];
+      void record() => phases.add(SchedulerBinding.instance.schedulerPhase);
+      matrix.voiceMessageEventId.addListener(record);
+      addTearDown(() => matrix.voiceMessageEventId.removeListener(record));
+      shown.value = false;
+      await tester.pump();
+      expect(matrix.audioPlayer, isNull);
+      expect(player.stops, 1);
+      expect(phases, [SchedulerPhase.postFrameCallbacks]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('the chosen speed is remembered for the next notes', (
+    tester,
+  ) async {
+    addTearDown(() => AppSettings.personalVoicePlaybackSpeed.setItem(1));
+    final (player, matrix) = await mount(tester);
+    await tester.tap(find.byTooltip('Playback speed'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Playback speed'));
+    await tester.pump();
+    expect(player.speed, 1.5);
+    expect(AppSettings.personalVoicePlaybackSpeed.value, 1.5);
+    expect(matrix.voiceSpeed, 1.5);
+    // Another account state or a later note reads the same stored speed.
+    final later = _Matrix(_Client(), await SharedPreferences.getInstance());
+    expect(later.voiceSpeed, 1.5);
+  });
+
+  testWidgets('a finished voice note continues with the next one', (
+    tester,
+  ) async {
+    RoundPlaybackCoordinator.shared.debugReset();
+    addTearDown(RoundPlaybackCoordinator.shared.debugReset);
+    final (player, matrix) = await mount(tester, playing: true);
+    final next = Event(
+      room: voice.room,
+      eventId: r'$voice-next',
+      type: EventTypes.Message,
+      senderId: '@speaker:example.invalid',
+      originServerTs: DateTime.utc(2026, 1, 2),
+      content: {
+        'msgtype': MessageTypes.Audio,
+        'body': 'Voice message',
+        'org.matrix.msc3245.voice': <String, Object?>{},
+      },
+    );
+    final row = _Row();
+    VoicePlayback.targets.register(next, row);
+    addTearDown(() => VoicePlayback.targets.unregister(next, row));
+    expect(await matrix.reserveAudio().acquireAudible(), isTrue);
+    matrix.watchAudio(player, continuation: () => [next]);
+    player.processing.add(ProcessingState.completed);
+    await tester.pump();
+    await tester.pump();
+    expect(row.calls, hasLength(1));
+    expect(row.tokenWasActive, isTrue);
+    expect(matrix.audioPlayer, isNull);
+    expect(player.stops, 1);
+    expect(RoundPlaybackCoordinator.shared.continuing, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'the notification shade keeps a voice note; background pauses it and '
+    'keeps it; a lock closes it',
+    (tester) async {
+      RoundPlaybackCoordinator.shared.debugReset();
+      addTearDown(() {
+        RoundPlaybackCoordinator.shared.debugReset();
+        PersonalPrivacy.surfaceUnlocked = true;
+        PersonalPrivacy.surfaceForeground = true;
+      });
+      final matrix = _Matrix(_Client(), await SharedPreferences.getInstance());
+      final player = _Player()..playing = true;
+      matrix
+        ..audioPlayer = player
+        ..voiceMessageEventId.value = r'$voice-fixture';
+      expect(await matrix.reserveAudio().acquireAudible(), isTrue);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: NotionTheme.build(Brightness.dark),
+          localizationsDelegates: L10n.localizationsDelegates,
+          supportedLocales: L10n.supportedLocales,
+          home: const AppLockWidget(
+            pincode: null,
+            useBiometrics: false,
+            isLoggedIn: true,
+            child: SizedBox.shrink(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final binding = tester.binding;
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      expect(player.pauses, 0);
+      expect(player.stops, 0);
+      expect(player.playing, isTrue);
+      expect(RoundPlaybackCoordinator.shared.suspended, isFalse);
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      expect(player.pauses, greaterThanOrEqualTo(1));
+      expect(player.playing, isFalse);
+      expect(player.stops, 0);
+      expect(matrix.audioPlayer, same(player));
+      expect(player.position, const Duration(seconds: 18));
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(RoundPlaybackCoordinator.shared.suspended, isFalse);
+      // Nothing resumes by itself; a lock releases the note.
+      expect(player.playing, isFalse);
+      tester.state<AppLock>(find.byType(AppLockWidget)).showLockScreen();
+      await tester.pump();
+      expect(matrix.audioPlayer, isNull);
+      expect(player.stops, 1);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+}
+
+class _Row implements RoundContinuationTarget {
+  final calls = <List<Event>>[];
+  bool tokenWasActive = false;
+  @override
+  Future<RoundStartResult> startContinuation(
+    List<Event> rest, {
+    required RoundContinuationToken token,
+    required double speed,
+    required bool enlarge,
+  }) async {
+    calls.add(rest);
+    tokenWasActive = token.active;
+    return RoundStartResult.started;
+  }
 }

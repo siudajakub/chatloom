@@ -34,7 +34,6 @@ class RecordingInputRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.notion.colors;
-    final time = formatDuration(state.duration);
     final paused = state.isPaused;
     final status = state.isSending
         ? 'Sending voice message'
@@ -82,26 +81,36 @@ class RecordingInputRow extends StatelessWidget {
               onPressed: state.controlsBusy ? null : state.pause,
             ),
           const SizedBox(width: 4),
-          Semantics(
-            container: true,
-            liveRegion: paused,
-            label: '$status, $time',
-            child: ExcludeSemantics(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  RecordingDot(active: !paused && !state.isSending),
-                  const SizedBox(width: 8),
-                  Text(
-                    time,
-                    style: NotionType.body.copyWith(
-                      color: state.limitReached ? colors.danger : colors.text,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
+          // Per-sample ticks rebuild only the clock and the waveform.
+          ListenableBuilder(
+            listenable: state.samples,
+            child: RecordingDot(active: !paused && !state.isSending),
+            builder: (context, dot) {
+              final time = formatDuration(state.duration);
+              return Semantics(
+                container: true,
+                liveRegion: paused,
+                label: '$status, $time',
+                child: ExcludeSemantics(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      dot!,
+                      const SizedBox(width: 8),
+                      Text(
+                        time,
+                        style: NotionType.body.copyWith(
+                          color: state.limitReached
+                              ? colors.danger
+                              : colors.text,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -109,12 +118,15 @@ class RecordingInputRow extends StatelessWidget {
               child: SizedBox(
                 height: 32,
                 child: RepaintBoundary(
-                  child: CustomPaint(
-                    painter: _LiveWaveformPainter(
-                      amplitudes: state.amplitudeTimeline,
-                      revision: state.amplitudeTimeline.length,
-                      duration: state.duration,
-                      color: paused ? colors.textTertiary : colors.text,
+                  child: ListenableBuilder(
+                    listenable: state.samples,
+                    builder: (context, _) => CustomPaint(
+                      painter: _LiveWaveformPainter(
+                        amplitudes: state.amplitudeTimeline,
+                        revision: state.amplitudeTimeline.length,
+                        duration: state.duration,
+                        color: paused ? colors.textTertiary : colors.text,
+                      ),
                     ),
                   ),
                 ),

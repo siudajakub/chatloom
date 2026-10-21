@@ -52,7 +52,6 @@ void main() {
                 width: 320,
                 child: ConversationMessageGestures(
                   identity: 'fictional-voice',
-                  interactiveContent: true,
                   onReply: () => replies++,
                   child: NotionAudioFileBlock(
                     duration: '0:18 / 1:06',
@@ -120,6 +119,52 @@ void main() {
       await tester.pump();
     }
     expect(calls, ['play', 'back', 'forward', 'speed', 'save']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an inactive note is one row: no skips, speed or save', (
+    tester,
+  ) async {
+    Widget block(bool controls) => MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 300,
+          child: NotionAudioFileBlock(
+            duration: '1:06',
+            progress: 0,
+            controls: controls,
+            onPlay: () {},
+            onSeekBack: () {},
+            onSeekForward: () {},
+            onSpeed: () {},
+            onDownload: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(block(false));
+    final compact = tester.getSize(find.byType(NotionAudioFileBlock)).height;
+    expect(find.byTooltip('Play audio'), findsOneWidget);
+    for (final tooltip in [
+      'Rewind 10 seconds',
+      'Forward 10 seconds',
+      'Playback speed',
+      'Download audio',
+    ]) {
+      expect(find.byTooltip(tooltip), findsNothing);
+    }
+    // Becoming active reveals the row (size + fade), then settles.
+    await tester.pumpWidget(block(true));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Playback speed'), findsOneWidget);
+    expect(
+      tester.getSize(find.byType(NotionAudioFileBlock)).height,
+      greaterThan(compact),
+    );
+    await tester.pumpWidget(block(false));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Playback speed'), findsNothing);
+    expect(tester.getSize(find.byType(NotionAudioFileBlock)).height, compact);
     expect(tester.takeException(), isNull);
   });
 

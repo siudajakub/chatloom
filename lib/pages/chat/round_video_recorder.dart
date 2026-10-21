@@ -456,9 +456,10 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
         await _controller.backend.dispose();
       }
     }
+    // Removed meanwhile: dispose() already released this controller.
+    if (!mounted) return;
     _controller.removeListener(_changed);
     _controller.dispose();
-    if (!mounted) return;
     _zoomDraft = null;
     _pinchStartZoom = null;
     _screenFlash = false;
@@ -673,9 +674,10 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
     final preview = _controller.preview;
     final player = _player;
     final size = RoundRecorderLayout.circleSize(screen);
-    final progress = review
+    final controller = _controller;
+    double progress() => review
         ? 0.0
-        : (_controller.duration.inMilliseconds / widget.profile.maxDurationMs)
+        : (controller.duration.inMilliseconds / widget.profile.maxDurationMs)
               .clamp(0.0, 1.0);
     final Widget content;
     if (review && player?.value.isInitialized == true) {
@@ -844,7 +846,8 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
           size +
           2 * (RoundRecorderLayout.ringGap + RoundRecorderLayout.ringWidth),
       child: CustomPaint(
-        painter: _ProgressRing(progress: progress),
+        // The ring repaints from the recording clock; nothing rebuilds.
+        painter: _ProgressRing(progress: progress, repaint: controller.elapsed),
         child: Center(
           child: AnimatedBuilder(
             animation: _flip,
@@ -986,11 +989,14 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
         children: [
           RecordingDot(active: live),
           const SizedBox(width: NotionSpace.xs),
-          Text(
-            notionAudioTime(_controller.duration),
-            style: NotionType.callout.copyWith(
-              color: colors.text,
-              fontFeatures: const [FontFeature.tabularFigures()],
+          ListenableBuilder(
+            listenable: _controller.elapsed,
+            builder: (context, _) => Text(
+              notionAudioTime(_controller.duration),
+              style: NotionType.callout.copyWith(
+                color: colors.text,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
           ),
         ],
@@ -1453,11 +1459,12 @@ class _LockHint extends StatelessWidget {
 /// Telegram's recording ring: white, 3 dp, round cap, from 12 o'clock
 /// clockwise, one turn per maximum duration.
 class _ProgressRing extends CustomPainter {
-  final double progress;
-  const _ProgressRing({required this.progress});
+  final double Function() progress;
+  _ProgressRing({required this.progress, super.repaint});
 
   @override
   void paint(Canvas canvas, Size size) {
+    final progress = this.progress();
     if (progress <= 0) return;
     // The stroke is centred ringGap outside the circle.
     final rect = (Offset.zero & size).deflate(RoundRecorderLayout.ringWidth);
@@ -1476,5 +1483,5 @@ class _ProgressRing extends CustomPainter {
 
   @override
   bool shouldRepaint(_ProgressRing oldDelegate) =>
-      oldDelegate.progress != progress;
+      oldDelegate.progress() != progress();
 }

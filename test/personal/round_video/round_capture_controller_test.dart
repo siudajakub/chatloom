@@ -143,18 +143,27 @@ void main() {
       );
       addTearDown(controller.dispose);
       var changes = 0;
+      var ticks = 0;
       controller.addListener(() => changes++);
+      controller.elapsed.addListener(() => ticks++);
       await controller.initialize();
       await controller.start();
-      await tester.pump(const Duration(milliseconds: 200));
+      final recordingChanges = changes;
+      await tester.pump(const Duration(milliseconds: 1000));
+      // Time ticks the clock listenable only: state listeners (the whole
+      // recorder page) are not woken ten times a second.
+      expect(ticks, greaterThanOrEqualTo(9));
+      expect(changes, recordingChanges);
       await controller.pause();
       final pausedChanges = changes;
+      final pausedTicks = ticks;
       await tester.pump(const Duration(seconds: 5));
       expect(changes, pausedChanges);
+      expect(ticks, pausedTicks);
       await controller.resume();
-      final resumedChanges = changes;
+      final resumedTicks = ticks;
       await tester.pump(const Duration(milliseconds: 200));
-      expect(changes, greaterThan(resumedChanges));
+      expect(ticks, greaterThan(resumedTicks));
       await controller.cancel();
     },
   );
@@ -771,6 +780,29 @@ void main() {
         const RoundCaptureException('canceled'),
       );
       await Future<void>.delayed(Duration.zero);
+      controller.dispose();
+    },
+  );
+  test(
+    'pause disappearing in the last second notifies state listeners',
+    () async {
+      // The recording clock is a real stopwatch: a short limit keeps this fast.
+      final controller = RoundCaptureController(
+        backend: FakeCapture(),
+        profile: const RoundCaptureProfile(
+          maxBytes: 25000000,
+          maxDurationMs: 1200,
+        ),
+      );
+      await controller.initialize();
+      await controller.start();
+      expect(controller.canPause, isTrue);
+      var changes = 0;
+      controller.addListener(() => changes++);
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      expect(controller.canPause, isFalse);
+      expect(changes, greaterThanOrEqualTo(1));
+      await controller.cancel();
       controller.dispose();
     },
   );

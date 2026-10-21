@@ -3,10 +3,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:math';
-
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
@@ -27,11 +26,15 @@ class EventVideoPlayer extends StatelessWidget {
   final Color? textColor;
   final Color? linkColor;
 
+  /// Corners of the frame; inside a media bubble, the bubble's own shape.
+  final BorderRadius? borderRadius;
+
   const EventVideoPlayer(
     this.event, {
     this.timeline,
     this.textColor,
     this.linkColor,
+    this.borderRadius,
     super.key,
   });
 
@@ -47,31 +50,34 @@ class EventVideoPlayer extends StatelessWidget {
         ) ??
         fallbackBlurHash;
     final fileDescription = event.fileDescription;
-    const maxDimension = 300.0;
     final infoMap = event.content.tryGetMap<String, Object?>('info');
-    final videoWidth = (infoMap?.tryGet<int>('w') ?? 0) > 0
-        ? infoMap!.tryGet<int>('w')!.toDouble()
-        : maxDimension;
-    final videoHeight = (infoMap?.tryGet<int>('h') ?? 0) > 0
-        ? infoMap!.tryGet<int>('h')!.toDouble()
-        : maxDimension;
-
-    final modifier = max(videoWidth, videoHeight) / maxDimension;
-    final desiredWidth = videoWidth / modifier;
-    final desiredHeight = videoHeight / modifier;
 
     final durationInt = infoMap?.tryGet<int>('duration');
     final duration = durationInt == null
         ? null
         : Duration(milliseconds: durationInt);
+    final borderRadius =
+        this.borderRadius ?? BorderRadius.circular(NotionTokens.radius);
+    // A caption continues the frame below, so the joint stays flush.
+    final frameRadius = fileDescription == null
+        ? borderRadius
+        : borderRadius.copyWith(
+            bottomLeft: Radius.zero, // design-lint: allow joins the caption
+            bottomRight: Radius.zero, // design-lint: allow joins the caption
+          );
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width =
-            constraints.maxWidth.isFinite && desiredWidth > constraints.maxWidth
-            ? constraints.maxWidth
-            : desiredWidth;
-        final height = desiredHeight * width / desiredWidth;
+        // Same rule as images: the bubble's media width, aspect kept within
+        // limits, tall reels cropped instead of narrowed.
+        final frame = ConversationMedia.frame(
+          maxWidth: constraints.maxWidth,
+          width: infoMap?.tryGet<int>('w'),
+          height: infoMap?.tryGet<int>('h'),
+          maxHeight: ConversationMedia.maxHeightOf(context, constraints),
+        );
+        final width = frame.width;
+        final height = frame.height;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: .min,
@@ -79,17 +85,19 @@ class EventVideoPlayer extends StatelessWidget {
           children: [
             Material(
               color: Colors.black,
-              borderRadius: BorderRadius.circular(NotionTokens.radius),
+              borderRadius: frameRadius,
               child: InkWell(
                 onTap: () => supportsVideoPlayer
                     ? showImageViewer(context, event, timeline: timeline)
                     : event.saveFile(context),
-                borderRadius: BorderRadius.circular(NotionTokens.radius),
+                borderRadius: frameRadius,
                 child: SizedBox(
                   width: width,
                   height: height,
                   child: Hero(
                     tag: event.eventId,
+                    // Straight flight, as the viewer route uses.
+                    createRectTween: NotionMediaHero.rectTween,
                     child: Stack(
                       children: [
                         if (event.hasThumbnail &&
@@ -162,12 +170,10 @@ class EventVideoPlayer extends StatelessWidget {
               SizedBox(
                 width: width,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
+                  padding: NotionBubble.padding.copyWith(top: 0),
                   child: Linkify(
                     text: fileDescription,
+                    textWidthBasis: TextWidthBasis.longestLine,
                     textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
                     style: TextStyle(
                       color: textColor,

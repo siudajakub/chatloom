@@ -651,7 +651,16 @@ class RoundMiniPlayerController extends ChangeNotifier
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) unawaited(stop());
+    if (state == AppLifecycleState.resumed) return;
+    // The shade or a system dialog (inactive) keeps a detached voice note
+    // playing; a round stops at once (its played receipt is foreground-only).
+    final session = _current;
+    if (state == AppLifecycleState.inactive &&
+        session != null &&
+        !_isRound(session.event)) {
+      return;
+    }
+    unawaited(stop());
   }
 
   @override

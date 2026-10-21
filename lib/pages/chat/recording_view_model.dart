@@ -141,6 +141,12 @@ class RecordingViewModelState extends State<RecordingViewModel> {
 
   final List<double> amplitudeTimeline = [];
 
+  /// Ticks once per amplitude sample (10 Hz while recording). Only the
+  /// timer and the live waveform listen; the composer around them is not
+  /// rebuilt per sample.
+  Listenable get samples => _samples;
+  final _samples = ValueNotifier<int>(0);
+
   String? fileName;
 
   bool isPaused = false;
@@ -247,6 +253,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
   @override
   void dispose() {
     _reset();
+    _samples.dispose();
     super.dispose();
   }
 
@@ -272,14 +279,13 @@ class RecordingViewModelState extends State<RecordingViewModel> {
         }
         final raw = 100 + amplitude.current * 2;
         final value = raw.isFinite ? raw.clamp(1.0, 100.0) : 1.0;
-        setState(() {
-          amplitudeTimeline.add(value);
-          if (amplitudeTimeline.length > maxVisibleAmplitudes) {
-            amplitudeTimeline.removeAt(0);
-          }
-          _waveform.add(value);
-          duration = _clock.elapsed;
-        });
+        amplitudeTimeline.add(value);
+        if (amplitudeTimeline.length > maxVisibleAmplitudes) {
+          amplitudeTimeline.removeAt(0);
+        }
+        _waveform.add(value);
+        duration = _clock.elapsed;
+        _samples.value++;
         if (_clock.elapsed >= maxDuration && !_limitReached) {
           _limitReached = true;
           unawaited(pause());

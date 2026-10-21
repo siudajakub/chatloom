@@ -96,11 +96,15 @@ class RoundPlaybackCoordinator {
     _stopFailed = false;
   }
 
+  /// [retain] pauses a player and keeps its position when the app goes to
+  /// the background without a lock ([stopAll] with `retain: true`); players
+  /// without it are stopped as on lock.
   RoundPlaybackHandle register({
     required Future<void> Function() pause,
     required Future<void> Function() stop,
+    Future<void> Function()? retain,
   }) {
-    final handle = RoundPlaybackHandle._(this, pause, stop);
+    final handle = RoundPlaybackHandle._(this, pause, stop).._retain = retain;
     _players.add(handle);
     return handle;
   }
@@ -147,7 +151,10 @@ class RoundPlaybackCoordinator {
 
   /// Call on app lock, background, audio interruption or account switch.
   /// Invalidates pending downloads immediately, before awaiting codec cleanup.
-  Future<void> stopAll({bool suspend = true}) {
+  /// With [retain] (background without a lock) players registered with
+  /// `retain` only pause and keep their position; every other one stops.
+  /// Nothing resumes by itself either way.
+  Future<void> stopAll({bool suspend = true, bool retain = false}) {
     ++_generation;
     _suspended = suspend;
     _audible = null;
@@ -158,7 +165,8 @@ class RoundPlaybackCoordinator {
       for (final player in List<RoundPlaybackHandle>.from(_players)) {
         if (player._closed) continue;
         try {
-          await player._stop();
+          final keep = retain ? player._retain : null;
+          await (keep ?? player._stop)();
         } catch (error, stack) {
           firstError ??= error;
           firstStack ??= stack;
@@ -189,6 +197,7 @@ class RoundPlaybackCoordinator {
 class RoundPlaybackHandle {
   final RoundPlaybackCoordinator _coordinator;
   Future<void> Function() _pause, _stop;
+  Future<void> Function()? _retain;
   int _permit = -1;
   bool _closed = false;
   RoundPlaybackHandle._(this._coordinator, this._pause, this._stop);
@@ -202,10 +211,12 @@ class RoundPlaybackHandle {
   void rebind({
     required Future<void> Function() pause,
     required Future<void> Function() stop,
+    Future<void> Function()? retain,
   }) {
     if (_closed) return;
     _pause = pause;
     _stop = stop;
+    _retain = retain;
   }
 
   bool get isCurrent =>

@@ -286,7 +286,10 @@ void main() {
     );
   }
 
-  Future<(RecordingViewModelState, Room)> mount(WidgetTester tester) async {
+  Future<(RecordingViewModelState, Room)> mount(
+    WidgetTester tester, {
+    void Function()? onBuild,
+  }) async {
     final key = GlobalKey<RecordingViewModelState>();
     await tester.pumpWidget(
       MaterialApp(
@@ -301,7 +304,10 @@ void main() {
                 blobUrl: stoppedBlobUrl,
               ));
             },
-            builder: (_, _) => const SizedBox(),
+            builder: (_, _) {
+              onBuild?.call();
+              return const SizedBox();
+            },
           ),
         ),
       ),
@@ -810,6 +816,28 @@ void main() {
         state.amplitudeTimeline.length,
         RecordingViewModelState.maxVisibleAmplitudes,
       );
+      state.cancel();
+      await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
+    },
+  );
+
+  testWithDeadline(
+    'amplitude samples tick the sample listenable, not the composer',
+    (tester) async {
+      var builds = 0;
+      final (state, room) = await mount(tester, onBuild: () => builds++);
+      await start(state, room);
+      var ticks = 0;
+      state.samples.addListener(() => ticks++);
+      await tester.pump(const Duration(milliseconds: 100));
+      final before = builds;
+      for (var sample = 0; sample < 10; sample++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(ticks, greaterThanOrEqualTo(10));
+      expect(state.amplitudeTimeline.length, greaterThanOrEqualTo(10));
+      expect(state.duration, greaterThan(Duration.zero));
+      expect(builds, before, reason: 'the composer builder is not per sample');
       state.cancel();
       await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
     },

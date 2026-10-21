@@ -6,12 +6,14 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:async/async.dart';
 import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/media_inflight.dart';
 import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/personal/round_video/round_playback_queue.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
+import 'package:chatloom/personal/voice_playback.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
@@ -33,6 +35,10 @@ class AudioPlayerWidget extends StatefulWidget {
   final double fontSize;
   final Event event;
 
+  /// Loaded events of this chat, read only when the note ends, to continue
+  /// with the following voice notes (Telegram). Null: no continuation.
+  final Iterable<Event> Function()? continuationHistory;
+
   static const int wavesCount = 40;
 
   const AudioPlayerWidget(
@@ -40,6 +46,7 @@ class AudioPlayerWidget extends StatefulWidget {
     required this.color,
     required this.linkColor,
     required this.fontSize,
+    this.continuationHistory,
     super.key,
   });
 
@@ -47,12 +54,20 @@ class AudioPlayerWidget extends StatefulWidget {
   AudioPlayerState createState() => AudioPlayerState();
 }
 
-class AudioPlayerState extends State<AudioPlayerWidget> {
+class AudioPlayerState extends State<AudioPlayerWidget>
+    implements RoundContinuationTarget {
   double? _downloadProgress;
 
   late final MatrixState matrix;
   bool _starting = false;
   ScaffoldMessengerState? _messenger;
+
+  /// Player updates rebuild only the transport, never the transcript or the
+  /// caption below it. The subscriptions are made once per player.
+  final _transport = ValueNotifier<int>(0);
+  AudioPlayer? _bound;
+  List<StreamSubscription<Object?>> _subscriptions = const [];
+  List<double> _waveform = const [];
 
   AudioPlayer? get _player =>
       matrix.voiceMessageEventId.value == widget.event.eventId
@@ -71,6 +86,41 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
     return value != null && value > 0 ? Duration(milliseconds: value) : null;
   }
 
+  List<double> _parseWaveform() => notionVoiceWaveform(
+    widget.event.content.tryGetMap<String, Object?>(
+      'org.matrix.msc1767.audio',
+    )?['waveform'],
+  );
+
+  void _tick(Object? _) {
+    if (mounted) _transport.value++;
+  }
+
+  /// Follows the shared player when it starts, ends or moves to another note.
+  void _rebind() {
+    final player = _player;
+    if (identical(player, _bound)) return;
+    _cancelSubscriptions();
+    _bound = player;
+    if (player != null) {
+      void ignore(Object _) {}
+      _subscriptions = [
+        matrix.audioProgress(player).listen(_tick, onError: ignore),
+        player.playerStateStream.listen(_tick, onError: ignore),
+        player.durationStream.listen(_tick, onError: ignore),
+        player.speedStream.listen(_tick, onError: ignore),
+      ];
+    }
+    _tick(null);
+  }
+
+  void _cancelSubscriptions() {
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel().catchError((Object _) {}));
+    }
+    _subscriptions = const [];
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -87,84 +137,72 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    matrix = Matrix.of(context);
+    _waveform = _parseWaveform();
+    matrix.voiceMessageEventId.addListener(_rebind);
+    VoicePlayback.targets.register(widget.event, this);
+    _rebind();
+
+    if (matrix.voiceMessageEventId.value == widget.event.eventId &&
+        matrix.audioPlayer != null) {
+      _clearBannersAfterFrame();
+    }
+  }
+
+  @override
+  void didUpdateWidget(AudioPlayerWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.event, widget.event)) {
+      VoicePlayback.targets.unregister(oldWidget.event, this);
+      VoicePlayback.targets.register(widget.event, this);
+      _waveform = _parseWaveform();
+      _rebind();
+    }
+  }
+
+  @override
   void dispose() {
-    super.dispose();
+    matrix.voiceMessageEventId.removeListener(_rebind);
+    VoicePlayback.targets.unregister(widget.event, this);
+    _cancelSubscriptions();
+    _transport.dispose();
+    final shared = matrix;
     final messenger = _messenger;
     final event = widget.event;
-    final audioPlayer = matrix.voiceMessageEventId.value != event.eventId
-        ? null
-        : matrix.audioPlayer;
-    if (audioPlayer == null &&
-        matrix.voiceMessageEventId.value == event.eventId) {
-      unawaited(matrix.closeAudioPlayer());
+    final owner = shared.voiceMessageEventId.value == event.eventId;
+    final audioPlayer = owner ? shared.audioPlayer : null;
+    super.dispose();
+    if (!owner) return;
+    // Closing notifies every voice row: never while the tree is unmounting
+    // (the round players defer the same way).
+    void closeAfterFrame() => WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (shared.voiceMessageEventId.value == event.eventId &&
+          identical(shared.audioPlayer, audioPlayer)) {
+        unawaited(shared.closeAudioPlayer().catchError((Object _) {}));
+      }
+    });
+    // Still preparing (scrolled away right after the tap), or ended.
+    if (audioPlayer == null || audioPlayer.isAtEndPosition) {
+      closeAfterFrame();
+      return;
     }
-    if (audioPlayer != null) {
-      if (audioPlayer.playing && !audioPlayer.isAtEndPosition) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (messenger == null ||
-              !messenger.mounted ||
-              matrix.audioPlayer != audioPlayer ||
-              matrix.voiceMessageEventId.value != event.eventId)
-            return;
-          messenger.showMaterialBanner(
-            MaterialBanner(
-              padding: EdgeInsets.zero,
-              leading: StreamBuilder(
-                stream: audioPlayer.playerStateStream.asBroadcastStream(),
-                builder: (context, _) => IconButton(
-                  onPressed: () {
-                    if (matrix.audioPlayer != audioPlayer) return;
-                    if (audioPlayer.isAtEndPosition) {
-                      audioPlayer.seek(Duration.zero);
-                    } else if (audioPlayer.playing) {
-                      audioPlayer.pause();
-                    } else {
-                      matrix.playAudio();
-                    }
-                  },
-                  icon: NotionMorphSwitcher(
-                    child: audioPlayer.playing && !audioPlayer.isAtEndPosition
-                        ? const Icon(
-                            Icons.pause_outlined,
-                            key: ValueKey('pause'),
-                          )
-                        : const Icon(
-                            Icons.play_arrow_outlined,
-                            key: ValueKey('play'),
-                          ),
-                  ),
-                ),
-              ),
-              content: StreamBuilder(
-                stream: audioPlayer.positionStream.asBroadcastStream(),
-                builder: (context, _) => GestureDetector(
-                  onTap: () => ChatLoomApp.router.go(
-                    conversationLocation(event.room, eventId: event.eventId),
-                  ),
-                  child: Text(
-                    '🎙️ ${audioPlayer.position.minuteSecondString} / ${audioPlayer.duration?.minuteSecondString} - ${event.senderFromMemoryOrFallback.calcDisplayname()}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
-              actions: [
-                IconButton(
-                  onPressed: () {
-                    if (matrix.audioPlayer != audioPlayer) return;
-                    matrix.closeAudioPlayer();
-                    _clearBannersAfterFrame();
-                  },
-                  icon: const Icon(Icons.close_outlined),
-                ),
-              ],
-            ),
-          );
-        });
+    // Paused: keep the single player and its position for when the row
+    // comes back (Telegram); the next note, a lock or an account switch
+    // releases it.
+    if (!audioPlayer.playing) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (messenger == null ||
+          !messenger.mounted ||
+          shared.audioPlayer != audioPlayer ||
+          shared.voiceMessageEventId.value != event.eventId) {
         return;
       }
-      matrix.closeAudioPlayer();
-    }
+      messenger.showMaterialBanner(
+        _detachedVoiceBanner(shared, messenger, audioPlayer, event),
+      );
+    });
   }
 
   Future<void> _onButtonTap() async {
@@ -175,10 +213,7 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
     });
     try {
       _clearBannersAfterFrame();
-      final currentPlayer =
-          matrix.voiceMessageEventId.value != widget.event.eventId
-          ? null
-          : matrix.audioPlayer;
+      final currentPlayer = _player;
       if (currentPlayer != null) {
         if (currentPlayer.isAtEndPosition) {
           await currentPlayer.seek(Duration.zero);
@@ -193,146 +228,230 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
         }
         return;
       }
+      await _load();
+    } catch (_) {
+      if (mounted) _showPlaybackError();
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
+  }
 
-      final request = ++matrix.audioRequestGeneration;
-      await matrix.closeAudioPlayer(invalidateRequests: false);
-      if (request != matrix.audioRequestGeneration || !mounted) return;
-      final playback = matrix.reserveAudio();
-      if (!await playback.acquireAudible() ||
-          !playback.isCurrent ||
-          request != matrix.audioRequestGeneration ||
-          !mounted)
-        return;
-      matrix.voiceMessageEventId.value = widget.event.eventId;
-      File? file;
-      ManagedMediaFile? pendingLease;
-      MatrixFile? matrixFile;
+  /// Autoplay reached this note: scroll it into view and play it here.
+  @override
+  Future<RoundStartResult> startContinuation(
+    List<Event> rest, {
+    required RoundContinuationToken token,
+    required double speed,
+    required bool enlarge,
+  }) async {
+    if (!mounted || !token.active || _starting) return RoundStartResult.failed;
+    setState(() {
+      _starting = true;
+      _downloadProgress = null;
+    });
+    _reveal();
+    try {
+      return await _load(continuation: token, queue: rest);
+    } catch (_) {
+      return RoundStartResult.failed;
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
+  }
 
-      try {
-        final fileSize = widget.event.content
-            .tryGetMap<String, Object?>('info')
-            ?.tryGet<int>('size');
-        // Wait briefly for a matching prefetch; a newer play stops waiting.
-        await MediaInflight.settle(
-          widget.event.attachmentMxcUrl,
-          cancelled: () => request != matrix.audioRequestGeneration || !mounted,
-        );
-        matrixFile = await widget.event.downloadAndDecryptAttachment(
-          onDownloadProgress: fileSize != null && fileSize > 0
-              ? (progress) {
-                  final progressPercentage = progress / fileSize;
-                  if (!mounted || request != matrix.audioRequestGeneration)
-                    return;
-                  setState(() {
-                    _downloadProgress = progressPercentage < 1
-                        ? progressPercentage
-                        : null;
-                  });
+  void _reveal() {
+    try {
+      unawaited(
+        Scrollable.ensureVisible(
+          context,
+          alignment: .5,
+          duration: NotionMotion.reduced(context)
+              ? Duration.zero
+              : NotionMotion.medium,
+          curve: NotionMotion.standard,
+        ).catchError((Object _) {}),
+      );
+    } catch (_) {
+      /* Not in a scrollable: play in place. */
+    }
+  }
+
+  /// The voice notes after this one, built only when it ends. Starting from
+  /// an unplayed incoming note, Telegram plays only the unplayed incoming
+  /// ones; from any other note, every later note of the run.
+  List<Event> Function()? _continuationFromHere({required bool unplayedOnly}) {
+    final history = widget.continuationHistory;
+    if (history == null) return null;
+    final source = widget.event;
+    final played = matrix.voicePlayed;
+    return () => VoicePlaybackQueue.after(
+      source,
+      history(),
+      unplayedOnly: unplayedOnly,
+      played: played.contains,
+    );
+  }
+
+  /// Downloads, decrypts and plays this note in the shared player. With a
+  /// [continuation] it is autoplay after the previous note ended: [queue]
+  /// plays next, a failure is silent (the walk skips the note) and nothing
+  /// the user started meanwhile loses its audio.
+  Future<RoundStartResult> _load({
+    RoundContinuationToken? continuation,
+    List<Event>? queue,
+  }) async {
+    final autoplay = continuation != null;
+    final request = ++matrix.audioRequestGeneration;
+    await matrix.closeAudioPlayer(invalidateRequests: false);
+    if (request != matrix.audioRequestGeneration || !mounted) {
+      return RoundStartResult.aborted;
+    }
+    final playback = matrix.reserveAudio();
+    if (!await playback.acquireAudible(continuation: continuation) ||
+        !playback.isCurrent ||
+        request != matrix.audioRequestGeneration ||
+        !mounted) {
+      return RoundStartResult.aborted;
+    }
+    final event = widget.event;
+    final unplayedOnly =
+        !autoplay &&
+        event.senderId != event.room.client.userID &&
+        !matrix.voicePlayed.contains(event);
+    matrix.voiceMessageEventId.value = event.eventId;
+    File? file;
+    ManagedMediaFile? pendingLease;
+    MatrixFile? matrixFile;
+
+    try {
+      final fileSize = event.content
+          .tryGetMap<String, Object?>('info')
+          ?.tryGet<int>('size');
+      // Wait briefly for a matching prefetch; a newer play stops waiting.
+      await MediaInflight.settle(
+        event.attachmentMxcUrl,
+        cancelled: () => request != matrix.audioRequestGeneration || !mounted,
+      );
+      matrixFile = await event.downloadAndDecryptAttachment(
+        onDownloadProgress: fileSize != null && fileSize > 0
+            ? (progress) {
+                final progressPercentage = progress / fileSize;
+                if (!mounted || request != matrix.audioRequestGeneration) {
+                  return;
                 }
-              : null,
-        );
+                setState(() {
+                  _downloadProgress = progressPercentage < 1
+                      ? progressPercentage
+                      : null;
+                });
+              }
+            : null,
+      );
 
-        final attachmentUrl = widget.event.attachmentOrThumbnailMxcUrl();
+      final attachmentUrl = event.attachmentOrThumbnailMxcUrl();
 
-        if (!kIsWeb && attachmentUrl != null) {
-          final access = await matrix.audioMediaAccess;
-          final suffix = switch (matrixFile.mimeType.toLowerCase()) {
-            'audio/ogg' => '.ogg',
-            'audio/mp4' => '.m4a',
-            'audio/mpeg' => '.mp3',
-            'audio/wav' => '.wav',
-            _ => '.bin',
-          };
-          final lease = await access.create(
-            matrixFile.bytes,
-            extension: suffix,
-          );
-          pendingLease = lease;
-          file = lease.file;
+      if (!kIsWeb && attachmentUrl != null) {
+        final access = await matrix.audioMediaAccess;
+        final suffix = switch (matrixFile.mimeType.toLowerCase()) {
+          'audio/ogg' => '.ogg',
+          'audio/mp4' => '.m4a',
+          'audio/mpeg' => '.mp3',
+          'audio/wav' => '.wav',
+          _ => '.bin',
+        };
+        final lease = await access.create(matrixFile.bytes, extension: suffix);
+        pendingLease = lease;
+        file = lease.file;
 
-          if (Platform.isIOS &&
-              matrixFile.mimeType.toLowerCase() == 'audio/ogg') {
-            Logs().v('Convert ogg audio file for iOS...');
-            final convertedFile = pendingLease.derivedFile('.caf');
-            if (await convertedFile.exists() == false) {
-              await OggCafConverter().convertOggToCaf(
-                input: file.path,
-                output: convertedFile.path,
-              );
-            }
-            file = convertedFile;
+        if (Platform.isIOS &&
+            matrixFile.mimeType.toLowerCase() == 'audio/ogg') {
+          Logs().v('Convert ogg audio file for iOS...');
+          final convertedFile = pendingLease.derivedFile('.caf');
+          if (await convertedFile.exists() == false) {
+            await OggCafConverter().convertOggToCaf(
+              input: file.path,
+              output: convertedFile.path,
+            );
           }
+          file = convertedFile;
         }
-      } catch (e, s) {
-        await pendingLease?.close();
-        if (request == matrix.audioRequestGeneration)
-          await matrix.closeAudioPlayer();
-        Logs().v('Could not download audio file', e, s);
-        if (!mounted) return;
-        setState(() {
-          _downloadProgress = null;
-        });
+      }
+    } catch (e, s) {
+      await pendingLease?.close();
+      if (request == matrix.audioRequestGeneration) {
+        await matrix.closeAudioPlayer();
+      }
+      Logs().v('Could not download audio file', e, s);
+      if (!mounted) return RoundStartResult.aborted;
+      setState(() {
+        _downloadProgress = null;
+      });
+      if (!autoplay) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
-        return;
       }
-      if (!context.mounted ||
+      return RoundStartResult.failed;
+    }
+    if (!mounted ||
+        !playback.isCurrent ||
+        request != matrix.audioRequestGeneration ||
+        matrix.voiceMessageEventId.value != event.eventId) {
+      await pendingLease?.close();
+      return RoundStartResult.aborted;
+    }
+    matrix.audioLease = pendingLease;
+
+    final audioPlayer = matrix.audioPlayer = AudioPlayer();
+    matrix.watchAudio(
+      audioPlayer,
+      continuation: queue != null
+          ? () => queue
+          : _continuationFromHere(unplayedOnly: unplayedOnly),
+    );
+    _rebind();
+
+    try {
+      if (file != null) {
+        await audioPlayer.setFilePath(file.path);
+      } else {
+        await audioPlayer.setAudioSource(
+          AudioSource.uri(
+            Uri.dataFromBytes(matrixFile.bytes, mimeType: matrixFile.mimeType),
+          ),
+        );
+      }
+      // The remembered speed (Telegram keeps 1.5×/2× for every note).
+      final speed = matrix.voiceSpeed;
+      if (speed != 1) await audioPlayer.setSpeed(speed);
+      if (!mounted ||
           !playback.isCurrent ||
           request != matrix.audioRequestGeneration ||
-          matrix.voiceMessageEventId.value != widget.event.eventId) {
-        await pendingLease?.close();
-        return;
-      }
-      matrix.audioLease = pendingLease;
-
-      final audioPlayer = matrix.audioPlayer = AudioPlayer();
-      setState(() {});
-      audioPlayer.processingStateStream
-          .firstWhere((s) => s == ProcessingState.completed)
-          .then((_) {
-            if (matrix.audioPlayer == audioPlayer) matrix.closeAudioPlayer();
-          })
-          .catchError((Object _) {});
-
-      try {
-        if (file != null) {
-          await audioPlayer.setFilePath(file.path);
-        } else {
-          await audioPlayer.setAudioSource(
-            AudioSource.uri(
-              Uri.dataFromBytes(
-                matrixFile.bytes,
-                mimeType: matrixFile.mimeType,
-              ),
-            ),
-          );
-        }
-        if (!mounted ||
-            !playback.isCurrent ||
-            request != matrix.audioRequestGeneration ||
-            matrix.audioPlayer != audioPlayer) {
-          await pendingLease?.close();
-          return;
-        }
-        await matrix.playAudio();
-      } catch (_) {
+          matrix.audioPlayer != audioPlayer) {
         if (matrix.audioPlayer == audioPlayer) {
           await matrix.closeAudioPlayer();
         } else {
           await pendingLease?.close();
         }
-        if (mounted)
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Could not play this audio. Try again.'),
-            ),
-          );
+        return RoundStartResult.aborted;
       }
+      matrix.voicePlayed.add(event);
+      await matrix.playAudio();
+      return RoundStartResult.started;
     } catch (_) {
-      if (mounted) _showPlaybackError();
-    } finally {
-      if (mounted) setState(() => _starting = false);
+      if (matrix.audioPlayer == audioPlayer) {
+        await matrix.closeAudioPlayer();
+      } else {
+        await pendingLease?.close();
+      }
+      if (mounted && !autoplay) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not play this audio. Try again.'),
+          ),
+        );
+      }
+      return RoundStartResult.failed;
     }
   }
 
@@ -360,140 +479,178 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
     );
   }
 
+  /// Cycles the speed; the choice applies to every later note too.
   Future<void> _toggleSpeed(AudioPlayer player) async {
     if (_player != player || _starting) return;
-    const speeds = [1.0, 1.25, 1.5, 2.0, 0.5];
-    final next = speeds[(speeds.indexOf(player.speed) + 1) % speeds.length];
     try {
-      await player.setSpeed(next);
+      await matrix.setVoiceSpeed(player, VoicePlayback.nextSpeed(player.speed));
     } catch (_) {
       if (mounted && _player == player) _showPlaybackError();
     }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    matrix = Matrix.of(context);
-
-    if (matrix.voiceMessageEventId.value == widget.event.eventId &&
-        matrix.audioPlayer != null) {
-      _clearBannersAfterFrame();
-    }
+  Widget _buildTransport(BuildContext context) {
+    final audioPlayer = _player;
+    final actualDuration = audioPlayer?.duration;
+    final total = actualDuration != null && actualDuration > Duration.zero
+        ? actualDuration
+        : _metadataDuration;
+    final duration = total?.inMilliseconds.toDouble() ?? 0;
+    final position = audioPlayer?.position.inMilliseconds.toDouble() ?? 0;
+    final fraction = duration > 0 ? (position / duration).clamp(0.0, 1.0) : 0.0;
+    final canSeek =
+        audioPlayer != null &&
+        actualDuration != null &&
+        actualDuration > Duration.zero &&
+        !_starting;
+    final loading =
+        _starting ||
+        audioPlayer?.processingState == ProcessingState.loading ||
+        audioPlayer?.processingState == ProcessingState.buffering;
+    return NotionAudioFileBlock(
+      duration: total == null
+          ? '–:–'
+          : '${notionAudioTime(audioPlayer?.position ?? Duration.zero)} / ${notionAudioTime(total)}',
+      seekDuration: total,
+      waveform: _waveform,
+      foregroundColor: widget.color,
+      progress: fraction,
+      playing:
+          audioPlayer?.playing == true && audioPlayer?.isAtEndPosition == false,
+      downloading: loading,
+      downloadProgress: _downloadProgress,
+      // Telegram: one row; skips, speed and save only for the active note.
+      controls: audioPlayer != null,
+      onPlay: _onButtonTap,
+      onSeek: !canSeek
+          ? null
+          : (value) => _seek(
+              audioPlayer,
+              Duration(milliseconds: (duration * value).round()),
+            ),
+      onSeekBack: !canSeek
+          ? null
+          : () => _seek(
+              audioPlayer,
+              audioPlayer.position - const Duration(seconds: 10),
+            ),
+      onSeekForward: !canSeek
+          ? null
+          : () => _seek(
+              audioPlayer,
+              audioPlayer.position + const Duration(seconds: 10),
+            ),
+      onDownload: () => widget.event.saveFile(context),
+      speed: audioPlayer?.speed ?? matrix.voiceSpeed,
+      onSpeed: audioPlayer == null || _starting
+          ? null
+          : () => _toggleSpeed(audioPlayer),
+    );
   }
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder(
-    valueListenable: matrix.voiceMessageEventId,
-    builder: (context, eventId, _) {
-      final audioPlayer = eventId == widget.event.eventId
-          ? matrix.audioPlayer
-          : null;
-      final fileDescription = widget.event.fileDescription;
-      return StreamBuilder<Object?>(
-        stream: audioPlayer == null
-            ? null
-            : StreamGroup.merge<Object?>([
-                audioPlayer.positionStream.asBroadcastStream(),
-                audioPlayer.playerStateStream.asBroadcastStream(),
-                audioPlayer.durationStream.asBroadcastStream(),
-                audioPlayer.speedStream.asBroadcastStream(),
-              ]),
-        builder: (context, _) {
-          final actualDuration = audioPlayer?.duration;
-          final total = actualDuration != null && actualDuration > Duration.zero
-              ? actualDuration
-              : _metadataDuration;
-          final duration = total?.inMilliseconds.toDouble() ?? 0;
-          final position = audioPlayer?.position.inMilliseconds.toDouble() ?? 0;
-          final fraction = duration > 0
-              ? (position / duration).clamp(0.0, 1.0)
-              : 0.0;
-          final canSeek =
-              audioPlayer != null &&
-              actualDuration != null &&
-              actualDuration > Duration.zero &&
-              !_starting;
-          final loading =
-              _starting ||
-              audioPlayer?.processingState == ProcessingState.loading ||
-              audioPlayer?.processingState == ProcessingState.buffering;
-          final waveform = notionVoiceWaveform(
-            widget.event.content.tryGetMap<String, Object?>(
-              'org.matrix.msc1767.audio',
-            )?['waveform'],
-          );
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              NotionAudioFileBlock(
-                duration: total == null
-                    ? '–:–'
-                    : '${notionAudioTime(audioPlayer?.position ?? Duration.zero)} / ${notionAudioTime(total)}',
-                seekDuration: total,
-                waveform: waveform,
-                foregroundColor: widget.color,
-                progress: fraction,
-                playing:
-                    audioPlayer?.playing == true &&
-                    audioPlayer?.isAtEndPosition == false,
-                downloading: loading,
-                downloadProgress: _downloadProgress,
-                onPlay: _onButtonTap,
-                onSeek: !canSeek
-                    ? null
-                    : (value) => _seek(
-                        audioPlayer,
-                        Duration(milliseconds: (duration * value).round()),
-                      ),
-                onSeekBack: !canSeek
-                    ? null
-                    : () => _seek(
-                        audioPlayer,
-                        audioPlayer.position - const Duration(seconds: 10),
-                      ),
-                onSeekForward: !canSeek
-                    ? null
-                    : () => _seek(
-                        audioPlayer,
-                        audioPlayer.position + const Duration(seconds: 10),
-                      ),
-                onDownload: () => widget.event.saveFile(context),
-                speed: audioPlayer?.speed ?? 1,
-                onSpeed: audioPlayer == null || _starting
-                    ? null
-                    : () => _toggleSpeed(audioPlayer),
+  Widget build(BuildContext context) {
+    final fileDescription = widget.event.fileDescription;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        RepaintBoundary(
+          child: ValueListenableBuilder<int>(
+            valueListenable: _transport,
+            builder: (context, _, _) => _buildTransport(context),
+          ),
+        ),
+        TranscriptPanel(event: widget.event, foregroundColor: widget.color),
+        if (fileDescription != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Linkify(
+              text: fileDescription,
+              textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
+              style: TextStyle(color: widget.color, fontSize: widget.fontSize),
+              options: const LinkifyOptions(humanize: false),
+              linkStyle: TextStyle(
+                color: widget.linkColor,
+                fontSize: widget.fontSize,
+                decoration: TextDecoration.underline,
+                decorationColor: widget.linkColor,
               ),
-              TranscriptPanel(
-                event: widget.event,
-                foregroundColor: widget.color,
-              ),
-              if (fileDescription != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Linkify(
-                    text: fileDescription,
-                    textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
-                    style: TextStyle(
-                      color: widget.color,
-                      fontSize: widget.fontSize,
-                    ),
-                    options: const LinkifyOptions(humanize: false),
-                    linkStyle: TextStyle(
-                      color: widget.linkColor,
-                      fontSize: widget.fontSize,
-                      decoration: TextDecoration.underline,
-                      decorationColor: widget.linkColor,
-                    ),
-                    onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
-                  ),
-                ),
-            ],
-          );
+              onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// A playing note whose row left the screen. It removes itself once the
+/// player ends or another note takes over.
+MaterialBanner _detachedVoiceBanner(
+  MatrixState matrix,
+  ScaffoldMessengerState messenger,
+  AudioPlayer audioPlayer,
+  Event event,
+) {
+  void clear() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (messenger.mounted) messenger.clearMaterialBanners();
+  });
+  bool current() =>
+      identical(matrix.audioPlayer, audioPlayer) &&
+      matrix.voiceMessageEventId.value == event.eventId;
+  return MaterialBanner(
+    padding: EdgeInsets.zero,
+    leading: StreamBuilder(
+      stream: audioPlayer.playerStateStream,
+      builder: (context, _) => IconButton(
+        onPressed: () {
+          if (!current()) return;
+          if (audioPlayer.isAtEndPosition) {
+            audioPlayer.seek(Duration.zero);
+          } else if (audioPlayer.playing) {
+            audioPlayer.pause();
+          } else {
+            matrix.playAudio();
+          }
         },
-      );
-    },
+        icon: NotionMorphSwitcher(
+          child: audioPlayer.playing && !audioPlayer.isAtEndPosition
+              ? const Icon(Icons.pause_outlined, key: ValueKey('pause'))
+              : const Icon(Icons.play_arrow_outlined, key: ValueKey('play')),
+        ),
+      ),
+    ),
+    content: ValueListenableBuilder(
+      valueListenable: matrix.voiceMessageEventId,
+      builder: (context, _, _) {
+        if (!current()) {
+          clear();
+          return const SizedBox.shrink();
+        }
+        return StreamBuilder(
+          stream: matrix.audioProgress(audioPlayer),
+          builder: (context, _) => GestureDetector(
+            onTap: () => ChatLoomApp.router.go(
+              conversationLocation(event.room, eventId: event.eventId),
+            ),
+            child: Text(
+              '🎙️ ${audioPlayer.position.minuteSecondString} / ${audioPlayer.duration?.minuteSecondString} - ${event.senderFromMemoryOrFallback.calcDisplayname()}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        );
+      },
+    ),
+    actions: [
+      IconButton(
+        onPressed: () {
+          if (current()) matrix.closeAudioPlayer();
+          clear();
+        },
+        icon: const Icon(Icons.close_outlined),
+      ),
+    ],
   );
 }
 

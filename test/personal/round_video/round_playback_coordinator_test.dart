@@ -154,4 +154,29 @@ void main() {
     expect(handle.isCurrent, isFalse);
     expect(await handle.acquireAudible(), isFalse);
   });
+  test('background retain pauses voice and stops everything else', () async {
+    final coordinator = RoundPlaybackCoordinator();
+    final calls = <String>[];
+    final voice = coordinator.register(
+      pause: () async => calls.add('voice pause'),
+      stop: () async => calls.add('voice stop'),
+      retain: () async => calls.add('voice retain'),
+    );
+    coordinator.register(
+      pause: () async => calls.add('round pause'),
+      stop: () async => calls.add('round stop'),
+    );
+    expect(await voice.acquireAudible(), isTrue);
+    await coordinator.stopAll(retain: true);
+    expect(calls, ['voice retain', 'round stop']);
+    expect(voice.isCurrent, isFalse);
+    expect(coordinator.suspended, isTrue);
+    expect(await voice.acquireAudible(), isFalse);
+    // A lock (or account switch) still stops the retained voice player.
+    calls.clear();
+    await coordinator.stopAll();
+    expect(calls, ['voice stop', 'round stop']);
+    coordinator.resume();
+    expect(await voice.acquireAudible(), isTrue);
+  });
 }
