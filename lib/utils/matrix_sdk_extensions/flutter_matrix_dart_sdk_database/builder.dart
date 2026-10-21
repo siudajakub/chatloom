@@ -21,6 +21,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:universal_html/html.dart' as html;
 
 import 'cipher.dart';
+import 'vacuum.dart';
 
 Future<DatabaseApi> flutterMatrixSdkDatabaseBuilder(String clientName) async {
   try {
@@ -113,8 +114,12 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
     options: OpenDatabaseOptions(
       version: 1,
       // most important : apply encryption when opening the DB
-      onConfigure: (db) =>
-          helper.applyPragmaKey(db, ensureIncrementalAutoVacuum: true),
+      onConfigure: (db) async {
+        await helper.applyPragmaKey(db);
+        // Keeps a reserve of free pages instead of releasing all on every
+        // open (startup and push wakes); see vacuum.dart.
+        await prepareIncrementalAutoVacuum(db);
+      },
     ),
   );
 
