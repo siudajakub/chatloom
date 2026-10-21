@@ -203,8 +203,9 @@ class RecordingViewModelState extends State<RecordingViewModel> {
         return;
       }
       final codec =
-          !PlatformInfos
-                  .isIOS && // Blocked by https://github.com/llfbandit/record/issues/560
+          // Apple's record backend writes Opus in CAF, not in the Ogg
+          // container advertised by our voice-message sender. Use AAC/M4A.
+          !PlatformInfos.isCupertinoStyle &&
               await audioRecorder.isEncoderSupported(AudioEncoder.opus)
           ? AudioEncoder.opus
           : AudioEncoder.aacLc;

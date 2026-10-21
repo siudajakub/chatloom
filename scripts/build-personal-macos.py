@@ -47,6 +47,15 @@ def main():
         if args.smoke_test:
             run('flutter', 'test', 'integration_test/macos_smoke_test.dart',
                 '-d', 'macos', env=env)
+            revision = run('git', 'rev-parse', 'HEAD', capture_output=True,
+                           text=True).stdout.strip()
+            (ROOT / 'build/macos-smoke-result.json').write_text(json.dumps({
+                'revision': revision, 'status': 'PASS',
+                'configuration': 'debug',
+                'checks': ['vodozemac', 'Keychain', 'SQLCipher restart',
+                           'SQLCipher wrong-key preservation',
+                           'native Opus/CAF audio decode', 'native H.264/AAC video decode'],
+            }) + '\n')
             return
         # Keep pub enabled to regenerate the real release plugin registrant.
         run('flutter', 'build', 'macos', '--release', env=env)
@@ -64,6 +73,21 @@ def main():
     run('codesign', '--verify', '--deep', '--strict', str(bundle))
     architectures = run('lipo', '-archs', str(executable), capture_output=True,
                         text=True).stdout.strip().split()
+    # A universal launcher with an arm64-only native plugin is not an Intel app.
+    # Inspect every embedded Mach-O image, including native-hook dylibs.
+    macho_magic = {bytes.fromhex(value) for value in
+                   ('feedface', 'cefaedfe', 'feedfacf', 'cffaedfe',
+                    'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca')}
+    native_images = 0
+    for path in bundle.rglob('*'):
+        if not path.is_file() or path.is_symlink():
+            continue
+        with path.open('rb') as handle:
+            magic = handle.read(4)
+        if magic in macho_magic:
+            run('lipo', str(path), '-verify_arch', *architectures,
+                capture_output=True)
+            native_images += 1
     output = ROOT / 'artifacts/macos'
     output.mkdir(parents=True, exist_ok=True)
     revision = run('git', 'rev-parse', 'HEAD', capture_output=True,
@@ -77,8 +101,16 @@ def main():
         'build': info['CFBundleVersion'], 'architectures': architectures,
         'archive': archive.name, 'sha256': digest, 'signing': 'ad-hoc',
         'notarized': False, 'system_notifications': False,
+        'minimum_macos': info.get('LSMinimumSystemVersion'),
+        'verified_native_images': native_images,
         'account_acceptance': 'NOT RUN',
     }
+    smoke = ROOT / 'build/macos-smoke-result.json'
+    manifest['native_smoke'] = {'status': 'NOT RUN'}
+    if smoke.is_file():
+        result = json.loads(smoke.read_text())
+        if result.get('revision') == revision:
+            manifest['native_smoke'] = result
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (output / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')
     print(json.dumps(manifest, indent=2))

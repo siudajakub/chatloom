@@ -9,6 +9,7 @@ import 'package:chatloom/pages/chat/recording_input_row.dart';
 import 'package:chatloom/pages/chat/recording_view_model.dart';
 import 'package:chatloom/pages/chat/recording_waveform.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -925,9 +926,11 @@ void main() {
     final (state, room) = await mount(tester);
     await start(state, room);
     final config = platform.lastConfig!;
-    expect(config.encoder, AudioEncoder.opus);
-    expect(config.sampleRate, 48000);
-    expect(config.bitRate, 96000);
+    final apple = PlatformInfos.isCupertinoStyle;
+    expect(config.encoder, apple ? AudioEncoder.aacLc : AudioEncoder.opus);
+    expect(config.sampleRate, apple ? 44100 : 48000);
+    expect(config.bitRate, apple ? 128000 : 96000);
+    expect(platform.outputPath, endsWith(apple ? '.m4a' : '.ogg'));
     expect(config.numChannels, 1);
     expect(
       config.androidConfig.audioSource,

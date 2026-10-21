@@ -24,6 +24,7 @@ final class RoundCapture: NSObject, FlutterTexture,
   private var output: URL?
   private var segments: [URL] = []
   private var segmentIndex = 0
+  private var writerActive = false
   private var side = 384
   private var maxBytes: Int64 = 0
   private var maxDuration = 60000
@@ -38,6 +39,7 @@ final class RoundCapture: NSObject, FlutterTexture,
   private var revision = 0
   private var observers: [NSObjectProtocol] = []
   private var sessionObserver: NSObjectProtocol?
+  private var focusObserver: NSObjectProtocol?
 
   init(registrar: FlutterPluginRegistrar) {
     textures = registrar.textures
@@ -48,11 +50,15 @@ final class RoundCapture: NSObject, FlutterTexture,
       guard let self = self else { return }
       self.queue.async { self.handle(call, result) }
     }
-    for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+    for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification,
+                 NSWorkspace.screensDidSleepNotification] {
       observers.append(NSWorkspace.shared.notificationCenter.addObserver(
         forName: name, object: nil, queue: nil
       ) { [weak self] _ in self?.interrupt() })
     }
+    focusObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didResignActiveNotification, object: nil, queue: nil
+    ) { [weak self] _ in self?.interrupt() }
   }
 
   private func reply(_ result: @escaping FlutterResult, _ value: Any? = nil) {
@@ -79,25 +85,25 @@ final class RoundCapture: NSObject, FlutterTexture,
     }
     switch call.method {
     case "start", "resume":
-      guard exporter == nil, stopAction == nil, movie?.isRecording == false else {
+      guard !writerActive, exporter == nil, stopAction == nil, movie?.isRecording == false else {
         fail(result, "busy"); return
       }
       startSegment(result)
     case "pause":
-      guard movie?.isRecording == true, stopAction == nil else { fail(result, "busy"); return }
+      guard writerActive, stopAction == nil else { fail(result, "busy"); return }
       pendingPause = result
       stopAction = {
         if let pause = self.pendingPause { self.pendingPause = nil; self.reply(pause) }
       }
-      movie?.stopRecording()
+      if movie?.isRecording == true { movie?.stopRecording() }
     case "finish":
       guard pendingFinish == nil, exporter == nil, stopAction == nil else {
         fail(result, "busy"); return
       }
       pendingFinish = result
-      if movie?.isRecording == true {
+      if writerActive {
         stopAction = { self.prepare() }
-        movie?.stopRecording()
+        if movie?.isRecording == true { movie?.stopRecording() }
       } else {
         prepare()
       }
@@ -128,10 +134,10 @@ final class RoundCapture: NSObject, FlutterTexture,
       pendingStop = result
       if let exporter = exporter {
         exporter.cancelExport()
-      } else if movie?.isRecording == true {
+      } else if writerActive {
         // Wait for the writer to close before Dart releases its private lease.
         stopAction = { self.cleanup(); self.completeStop() }
-        movie?.stopRecording()
+        if movie?.isRecording == true { movie?.stopRecording() }
       } else {
         cleanup(); completeStop()
       }
@@ -271,14 +277,24 @@ final class RoundCapture: NSObject, FlutterTexture,
     let url = directory.appendingPathComponent("segment-\(segmentIndex).mov")
     movie.maxRecordedDuration = CMTime(value: Int64(remaining), timescale: 1000)
     movie.maxRecordedFileSize = min(maxBytes * 8, 128 * 1024 * 1024)
+    writerActive = true
     movie.startRecording(to: url, recordingDelegate: self)
     reply(result)
+  }
+
+  func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo url: URL,
+                  from connections: [AVCaptureConnection]) {
+    queue.async {
+      guard let current = self.movie, output === current else { return }
+      if self.canceled || self.stopAction != nil { current.stopRecording() }
+    }
   }
 
   func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo url: URL,
                   from connections: [AVCaptureConnection], error: Error?) {
     queue.async {
       guard let current = self.movie, output === current else { return }
+      self.writerActive = false
       if self.canceled { self.cleanup(); self.completeStop(); return }
       if let error = error as NSError?,
          error.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool != true {
@@ -458,7 +474,7 @@ final class RoundCapture: NSObject, FlutterTexture,
 
   private func switchCamera(_ args: [String: Any], result: @escaping FlutterResult) {
     guard args["cameraRevision"] as? Int == revision else { fail(result, "stale_camera"); return }
-    guard movie?.isRecording == false, exporter == nil, stopAction == nil,
+    guard !writerActive, exporter == nil, stopAction == nil,
           let capture = session, let old = videoInput, cameras.count > 1,
           let device = cameras.first(where: { $0.uniqueID != old.device.uniqueID }) else {
       fail(result, "camera_switch_failed"); return
@@ -478,11 +494,11 @@ final class RoundCapture: NSObject, FlutterTexture,
 
   private func interrupt() {
     queue.async {
-      guard self.movie?.isRecording == true, self.stopAction == nil else { return }
+      guard self.writerActive, self.stopAction == nil else { return }
       self.interrupted = true
       self.event("preparing")
       self.stopAction = { self.prepare() }
-      self.movie?.stopRecording()
+      if self.movie?.isRecording == true { self.movie?.stopRecording() }
     }
   }
 
@@ -508,6 +524,7 @@ final class RoundCapture: NSObject, FlutterTexture,
       NotificationCenter.default.removeObserver(observer); sessionObserver = nil
     }
     session?.stopRunning(); session = nil; movie = nil; videoInput = nil; previewOutput = nil
+    writerActive = false
     for url in segments { try? FileManager.default.removeItem(at: url) }
     segments = []; recorded = .zero; stopAction = nil
     captureID = nil
@@ -518,6 +535,7 @@ final class RoundCapture: NSObject, FlutterTexture,
   }
 
   deinit {
+    if let observer = focusObserver { NotificationCenter.default.removeObserver(observer) }
     for observer in observers {
       NotificationCenter.default.removeObserver(observer)
       NSWorkspace.shared.notificationCenter.removeObserver(observer)
