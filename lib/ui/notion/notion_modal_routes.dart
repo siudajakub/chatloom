@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:material_ui/material_ui.dart';
 
+import 'notion_glass_reveal.dart';
 import 'notion_motion.dart';
 
 /// Dialog route with the Notion entrance: the barrier fades, the dialog
@@ -159,9 +160,17 @@ class _NotionDialogTransitionState extends State<NotionDialogTransition> {
   }
 }
 
-/// Anchored popover route (menus, the network selector): grows from
-/// [alignment] (the corner nearest the anchor) with a quick spring and
-/// leaves in [NotionMotion.instant].
+/// Anchored popover route (menus, the network selector), Telegram style:
+/// the glass panel grows out of [alignment] (the anchor) while its content
+/// fades in, and collapses back into it in [NotionMotion.quick].
+///
+/// The route itself neither fades nor scales its child: a blurred panel
+/// inside an animating `Opacity` or `Transform` reads an empty layer or
+/// changes its blur, which flashed when the popover settled. Instead it
+/// hands the animation to the panel through [NotionGlassReveal], and the
+/// first `NotionGlassPanel` below animates its clip and content while its
+/// blur stays on (DESIGN.md "Glass"). Under reduced motion the panel shows
+/// at once.
 class NotionPopoverRoute<T> extends RawDialogRoute<T> {
   NotionPopoverRoute({
     required WidgetBuilder builder,
@@ -179,11 +188,11 @@ class NotionPopoverRoute<T> extends RawDialogRoute<T> {
          transitionDuration: NotionMotion.short,
        );
 
-  /// Scale origin of the popover.
+  /// The anchor (origin of the reveal), relative to the overlay.
   final Alignment alignment;
 
   @override
-  Duration get reverseTransitionDuration => NotionMotion.instant;
+  Duration get reverseTransitionDuration => NotionMotion.quick;
 
   @override
   Widget buildTransitions(
@@ -191,17 +200,19 @@ class NotionPopoverRoute<T> extends RawDialogRoute<T> {
     Animation<double> animation,
     Animation<double> secondaryAnimation,
     Widget child,
-  ) => NotionDialogTransition(
+  ) => NotionGlassReveal(
     animation: animation,
-    from: NotionMotion.popoverFrom,
-    alignment: alignment,
+    origin: alignment.alongSize(MediaQuery.sizeOf(context)),
+    animate: !NotionMotion.reduced(context),
     child: child,
   );
 }
 
 /// Presents a popover built by [builder], which positions itself (for
 /// example with `CustomSingleChildLayout` or `Align` around the anchor
-/// rect). [alignment] is the scale origin.
+/// rect) and draws a `NotionGlassPanel`, which grows out of [alignment]
+/// (the anchor, relative to the overlay). Content without a glass panel
+/// appears without motion.
 ///
 /// ```dart
 /// showNotionPopover<Network>(

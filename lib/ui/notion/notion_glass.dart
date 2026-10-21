@@ -3,9 +3,12 @@ import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
 
+import 'notion_glass_reveal.dart';
 import 'notion_motion.dart';
 import 'notion_pressable.dart';
 import 'notion_tokens.dart';
+
+export 'notion_glass_reveal.dart';
 
 /// How [NotionGlassSurface] renders below a [NotionGlassScope].
 enum NotionGlassMode {
@@ -67,9 +70,18 @@ bool notionGlassEnabled(BuildContext context) {
 /// the blurred content behind it appears or goes. (Painting the tint at full
 /// alpha made the dock and pills a lighter grey than their glass, and a
 /// popover visibly darkened and turned translucent when it settled.)
-Color notionGlassOpaque(BuildContext context, Color tint) => tint.a >= 1
-    ? tint
-    : Color.alphaBlend(tint, context.notion.colors.background);
+///
+/// [under] is a translucent layer between the page and the surface (a modal
+/// barrier): a dialog that blurs once settled sees the page through its
+/// barrier, so its stand-in composites over both.
+Color notionGlassOpaque(BuildContext context, Color tint, {Color? under}) {
+  if (tint.a >= 1) return tint;
+  final page = context.notion.colors.background;
+  return Color.alphaBlend(
+    tint,
+    under == null || under.a == 0 ? page : Color.alphaBlend(under, page),
+  );
+}
 
 /// The only glass primitive: a translucent, backdrop-blurred fill.
 ///
@@ -93,10 +105,12 @@ class NotionGlassSurface extends StatelessWidget {
   final bool dock;
 
   /// A modal surface (menu, popover, dialog, sheet): uses
-  /// [NotionGlass.overlayTint] and blurs only once its route has settled.
-  /// While the route animates (enter, exit, drag-to-dismiss) it paints the
-  /// opaque fallback ([notionGlassOpaque], the same tone), so the blur is
-  /// never animated and never sits inside the route's fade.
+  /// [NotionGlass.overlayTint]. A popover (revealed from its anchor by
+  /// [NotionGlassReveal]) and a bottom sheet (which only slides) blur from
+  /// their first to their last frame. A dialog, which fades and scales,
+  /// blurs only once its route has settled and paints the opaque fallback
+  /// over its barrier ([notionGlassOpaque], the same tone) while it
+  /// animates, so a blur never sits inside a fade or a scale.
   final bool overlay;
   final BorderRadius borderRadius;
 
@@ -123,13 +137,45 @@ class NotionGlassSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final enabled = notionGlassEnabled(context);
-    final surface = overlay && enabled
-        ? _RouteSettled(builder: _paint)
-        : _paint(context, enabled);
-    return repaintBoundary ? RepaintBoundary(child: surface) : surface;
+    final reveal = overlay ? NotionGlassReveal.maybeOf(context) : null;
+    Widget surface(Animation<double>? content) {
+      final body = content == null
+          ? child
+          : FadeTransition(opacity: content, child: child);
+      // The tree has the same shape whatever the glass state: switching
+      // blur on or off flips `BackdropFilter.enabled` and the fill, and never
+      // remounts the content (which replayed the entrances of a popover's
+      // rows when it settled, and reset scroll and ink).
+      var result = overlay
+          ? _OverlayGlass(
+              enabled: enabled,
+              always: reveal != null,
+              builder: (context, blur, under) =>
+                  _paint(context, blur, body, under: under),
+            )
+          : _paint(context, enabled, body);
+      if (repaintBoundary) result = RepaintBoundary(child: result);
+      return result;
+    }
+
+    if (reveal == null) return surface(null);
+    final side = border?.top;
+    return NotionGlassRevealHost(
+      reveal: reveal,
+      borderRadius: borderRadius,
+      borderColor: side == null || side.style == BorderStyle.none
+          ? null
+          : side.color,
+      builder: (context, content) => surface(content),
+    );
   }
 
-  Widget _paint(BuildContext context, bool enabled) {
+  Widget _paint(
+    BuildContext context,
+    bool blur,
+    Widget content, {
+    Color? under,
+  }) {
     final glass = context.notion.glass;
     final fill =
         tint ??
@@ -140,55 +186,71 @@ class NotionGlassSurface extends StatelessWidget {
             : glass.tint);
     // BorderRadius.zero marks the full-bleed bars.
     final square = borderRadius == BorderRadius.zero; // design-lint: allow bars
-    Widget surface = DecoratedBox(
-      decoration: BoxDecoration(
-        color: enabled ? fill : notionGlassOpaque(context, fill),
-        borderRadius: square ? null : borderRadius,
-        border: border,
-      ),
-      child: alignment == null
-          ? child
-          : Align(alignment: alignment!, child: child),
-    );
-    if (!enabled) {
-      // Still clip so ink splashes respect the rounded dock.
-      return square
-          ? surface
-          : ClipRRect(borderRadius: borderRadius, child: surface);
-    }
-    surface = BackdropFilter.grouped(
+    final surface = BackdropFilter.grouped(
+      enabled: blur,
       filter: ui.ImageFilter.blur(
         sigmaX: glass.blurSigma,
         sigmaY: glass.blurSigma,
         tileMode: TileMode.mirror,
       ),
-      child: surface,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: blur ? fill : notionGlassOpaque(context, fill, under: under),
+          borderRadius: square ? null : borderRadius,
+          border: border,
+        ),
+        child: alignment == null
+            ? content
+            : Align(alignment: alignment!, child: content),
+      ),
     );
+    // Clip the blur to the shape; without blur the clip still keeps ink
+    // splashes inside the rounded dock.
     return square
         ? ClipRect(child: surface)
         : ClipRRect(borderRadius: borderRadius, child: surface);
   }
 }
 
-/// Rebuilds with `settled == true` only while the enclosing route's
-/// animation is complete (no route: always settled). Listens to status
-/// changes only, never to animation ticks.
-class _RouteSettled extends StatefulWidget {
-  final Widget Function(BuildContext context, bool settled) builder;
-  const _RouteSettled({required this.builder});
+/// The glass state of an overlay surface.
+///
+/// - [always] (a popover revealed by [NotionGlassReveal], or a bottom sheet,
+///   whose slide and drag only translate it): blurs from the first to the
+///   last frame. Nothing above the blur fades or scales, so it never needs
+///   a fallback and never switches state mid-motion.
+/// - Otherwise (dialogs, which fade and scale): blurs only while the route
+///   is settled and paints the opaque tone while it animates, composited
+///   over the route's barrier so that settling changes no colour.
+///
+/// Listens to route status changes only, never to animation ticks.
+class _OverlayGlass extends StatefulWidget {
+  final bool enabled;
+  final bool always;
+  final Widget Function(BuildContext context, bool blur, Color? under) builder;
+  const _OverlayGlass({
+    required this.enabled,
+    required this.always,
+    required this.builder,
+  });
 
   @override
-  State<_RouteSettled> createState() => _RouteSettledState();
+  State<_OverlayGlass> createState() => _OverlayGlassState();
 }
 
-class _RouteSettledState extends State<_RouteSettled> {
+class _OverlayGlassState extends State<_OverlayGlass> {
   Animation<double>? _animation;
   bool _settled = true;
+  bool _sheet = false;
+  Color? _barrier;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final animation = ModalRoute.of(context)?.animation;
+    final route = ModalRoute.of(context);
+    _sheet = route is ModalBottomSheetRoute;
+    final barrier = route?.barrierColor;
+    _barrier = barrier == null || barrier.a == 0 ? null : barrier;
+    final animation = route?.animation;
     if (identical(animation, _animation)) return;
     _animation?.removeStatusListener(_status);
     _animation = animation?..addStatusListener(_status);
@@ -207,7 +269,14 @@ class _RouteSettledState extends State<_RouteSettled> {
   }
 
   @override
-  Widget build(BuildContext context) => widget.builder(context, _settled);
+  Widget build(BuildContext context) {
+    final stable = widget.always || _sheet;
+    final blur = widget.enabled && (stable || _settled);
+    // A surface that blurs at rest but not yet: the fallback composited over
+    // the barrier is what the settled glass shows over an empty page.
+    final under = widget.enabled && !stable ? _barrier : null;
+    return widget.builder(context, blur, under);
+  }
 }
 
 /// Rounded glass container with the dock's hairline: menus, popovers,

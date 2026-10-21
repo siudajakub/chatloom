@@ -855,21 +855,27 @@ void main() {
         ),
       ),
     );
-    Finder blur() => find.descendant(
-      of: find.byType(NotionDialog),
-      matching: find.byType(BackdropFilter),
-    );
+    // The filter stays mounted (no remount when the glass switches on) and
+    // is enabled only while the dialog rests.
+    bool blur() => tester
+        .widget<BackdropFilter>(
+          find.descendant(
+            of: find.byType(NotionDialog),
+            matching: find.byType(BackdropFilter),
+          ),
+        )
+        .enabled;
     await tester.tap(find.text('open'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 60));
     expect(find.byType(NotionDialog), findsOneWidget);
-    expect(blur(), findsNothing, reason: 'no blur while the dialog grows');
+    expect(blur(), isFalse, reason: 'no blur while the dialog grows');
     await tester.pumpAndSettle();
-    expect(blur(), findsOneWidget, reason: 'blur once settled');
+    expect(blur(), isTrue, reason: 'blur once settled');
     Navigator.of(tester.element(find.byType(NotionDialog))).pop();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 30));
-    expect(blur(), findsNothing, reason: 'no blur while it leaves');
+    expect(blur(), isFalse, reason: 'no blur while it leaves');
     await tester.pumpAndSettle();
     expect(find.byType(NotionDialog), findsNothing);
   });

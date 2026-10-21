@@ -158,7 +158,6 @@ Widget _inbox({bool empty = false, int extraPins = 0}) {
                   order: i + 2,
                 ),
             ],
-      onCompose: _noop,
       onSettings: _noop,
       onSearch: _noop,
       onNetworkSelected: (_) {},

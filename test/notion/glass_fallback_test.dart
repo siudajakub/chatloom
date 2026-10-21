@@ -74,7 +74,7 @@ void main() {
     });
   }
 
-  testWidgets('an overlay keeps its tone while it settles into the blur', (
+  testWidgets('a popover keeps one glass tone from its first to last frame', (
     tester,
   ) async {
     final navigator = GlobalKey<NavigatorState>();
@@ -99,27 +99,24 @@ void main() {
         ),
       ),
     );
+    final panel = find.byKey(const ValueKey('panel'));
+    BackdropFilter blur() => tester.widget<BackdropFilter>(
+      find.descendant(of: panel, matching: find.byType(BackdropFilter)),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 40));
-    final panel = find.byKey(const ValueKey('panel'));
-    expect(find.byType(BackdropFilter), findsNothing);
-    final growing = _fills(tester, panel).first;
-    expect(
-      growing,
-      Color.alphaBlend(tokens.glass.overlayTint, tokens.colors.background),
-    );
+    // The glass grows out of its anchor with its blur on (no opaque
+    // stand-in that turns translucent when the popover settles).
+    expect(blur().enabled, isTrue);
+    expect(_fills(tester, panel).first, tokens.glass.overlayTint);
     await tester.pumpAndSettle();
-    expect(find.byType(BackdropFilter), findsOneWidget);
-    // Settled glass over the same empty page composites to the same tone.
-    expect(
-      Color.alphaBlend(_fills(tester, panel).first, tokens.colors.background),
-      growing,
-    );
+    expect(blur().enabled, isTrue);
+    expect(_fills(tester, panel).first, tokens.glass.overlayTint);
     navigator.currentState!.pop();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 20));
-    expect(find.byType(BackdropFilter), findsNothing);
-    expect(_fills(tester, panel).first, growing);
+    expect(blur().enabled, isTrue);
+    expect(_fills(tester, panel).first, tokens.glass.overlayTint);
     await tester.pumpAndSettle();
   });
 }

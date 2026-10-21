@@ -524,24 +524,57 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('popover grows from its anchor and dismisses', (tester) async {
+    testWidgets('popover glass grows from its anchor and dismisses', (
+      tester,
+    ) async {
       await tester.pumpWidget(_app(const SizedBox()));
       final context = tester.element(find.byType(SizedBox).last);
       final result = showNotionPopover<String>(
         context: context,
         alignment: Alignment.bottomRight,
-        builder: (_) =>
-            const Align(alignment: Alignment.bottomRight, child: Text('Menu')),
+        builder: (_) => const Align(
+          alignment: Alignment.bottomRight,
+          child: NotionGlassPanel(child: Text('Menu')),
+        ),
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 20));
-      expect(_scale(tester, find.text('Menu')), lessThan(1));
+      RenderNotionRevealClip clip() =>
+          tester.renderObject(find.byType(NotionRevealClip));
+      final size = tester.getSize(find.byType(NotionRevealClip));
+      expect(clip().revealing, isTrue);
+      expect(clip().currentClip.width, lessThan(size.width));
+      // It grows out of the bottom-right anchor.
+      expect(clip().currentClip.right, closeTo(size.width, .01));
+      expect(clip().currentClip.bottom, closeTo(size.height, .01));
+      expect(_opacity(tester, find.text('Menu')), lessThan(1));
+      expect(_scale(tester, find.text('Menu')), 1, reason: 'never scaled');
       await tester.pumpAndSettle();
+      expect(clip().revealing, isFalse);
       expect(_identity(tester, find.text('Menu')), isTrue);
       await tester.tapAt(const Offset(5, 5));
       await tester.pumpAndSettle();
       expect(find.text('Menu'), findsNothing);
       expect(await result, isNull);
+    });
+
+    testWidgets('popover under reduced motion shows at once', (tester) async {
+      await tester.pumpWidget(_app(const SizedBox(), reduced: true));
+      final context = tester.element(find.byType(SizedBox).last);
+      showNotionPopover<void>(
+        context: context,
+        builder: (_) =>
+            const Center(child: NotionGlassPanel(child: Text('Quiet'))),
+      );
+      await tester.pump();
+      expect(
+        tester
+            .renderObject<RenderNotionRevealClip>(find.byType(NotionRevealClip))
+            .revealing,
+        isFalse,
+      );
+      expect(_identity(tester, find.text('Quiet')), isTrue);
+      await tester.pumpAndSettle();
     });
 
     testWidgets('sheet content rises in and settles', (tester) async {

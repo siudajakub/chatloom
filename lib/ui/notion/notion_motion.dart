@@ -146,6 +146,11 @@ abstract final class NotionMotion {
   /// Start scale of a popover or menu.
   static const double popoverFrom = .92;
 
+  /// Opacity a refreshed list (another view or network) fades in from: a
+  /// cue that the content changed, never a frame without content (an empty
+  /// frame flashed the bare page through the glass header and dock).
+  static const double refreshFrom = .5;
+
   // ------------------------------------------------------------ route styles
 
   /// Bottom sheets (`showModalBottomSheet(sheetAnimationStyle: ...)`).
