@@ -1,7 +1,0 @@
-{
-  "package": "swipe_to_action",
-  "version": "0.3.0",
-  "source": "pub.dev cached release",
-  "upstream_swipeable_sha256": "9775822088ca31aa522620d7f090ed0cd6d99b025b711268de614f3e15464a68",
-  "patch": "Guard post-frame setState with mounted to avoid disposed State null checks"
-}
