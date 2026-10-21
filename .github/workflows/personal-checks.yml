@@ -122,7 +122,9 @@ jobs:
           test/notion/settings_controller_test.dart
           test/notion/settings_routes_controller_test.dart
           test/notion/settings_widgets_test.dart
-          test/notion/inbox_controller_test.dart
+          test/notion/inbox_controller_latency_test.dart
+          test/notion/inbox_resource_lifecycle_test.dart
+          test/notion/inbox_startup_lifecycle_test.dart
           test/notion/chat_preferences_controller_test.dart
           test/notion/push_preferences_controller_test.dart
           test/notion/details_adapter_test.dart
