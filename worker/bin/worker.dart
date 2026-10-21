@@ -177,6 +177,22 @@ Future<void> main(List<String> arguments) async {
             }),
           );
         }
+        // New room keys (to-device) let jobs waiting for keys try again at
+        // once, and end the loop's wait like a received message does.
+        var newKeys = false;
+        Completer<void>? keysWake;
+        final keyWatch = client.onToDeviceEvent.stream
+            .where(
+              (event) =>
+                  event.type == EventTypes.RoomKey ||
+                  event.type == EventTypes.ForwardedRoomKey,
+            )
+            .listen((_) {
+              newKeys = true;
+              final wake = keysWake;
+              keysWake = null;
+              if (wake != null && !wake.isCompleted) wake.complete();
+            });
         final heartbeats = HeartbeatSchedule();
         // A fresh journal session at start and daily, so app devices added
         // since can trust worker results soon (journal_session_rotation).
@@ -192,6 +208,10 @@ Future<void> main(List<String> arguments) async {
               if (stopping) break;
               await engine.autoScan();
               if (stopping) break;
+              if (newKeys) {
+                newKeys = false;
+                engine.retryWaitingKeys();
+              }
               await engine.tick();
               if (stopping) break;
               final at = DateTime.now().toUtc();
@@ -258,10 +278,12 @@ Future<void> main(List<String> arguments) async {
                 Future<void>.delayed(const Duration(seconds: 2)),
                 engine.wakeup,
                 ?liveSources?.wakeup,
+                (keysWake ??= Completer<void>()).future,
               ]);
             }
           }
         } finally {
+          await keyWatch.cancel();
           await liveSources?.close();
           await engine.shutdown();
           for (final subscription in subscriptions) {

@@ -11,45 +11,71 @@ abstract class ReminderReplyHistory {
   void requestKeys();
 }
 
+/// A real reply from the other party after the reminder was set: a synced
+/// message or sticker that is not the owner's, not a bot's or bridge notice,
+/// not an edit, reaction or redaction.
+///
 /// [isOwnSender] additionally recognises the owner's bridge ghosts (messages
 /// sent from the native Telegram/WhatsApp/Signal app without double
 /// puppeting); they are never the recipient's reply. See personal_core
-/// `OwnRemoteIdentity`.
+/// `OwnRemoteIdentity`. [isBot] recognises automated senders (the room's
+/// declared bridge bots); their messages are status notices, not replies.
 bool isRecipientReply(
   Event event,
   String ownUserId,
   DateTime since, {
   bool Function(String senderId)? isOwnSender,
+  bool Function(String senderId)? isBot,
 }) =>
     event.status.isSynced &&
     (event.type == EventTypes.Message || event.type == EventTypes.Sticker) &&
-    !_own(event.senderId, ownUserId, isOwnSender) &&
+    !_ignoredSender(event.senderId, ownUserId, isOwnSender, isBot) &&
     event.originServerTs.isAfter(since) &&
     !event.redacted &&
-    event.relationshipType != RelationshipTypes.edit;
+    !_notReply(event) &&
+    // m.notice is the automated message type (bots, bridge status texts).
+    event.content['msgtype'] != MessageTypes.Notice;
 
-/// False is returned only after a continuous history frontier is proved.
-/// Missing pages or recipient keys remain unresolved rather than "no reply".
-bool _own(
+/// Edits and reactions never answer anything. Encrypted events keep their
+/// `m.relates_to` in clear, so this also holds while keys are missing.
+bool _notReply(Event event) => {
+  RelationshipTypes.edit,
+  RelationshipTypes.reaction,
+}.contains(event.relationshipType);
+
+/// Owner (account or own ghost) or an automated sender.
+bool _ignoredSender(
   String senderId,
   String ownUserId,
   bool Function(String senderId)? isOwnSender,
-) => senderId == ownUserId || (isOwnSender?.call(senderId) ?? false);
+  bool Function(String senderId)? isBot,
+) =>
+    senderId == ownUserId ||
+    (isOwnSender?.call(senderId) ?? false) ||
+    (isBot?.call(senderId) ?? false);
 
+/// False is returned only after a continuous history frontier is proved.
+/// Missing pages or recipient keys remain unresolved rather than "no reply".
 Future<bool> receivedReplySince(
   ReminderReplyHistory history,
   String ownUserId,
   DateTime since, {
   Duration timeout = const Duration(seconds: 10),
   bool Function(String senderId)? isOwnSender,
+  bool Function(String senderId)? isBot,
 }) async {
   final deadline = DateTime.now().add(timeout);
   var stagnantRequests = 0;
   while (true) {
     final events = List<Event>.from(history.events);
     if (events.any(
-      (event) =>
-          isRecipientReply(event, ownUserId, since, isOwnSender: isOwnSender),
+      (event) => isRecipientReply(
+        event,
+        ownUserId,
+        since,
+        isOwnSender: isOwnSender,
+        isBot: isBot,
+      ),
     )) {
       return true;
     }
@@ -57,9 +83,10 @@ Future<bool> receivedReplySince(
       (event) =>
           event.status.isSynced &&
           event.type == EventTypes.Encrypted &&
-          !_own(event.senderId, ownUserId, isOwnSender) &&
+          !_ignoredSender(event.senderId, ownUserId, isOwnSender, isBot) &&
           event.originServerTs.isAfter(since) &&
-          !event.redacted,
+          !event.redacted &&
+          !_notReply(event),
     )) {
       history.requestKeys();
       throw const WorkerFailure('waiting_keys');

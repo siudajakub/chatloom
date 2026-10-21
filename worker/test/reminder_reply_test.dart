@@ -28,6 +28,9 @@ Event event({
   DateTime? at,
   bool edit = false,
   bool redacted = false,
+  String msgtype = 'm.text',
+  String? relType,
+  bool inReplyTo = false,
 }) => Event(
   eventId: '\$fixture-${sequence++}',
   room: room,
@@ -35,9 +38,15 @@ Event event({
   originServerTs: at ?? since.add(const Duration(seconds: 1)),
   type: type,
   content: {
-    'msgtype': 'm.text',
+    'msgtype': msgtype,
     'body': 'fixture',
     if (edit) 'm.relates_to': {'rel_type': 'm.replace', 'event_id': r'$old'},
+    if (relType != null)
+      'm.relates_to': {'rel_type': relType, 'event_id': r'$old'},
+    if (inReplyTo)
+      'm.relates_to': {
+        'm.in_reply_to': {'event_id': r'$old'},
+      },
   },
   unsigned: redacted
       ? {
@@ -250,6 +259,128 @@ void main() {
       isFalse,
     );
     expect(history.keyRequests, 0);
+  });
+
+  group('only real replies from the other party count', () {
+    const bot = '@telegrambot:bridge.invalid';
+    bool botOnly(String id) => id == bot;
+
+    test('bot and bridge notices are not replies', () {
+      expect(
+        isRecipientReply(event(sender: bot), own, since, isBot: botOnly),
+        isFalse,
+      );
+      expect(
+        isRecipientReply(
+          event(sender: bot, type: EventTypes.Sticker),
+          own,
+          since,
+          isBot: botOnly,
+        ),
+        isFalse,
+      );
+      expect(isRecipientReply(event(msgtype: 'm.notice'), own, since), isFalse);
+      // Without a bot predicate the same sender is an ordinary member.
+      expect(isRecipientReply(event(sender: bot), own, since), isTrue);
+    });
+
+    test('reactions and edits are not replies, quoted replies are', () {
+      expect(
+        isRecipientReply(event(relType: 'm.annotation'), own, since),
+        isFalse,
+      );
+      expect(
+        isRecipientReply(event(relType: 'm.replace'), own, since),
+        isFalse,
+      );
+      expect(isRecipientReply(event(inReplyTo: true), own, since), isTrue);
+      expect(isRecipientReply(event(relType: 'm.thread'), own, since), isTrue);
+      expect(isRecipientReply(event(msgtype: 'm.image'), own, since), isTrue);
+    });
+
+    test('only messages after the reminder was set count', () async {
+      final history = History([
+        [
+          event(sender: own),
+          event(at: since.subtract(const Duration(minutes: 1))),
+        ],
+      ]);
+      expect(await receivedReplySince(history, own, since), isFalse);
+    });
+
+    test('a history of only bot notices and reactions is no reply', () async {
+      final history = History([
+        [
+          event(sender: bot),
+          event(msgtype: 'm.notice'),
+          event(type: EventTypes.Reaction),
+          event(relType: 'm.replace'),
+          event(at: since),
+        ],
+      ]);
+      expect(
+        await receivedReplySince(history, own, since, isBot: botOnly),
+        isFalse,
+      );
+    });
+
+    test(
+      'undecryptable reactions, edits and bot events do not wait for keys',
+      () async {
+        final history = History([
+          [
+            event(type: EventTypes.Encrypted, relType: 'm.annotation'),
+            event(type: EventTypes.Encrypted, relType: 'm.replace'),
+            event(type: EventTypes.Encrypted, sender: bot),
+            event(at: since),
+          ],
+        ]);
+        expect(
+          await receivedReplySince(history, own, since, isBot: botOnly),
+          isFalse,
+        );
+        expect(history.keyRequests, 0);
+      },
+    );
+
+    test('an undecryptable quoted reply still waits for keys', () async {
+      final history = History([
+        [event(type: EventTypes.Encrypted, inReplyTo: true), event(at: since)],
+      ]);
+      await expectLater(
+        receivedReplySince(history, own, since, isBot: botOnly),
+        throwsA(
+          isA<WorkerFailure>().having((f) => f.code, 'code', 'waiting_keys'),
+        ),
+      );
+    });
+
+    test('declared bridge bots of the room are the bot senders', () {
+      final client = Client('fixture-bots', database: NoDatabase());
+      final portal = Room(id: '!portal:example.invalid', client: client);
+      expect(reminderBotSenders(portal), isEmpty);
+      for (final (type, key, declared) in [
+        ('m.bridge', 'a', bot),
+        ('com.beeper.bridge', 'b', '@sh-whatsappbot:bridge.invalid'),
+        ('uk.half-shot.bridge', 'c', ''),
+      ]) {
+        portal.setState(
+          Event(
+            eventId: '\$bridge-$key',
+            room: portal,
+            senderId: declared.isEmpty ? bot : declared,
+            originServerTs: since,
+            type: type,
+            stateKey: key,
+            content: {'bridgebot': declared},
+          ),
+        );
+      }
+      expect(reminderBotSenders(portal), {
+        bot,
+        '@sh-whatsappbot:bridge.invalid',
+      });
+    });
   });
 
   group('worker identity from room state', () {

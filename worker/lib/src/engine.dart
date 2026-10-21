@@ -54,10 +54,25 @@ class WorkerEngine {
   /// Private operator switch (`autoTranscription` in the worker config).
   /// Off by default: the synced user policy alone never starts a scan.
   final bool autoTranscription;
+  /// Round-robin source audit over every transcript job (redaction
+  /// detection): [sourceAuditBatch] probes at most this often.
+  static const sourceAuditInterval = Duration(seconds: 30);
+  static const sourceAuditBatch = 4;
+
+  /// Jobs parked on an unknown source status (`waitingSync` +
+  /// `source_status_unknown`: the source could not be checked before the
+  /// download, or a finished transcript waits for that check before it is
+  /// published) are probed again this often, ahead of the round-robin.
+  /// Before, they waited for the round-robin over every transcript job, so
+  /// with a few hundred jobs a fresh voice note's transcript could wait the
+  /// better part of an hour after a single slow check.
+  static const parkedSourceRetry = Duration(seconds: 5);
   final Map<String, Cancellation> _cancellations = {};
   bool _running = false;
   bool _sourceAuditBusy = false;
   DateTime? _sourceAuditAt;
+  DateTime? _parkedAuditAt;
+  int _parkedCursor = 0;
   bool _autoScanBusy = false;
   DateTime? _autoScanAt;
   final Map<String, Future<void>> _activeTranscripts = {};
@@ -476,42 +491,7 @@ class WorkerEngine {
             j['kind'] == 'reminder' &&
             {'queued', 'waitingKeys', 'waitingSync'}.contains(j['state']),
       )) {
-        if (job['nextReplyCheckAt'] is String &&
-            clock().isBefore(
-              DateTime.parse(job['nextReplyCheckAt'] as String),
-            )) {
-          continue;
-        }
-        if (job['untilReply'] == true) {
-          final ref = ConversationRef.fromJson(
-            Map<String, dynamic>.from(job['conversation'] as Map),
-          );
-          try {
-            if (await transport.hasRepliedSince(
-              ref,
-              DateTime.parse(job['createdAt'] as String),
-            )) {
-              _setState(job, 'cancelled', 'replied');
-              continue;
-            }
-          } on WorkerFailure catch (e) {
-            _deferReminder(
-              job,
-              e.code == 'waiting_keys' ? 'waitingKeys' : 'waitingSync',
-              e.code,
-            );
-            continue;
-          } catch (_) {
-            _deferReminder(job, 'waitingSync', 'history_unavailable');
-            continue;
-          }
-          job.remove('nextReplyCheckAt');
-          if (job['state'] != 'queued') _setState(job, 'queued', null);
-        }
-        if (!clock().isBefore(DateTime.parse(job['dueAt'] as String))) {
-          job['due'] = true;
-          _setState(job, 'done', null);
-        }
+        await _reminder(job);
       }
       final free = maxConcurrentTranscripts - _activeTranscripts.length;
       if (free > 0) {
@@ -627,11 +607,99 @@ class WorkerEngine {
     }
   }
 
+  /// Retry interval of a reminder's reply check while the history cannot be
+  /// read, and the polling interval of a successful check before due.
+  static const reminderReplyRecheck = Duration(seconds: 30);
+
+  /// How long a due "only if no reply" reminder waits for unreadable history
+  /// before it fires anyway (`replyCheck: skipped`).
+  static const reminderReplyCheckGrace = Duration(minutes: 5);
+
+  /// A due reminder is fired. With "only if no reply" (`untilReply`) it is
+  /// first checked for a real reply since it was set; a reply cancels it
+  /// (`replied`). While the history cannot be read (missing keys, gaps), the
+  /// check is retried every [reminderReplyRecheck], but only until
+  /// [reminderReplyCheckGrace] after the due time: then the reminder fires
+  /// anyway with `replyCheck: skipped` instead of waiting forever. The grace
+  /// is measured from `dueAt`, so reminders stuck before this rule fire on
+  /// the first tick that sees them.
+  Future<void> _reminder(Map<String, dynamic> job) async {
+    final due = DateTime.parse(job['dueAt'] as String);
+    final graceEnd = due.add(reminderReplyCheckGrace);
+    final next = job['nextReplyCheckAt'];
+    if (clock().isBefore(graceEnd) &&
+        next is String &&
+        clock().isBefore(DateTime.parse(next))) {
+      return;
+    }
+    if (job['untilReply'] == true) {
+      final ref = ConversationRef.fromJson(
+        Map<String, dynamic>.from(job['conversation'] as Map),
+      );
+      String? unresolved;
+      try {
+        if (await transport.hasRepliedSince(
+          ref,
+          DateTime.parse(job['createdAt'] as String),
+        )) {
+          job.remove('nextReplyCheckAt');
+          _setState(job, 'cancelled', 'replied');
+          return;
+        }
+      } on WorkerFailure catch (e) {
+        unresolved = e.code;
+      } catch (_) {
+        unresolved = 'history_unavailable';
+      }
+      final now = clock();
+      if (unresolved != null) {
+        if (now.isBefore(graceEnd)) {
+          _deferReminder(
+            job,
+            unresolved == 'waiting_keys' ? 'waitingKeys' : 'waitingSync',
+            unresolved,
+          );
+          return;
+        }
+        // Past the grace period: remind rather than stay silent, and say
+        // that replies could not be checked.
+        job['replyCheck'] = 'skipped';
+        job['replyCheckError'] = unresolved;
+      } else if (now.isBefore(due)) {
+        // No reply yet; look again later instead of on every tick.
+        job['nextReplyCheckAt'] = _nextReplyCheck(
+          now,
+          due,
+        ).toUtc().toIso8601String();
+        if (job['state'] != 'queued') {
+          _setState(job, 'queued', null);
+        } else {
+          store.saveJob(job);
+        }
+        return;
+      }
+    }
+    if (clock().isBefore(due)) return;
+    job.remove('nextReplyCheckAt');
+    job['due'] = true;
+    _setState(job, 'done', null);
+  }
+
+  /// [reminderReplyRecheck] from [now], but never past the due time or the
+  /// end of the grace period, so neither is missed by up to 30 s.
+  DateTime _nextReplyCheck(DateTime now, DateTime due) {
+    var next = now.add(reminderReplyRecheck);
+    for (final edge in [due, due.add(reminderReplyCheckGrace)]) {
+      if (edge.isAfter(now) && edge.isBefore(next)) next = edge;
+    }
+    return next;
+  }
+
   void _deferReminder(Map<String, dynamic> job, String state, String code) {
-    job['nextReplyCheckAt'] = clock()
-        .add(const Duration(seconds: 30))
-        .toUtc()
-        .toIso8601String();
+    job['nextReplyCheckAt'] = _nextReplyCheck(
+      clock(),
+      DateTime.parse(job['dueAt'] as String),
+    ).toUtc().toIso8601String();
     if (job['state'] != state || job['errorCode'] != code) {
       _setState(job, state, code);
     } else {
@@ -649,18 +717,45 @@ class WorkerEngine {
     });
   }
 
+  static bool _parkedOnSource(Map<String, dynamic> job) =>
+      job['kind'] == 'transcript' &&
+      job['state'] == 'waitingSync' &&
+      job['errorCode'] == 'source_status_unknown';
+
   /// Invoked after sync reconciliation; only explicit jobs, no history scan.
+  /// Parked jobs (see [parkedSourceRetry]) first, then the bounded
+  /// round-robin over every job.
   Future<void> auditTranscriptSources({bool force = false}) async {
-    if (_sourceAuditBusy ||
-        (!force &&
-            _sourceAuditAt != null &&
-            clock().difference(_sourceAuditAt!) <
-                const Duration(seconds: 30))) {
-      return;
-    }
+    if (_sourceAuditBusy) return;
+    final now = clock();
+    final roundRobinDue =
+        force ||
+        _sourceAuditAt == null ||
+        now.difference(_sourceAuditAt!) >= sourceAuditInterval;
+    final parkedDue =
+        force ||
+        _parkedAuditAt == null ||
+        now.difference(_parkedAuditAt!) >= parkedSourceRetry;
+    if (!roundRobinDue && !parkedDue) return;
     _sourceAuditBusy = true;
-    _sourceAuditAt = clock();
     try {
+      if (parkedDue) {
+        final parked = store.jobs().where(_parkedOnSource).toList();
+        if (parked.isNotEmpty) {
+          _parkedAuditAt = now;
+          // Rotate, so more parked jobs than one batch all get their turn.
+          final start = _parkedCursor % parked.length;
+          final count = parked.length < sourceAuditBatch
+              ? parked.length
+              : sourceAuditBatch;
+          for (var n = 0; n < count; n++) {
+            await _auditSource(parked[(start + n) % parked.length]);
+          }
+          _parkedCursor = start + count;
+        }
+      }
+      if (!roundRobinDue) return;
+      _sourceAuditAt = now;
       final jobs = store
           .jobs()
           .where(
@@ -672,38 +767,66 @@ class WorkerEngine {
       if (jobs.isEmpty) return;
       final cursor = store.checkpoint('source-audit');
       final prior = jobs.indexWhere((job) => job['id'] == cursor);
-      for (var n = 0; n < jobs.length && n < 4; n++) {
+      for (var n = 0; n < jobs.length && n < sourceAuditBatch; n++) {
         final snapshot = jobs[(prior + 1 + n) % jobs.length];
-        final id = snapshot['id'] as String;
-        final source = SourceEventRef.fromJson(
-          Map<String, dynamic>.from(snapshot['source'] as Map),
-        );
-        final redacted = await _probeSource(source);
-        final current = store.job(id);
-        if (current != null &&
-            current['source'].toString() == snapshot['source'].toString()) {
-          if (redacted == true) {
-            _invalidateSource(current);
-          } else if (redacted == false &&
-              current['state'] == 'waitingSync' &&
-              current['pendingResult'] == null &&
-              current['errorCode'] == 'source_status_unknown') {
-            _setState(current, 'queued', null);
-          } else if (redacted == false &&
-              current['pendingResult'] is Map &&
-              current['state'] == 'waitingSync') {
-            final pending = Map<String, dynamic>.from(
-              current.remove('pendingResult') as Map,
-            );
-            current.addAll(pending);
-            _setState(current, 'done', null);
-          }
-        }
-        store.setCheckpoint('source-audit', id);
+        await _auditSource(snapshot);
+        store.setCheckpoint('source-audit', snapshot['id'] as String);
       }
     } finally {
       _sourceAuditBusy = false;
     }
+  }
+
+  /// Probes one job's source: a redacted source erases the job, a confirmed
+  /// one releases a parked job (queued again, or its held result published).
+  Future<void> _auditSource(Map<String, dynamic> snapshot) async {
+    final id = snapshot['id'] as String;
+    final source = SourceEventRef.fromJson(
+      Map<String, dynamic>.from(snapshot['source'] as Map),
+    );
+    final redacted = await _probeSource(source);
+    final current = store.job(id);
+    if (current == null ||
+        current['source'].toString() != snapshot['source'].toString()) {
+      return;
+    }
+    if (redacted == true) {
+      _invalidateSource(current);
+    } else if (redacted == false &&
+        current['state'] == 'waitingSync' &&
+        current['pendingResult'] == null &&
+        current['errorCode'] == 'source_status_unknown') {
+      _setState(current, 'queued', null);
+    } else if (redacted == false &&
+        current['pendingResult'] is Map &&
+        current['state'] == 'waitingSync') {
+      final pending = Map<String, dynamic>.from(
+        current.remove('pendingResult') as Map,
+      );
+      current.addAll(pending);
+      _setState(current, 'done', null);
+    }
+  }
+
+  /// New room keys arrived (to-device): jobs waiting for keys try again now
+  /// instead of after their backoff (up to 30 min apart). Nothing is paid
+  /// for a retry that still finds no key.
+  int retryWaitingKeys() {
+    var woken = 0;
+    store.transaction(() {
+      for (final job in store.jobs()) {
+        if (job['kind'] != 'transcript' ||
+            job['state'] != 'waitingKeys' ||
+            !job.containsKey('retryAt')) {
+          continue;
+        }
+        job.remove('retryAt');
+        store.saveJob(job);
+        woken++;
+      }
+    });
+    if (woken > 0) _signal();
+    return woken;
   }
 
   Future<bool?> _probeSource(SourceEventRef source) async {

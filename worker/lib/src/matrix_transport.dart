@@ -62,6 +62,22 @@ Future<Uint8List> boundedMediaDownload(
   }
 }
 
+/// An event the SDK stored before its room key arrived stays stored as it
+/// came (encrypted): the SDK re-decrypts stored events only for a live
+/// `Timeline` or for to-device keys within 5 minutes, never for keys from the
+/// key backup or a later forward (the worker holds no timelines). Decrypt it
+/// now with the keys the store holds; still encrypted when they are missing.
+Future<Event> decryptStoredEvent(Client client, Event event) async {
+  if (event.type != EventTypes.Encrypted || !client.encryptionEnabled) {
+    return event;
+  }
+  try {
+    return await client.encryption?.decryptRoomEvent(event) ?? event;
+  } catch (_) {
+    return event;
+  }
+}
+
 class MatrixFeatureTransport
     implements FeatureTransport, MediaPreflight, BoundedAudioLoader {
   final Client client;
@@ -128,9 +144,12 @@ class MatrixFeatureTransport
   }) async {
     final selected = await room(source.conversation);
     cancel.check();
-    final event = await selected.getEventById(source.eventId);
-    if (event == null) throw const WorkerFailure('source_unavailable');
-    if (event.redacted) throw const WorkerFailure('source_redacted');
+    final stored = await selected.getEventById(source.eventId);
+    if (stored == null) throw const WorkerFailure('source_unavailable');
+    if (stored.redacted) throw const WorkerFailure('source_redacted');
+    // Keys that arrived after the event (backup, forward) decrypt it now;
+    // without this a job waited for keys it already had, forever.
+    final event = await decryptStoredEvent(client, stored);
     if (event.type == EventTypes.Encrypted) {
       try {
         await event.requestKey();
@@ -180,9 +199,12 @@ class MatrixFeatureTransport
   Future<MediaFacts?> mediaFacts(SourceEventRef source) async {
     try {
       final selected = await room(source.conversation);
-      final event = await selected
+      final stored = await selected
           .getEventById(source.eventId)
           .timeout(const Duration(seconds: 5));
+      final event = stored == null
+          ? null
+          : await decryptStoredEvent(client, stored);
       if (event == null || event.redacted || event.type != EventTypes.Message) {
         return null;
       }
@@ -309,12 +331,22 @@ class MatrixFeatureTransport
         // Weak (DM-structure) evidence is scoped to this room.
         isOwnSender: (senderId) =>
             identity.isOwn(senderId, roomId: selected.id),
+        isBot: reminderBotSenders(selected).contains,
       );
     } finally {
       timeline.cancelSubscriptions();
     }
   }
 }
+
+/// Automated senders whose messages never count as a reply to a reminder:
+/// the bridge bots [room] declares in its bridge state (`bridgebot`).
+Set<String> reminderBotSenders(Room room) => {
+  for (final type in ownIdentityBridgeStateTypes)
+    for (final state in room.states[type]?.values ?? <StrippedStateEvent>[])
+      if (state.content['bridgebot'] case final String bot when bot.isNotEmpty)
+        bot,
+};
 
 /// Owner identity incl. own bridge ghosts, from already-loaded room state
 /// (same snapshot rules as the app's `lib/personal/own_sender.dart`): only

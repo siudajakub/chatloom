@@ -197,6 +197,33 @@ void main() {
     expect(items.single.kind, AutoTranscriptionKind.video);
   });
 
+  test('a stored copy that is still encrypted is decrypted with keys that '
+      'arrived later (key backup, forwarded keys)', () async {
+    final decrypted = <String>[];
+    feed = MatrixLiveSources(
+      client,
+      journalRoomId: '!journal:example.invalid',
+      clock: () => now,
+      decrypt: (event) async {
+        decrypted.add(event.eventId);
+        return message(event.eventId, video());
+      },
+    );
+    final encrypted = message(r'$backup', {
+      'algorithm': 'm.megolm.v1.aes-sha2',
+    }, type: EventTypes.Encrypted);
+    feed.observe(encrypted);
+    expect(await feed.drain(), isEmpty);
+    // The SDK store still holds the encrypted copy: only the feed's own
+    // decryption with the now-present key finds the video.
+    room.stored[r'$backup'] = encrypted;
+    now = now.add(MatrixLiveSources.pendingKeysRetry);
+    final items = await feed.drain();
+    expect(decrypted, [r'$backup']);
+    expect(items.single.eventId, r'$backup');
+    expect(items.single.kind, AutoTranscriptionKind.video);
+  });
+
   test(
     'an inactive feed drops what it receives and wakes on new items',
     () async {

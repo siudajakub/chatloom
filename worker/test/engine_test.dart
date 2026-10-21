@@ -79,9 +79,12 @@ class FakeTransport implements FeatureTransport {
     ConversationRef conversation,
     DateTime since,
   ) async {
+    replyChecks++;
     if (replyHistoryFailure != null) throw WorkerFailure(replyHistoryFailure!);
     return receivedReply;
   }
+
+  int replyChecks = 0;
 }
 
 class FakeTranscriber implements Transcriber {
@@ -215,6 +218,168 @@ void main() {
       expect(transport.reads, isEmpty);
     },
   );
+  group('untilReply reminders with unreadable history', () {
+    late DateTime reminderClock;
+    setUp(() {
+      reminderClock = now;
+      engine = WorkerEngine(
+        store,
+        transport,
+        transcriber,
+        clock: () => reminderClock,
+      );
+    });
+    void create(DateTime due) => engine.accept(
+      op('reminder-until', 'reminder.create', 'r', {
+        'id': 'r',
+        'conversation': conversation.toJson(),
+        'dueAt': due.toIso8601String(),
+        'untilReply': true,
+      }),
+    );
+    Map<String, dynamic> lastResult() =>
+        Map<String, dynamic>.from(store.outbox.last['payload'] as Map);
+
+    test(
+      'fire after a bounded grace past due and mark the reply check skipped',
+      () async {
+        final due = now.add(const Duration(seconds: 10));
+        final graceEnd = due.add(WorkerEngine.reminderReplyCheckGrace);
+        create(due);
+        transport.replyHistoryFailure = 'waiting_keys';
+        await engine.tick();
+        expect(store.job('r')!['state'], 'waitingKeys');
+        // The retry is pulled forward to the due time instead of +30 s.
+        expect(store.job('r')!['nextReplyCheckAt'], due.toIso8601String());
+        reminderClock = due;
+        await engine.tick();
+        expect(store.job('r')!['state'], 'waitingKeys');
+        expect(store.job('r')!['due'], isNot(true));
+        transport.replyHistoryFailure = 'history_unavailable';
+        reminderClock = graceEnd.subtract(const Duration(seconds: 1));
+        await engine.tick();
+        expect(store.job('r')!['state'], 'waitingSync');
+        expect(store.job('r')!['due'], isNot(true));
+        expect(store.job('r')!['nextReplyCheckAt'], graceEnd.toIso8601String());
+        reminderClock = graceEnd;
+        await engine.tick();
+        final job = store.job('r')!;
+        expect(job['state'], 'done');
+        expect(job['due'], true);
+        expect(job['errorCode'], isNull);
+        expect(job['replyCheck'], 'skipped');
+        expect(job['replyCheckError'], 'history_unavailable');
+        expect(job.containsKey('nextReplyCheckAt'), isFalse);
+        // The published result carries what the client needs to alert.
+        final result = lastResult();
+        expect(store.outbox.last['kind'], 'reminder.result');
+        expect(result['state'], 'done');
+        expect(result['due'], true);
+        expect(result['untilReply'], true);
+        expect(result['replyCheck'], 'skipped');
+        expect(result['conversation'], conversation.toJson());
+        expect(transport.sent, isEmpty);
+        expect(transport.reads, isEmpty);
+      },
+    );
+
+    test('keys arriving within the grace still cancel on a reply', () async {
+      create(now);
+      transport.replyHistoryFailure = 'waiting_keys';
+      await engine.tick();
+      reminderClock = now.add(const Duration(minutes: 2));
+      transport.replyHistoryFailure = null;
+      transport.receivedReply = true;
+      await engine.tick();
+      expect(store.job('r')!['state'], 'cancelled');
+      expect(store.job('r')!['errorCode'], 'replied');
+      expect(store.job('r')!['due'], isNot(true));
+    });
+
+    test(
+      'a reminder stuck before the grace rule fires on the next tick',
+      () async {
+        // Persisted by the previous worker: long past due, retry gate ahead.
+        store.saveJob({
+          'id': 'r',
+          'conversation': conversation.toJson(),
+          'untilReply': true,
+          'kind': 'reminder',
+          'revision': 40,
+          'state': 'waitingKeys',
+          'errorCode': 'waiting_keys',
+          'acceptedOpId': 'reminder-until',
+          'dueAt': now.subtract(const Duration(days: 2)).toIso8601String(),
+          'createdAt': now.subtract(const Duration(days: 3)).toIso8601String(),
+          'nextReplyCheckAt': now
+              .add(const Duration(seconds: 20))
+              .toIso8601String(),
+        });
+        transport.replyHistoryFailure = 'waiting_keys';
+        await engine.tick();
+        final job = store.job('r')!;
+        expect(job['state'], 'done');
+        expect(job['due'], true);
+        expect(job['revision'], 41);
+        expect(job['replyCheck'], 'skipped');
+        expect(job['replyCheckError'], 'waiting_keys');
+        expect(lastResult()['state'], 'done');
+      },
+    );
+
+    test(
+      'a stuck reminder whose history is now readable checks first',
+      () async {
+        store.saveJob({
+          'id': 'r',
+          'conversation': conversation.toJson(),
+          'untilReply': true,
+          'kind': 'reminder',
+          'revision': 9,
+          'state': 'waitingSync',
+          'errorCode': 'history_unavailable',
+          'acceptedOpId': 'reminder-until',
+          'dueAt': now.subtract(const Duration(hours: 1)).toIso8601String(),
+          'createdAt': now.subtract(const Duration(hours: 2)).toIso8601String(),
+          'nextReplyCheckAt': now
+              .add(const Duration(seconds: 20))
+              .toIso8601String(),
+        });
+        await engine.tick();
+        expect(store.job('r')!['state'], 'done');
+        expect(store.job('r')!.containsKey('replyCheck'), isFalse);
+      },
+    );
+
+    test(
+      'readable history is checked every 30 s before due and at the due time',
+      () async {
+        final due = now.add(const Duration(seconds: 45));
+        create(due);
+        await engine.tick();
+        expect(transport.replyChecks, 1);
+        expect(store.job('r')!['state'], 'queued');
+        reminderClock = now.add(const Duration(seconds: 10));
+        await engine.tick();
+        expect(transport.replyChecks, 1);
+        reminderClock = now.add(const Duration(seconds: 30));
+        await engine.tick();
+        expect(transport.replyChecks, 2);
+        expect(store.job('r')!['nextReplyCheckAt'], due.toIso8601String());
+        reminderClock = now.add(const Duration(seconds: 40));
+        await engine.tick();
+        expect(transport.replyChecks, 2);
+        expect(store.job('r')!['due'], isNot(true));
+        reminderClock = due;
+        await engine.tick();
+        expect(transport.replyChecks, 3);
+        final job = store.job('r')!;
+        expect(job['state'], 'done');
+        expect(job['due'], true);
+        expect(job.containsKey('replyCheck'), isFalse);
+      },
+    );
+  });
   test('pairing ACK is durable, idempotent and never creates a job', () async {
     final command = op('pair', 'worker.pairing', 'worker', {'schema': 1});
     engine.accept(command);
@@ -599,6 +764,48 @@ void main() {
       expect(store.job('t')!['text'], isNull);
       expect(store.job('t')!['errorCode'], 'source_redacted');
       expect(transcriber.calls, 1);
+    },
+  );
+  test(
+    'jobs parked on an unknown source are re-probed ahead of the round-robin',
+    () async {
+      var clockNow = now;
+      engine = WorkerEngine(
+        store,
+        transport,
+        transcriber,
+        clock: () => clockNow,
+      );
+      // Many other jobs: the round-robin alone (4 per 30 s) would reach the
+      // parked one only after several passes.
+      for (var i = 0; i < 12; i++) {
+        final body = transcriptBody()..['id'] = 'old$i';
+        engine.accept(op('old$i', 'transcript.request', 'old$i', body));
+      }
+      await engine.auditTranscriptSources(force: true);
+      final probes = transport.sourceProbes;
+      // A fresh job whose source could not be checked before the download.
+      final body = transcriptBody()..['id'] = 'fresh';
+      engine.accept(op('fresh', 'transcript.request', 'fresh', body));
+      final parked = store.job('fresh')!
+        ..['state'] = 'waitingSync'
+        ..['errorCode'] = 'source_status_unknown';
+      store.saveJob(parked);
+      clockNow = clockNow.add(WorkerEngine.parkedSourceRetry);
+      await engine.auditTranscriptSources();
+      expect(
+        transport.sourceProbes,
+        probes + 1,
+        reason: 'only the parked job; the round-robin is not due yet',
+      );
+      expect(store.job('fresh')!['state'], 'queued');
+      // Nothing parked any more: no probes until the round-robin is due.
+      clockNow = clockNow.add(WorkerEngine.parkedSourceRetry);
+      await engine.auditTranscriptSources();
+      expect(transport.sourceProbes, probes + 1);
+      clockNow = clockNow.add(WorkerEngine.sourceAuditInterval);
+      await engine.auditTranscriptSources();
+      expect(transport.sourceProbes, probes + 1 + WorkerEngine.sourceAuditBatch);
     },
   );
   test(

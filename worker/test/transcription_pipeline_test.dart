@@ -402,6 +402,23 @@ void main() {
     },
   );
 
+  test('new room keys retry key-waiting jobs at once', () async {
+    transport.failures[r'$late-keys'] = ['waiting_keys'];
+    await deliver([live(r'$late-keys', at: now)]);
+    await runJobs();
+    expect(job(r'$late-keys')['state'], 'waitingKeys');
+    expect(transport.loads, hasLength(1));
+    // Without keys arriving the job waits for its backoff.
+    await runJobs();
+    expect(transport.loads, hasLength(1));
+    // A to-device room key arrived: no waiting for the backoff.
+    expect(engine.retryWaitingKeys(), 1);
+    await runJobs();
+    expect(job(r'$late-keys')['state'], 'done');
+    expect(transport.loads, hasLength(2));
+    expect(engine.retryWaitingKeys(), 0, reason: 'nothing left to wake');
+  });
+
   test('retry budget is bounded for persistent provider overload', () async {
     transcriber.failure = 'openai_unavailable';
     await deliver([live(r'$down', at: now)]);

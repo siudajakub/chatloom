@@ -17,7 +17,9 @@ import 'ports.dart';
 /// the engine exactly as for the local scan.
 ///
 /// Events the SDK could not decrypt yet are re-read from the SDK database
-/// (which stores them once their keys arrive) for a bounded time.
+/// for a bounded time and decrypted with the keys it holds by then: the SDK
+/// stores the decrypted copy itself only for to-device keys that arrive
+/// within 5 minutes, not for keys from the backup or a later forward.
 class MatrixLiveSources implements LiveSourceFeed {
   static const maxQueued = 200;
   static const maxPendingKeys = 100;
@@ -32,6 +34,10 @@ class MatrixLiveSources implements LiveSourceFeed {
   /// so whichever source sees it first creates the single job.
   final bool Function(String roomId) excludedRoom;
   final DateTime Function() clock;
+
+  /// Decrypts a stored, still encrypted event with the keys held now
+  /// ([decryptStoredEvent]); a test seam.
+  final Future<Event> Function(Event event) decrypt;
   final _queue = Queue<RecentSourceItem>();
   final _seen = <String>{};
   final _seenOrder = Queue<String>();
@@ -46,8 +52,10 @@ class MatrixLiveSources implements LiveSourceFeed {
     required this.journalRoomId,
     bool Function(String roomId)? excludedRoom,
     DateTime Function()? clock,
+    Future<Event> Function(Event event)? decrypt,
   }) : excludedRoom = excludedRoom ?? ((_) => false),
-       clock = clock ?? DateTime.now;
+       clock = clock ?? DateTime.now,
+       decrypt = decrypt ?? ((event) => decryptStoredEvent(client, event));
 
   /// Subscribe before the SDK's first sync, so messages that arrived while
   /// the worker was stopped (the catch-up sync) are seen as well.
@@ -168,7 +176,10 @@ class MatrixLiveSources implements LiveSourceFeed {
         continue;
       }
       try {
-        final stored = await room.getEventById(entry.key);
+        var stored = await room.getEventById(entry.key);
+        if (stored != null && stored.type == EventTypes.Encrypted) {
+          stored = await decrypt(stored);
+        }
         if (stored == null || stored.type == EventTypes.Encrypted) continue;
         _pending.remove(entry.key);
         _accept(stored);
