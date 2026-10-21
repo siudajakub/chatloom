@@ -5,13 +5,17 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../pages/chat/conversation_bubble.dart';
+import 'notion_appearance.dart';
 import 'notion_motion.dart';
 import 'notion_tokens.dart';
 
-/// Builds the only [ThemeData] of the app from [NotionColors].
+/// Builds the only [ThemeData] of the app from [NotionColors] and the user's
+/// [NotionAppearance] (accent preset and colour intensity).
 ///
 /// Every Material component the app uses gets a Notion component theme here,
-/// so plain Material widgets already look right. See `client/DESIGN.md`.
+/// so plain Material widgets already look right and follow the accent
+/// (toggles, checkboxes, sliders, badges, primary buttons, selection, links).
+/// See `client/DESIGN.md` "Colour system".
 abstract final class NotionTheme {
   /// One page motion for every route: Notion slide+fade with predictive
   /// back on Android and desktop, native Cupertino on iOS.
@@ -26,21 +30,22 @@ abstract final class NotionTheme {
     },
   );
 
-  static ThemeData build(Brightness brightness, [Color? seed]) {
+  static ThemeData build(
+    Brightness brightness, [
+    NotionAppearance appearance = NotionAppearance.standard,
+  ]) {
     final dark = brightness == Brightness.dark;
     final base = dark ? NotionColors.dark : NotionColors.light;
-    final accent = seed == null
-        ? base.text
-        : ColorScheme.fromSeed(seedColor: seed, brightness: brightness).primary;
-    final c = base.copyWith(
-      accent: accent,
-      onAccent: ThemeData.estimateBrightnessForColor(accent) == Brightness.dark
-          ? NotionColors.dark.text
-          : NotionColors.light.text,
-    );
+    final palette = NotionPalette.resolve(appearance, base, brightness);
+    final accent = palette.accent;
+    final fill = palette.accentFill;
+    final onFill = palette.onAccentFill;
+    final tint = palette.accentTint;
+    final c = base.copyWith(accent: accent, onAccent: palette.onAccent);
     final tokens = NotionTokens(
       colors: c,
       glass: dark ? NotionGlass.dark : NotionGlass.light,
+      palette: palette,
     );
     final t = tokens.typography;
     final background = c.background;
@@ -52,7 +57,7 @@ abstract final class NotionTheme {
     final scheme = ColorScheme.fromSeed(seedColor: text, brightness: brightness)
         .copyWith(
           primary: accent,
-          onPrimary: background,
+          onPrimary: palette.onAccent,
           primaryContainer: selected,
           onPrimaryContainer: text,
           secondary: text,
@@ -111,7 +116,7 @@ abstract final class NotionTheme {
       border: outline(border),
       enabledBorder: outline(border),
       disabledBorder: outline(border.withValues(alpha: .5)),
-      focusedBorder: outline(secondary),
+      focusedBorder: outline(accent),
       errorBorder: outline(c.danger),
       focusedErrorBorder: outline(c.danger),
     );
@@ -136,9 +141,10 @@ abstract final class NotionTheme {
       colorScheme: scheme,
       extensions: [
         tokens,
-        dark
-            ? ConversationBubbleColors.dark
-            : ConversationBubbleColors.light(scheme),
+        (dark
+                ? ConversationBubbleColors.dark
+                : ConversationBubbleColors.light(scheme))
+            .withPalette(palette),
       ],
       scaffoldBackgroundColor: background,
       canvasColor: background,
@@ -272,7 +278,7 @@ abstract final class NotionTheme {
         subtitleTextStyle: t.footnoteMuted,
         leadingAndTrailingTextStyle: t.footnoteMuted,
         selectedColor: text,
-        selectedTileColor: selected,
+        selectedTileColor: tint,
         tileColor: Colors.transparent,
         shape: NotionShapes.row,
         visualDensity: VisualDensity.standard,
@@ -289,18 +295,20 @@ abstract final class NotionTheme {
       checkboxTheme: CheckboxThemeData(
         shape: NotionShapes.xs,
         side: BorderSide(color: secondary, width: 1.5),
-        fillColor: selectedFill(text, Colors.transparent),
-        checkColor: WidgetStatePropertyAll(background),
+        fillColor: selectedFill(fill, Colors.transparent),
+        checkColor: WidgetStatePropertyAll(onFill),
         overlayColor: WidgetStatePropertyAll(text.withValues(alpha: .06)),
       ),
       radioTheme: RadioThemeData(
-        fillColor: selectedFill(text, secondary),
+        fillColor: selectedFill(accent, secondary),
         overlayColor: WidgetStatePropertyAll(text.withValues(alpha: .06)),
       ),
+      // On: an accent track with a light thumb (Messenger, iOS); off: the
+      // grey track of the Notion look.
       switchTheme: SwitchThemeData(
-        trackColor: selectedFill(secondary.withValues(alpha: .4), surface),
-        thumbColor: WidgetStatePropertyAll(text),
-        trackOutlineColor: WidgetStatePropertyAll(border),
+        trackColor: selectedFill(fill, surface),
+        thumbColor: selectedFill(onFill, secondary),
+        trackOutlineColor: selectedFill(Colors.transparent, border),
       ),
       iconButtonTheme: IconButtonThemeData(
         style: IconButton.styleFrom(
@@ -319,7 +327,7 @@ abstract final class NotionTheme {
         unselectedLabelStyle: t.callout,
         // A pill behind the selected tab instead of an underline; it slides
         // elastically between tabs.
-        indicator: NotionPillTabIndicator(color: selected),
+        indicator: NotionPillTabIndicator(color: tint),
         indicatorSize: TabBarIndicatorSize.tab,
         indicatorAnimation: TabIndicatorAnimation.elastic,
         splashBorderRadius: NotionRadius.pillAll,
@@ -332,7 +340,7 @@ abstract final class NotionTheme {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         height: 64,
-        indicatorColor: selected,
+        indicatorColor: tint,
         indicatorShape: pill,
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => t.micro.copyWith(
@@ -346,24 +354,11 @@ abstract final class NotionTheme {
           ),
         ),
       ),
-      navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: background,
-        elevation: 0,
-        indicatorColor: selected,
-        indicatorShape: pill,
-        selectedIconTheme: IconThemeData(color: text, size: NotionSize.iconMd),
-        unselectedIconTheme: IconThemeData(
-          color: secondary,
-          size: NotionSize.iconMd,
-        ),
-        selectedLabelTextStyle: t.micro.copyWith(color: text),
-        unselectedLabelTextStyle: t.micro,
-      ),
       navigationDrawerTheme: NavigationDrawerThemeData(
         backgroundColor: background,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        indicatorColor: selected,
+        indicatorColor: tint,
         indicatorShape: pill,
       ),
       drawerTheme: DrawerThemeData(
@@ -390,14 +385,14 @@ abstract final class NotionTheme {
         waitDuration: const Duration(milliseconds: 500),
       ),
       badgeTheme: BadgeThemeData(
-        backgroundColor: text,
-        textColor: background,
+        backgroundColor: fill,
+        textColor: onFill,
         textStyle: t.micro.copyWith(fontWeight: FontWeight.w600),
         padding: const EdgeInsets.symmetric(horizontal: 5),
       ),
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
-          backgroundColor: selectedFill(selected, Colors.transparent),
+          backgroundColor: selectedFill(tint, Colors.transparent),
           foregroundColor: selectedFill(text, secondary),
           side: WidgetStatePropertyAll(borderSide),
           shape: const WidgetStatePropertyAll(pill),
@@ -406,8 +401,8 @@ abstract final class NotionTheme {
         ),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: text,
-        foregroundColor: background,
+        backgroundColor: fill,
+        foregroundColor: onFill,
         elevation: 0,
         focusElevation: 0,
         hoverElevation: 0,
@@ -416,12 +411,12 @@ abstract final class NotionTheme {
         extendedTextStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
       ),
       sliderTheme: SliderThemeData(
-        activeTrackColor: text,
+        activeTrackColor: accent,
         inactiveTrackColor: border,
-        thumbColor: text,
-        overlayColor: text.withValues(alpha: .12),
-        valueIndicatorColor: text,
-        valueIndicatorTextStyle: t.caption.copyWith(color: background),
+        thumbColor: accent,
+        overlayColor: accent.withValues(alpha: .12),
+        valueIndicatorColor: fill,
+        valueIndicatorTextStyle: t.caption.copyWith(color: onFill),
       ),
       searchBarTheme: SearchBarThemeData(
         backgroundColor: WidgetStatePropertyAll(surface),
@@ -449,7 +444,7 @@ abstract final class NotionTheme {
       ),
       chipTheme: ChipThemeData(
         backgroundColor: surface,
-        selectedColor: selected,
+        selectedColor: tint,
         disabledColor: surface.withValues(alpha: .5),
         labelStyle: t.footnote,
         showCheckmark: false,
@@ -458,14 +453,14 @@ abstract final class NotionTheme {
         padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
       ),
       textSelectionTheme: TextSelectionThemeData(
-        cursorColor: text,
-        selectionColor: text.withValues(alpha: .22),
-        selectionHandleColor: text,
+        cursorColor: accent,
+        selectionColor: accent.withValues(alpha: .32),
+        selectionHandleColor: accent,
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: text,
-          foregroundColor: background,
+          backgroundColor: fill,
+          foregroundColor: onFill,
           disabledBackgroundColor: selected,
           disabledForegroundColor: c.textTertiary,
           textStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
@@ -500,7 +495,7 @@ abstract final class NotionTheme {
         ),
       ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
-        color: text,
+        color: accent,
         linearTrackColor: border,
         circularTrackColor: Colors.transparent,
         borderRadius: NotionRadius.pillAll,
@@ -509,7 +504,7 @@ abstract final class NotionTheme {
       snackBarTheme: SnackBarThemeData(
         backgroundColor: surface,
         contentTextStyle: t.callout,
-        actionTextColor: text,
+        actionTextColor: accent,
         behavior: SnackBarBehavior.floating,
         elevation: 0,
         // A floating rounded block with the dock's hairline and inset.

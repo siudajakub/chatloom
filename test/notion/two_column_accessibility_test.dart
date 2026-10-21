@@ -9,9 +9,9 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 void main() {
-  for (final hasNavigationRail in [true, false]) {
+  {
     testWidgets(
-      'main pane stays accessible through child navigation and resize, rail $hasNavigationRail',
+      'main pane stays accessible through child navigation and resize',
       (tester) async {
         tester.view.devicePixelRatio = 1;
         tester.view.physicalSize = const Size(1365, 900);
@@ -39,11 +39,7 @@ void main() {
                     context,
                     state,
                     ChatLoomThemes.isColumnMode(context)
-                        ? TwoColumnLayout(
-                            mainView: mainView(),
-                            sideView: child,
-                            hasNavigationRail: hasNavigationRail,
-                          )
+                        ? TwoColumnLayout(mainView: mainView(), sideView: child)
                         : child,
                   ),
               routes: [

@@ -7,6 +7,7 @@ import 'notion_tokens.dart';
 
 export 'details_contract.dart';
 export 'initial_avatar.dart';
+export 'notion_appearance.dart';
 export 'notion_callout.dart';
 export 'notion_contrast.dart';
 export 'notion_entrance.dart';
@@ -18,8 +19,10 @@ export 'notion_motion.dart';
 export 'notion_pressable.dart';
 export 'notion_primitives.dart';
 export 'notion_reactions.dart';
+export 'notion_shimmer_lines.dart';
 export 'notion_skeleton.dart';
 export 'notion_status_line.dart';
+export 'notion_status_pill.dart';
 export 'notion_switchers.dart';
 export 'notion_tokens.dart';
 

@@ -7,7 +7,6 @@ import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/widgets/pulsating_widget.dart';
-import 'package:chatloom/widgets/typing_animation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -435,7 +434,6 @@ void main() {
     for (final (name, widget) in [
       ('typing dots', const NotionTypingDots()),
       ('pulse', const NotionPulse(child: SizedBox.square(dimension: 40))),
-      ('legacy TypingAnimation', const TypingAnimation()),
       (
         'legacy PulsatingWidget',
         const PulsatingWidget(child: SizedBox.square(dimension: 40)),
@@ -453,12 +451,6 @@ void main() {
         expect(tester.binding.hasScheduledFrame, isFalse);
       });
     }
-
-    testWidgets('legacy TypingAnimation keeps its footprint', (tester) async {
-      await tester.pumpWidget(_app(const TypingAnimation()));
-      expect(tester.getSize(find.byType(TypingAnimation)), const Size(36, 24));
-      await tester.pumpWidget(_app(const SizedBox()));
-    });
   });
 
   group('NotionSkeleton', () {

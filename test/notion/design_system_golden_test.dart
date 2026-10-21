@@ -388,6 +388,8 @@ Widget _motion() => _page([
       ],
     ),
   ),
+  // Transcript placeholder (static bars under reduced motion).
+  const NotionShimmerLines(),
   const NotionSectionHeader(title: 'Live'),
   const Row(
     children: [

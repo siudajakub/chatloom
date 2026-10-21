@@ -31,26 +31,30 @@ class NotionInitialAvatar extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color:
-          backgroundColor ??
-          Theme.of(context).colorScheme.surfaceContainerHighest,
-      borderRadius: NotionRadius.avatarAll,
-    ),
-    child: icon == null
-        ? Text(
-            initials(name),
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: textColor ?? Theme.of(context).colorScheme.onSurface,
-              fontWeight: FontWeight.w600,
-              fontSize: size / 2.5,
-            ),
-          )
-        : Icon(icon, color: textColor, size: size / 2),
-  );
+  Widget build(BuildContext context) {
+    // Letter avatars follow the colour intensity: grey (Muted), a tint of a
+    // per-name hue (Balanced) or the saturated hue (Vivid, Messenger).
+    final palette = context.notion.palette.avatar(name);
+    final foreground = textColor ?? palette.foreground;
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: backgroundColor ?? palette.background,
+        borderRadius: NotionRadius.avatarAll,
+      ),
+      child: icon == null
+          ? Text(
+              initials(name),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: foreground,
+                fontWeight: FontWeight.w600,
+                fontSize: size / 2.5,
+              ),
+            )
+          : Icon(icon, color: foreground, size: size / 2),
+    );
+  }
 }

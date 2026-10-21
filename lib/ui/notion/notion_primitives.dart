@@ -231,7 +231,7 @@ class NotionButton extends StatelessWidget {
     final colors = context.notion.colors;
     final pressed = busy ? null : onPressed;
     final foreground = switch (variant) {
-      NotionButtonVariant.primary => colors.background,
+      NotionButtonVariant.primary => context.notion.palette.onAccentFill,
       NotionButtonVariant.destructive => colors.danger,
       _ => colors.text,
     };

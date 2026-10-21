@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:material_ui/material_ui.dart';
 
+import 'notion_appearance.dart';
+
 /// Spacing scale. The only padding/gap values UI code should use.
 ///
 /// Theme independent, so every value is `const` and usable in `const
@@ -292,7 +294,9 @@ class NotionColors {
   /// Page cover band behind the title.
   final Color cover;
 
-  /// User accent (defaults to [text] for the neutral look).
+  /// User accent as a foreground on the page (links, active icons, the
+  /// typing line); at least 4.5:1 on [background]. Equals [text] for the
+  /// Graphite preset. Filled accent controls use `NotionPalette.accentFill`.
   final Color accent;
   final Color onAccent;
 
@@ -568,11 +572,21 @@ class NotionTokens extends ThemeExtension<NotionTokens> {
   final NotionTypography typography;
   final NotionGlass glass;
 
+  /// Accent and intensity roles (DESIGN.md "Colour system"): bubble fill,
+  /// accent fills and tints, letter avatars, network marks.
+  final NotionPalette palette;
+
   NotionTokens({
     required this.colors,
     NotionTypography? typography,
     this.glass = NotionGlass.dark,
-  }) : typography = typography ?? NotionTypography.of(colors);
+    NotionPalette? palette,
+  }) : typography = typography ?? NotionTypography.of(colors),
+       palette =
+           palette ??
+           (identical(glass, NotionGlass.light)
+               ? NotionPalette.legacyLight
+               : NotionPalette.legacyDark);
 
   static final dark = NotionTokens(colors: NotionColors.dark);
   static final light = NotionTokens(
@@ -591,10 +605,12 @@ class NotionTokens extends ThemeExtension<NotionTokens> {
     NotionColors? colors,
     NotionTypography? typography,
     NotionGlass? glass,
+    NotionPalette? palette,
   }) => NotionTokens(
     colors: colors ?? this.colors,
     typography: typography ?? (colors == null ? this.typography : null),
     glass: glass ?? this.glass,
+    palette: palette ?? this.palette,
   );
 
   @override
@@ -604,6 +620,7 @@ class NotionTokens extends ThemeExtension<NotionTokens> {
       colors: NotionColors.lerp(colors, other.colors, t),
       typography: NotionTypography.lerp(typography, other.typography, t),
       glass: NotionGlass.lerp(glass, other.glass, t),
+      palette: NotionPalette.lerp(palette, other.palette, t),
     );
   }
 

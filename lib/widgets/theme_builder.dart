@@ -3,22 +3,24 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:chatloom/utils/color_value.dart';
+import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/ui/notion/notion_appearance.dart';
 import 'package:collection/collection.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Holds the theme mode and the colour appearance (accent preset and
+/// intensity) and rebuilds the app theme live when either changes.
 class ThemeBuilder extends StatefulWidget {
   final Widget Function(
     BuildContext context,
     ThemeMode themeMode,
-    Color? primaryColor,
+    NotionAppearance appearance,
   )
   builder;
 
   final String themeModeSettingsKey;
-  final String primaryColorSettingsKey;
 
   /// Already loaded preferences: the stored theme applies to the first frame
   /// instead of after an asynchronous load (no dark/light flash at startup).
@@ -27,10 +29,28 @@ class ThemeBuilder extends StatefulWidget {
   const ThemeBuilder({
     required this.builder,
     this.themeModeSettingsKey = 'theme_mode',
-    this.primaryColorSettingsKey = 'primary_color',
     this.preferences,
     super.key,
   });
+
+  /// The colour picker of FluffyChat stored an ARGB seed here. It is read
+  /// to pick the closest accent preset until the user chooses one.
+  static const legacyPrimaryColorKey = 'primary_color';
+
+  /// The stored appearance, or the default for a new install.
+  static NotionAppearance readAppearance(SharedPreferences preferences) {
+    final accentName = preferences.getString(AppSettings.appearanceAccent.key);
+    final legacy = preferences.getInt(legacyPrimaryColorKey);
+    final accent = accentName == null && legacy != null
+        ? NotionAccent.nearest(Color(legacy))
+        : NotionAccent.parse(accentName);
+    return NotionAppearance(
+      accent: accent,
+      intensity: NotionIntensity.parse(
+        preferences.getString(AppSettings.appearanceIntensity.key),
+      ),
+    );
+  }
 
   @override
   State<ThemeBuilder> createState() => ThemeController();
@@ -39,11 +59,12 @@ class ThemeBuilder extends StatefulWidget {
 class ThemeController extends State<ThemeBuilder> {
   SharedPreferences? _sharedPreferences;
   ThemeMode? _themeMode;
-  Color? _primaryColor;
+  NotionAppearance _appearance = NotionAppearance.standard;
 
   ThemeMode get themeMode => _themeMode ?? ThemeMode.dark;
 
-  Color? get primaryColor => _primaryColor;
+  /// Accent preset and colour intensity of the current theme.
+  NotionAppearance get appearance => _appearance;
 
   static ThemeController of(BuildContext context) =>
       Provider.of<ThemeController>(context, listen: false);
@@ -57,36 +78,41 @@ class ThemeController extends State<ThemeBuilder> {
 
   void _read(SharedPreferences preferences) {
     final rawThemeMode = preferences.getString(widget.themeModeSettingsKey);
-    final rawColor = preferences.getInt(widget.primaryColorSettingsKey);
     _themeMode = ThemeMode.values.singleWhereOrNull(
       (value) => value.name == rawThemeMode,
     );
-    _primaryColor = rawColor == null ? null : Color(rawColor);
+    _appearance = ThemeBuilder.readAppearance(preferences);
   }
 
   Future<void> setThemeMode(ThemeMode newThemeMode) async {
     final preferences = _sharedPreferences ??=
         await SharedPreferences.getInstance();
     await preferences.setString(widget.themeModeSettingsKey, newThemeMode.name);
+    if (!mounted) return;
     setState(() {
       _themeMode = newThemeMode;
     });
   }
 
-  Future<void> setPrimaryColor(Color? newPrimaryColor) async {
+  /// Applies [newAppearance] at once (the whole app re-themes in the same
+  /// frame, no restart) and stores it.
+  Future<void> setAppearance(NotionAppearance newAppearance) async {
+    if (newAppearance == _appearance) return;
+    if (mounted) {
+      setState(() => _appearance = newAppearance);
+    } else {
+      _appearance = newAppearance;
+    }
     final preferences = _sharedPreferences ??=
         await SharedPreferences.getInstance();
-    if (newPrimaryColor == null) {
-      await preferences.remove(widget.primaryColorSettingsKey);
-    } else {
-      await preferences.setInt(
-        widget.primaryColorSettingsKey,
-        newPrimaryColor.hexValue,
-      );
-    }
-    setState(() {
-      _primaryColor = newPrimaryColor;
-    });
+    await preferences.setString(
+      AppSettings.appearanceAccent.key,
+      newAppearance.accent.name,
+    );
+    await preferences.setString(
+      AppSettings.appearanceIntensity.key,
+      newAppearance.intensity.name,
+    );
   }
 
   @override
@@ -104,7 +130,7 @@ class ThemeController extends State<ThemeBuilder> {
   Widget build(BuildContext context) {
     return Provider(
       create: (_) => this,
-      child: widget.builder(context, themeMode, primaryColor),
+      child: widget.builder(context, themeMode, appearance),
     );
   }
 }

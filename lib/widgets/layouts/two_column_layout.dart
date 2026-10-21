@@ -14,13 +14,11 @@ import 'package:material_ui/material_ui.dart';
 class TwoColumnLayout extends StatefulWidget {
   final Widget mainView;
   final Widget sideView;
-  final bool hasNavigationRail;
 
   const TwoColumnLayout({
     super.key,
     required this.mainView,
     required this.sideView,
-    this.hasNavigationRail = true,
   });
 
   @override
@@ -86,9 +84,8 @@ class _TwoColumnLayoutState extends State<TwoColumnLayout>
             Container(
               clipBehavior: Clip.antiAlias,
               decoration: const BoxDecoration(),
-              width:
-                  ChatLoomThemes.columnWidth +
-                  (widget.hasNavigationRail ? ChatLoomThemes.navRailWidth : 0),
+              // Just the inbox (or settings index): no navigation rail.
+              width: ChatLoomThemes.columnWidth,
               // Each column owns its transient messages. In particular the
               // inbox Scaffold must place them above its floating dock.
               child: ScaffoldMessenger(child: widget.mainView),

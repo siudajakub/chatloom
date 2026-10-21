@@ -405,13 +405,11 @@ Widget _settings() => NotionSettingsPage(
     name: 'Jan',
     avatar: _avatar('Jan', 44),
     summaries: const {
-      NotionSettingsCategory.account:
-          'Account · Profile and account management',
+      NotionSettingsCategory.account: 'Profile and sign out',
       NotionSettingsCategory.security:
           'Incognito on · App lock, devices and recovery',
-      NotionSettingsCategory.appearance: 'Dark · Text size and wallpaper',
-      NotionSettingsCategory.sync:
-          'Private sync configured · Services and transcriptions',
+      NotionSettingsCategory.appearance: 'Dark · Colours and wallpaper',
+      NotionSettingsCategory.advanced: 'Private sync configured',
     },
   ),
   actions: NotionSettingsActions(back: _noop, open: (_) {}),
@@ -620,7 +618,6 @@ void main() {
           TwoColumnLayout(
             mainView: _inbox(),
             sideView: _conversation(merged: true),
-            hasNavigationRail: false,
           ),
         ),
       );
