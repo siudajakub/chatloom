@@ -9,6 +9,7 @@ import 'package:chatloom/pages/bootstrap/view_model/bootstrap_view_model.dart';
 import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
+import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/device_extension.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
@@ -21,6 +22,20 @@ class RestoreBootstrapView extends StatelessWidget {
   final BootstrapViewModel viewModel;
 
   const RestoreBootstrapView(this.viewModel, {super.key});
+
+  /// "Try again" for verification with another device; a request that
+  /// cannot be sent is explained instead of doing nothing.
+  Future<void> _retryVerification(BuildContext context) async {
+    try {
+      await viewModel.retryKeyVerification();
+    } catch (error, stack) {
+      if (!context.mounted) return;
+      await ErrorReporter.action(
+        context,
+        onRetry: () => _retryVerification(context),
+      ).onErrorCallback(error, stack);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -68,7 +83,7 @@ class RestoreBootstrapView extends StatelessWidget {
                         key: const ValueKey('retry'),
                         onPressed: viewModel.value.isLoading
                             ? null
-                            : viewModel.retryKeyVerification,
+                            : () => _retryVerification(context),
                         tooltip: L10n.of(context).tryAgain,
                         icon: Icon(Icons.refresh_outlined),
                       )

@@ -5,6 +5,7 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat_encryption_settings/chat_encryption_settings_view.dart';
+import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -98,8 +99,19 @@ class ChatEncryptionSettingsController extends State<ChatEncryptionSettings> {
     );
     if (consent != OkCancelResult.ok) return;
     if (!mounted) return;
-    final req = await room.client.userDeviceKeys[room.directChatMatrixID]!
-        .startVerification();
+    final KeyVerification req;
+    try {
+      req = await room.client.userDeviceKeys[room.directChatMatrixID]!
+          .startVerification();
+    } catch (error, stack) {
+      if (mounted) {
+        await ErrorReporter.action(
+          context,
+          onRetry: startVerification,
+        ).onErrorCallback(error, stack);
+      }
+      return;
+    }
     req.onUpdate = () {
       if (req.state == KeyVerificationState.done) {
         setState(() {});

@@ -6,6 +6,7 @@
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/device_settings/device_settings.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
@@ -36,7 +37,9 @@ class DevicesSettingsView extends StatelessWidget {
                   mainAxisSize: .min,
                   children: <Widget>[
                     const Icon(Icons.error_outlined),
-                    Text(snapshot.error.toString()),
+                    Text(
+                      humanErrorText(snapshot.error!, action: ErrorAction.load),
+                    ),
                   ],
                 ),
               );

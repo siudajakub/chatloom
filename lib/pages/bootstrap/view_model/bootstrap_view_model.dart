@@ -3,6 +3,9 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
+
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
@@ -88,9 +91,15 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
               .toList() ??
           [];
       if (devices.isNotEmpty) {
-        value.keyVerification = await client.userDeviceKeys[client.userID!]!
-            .startVerification();
-        value.keyVerification?.onUpdate = _onKeyVerificationUpdate;
+        // Started on its own: if the request cannot be sent, the recovery
+        // key below still works and "Try again" sends it later.
+        try {
+          value.keyVerification = await client.userDeviceKeys[client.userID!]!
+              .startVerification();
+          value.keyVerification?.onUpdate = _onKeyVerificationUpdate;
+        } catch (e, s) {
+          logBackgroundError('bootstrap_verification', e, s);
+        }
       }
       if (supportsSecureStorage) {
         try {
@@ -183,7 +192,17 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
     if (keyVerification != null &&
         keyVerification.state != KeyVerificationState.done &&
         keyVerification.state != KeyVerificationState.error) {
-      keyVerification.cancel();
+      // `m.user`, not the SDK default `m.unknown`: this request went to every
+      // own device, which showed "Error m.unknown: m.unknown" on cancel.
+      unawaited(
+        keyVerification
+            .cancel('m.user')
+            .then(
+              (_) {},
+              onError: (Object e, StackTrace s) =>
+                  logBackgroundError('verification_cancel', e, s),
+            ),
+      );
     }
   }
 

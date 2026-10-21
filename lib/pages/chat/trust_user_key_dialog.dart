@@ -5,7 +5,9 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/utils/beautify_string_extension.dart';
+import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/dialog_text_field.dart';
 import 'package:chatloom/widgets/avatar.dart';
@@ -15,7 +17,16 @@ import 'package:matrix/matrix.dart';
 Future<bool> showTrustUserInRoomDialog(BuildContext context, Room room) async {
   if (!room.encrypted) return true;
 
-  final users = await room.requestParticipants();
+  List<User> users;
+  try {
+    users = await room.requestParticipants();
+  } catch (error, stack) {
+    // The member list could not be refreshed (offline, server error): ask
+    // about the members already known. Encryption loads the list again,
+    // and a failure there shows on the message itself.
+    logBackgroundError('trust_check_members', error, stack);
+    users = room.getParticipants();
+  }
   if (!context.mounted) return false;
 
   users.removeWhere((user) {
@@ -149,12 +160,19 @@ Future<bool> showTrustUserInRoomDialog(BuildContext context, Room room) async {
     case _Action.deny:
       return false;
     case _Action.verification:
-      final req = await room.client.userDeviceKeys[room.directChatMatrixID]
-          ?.startVerification();
-      if (req == null) return false;
-      if (!context.mounted) return false;
-      final success = await KeyVerificationDialog(request: req).show(context);
-      return success == true;
+      try {
+        final req = await room.client.userDeviceKeys[room.directChatMatrixID]
+            ?.startVerification();
+        if (req == null) return false;
+        if (!context.mounted) return false;
+        final success = await KeyVerificationDialog(request: req).show(context);
+        return success == true;
+      } catch (error, stack) {
+        if (context.mounted) {
+          await ErrorReporter.action(context).onErrorCallback(error, stack);
+        }
+        return false;
+      }
   }
 
   return true;

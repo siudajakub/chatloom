@@ -7,6 +7,7 @@ import 'package:async/async.dart' show Result;
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/device_settings/device_settings_view.dart';
 import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
+import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
@@ -127,11 +128,22 @@ class DevicesSettingsController extends State<DevicesSettings> {
     );
     if (consent != OkCancelResult.ok) return;
     if (!mounted) return;
-    final req = await matrix
-        .client
-        .userDeviceKeys[matrix.client.userID!]!
-        .deviceKeys[device.deviceId]!
-        .startVerification();
+    final KeyVerification req;
+    try {
+      req = await matrix
+          .client
+          .userDeviceKeys[matrix.client.userID!]!
+          .deviceKeys[device.deviceId]!
+          .startVerification();
+    } catch (error, stack) {
+      if (mounted) {
+        await ErrorReporter.action(
+          context,
+          onRetry: () => verifyDeviceAction(device),
+        ).onErrorCallback(error, stack);
+      }
+      return;
+    }
     req.onUpdate = () {
       if ({
         KeyVerificationState.error,
