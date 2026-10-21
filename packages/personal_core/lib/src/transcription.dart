@@ -67,9 +67,11 @@ class TranscriptionPolicy {
   /// Per-room overrides: true = always, false = never.
   final Map<String, bool> chatOverrides;
 
-  /// Explicit per-kind switches (`voice`, `round`, `video`, `audio`); absent
-  /// kinds are on. Older apps drop this field when they save the policy,
-  /// which turns every kind back on (the documented default).
+  /// Explicit per-kind switches (`voice`, `round`, `video`, `audio`,
+  /// `reel`); an absent kind takes its default ([kindEnabled]): on, except
+  /// Instagram reels, which are transcribed only on demand. Older apps drop
+  /// this field (or the `reel` key) when they save the policy, which returns
+  /// every kind to that default, never to automatic reels.
   final Map<String, bool> kinds;
   final int maxSeconds;
   final double dailyBudgetUsd;
@@ -200,11 +202,14 @@ class TranscriptionPolicy {
   TranscriptionPolicy withKind(AutoTranscriptionKind kind, bool enabled) =>
       copyWith(kinds: {...kinds, kind.name: enabled});
 
-  /// Kinds without an explicit switch are transcribed automatically: J asked
-  /// (2026-10-19) for voice, rounds and videos alike, so an absent `kinds`
-  /// field (never saved, or saved by an older app) means every kind is on.
+  /// Kinds without an explicit switch follow their default
+  /// ([AutoTranscriptionKind.automaticByDefault]): J asked (2026-10-19) for
+  /// voice, rounds and videos alike, and (2026-10-20) for Instagram reels
+  /// only on demand. An absent `kinds` field (never saved, or saved by an
+  /// older app) therefore means every kind except reels.
   /// The worker re-checks this at job start and again before upload.
-  bool kindEnabled(AutoTranscriptionKind kind) => kinds[kind.name] ?? true;
+  bool kindEnabled(AutoTranscriptionKind kind) =>
+      kinds[kind.name] ?? kind.automaticByDefault;
 
   /// null removes the override (Default).
   TranscriptionPolicy withChatOverride(String roomId, bool? value) {
@@ -246,9 +251,50 @@ class TranscriptionPolicy {
 /// * `round`: a Telegram round video (`fi.mau.telegram.round_message`).
 /// * `video`: any other video, also an `m.file` with a `video/*` type.
 /// * `audio`: any other audio, also an `m.file` with an `audio/*` type.
-enum AutoTranscriptionKind { voice, round, video, audio }
+/// * `reel`: a video shared from Instagram (a reel, post or story share, see
+///   [isInstagramShare]); transcribed only on demand unless switched on.
+///
+/// Workers and apps that predate a kind ignore its switch and classify such
+/// media by the older rules (a reel is then an ordinary `video`).
+enum AutoTranscriptionKind {
+  voice,
+  round,
+  video,
+  audio,
+  reel;
+
+  /// Whether a policy without an explicit switch transcribes this kind
+  /// automatically. J (2026-10-20): Instagram reels only when asked.
+  bool get automaticByDefault => this != AutoTranscriptionKind.reel;
+}
 
 final _kindNames = {for (final kind in AutoTranscriptionKind.values) kind.name};
+
+/// Hosts of shared Instagram posts, reels and stories.
+bool _instagramHost(String host) {
+  final value = host.toLowerCase();
+  return value == 'instagram.com' ||
+      value.endsWith('.instagram.com') ||
+      value == 'instagr.am' ||
+      value.endsWith('.instagr.am');
+}
+
+/// True for media the Instagram bridge delivered as a share of someone's
+/// post, reel or story rather than as a recording sent by the sender.
+///
+/// mautrix-meta converts a shared post (an XMA attachment) into the post's
+/// own media and always adds the post's link as the top-level `external_url`
+/// (`igconv/xma.go` `fetchXMA`/`wrapXMAItem`; the older Messenger path in
+/// `msgconv/from-meta.go` does the same from the share's action URL). A video
+/// recorded and sent directly in the chat has no `external_url`.
+bool isInstagramShare(Map<String, dynamic> content) {
+  final url = content['external_url'];
+  if (url is! String || url.length > 2048) return false;
+  final parsed = Uri.tryParse(url.trim());
+  return parsed != null &&
+      (parsed.scheme == 'https' || parsed.scheme == 'http') &&
+      _instagramHost(parsed.host);
+}
 
 /// Containers and audio formats the worker's FFmpeg input whitelist reads.
 /// Used only where a file has no usable MIME type.
@@ -264,6 +310,7 @@ const _audioExtensions = {
 /// whose protective metadata forbids transcription (view-once, protected,
 /// disappearing). Shared by the app and the worker so both classify alike.
 /// Room-level disappearing settings are checked separately by the callers.
+/// A video shared from Instagram is a `reel`, not a `video`.
 AutoTranscriptionKind? transcribableMediaKind(Map<String, dynamic> content) {
   final msgtype = content['msgtype'];
   if (msgtype is! String) return null;
@@ -305,9 +352,16 @@ AutoTranscriptionKind? transcribableMediaKind(Map<String, dynamic> content) {
         : '';
   }
   if (msgtype == 'm.video') {
-    return mime.startsWith('image/') ? null : AutoTranscriptionKind.video;
+    if (mime.startsWith('image/')) return null;
+    return isInstagramShare(content)
+        ? AutoTranscriptionKind.reel
+        : AutoTranscriptionKind.video;
   }
-  if (mime.startsWith('video/')) return AutoTranscriptionKind.video;
+  if (mime.startsWith('video/')) {
+    return isInstagramShare(content)
+        ? AutoTranscriptionKind.reel
+        : AutoTranscriptionKind.video;
+  }
   if (mime.startsWith('audio/')) return AutoTranscriptionKind.audio;
   return null;
 }

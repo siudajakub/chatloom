@@ -437,7 +437,11 @@ void main() {
     test('per-kind switches are synced and apply even with Always', () {
       const base = TranscriptionPolicy();
       for (final kind in AutoTranscriptionKind.values) {
-        expect(base.kindEnabled(kind), isTrue, reason: kind.name);
+        expect(
+          base.kindEnabled(kind),
+          kind != AutoTranscriptionKind.reel,
+          reason: kind.name,
+        );
       }
       final noVideo = base.withKind(AutoTranscriptionKind.video, false);
       final restored = TranscriptionPolicy.fromValue(
@@ -467,6 +471,138 @@ void main() {
         'kinds': {'video': 'no', 'hologram': false, 'round': false},
       });
       expect(odd.kinds, {'round': false});
+    });
+
+    group('Instagram reels', () {
+      const reelUrl = 'https://www.instagram.com/reel/Cfixture/?igsh=x';
+      Map<String, dynamic> share(
+        String msgtype, {
+        Object? url = reelUrl,
+        Map<String, dynamic> info = const {'mimetype': 'video/mp4'},
+      }) => media(
+        msgtype,
+        body: 'Caption of the shared post',
+        info: info,
+        extra: {
+          'external_url': ?url,
+          'com.beeper.meta.full_post_title': 'fixture',
+        },
+      );
+
+      test('a video shared from Instagram is a reel', () {
+        expect(
+          transcribableMediaKind(share('m.video')),
+          AutoTranscriptionKind.reel,
+        );
+        for (final url in [
+          'https://instagram.com/p/Cfixture/',
+          'https://www.instagram.com/stories/fixture/1234567890/',
+          'http://instagr.am/p/Cfixture/',
+          'https://m.instagram.com/tv/Cfixture',
+        ]) {
+          expect(
+            transcribableMediaKind(share('m.video', url: url)),
+            AutoTranscriptionKind.reel,
+            reason: url,
+          );
+        }
+        expect(
+          transcribableMediaKind(share('m.file')),
+          AutoTranscriptionKind.reel,
+        );
+        expect(isInstagramShare(share('m.video')), isTrue);
+      });
+
+      test('other videos, links and loops are not reels', () {
+        // Recorded and sent directly in the chat: no external_url.
+        expect(
+          transcribableMediaKind(share('m.video', url: null)),
+          AutoTranscriptionKind.video,
+        );
+        for (final url in [
+          'https://www.facebook.com/reel/1234567890',
+          'https://notinstagram.com/reel/x',
+          'https://instagram.com.example.org/reel/x',
+          'javascript:alert(1)',
+          'instagram.com/reel/x',
+          '',
+          42,
+        ]) {
+          expect(
+            transcribableMediaKind(share('m.video', url: url)),
+            AutoTranscriptionKind.video,
+            reason: '$url',
+          );
+        }
+        // A shared silent loop stays a loop; a shared photo stays an image.
+        expect(
+          transcribableMediaKind(
+            share(
+              'm.video',
+              info: {'mimetype': 'video/mp4', 'fi.mau.gif': true},
+            ),
+          ),
+          isNull,
+        );
+        expect(transcribableMediaKind(share('m.image')), isNull);
+        // Audio is never a reel (for example a shared music sticker).
+        expect(
+          transcribableMediaKind(
+            share('m.audio', info: {'mimetype': 'audio/mpeg'}),
+          ),
+          AutoTranscriptionKind.audio,
+        );
+      });
+
+      test('reels are on demand unless switched on, also for old policies', () {
+        for (final value in <Object?>[
+          null,
+          const TranscriptionPolicy().toJson(),
+          {'auto': true},
+          // An app that predates reels drops the switch when it saves.
+          {
+            'auto': true,
+            'kinds': {'video': true},
+          },
+        ]) {
+          final policy = TranscriptionPolicy.fromValue(value);
+          expect(
+            policy.kindEnabled(AutoTranscriptionKind.reel),
+            isFalse,
+            reason: '$value',
+          );
+          expect(policy.kindEnabled(AutoTranscriptionKind.video), isTrue);
+          expect(
+            autoTranscriptionBlock(
+              policy,
+              candidate(kind: AutoTranscriptionKind.reel),
+              now: now,
+            ),
+            'kind_disabled',
+          );
+        }
+        final on = const TranscriptionPolicy().withKind(
+          AutoTranscriptionKind.reel,
+          true,
+        );
+        final restored = TranscriptionPolicy.fromValue(
+          jsonDecode(jsonEncode(on.toJson())),
+        );
+        expect(restored.kinds, {'reel': true});
+        expect(restored.kindEnabled(AutoTranscriptionKind.reel), isTrue);
+        expect(
+          autoTranscriptionBlock(
+            restored,
+            candidate(kind: AutoTranscriptionKind.reel),
+            now: now,
+          ),
+          isNull,
+        );
+        // Switching videos off does not switch reels on, and vice versa.
+        final noVideo = restored.withKind(AutoTranscriptionKind.video, false);
+        expect(noVideo.kindEnabled(AutoTranscriptionKind.reel), isTrue);
+        expect(noVideo.kindEnabled(AutoTranscriptionKind.video), isFalse);
+      });
     });
   });
 }

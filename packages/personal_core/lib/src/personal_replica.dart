@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'contracts.dart';
+import 'transcription.dart' show sha256Hex;
 
 typedef ReplicaRead = Future<Map<String, dynamic>?> Function(String key);
 typedef ReplicaWrite =
@@ -20,6 +21,10 @@ Object? _ordered(Object? value) {
 
 bool _same(Object? a, Object? b) =>
     jsonEncode(_ordered(a)) == jsonEncode(_ordered(b));
+
+/// Order-independent fingerprint of a metadata value (null = absent/deleted).
+String _digest(Object? value) =>
+    sha256Hex(utf8.encode(jsonEncode(_ordered(value))));
 
 enum TranscriptCancellation {
   cancelledLocally,
@@ -189,6 +194,17 @@ class PersonalReplica {
   final reminders = <String, Map<String, dynamic>>{};
   final pending = <String, PersonalOperation>{};
   final transcriptCancellations = <String>{};
+
+  /// Automatic re-publications of one unconfirmed metadata change (a fresh
+  /// operation id, see [reissue]) before only the user can resend it.
+  static const maxAutomaticReissues = 2;
+
+  /// Automatic rebases of this device's own change onto a newer revision
+  /// that holds no foreign change, before the conflict is shown instead.
+  static const maxAutomaticRebases = 3;
+
+  /// Digests of the last values this device sent per entity.
+  static const _sentHistory = 4;
   final _records = <String, Map<String, dynamic>>{};
   final _seen = <String>{};
   Future<void> _tail = Future.value();
@@ -262,7 +278,10 @@ class PersonalReplica {
       }
     }
     final conflict = record['conflict'];
-    if (conflict is Map) {
+    // Only metadata (settings, chat metadata, drafts) can conflict. A refused
+    // job command (already exists, too late, not found) is part of the job's
+    // state and never a choice between two versions.
+    if (conflict is Map && record['jobKind'] == null) {
       conflicts[entity] = Map<String, dynamic>.from(conflict);
     } else {
       conflicts.remove(entity);
@@ -340,6 +359,7 @@ class PersonalReplica {
             _add(record, op);
             record['metadataInFlight'] = op.opId;
             record['metadataCommandGeneration'] = record['generation'];
+            record['metadataBase'] = _digest(record['serverValue']);
           }
         }
         await _commit(entity, record);
@@ -410,6 +430,7 @@ class PersonalReplica {
       record['metadataInFlight'] = op.opId;
       record['generation'] = (record['generation'] as int? ?? 0) + 1;
       record['metadataCommandGeneration'] = record['generation'];
+      record['metadataBase'] = _digest(record['serverValue']);
       if (kind == 'metadata.put')
         record['localValue'] = _copy(
           Map<String, dynamic>.from(payload['value'] as Map),
@@ -434,9 +455,239 @@ class PersonalReplica {
     final attempted =
         (record['attempted'] as List? ?? []).cast<String>().toSet()..add(opId);
     record['attempted'] = attempted.toList();
+    record['attemptedAt'] = {
+      ...Map<String, dynamic>.from(record['attemptedAt'] as Map? ?? {}),
+      opId: clock().toUtc().millisecondsSinceEpoch,
+    };
+    // Remembered before sending: if the acknowledgement never arrives, a
+    // later refusal that reports this value is recognised as this device's
+    // own write rather than a concurrent change.
+    if (op.kind == 'metadata.put') {
+      _rememberSent(record, op.payload['value']);
+    } else if (op.kind == 'metadata.delete') {
+      _rememberSent(record, null);
+    }
     await _commit(op.entityId, record);
     return pending[opId];
   });
+
+  /// When this device first started publishing [opId] (null: not yet, or a
+  /// record from before this was tracked).
+  DateTime? attemptedAt(String opId) {
+    final op = pending[opId];
+    final at = op == null
+        ? null
+        : (_records[op.entityId]?['attemptedAt'] as Map?)?[opId];
+    return at is int
+        ? DateTime.fromMillisecondsSinceEpoch(at, isUtc: true)
+        : null;
+  }
+
+  /// Whether [opId] was handed to the journal at least once.
+  bool isAttempted(String opId) {
+    final op = pending[opId];
+    return op != null &&
+        ((_records[op.entityId]?['attempted'] as List?)?.contains(opId) ??
+            false);
+  }
+
+  /// How often the change behind [opId] was re-published automatically.
+  int reissueCount(String opId) {
+    final op = pending[opId];
+    return op == null ? 0 : _records[op.entityId]?['reissues'] as int? ?? 0;
+  }
+
+  /// Republishes an unconfirmed metadata change (or the pairing request)
+  /// under a fresh operation id, so it travels as a new journal event in the
+  /// current encryption session. A command the worker could never read (for
+  /// example one sent before the worker's device existed) otherwise waits
+  /// forever: a resend with the same transaction id returns the old event.
+  ///
+  /// Safe to repeat: every command carries the revision it was based on and
+  /// the worker refuses one whose entity moved on, so a command the worker
+  /// did process (only its answer was lost) comes back as a refusal with the
+  /// real state, never as a second job or charge. An acknowledgement of the
+  /// old id that still arrives is applied like any other result.
+  /// [automatic] re-issues only metadata changes and the pairing request, at
+  /// most [maxAutomaticReissues] times per change; paid or sending jobs
+  /// (transcripts, schedules, reminders) are only resent when the user asks.
+  /// Returns the new operation, or null when [opId] is not an attempted
+  /// command.
+  Future<PersonalOperation?> reissue(
+    String opId, {
+    bool automatic = false,
+  }) => _serial(() async {
+    final op = pending[opId];
+    if (op == null) return null;
+    final metadata = op.kind == 'metadata.put' || op.kind == 'metadata.delete';
+    if (automatic && !metadata && op.kind != 'worker.pairing') {
+      return null;
+    }
+    final record = _record(op.entityId);
+    final commands = Map<String, dynamic>.from(
+      record['commands'] as Map? ?? {},
+    );
+    final attempted = (record['attempted'] as List? ?? []).cast<String>();
+    if (commands[opId] is! Map || !attempted.contains(opId)) return null;
+    final count = record['reissues'] as int? ?? 0;
+    if (automatic && count >= maxAutomaticReissues) return null;
+    final put = op.kind == 'metadata.put';
+    final fresh = _operation(
+      op.kind,
+      op.entityId,
+      put && record['localValue'] is Map
+          ? {'value': record['localValue']}
+          : Map<String, dynamic>.from(op.payload),
+      op.kind == 'worker.pairing' ? op.baseRevision : record['revision'] as int,
+    );
+    commands.remove(opId);
+    record['commands'] = commands;
+    record['attempted'] = attempted.where((id) => id != opId).toList();
+    final at = Map<String, dynamic>.from(record['attemptedAt'] as Map? ?? {})
+      ..remove(opId);
+    record['attemptedAt'] = at;
+    _add(record, fresh);
+    if (record['metadataInFlight'] == opId) {
+      record['metadataInFlight'] = fresh.opId;
+      if (put) record['metadataCommandGeneration'] = record['generation'];
+    }
+    record['reissues'] = count + 1;
+    await _commit(op.entityId, record);
+    return fresh;
+  });
+
+  /// Resolves the metadata conflict of [entity] with one tap.
+  ///
+  /// [keepLocal]: this device's version is written over the other one (a new
+  /// command based on the conflict's revision; the conflict disappears now
+  /// and returns only if the entity changes elsewhere again).
+  /// Otherwise the other version is kept: nothing is published, this
+  /// device's proposal is dropped (a draft is kept as a draft copy first).
+  Future<void> resolveConflict(String entity, {required bool keepLocal}) =>
+      _serial(() async {
+        final record = _record(entity);
+        final conflict = record['conflict'];
+        if (conflict is! Map || record['jobKind'] != null) return;
+        if (record['metadataInFlight'] != null) {
+          throw StateError('Metadata already awaiting acknowledgement');
+        }
+        final revision = conflict['revision'] is int
+            ? conflict['revision'] as int
+            : record['revision'] as int;
+        final proposed = record['localValue'] is Map
+            ? record['localValue']
+            : conflict['proposedValue'];
+        final existing = conflict.containsKey('existingValue')
+            ? conflict['existingValue']
+            : record['serverValue'];
+        record.remove('conflict');
+        record.remove('rebases');
+        if (keepLocal) {
+          // A replaced draft stays readable as a draft copy.
+          if (entity.startsWith('draft:') && existing is Map) {
+            _preserveDraft(record, entity, Map<String, dynamic>.from(existing));
+          }
+          final op = proposed is Map
+              ? _operation('metadata.put', entity, {
+                  'value': proposed,
+                }, revision)
+              : _operation('metadata.delete', entity, {}, revision);
+          record['generation'] = (record['generation'] as int? ?? 0) + 1;
+          if (proposed is Map) {
+            record['localValue'] = _copy(Map<String, dynamic>.from(proposed));
+          }
+          _add(record, op);
+          record['metadataInFlight'] = op.opId;
+          record['metadataCommandGeneration'] = record['generation'];
+          record['metadataBase'] = _digest(existing);
+        } else {
+          if (entity.startsWith('draft:') && proposed is Map) {
+            _preserveDraft(record, entity, Map<String, dynamic>.from(proposed));
+          }
+          record.remove('localValue');
+          if (existing is Map) {
+            record['serverValue'] = _copy(Map<String, dynamic>.from(existing));
+          } else {
+            record.remove('serverValue');
+          }
+          if (revision > (record['revision'] as int)) {
+            record['revision'] = revision;
+          }
+        }
+        await _commit(entity, record);
+      });
+
+  /// Clears stored conflicts that need no choice: both versions are equal
+  /// (an echo of this device's own write, or the same change made twice).
+  /// Older app versions recorded those as conflicts. Returns the number of
+  /// entities settled.
+  Future<int> settleObsoleteConflicts() => _serial(() async {
+    var settled = 0;
+    // Only records holding a conflict are copied: startup stays cheap with
+    // thousands of transcripts and drafts.
+    final candidates = [
+      for (final entry in _records.entries)
+        if (entry.value['conflict'] is Map && entry.value['jobKind'] == null)
+          entry.key,
+    ];
+    for (final entity in candidates) {
+      final record = _record(entity);
+      final conflict = record['conflict'];
+      if (conflict is! Map ||
+          record['jobKind'] != null ||
+          record['metadataInFlight'] != null ||
+          !conflict.containsKey('proposedValue')) {
+        continue;
+      }
+      final proposed = record['localValue'] is Map
+          ? record['localValue']
+          : conflict['proposedValue'];
+      final existing = conflict.containsKey('existingValue')
+          ? conflict['existingValue']
+          : record['serverValue'];
+      if (!_equalValues(existing, proposed)) continue;
+      record.remove('conflict');
+      record.remove('localValue');
+      if (existing is Map) {
+        record['serverValue'] = _copy(Map<String, dynamic>.from(existing));
+      } else {
+        record.remove('serverValue');
+      }
+      final revision = conflict['revision'];
+      if (revision is int && revision > (record['revision'] as int)) {
+        record['revision'] = revision;
+      }
+      await _commit(entity, record);
+      settled++;
+    }
+    return settled;
+  });
+
+  /// Equal metadata values; null (absent or deleted) equals only null.
+  static bool _equalValues(Object? a, Object? b) =>
+      (a is! Map && b is! Map) || (a is Map && b is Map && _same(a, b));
+
+  void _preserveDraft(
+    Map<String, dynamic> record,
+    String entity,
+    Map<String, dynamic> value,
+  ) {
+    final preserved = Map<String, dynamic>.from(
+      record['preservedDrafts'] as Map? ?? {},
+    );
+    if (preserved.values.any(
+      (copy) => copy is Map && _same(copy['originalValue'], value),
+    )) {
+      return;
+    }
+    preserved[newOperationId()] = {
+      ..._copy(value),
+      'originalValue': _copy(value),
+      'sourceEntity': entity,
+      'savedAt': clock().toUtc().toIso8601String(),
+    };
+    record['preservedDrafts'] = preserved;
+  }
 
   /// Cancellation shares the publication lock. Only a request which has never
   /// started publication can be withdrawn locally. Otherwise the cancellation
@@ -566,46 +817,31 @@ class PersonalReplica {
     record['attempted'] = (record['attempted'] as List? ?? [])
         .where((id) => id != accepted)
         .toList();
+    final attemptedAt = Map<String, dynamic>.from(
+      record['attemptedAt'] as Map? ?? {},
+    )..removeWhere((id, _) => id == accepted || !commands.containsKey(id));
+    if (attemptedAt.isEmpty) {
+      record.remove('attemptedAt');
+    } else {
+      record['attemptedAt'] = attemptedAt;
+    }
     if (record['metadataInFlight'] == accepted)
       record.remove('metadataInFlight');
     final latest = revision >= (record['revision'] as int);
-    if (latest) {
+    if (result.kind == 'metadata.result') {
+      _metadataResult(
+        entity,
+        record,
+        payload,
+        revision: revision,
+        latest: latest,
+        acknowledged: acknowledged,
+        commandGeneration: commandGeneration,
+      );
+    } else if (latest) {
       record['revision'] = revision;
-      if (result.kind == 'metadata.result') {
-        if (payload['state'] == 'conflict') {
-          record['conflict'] = _copy(payload);
-          final existing = payload['existingValue'];
-          if (existing is Map)
-            record['serverValue'] = _copy(Map<String, dynamic>.from(existing));
-        } else {
-          if (payload['deleted'] == true)
-            record.remove('serverValue');
-          else if (payload['value'] is Map)
-            record['serverValue'] = _copy(
-              Map<String, dynamic>.from(payload['value'] as Map),
-            );
-          // A foreign update cannot erase a local unacknowledged draft.
-          if (acknowledged != null) {
-            final sent = acknowledged.payload['value'];
-            if ((acknowledged.kind == 'metadata.delete' &&
-                    record['generation'] == commandGeneration) ||
-                _same(sent, record['localValue']))
-              record.remove('localValue');
-            record.remove('conflict');
-          }
-        }
-        if (record['localValue'] is Map &&
-            record['conflict'] == null &&
-            record['metadataInFlight'] == null &&
-            acknowledged != null) {
-          final op = _operation('metadata.put', entity, {
-            'value': record['localValue'],
-          }, revision);
-          _add(record, op);
-          record['metadataInFlight'] = op.opId;
-          record['metadataCommandGeneration'] = record['generation'];
-        }
-      } else if ({
+      if (result.kind == 'worker.pairing.result') record.remove('reissues');
+      if ({
         'transcript.result',
         'schedule.result',
         'reminder.result',
@@ -627,19 +863,6 @@ class PersonalReplica {
           record['job'] = {...previous, ..._copy(payload)};
           record.remove('conflict');
         }
-      }
-    } else if (result.kind == 'metadata.result' &&
-        acknowledged != null &&
-        payload['state'] != 'conflict') {
-      if (_same(acknowledged.payload['value'], record['localValue'])) {
-        record.remove('localValue');
-      } else if (record['localValue'] is Map) {
-        record['conflict'] = {
-          'state': 'conflict',
-          'revision': record['revision'],
-          'existingValue': record['serverValue'],
-          'proposedValue': record['localValue'],
-        };
       }
     }
     if (result.kind == 'transcript.result') {
@@ -664,6 +887,239 @@ class PersonalReplica {
     await write(seenKey, {'seen': true});
     _seen.add(result.opId);
   });
+
+  /// Applies a `metadata.result`. The worker serializes writes per entity by
+  /// revision; a refusal (`state: conflict`) carries its current value.
+  ///
+  /// * A result for another device's operation only teaches the server state.
+  ///   That device keeps, and resolves, its own proposal.
+  /// * A refusal of this device's change is no conflict when the server
+  ///   already holds the wanted value, and is rebased (sent again at the new
+  ///   revision) when the server holds no foreign change: the value this
+  ///   change started from, a value this device wrote itself, or nothing at
+  ///   revision 0. Rebases are bounded by [maxAutomaticRebases].
+  /// * Anything else is a real concurrent change: both versions stay until
+  ///   the user chooses ([resolveConflict]).
+  void _metadataResult(
+    String entity,
+    Map<String, dynamic> record,
+    Map<String, dynamic> payload, {
+    required int revision,
+    required bool latest,
+    required PersonalOperation? acknowledged,
+    required Object? commandGeneration,
+  }) {
+    final refused = payload['state'] == 'conflict';
+    if (acknowledged == null) {
+      if (!latest) return;
+      record['revision'] = revision;
+      if (refused) {
+        final existing = payload['existingValue'];
+        _setServer(record, existing is Map ? existing : null);
+      } else if (payload['deleted'] == true) {
+        record.remove('serverValue');
+      } else if (payload['value'] is Map) {
+        _setServer(record, payload['value'] as Map);
+      }
+      _refreshConflict(record);
+      return;
+    }
+    final put = acknowledged.kind == 'metadata.put';
+    final sent = put ? acknowledged.payload['value'] : null;
+    final newerEdit = record['generation'] != commandGeneration;
+    record.remove('reissues');
+    if (!refused) {
+      if (latest) {
+        record['revision'] = revision;
+        if (payload['deleted'] == true) {
+          record.remove('serverValue');
+        } else if (payload['value'] is Map) {
+          _setServer(record, payload['value'] as Map);
+        }
+        // A foreign update cannot erase a local unacknowledged draft.
+        if ((!put && !newerEdit) || _same(sent, record['localValue'])) {
+          record.remove('localValue');
+        }
+        record.remove('conflict');
+        record.remove('rebases');
+        _requeueLocal(record, entity, revision);
+      } else if (_same(sent, record['localValue'])) {
+        record.remove('localValue');
+      } else if (record['localValue'] is Map) {
+        // Acknowledged at an older state than one already applied (results
+        // replayed out of order). The newer local edit started from this
+        // device's own write: send it again when the newest known state is
+        // still that write, otherwise keep both versions for the user.
+        final known = record['serverValue'];
+        final current = record['revision'] as int;
+        if (_foreignChange(record, known, current)) {
+          record['conflict'] = {
+            'state': 'conflict',
+            'revision': current,
+            'existingValue': _copyOrNull(known),
+            'proposedValue': _copyOrNull(record['localValue']),
+          };
+        } else {
+          _requeueLocal(record, entity, current);
+        }
+      }
+      return;
+    }
+    final wantDelete = !put && !newerEdit;
+    final Object? wanted = wantDelete
+        ? null
+        : record['localValue'] is Map
+        ? record['localValue']
+        : sent;
+    // Decide against the newest server state this device knows: the
+    // refusal's own, or a newer one already applied (out-of-order replay).
+    // A refusal at revision 0 without a value is always current: the worker
+    // has never stored this entity (for example a re-created worker store),
+    // whatever revision this device remembers.
+    final authoritative =
+        latest || (revision == 0 && payload['existingValue'] is! Map);
+    final current = authoritative ? revision : record['revision'] as int;
+    if (authoritative) {
+      record['revision'] = revision;
+      final existing = payload['existingValue'];
+      _setServer(record, existing is Map ? existing : null);
+    }
+    final server = record['serverValue'];
+    if (wantDelete ? server is! Map : wanted is Map && _same(server, wanted)) {
+      // Both sides already agree: nothing to choose.
+      record.remove('localValue');
+      record.remove('conflict');
+      record.remove('rebases');
+      return;
+    }
+    if (!_foreignChange(record, server, current) &&
+        _rebase(record, entity, wanted, wantDelete, current)) {
+      return;
+    }
+    // A real concurrent change: both versions stay until the user chooses.
+    // The refusal names the version that was sent; a newer unsent edit stays
+    // the local value, so neither is lost.
+    record['conflict'] = authoritative
+        ? {..._copy(payload), 'existingValue': _copyOrNull(server)}
+        : {
+            'state': 'conflict',
+            'revision': current,
+            'existingValue': _copyOrNull(server),
+            'proposedValue': _copyOrNull(wanted),
+          };
+    if (wanted is Map && record['localValue'] is! Map) {
+      record['localValue'] = _copyOrNull(wanted);
+    }
+    record.remove('rebases');
+  }
+
+  static Map<String, dynamic>? _copyOrNull(Object? value) =>
+      value is Map ? _copy(Map<String, dynamic>.from(value)) : null;
+
+  /// Whether [server] (at [revision]) may hold another device's change: it
+  /// is neither the value this device's change started from, nor one this
+  /// device wrote itself, nor an entity the worker has never stored.
+  bool _foreignChange(
+    Map<String, dynamic> record,
+    Object? server,
+    int revision,
+  ) {
+    final value = server is Map ? server : null;
+    final digest = _digest(value);
+    final sent = record['sentDigests'] as List? ?? const [];
+    return !(digest == record['metadataBase'] ||
+        sent.contains(digest) ||
+        (value == null && revision == 0));
+  }
+
+  /// Sends [wanted] (or a delete) again at [base]; false when not allowed.
+  bool _rebase(
+    Map<String, dynamic> record,
+    String entity,
+    Object? wanted,
+    bool wantDelete,
+    int base,
+  ) {
+    final rebases = record['rebases'] as int? ?? 0;
+    if (rebases >= maxAutomaticRebases || (!wantDelete && wanted is! Map)) {
+      return false;
+    }
+    final op = wantDelete
+        ? _operation('metadata.delete', entity, {}, base)
+        : _operation('metadata.put', entity, {'value': wanted}, base);
+    if (!wantDelete) {
+      record['localValue'] = _copy(Map<String, dynamic>.from(wanted as Map));
+      record['metadataCommandGeneration'] = record['generation'];
+    }
+    record.remove('conflict');
+    record['rebases'] = rebases + 1;
+    _add(record, op);
+    record['metadataInFlight'] = op.opId;
+    record['metadataBase'] = _digest(record['serverValue']);
+    return true;
+  }
+
+  /// Sends the newest local edit, unless one is in flight or in conflict.
+  void _requeueLocal(Map<String, dynamic> record, String entity, int base) {
+    if (record['localValue'] is! Map ||
+        record['conflict'] != null ||
+        record['metadataInFlight'] != null) {
+      return;
+    }
+    final op = _operation('metadata.put', entity, {
+      'value': record['localValue'],
+    }, base);
+    _add(record, op);
+    record['metadataInFlight'] = op.opId;
+    record['metadataCommandGeneration'] = record['generation'];
+    record['metadataBase'] = _digest(record['serverValue']);
+  }
+
+  void _setServer(Map<String, dynamic> record, Map? value) {
+    if (value == null) {
+      record.remove('serverValue');
+    } else {
+      record['serverValue'] = _copy(Map<String, dynamic>.from(value));
+    }
+  }
+
+  void _rememberSent(Map<String, dynamic> record, Object? value) {
+    final digests = [
+      for (final digest in record['sentDigests'] as List? ?? const [])
+        if (digest is String) digest,
+    ];
+    final digest = _digest(value is Map ? value : null);
+    digests
+      ..remove(digest)
+      ..add(digest);
+    record['sentDigests'] = digests.length > _sentHistory
+        ? digests.sublist(digests.length - _sentHistory)
+        : digests;
+  }
+
+  /// Another device changed an entity this device holds a conflict for: the
+  /// conflict now compares against the new server version, and disappears
+  /// when that already equals this device's proposal.
+  void _refreshConflict(Map<String, dynamic> record) {
+    final conflict = record['conflict'];
+    if (conflict is! Map || !conflict.containsKey('proposedValue')) return;
+    final server = record['serverValue'];
+    final proposed = record['localValue'] is Map
+        ? record['localValue']
+        : conflict['proposedValue'];
+    if (_equalValues(server, proposed)) {
+      record.remove('conflict');
+      record.remove('localValue');
+      return;
+    }
+    record['conflict'] = {
+      ...Map<String, dynamic>.from(conflict),
+      'revision': record['revision'],
+      'existingValue': server is Map
+          ? _copy(Map<String, dynamic>.from(server))
+          : null,
+    };
+  }
 
   /// The persisted journal resume point for [roomId]; null means full replay
   /// (new or migrated store, other journal room, unknown or broken record).

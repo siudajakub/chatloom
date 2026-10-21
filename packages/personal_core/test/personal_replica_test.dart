@@ -107,17 +107,19 @@ void main() {
         (op) => op.entityId == key,
       );
       await restarted.markPublishing(own.opId);
+      // Another device changed the same network default meanwhile.
+      final remote = {...policy, 'groupNotifications': 'all'};
       await restarted.acceptResult(
         result('remote-conflict', key, 'metadata.result', {
           'state': 'conflict',
           'revision': 2,
           'acceptedOpId': own.opId,
-          'existingValue': policy,
+          'existingValue': remote,
           'proposedValue': own.payload['value'],
         }),
       );
       expect(replica(store).conflicts, contains(key));
-      expect(replica(store).conflicts[key]!['existingValue'], policy);
+      expect(replica(store).conflicts[key]!['existingValue'], remote);
     },
   );
   test(
@@ -576,10 +578,13 @@ void main() {
     () async {
       final store = MemoryStore();
       final r = replica(store);
+      await r.queueMetadata('draft:fixture', {'text': 'mine'});
+      final mine = (await r.markPublishing(r.pending.keys.single))!;
       await r.acceptResult(
         result('conflict', 'draft:fixture', 'metadata.result', {
           'state': 'conflict',
           'revision': 3,
+          'acceptedOpId': mine.opId,
           'existingValue': {'text': 'other'},
           'proposedValue': {'text': 'mine'},
         }),
@@ -616,9 +621,12 @@ void main() {
     () async {
       final store = MemoryStore();
       final r = replica(store);
+      await r.queueMetadata('draft:fixture', {'text': 'mine'});
+      final mine = (await r.markPublishing(r.pending.keys.single))!;
       final conflict = result('conflict', 'draft:fixture', 'metadata.result', {
         'state': 'conflict',
         'revision': 9,
+        'acceptedOpId': mine.opId,
         'existingValue': {'text': 'remote'},
         'proposedValue': {'text': 'mine'},
       });
@@ -884,7 +892,10 @@ void main() {
         }),
       );
       expect(r.schedules['schedule-fixture']!['state'], 'processing');
-      expect(r.conflicts.containsKey('schedule-fixture'), isTrue);
+      expect(r.schedules['schedule-fixture']!['errorCode'], 'dispatch_started');
+      // A refused job command is part of the job's state, not a choice
+      // between two settings versions (Sync settings listed it as one).
+      expect(r.conflicts.containsKey('schedule-fixture'), isFalse);
       expect(
         replica(store).schedules['schedule-fixture']!['state'],
         'processing',
@@ -939,6 +950,295 @@ void main() {
       expect(restored.transcripts[job.id]!.text, isNull);
     },
   );
+
+  group('conflicts and unconfirmed changes (2026-10-20)', () {
+    const key = 'transcription-policy';
+    PersonalOperation refusal(
+      String id,
+      PersonalOperation command,
+      int revision,
+      Map<String, dynamic>? existing,
+    ) => result(id, command.entityId, 'metadata.result', {
+      'state': 'conflict',
+      'revision': revision,
+      'acceptedOpId': command.opId,
+      'existingValue': existing,
+      'proposedValue': command.payload['value'],
+    });
+
+    test('a refusal that already holds the wanted value is no conflict', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.queueMetadata(key, {'auto': true});
+      final sent = (await r.markPublishing(r.pending.keys.single))!;
+      await r.acceptResult(refusal('same', sent, 2, {'auto': true}));
+      final restored = replica(store);
+      expect(restored.conflicts, isEmpty);
+      expect(restored.pending, isEmpty);
+      expect(restored.values[key], {'auto': true});
+      expect(restored.revisions[key], 2);
+    });
+
+    test('an own write whose acknowledgement was lost is rebased', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.queueMetadata(key, {'auto': true});
+      final first = (await r.markPublishing(r.pending.keys.single))!;
+      await r.queueMetadata(key, {'auto': false});
+      // The worker accepted the first write (revision 1), but its answer
+      // never reached this device; the change is re-issued and refused.
+      final again = (await r.reissue(first.opId))!;
+      expect(again.opId, isNot(first.opId));
+      expect(again.payload['value'], {'auto': false});
+      await r.markPublishing(again.opId);
+      await r.acceptResult(refusal('lost-ack', again, 1, {'auto': true}));
+      expect(r.conflicts, isEmpty);
+      final rebased = r.pending.values.single;
+      expect(rebased.baseRevision, 1);
+      expect(rebased.payload['value'], {'auto': false});
+      await r.markPublishing(rebased.opId);
+      await r.acceptResult(metadataAck(rebased, 2));
+      expect(r.pending, isEmpty);
+      expect(replica(store).values[key], {'auto': false});
+    });
+
+    test('a newer revision with the unchanged base value is rebased', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.acceptResult(
+        result('remote-1', key, 'metadata.result', {
+          'revision': 1,
+          'value': {'auto': true},
+        }),
+      );
+      await r.queueMetadata(key, {'auto': false});
+      final mine = (await r.markPublishing(r.pending.keys.single))!;
+      expect(mine.baseRevision, 1);
+      // Another device saved the same value again (revision 2).
+      await r.acceptResult(refusal('echo', mine, 2, {'auto': true}));
+      expect(r.conflicts, isEmpty);
+      expect(r.pending.values.single.baseRevision, 2);
+    });
+
+    test('a real concurrent change keeps both versions until chosen', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.queueMetadata(key, {'auto': false});
+      final mine = (await r.markPublishing(r.pending.keys.single))!;
+      await r.acceptResult(refusal('remote', mine, 4, {'auto': true, 'x': 1}));
+      final restored = replica(store);
+      expect(restored.conflicts[key]!['existingValue'], {'auto': true, 'x': 1});
+      expect(restored.conflicts[key]!['proposedValue'], {'auto': false});
+      expect(restored.values[key], {'auto': false});
+      expect(restored.pending, isEmpty);
+    });
+
+    test('rebasing is bounded, then the conflict is shown', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.queueMetadata(key, {'auto': false});
+      var op = (await r.markPublishing(r.pending.keys.single))!;
+      for (var i = 1; i <= PersonalReplica.maxAutomaticRebases; i++) {
+        await r.acceptResult(refusal('echo-$i', op, i, null));
+        expect(r.conflicts, isEmpty, reason: 'rebase $i');
+        op = (await r.markPublishing(r.pending.keys.single))!;
+      }
+      await r.acceptResult(refusal('echo-last', op, 9, null));
+      expect(r.pending, isEmpty);
+      expect(r.conflicts[key]!['proposedValue'], {'auto': false});
+    });
+
+    test('a worker that never stored the entity accepts it again', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.acceptResult(
+        result('old-worker', key, 'metadata.result', {
+          'revision': 5,
+          'value': {'auto': true},
+        }),
+      );
+      await r.queueMetadata(key, {'auto': false});
+      final mine = (await r.markPublishing(r.pending.keys.single))!;
+      await r.acceptResult(refusal('empty-worker', mine, 0, null));
+      expect(r.conflicts, isEmpty);
+      final again = r.pending.values.single;
+      expect(again.baseRevision, 0);
+      await r.markPublishing(again.opId);
+      await r.acceptResult(metadataAck(again, 1));
+      expect(r.pending, isEmpty);
+      expect(r.values[key], {'auto': false});
+      expect(r.revisions[key], 1);
+    });
+
+    test("another device's refused write is never this device's conflict", () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.acceptResult(
+        result('foreign-refusal', key, 'metadata.result', {
+          'state': 'conflict',
+          'revision': 3,
+          'acceptedOpId': 'other-device-op',
+          'existingValue': {'auto': true},
+          'proposedValue': {'auto': false},
+        }),
+      );
+      expect(r.conflicts, isEmpty);
+      expect(r.values[key], {'auto': true});
+      expect(r.revisions[key], 3);
+      await r.queueMetadata(key, {'maxSeconds': 60});
+      expect(r.pending.values.single.baseRevision, 3);
+    });
+
+    test('a later foreign write refreshes or settles a held conflict', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.queueMetadata(key, {'auto': false});
+      final mine = (await r.markPublishing(r.pending.keys.single))!;
+      await r.acceptResult(refusal('remote', mine, 2, {'auto': true}));
+      expect(r.conflicts, contains(key));
+      await r.acceptResult(
+        result('remote-3', key, 'metadata.result', {
+          'revision': 3,
+          'value': {'auto': true, 'maxSeconds': 60},
+        }),
+      );
+      expect(r.conflicts[key]!['revision'], 3);
+      expect(r.conflicts[key]!['existingValue'], {
+        'auto': true,
+        'maxSeconds': 60,
+      });
+      await r.acceptResult(
+        result('remote-4', key, 'metadata.result', {
+          'revision': 4,
+          'value': {'auto': false},
+        }),
+      );
+      expect(replica(store).conflicts, isEmpty);
+      expect(replica(store).values[key], {'auto': false});
+    });
+
+    test('one-tap resolution: keep this device or use the other version', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.queueMetadata(key, {'auto': false});
+      final mine = (await r.markPublishing(r.pending.keys.single))!;
+      await r.acceptResult(refusal('remote', mine, 2, {'auto': true}));
+      await r.resolveConflict(key, keepLocal: true);
+      expect(r.conflicts, isEmpty);
+      final keep = r.pending.values.single;
+      expect(keep.baseRevision, 2);
+      expect(keep.payload['value'], {'auto': false});
+      await r.markPublishing(keep.opId);
+      await r.acceptResult(metadataAck(keep, 3));
+      expect(r.values[key], {'auto': false});
+
+      const draft = 'draft:fixture';
+      await r.queueMetadata(draft, {'text': 'mine'});
+      final typed = (await r.markPublishing(r.pending.keys.single))!;
+      await r.acceptResult(refusal('remote-draft', typed, 5, {'text': 'other'}));
+      final writes = store.writes.length;
+      await r.resolveConflict(draft, keepLocal: false);
+      final restored = replica(store);
+      expect(restored.conflicts, isEmpty);
+      expect(restored.pending, isEmpty);
+      expect(restored.values[draft], {'text': 'other'});
+      expect(restored.revisions[draft], 5);
+      // Nothing was published; this device's text is kept as a draft copy.
+      expect(store.writes.length, writes + 1);
+      expect(
+        restored.values.entries
+            .where((e) => e.key.startsWith('draft-copy:'))
+            .map((e) => e.value['text']),
+        contains('mine'),
+      );
+    });
+
+    test('stored echo conflicts are settled; real ones are kept', () async {
+      final store = MemoryStore();
+      Map<String, dynamic> record(Map<String, dynamic> conflict) => {
+        'revision': 2,
+        'generation': 1,
+        'commands': <String, dynamic>{},
+        'attempted': <String>[],
+        'appliedResults': <String>[],
+        'serverValue': {'auto': true},
+        'localValue': conflict['proposedValue'],
+        'conflict': conflict,
+      };
+      store.data['replica:echo'] = record({
+        'state': 'conflict',
+        'revision': 4,
+        'existingValue': {'auto': true},
+        'proposedValue': {'auto': true},
+      });
+      store.data['replica:real'] = record({
+        'state': 'conflict',
+        'revision': 4,
+        'existingValue': {'auto': true},
+        'proposedValue': {'auto': false},
+      });
+      store.data['replica:legacy'] = {
+        ...record({'state': 'synthetic conflict'}),
+      }..remove('localValue');
+      final r = replica(store);
+      expect(r.conflicts.keys, containsAll(['echo', 'real', 'legacy']));
+      expect(await r.settleObsoleteConflicts(), 1);
+      final restored = replica(store);
+      expect(restored.conflicts.keys.toSet(), {'real', 'legacy'});
+      expect(restored.values['echo'], {'auto': true});
+      expect(restored.revisions['echo'], 4);
+    });
+
+    test('unconfirmed commands: publication time and bounded re-issue', () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      await r.queueMetadata(key, {'auto': true});
+      final op = r.pending.values.single;
+      expect(await r.reissue(op.opId), isNull, reason: 'never sent');
+      expect(r.attemptedAt(op.opId), isNull);
+      await r.markPublishing(op.opId);
+      expect(r.attemptedAt(op.opId), clock);
+      expect(r.isAttempted(op.opId), isTrue);
+      var current = op;
+      for (var i = 0; i < PersonalReplica.maxAutomaticReissues; i++) {
+        current = (await r.reissue(current.opId, automatic: true))!;
+        expect(r.pending.keys.single, current.opId);
+        expect(r.isAttempted(current.opId), isFalse);
+        await r.markPublishing(current.opId);
+      }
+      expect(r.reissueCount(current.opId), PersonalReplica.maxAutomaticReissues);
+      expect(await r.reissue(current.opId, automatic: true), isNull);
+      final manual = (await r.reissue(current.opId))!;
+      await r.markPublishing(manual.opId);
+      // The answer to the very first id still arrives: applied like a
+      // foreign result; the re-issued change then settles as an echo.
+      await r.acceptResult(metadataAck(op, 1));
+      expect(r.pending.keys.single, manual.opId);
+      await r.acceptResult(refusal('echo', manual, 1, {'auto': true}));
+      expect(r.pending, isEmpty);
+      expect(r.conflicts, isEmpty);
+      expect(replica(store).values[key], {'auto': true});
+
+      // Paid jobs are re-issued only on request, at the current revision.
+      final job = TranscriptionJob(
+        id: 'transcript-fixture',
+        source: source,
+        state: JobState.waitingSync,
+      );
+      final request = await r.stageCommand(
+        'transcript.request',
+        job.id,
+        job.toJson().cast<String, dynamic>(),
+        optimisticJob: job.toJson().cast<String, dynamic>(),
+      );
+      await r.markPublishing(request.opId);
+      expect(await r.reissue(request.opId, automatic: true), isNull);
+      final resent = (await r.reissue(request.opId))!;
+      expect(resent.kind, 'transcript.request');
+      expect(resent.baseRevision, 0);
+      expect(r.pending.keys, [resent.opId]);
+    });
+  });
 
   group('journal watermark', () {
     const room = '!fixture-journal';
