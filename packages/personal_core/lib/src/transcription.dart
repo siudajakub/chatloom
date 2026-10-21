@@ -43,9 +43,11 @@ String transcriptEntityId(SourceEventRef source) =>
 /// Synced, account-wide automatic transcription rules (journal metadata).
 ///
 /// Absent policy = [TranscriptionPolicy.defaults]: J asked for automatic
-/// transcription of incoming voice and round messages in every network.
+/// transcription of incoming voice and round messages in every network
+/// (2026-10-17) and of his own voice and round messages too (2026-10-21).
 /// The worker additionally requires its private `autoTranscription` operator
-/// switch before it scans local sources (double opt-in).
+/// switch before it scans local sources or accepts automatic requests
+/// (double opt-in).
 class TranscriptionPolicy {
   static const defaultMaxSeconds = 300;
   static const defaultDailyBudgetUsd = 1.0;
@@ -54,6 +56,14 @@ class TranscriptionPolicy {
   static const maxDailyBudgetUsd = 100.0;
 
   final bool auto;
+
+  /// Also the user's own voice notes and round videos (sent from any device
+  /// or app; own videos and files stay on demand). Absent = on (J,
+  /// 2026-10-21); a malformed value is off. Mute and ignore rules describe
+  /// incoming attention and do not apply to own messages; the per-chat
+  /// Never, network and kind switches, the time window and the cost limits
+  /// do.
+  final bool outgoing;
 
   /// Automatic work only considers messages sent at or after this moment.
   final DateTime? enabledAt;
@@ -78,6 +88,7 @@ class TranscriptionPolicy {
 
   const TranscriptionPolicy({
     this.auto = true,
+    this.outgoing = true,
     this.enabledAt,
     this.defaultLanguage,
     this.networks = const {},
@@ -124,6 +135,7 @@ class TranscriptionPolicy {
     return TranscriptionPolicy(
       // A malformed switch never turns paid background work on.
       auto: !json.containsKey('auto') || json['auto'] == true,
+      outgoing: !json.containsKey('outgoing') || json['outgoing'] == true,
       enabledAt: enabled is String ? DateTime.tryParse(enabled)?.toUtc() : null,
       defaultLanguage:
           language is String && transcriptionLanguages.containsKey(language)
@@ -147,6 +159,7 @@ class TranscriptionPolicy {
   Map<String, dynamic> toJson() => {
     'version': transcriptionPolicyVersion,
     'auto': auto,
+    'outgoing': outgoing,
     'enabledAt': enabledAt?.toUtc().toIso8601String(),
     'defaultLanguage': defaultLanguage,
     'networks': {
@@ -163,6 +176,7 @@ class TranscriptionPolicy {
 
   TranscriptionPolicy copyWith({
     bool? auto,
+    bool? outgoing,
     DateTime? Function()? enabledAt,
     String? Function()? defaultLanguage,
     Map<String, bool>? networks,
@@ -172,6 +186,7 @@ class TranscriptionPolicy {
     double? dailyBudgetUsd,
   }) => TranscriptionPolicy(
     auto: auto ?? this.auto,
+    outgoing: outgoing ?? this.outgoing,
     enabledAt: enabledAt == null ? this.enabledAt : enabledAt(),
     defaultLanguage: defaultLanguage == null
         ? this.defaultLanguage
@@ -195,6 +210,10 @@ class TranscriptionPolicy {
     auto: enabled,
     enabledAt: enabled && !auto ? () => now.toUtc() : null,
   );
+
+  /// Own messages follow the same window as incoming ones ([enabledAt]).
+  TranscriptionPolicy withOutgoing(bool enabled) =>
+      copyWith(outgoing: enabled);
 
   TranscriptionPolicy withNetwork(String network, bool enabled) =>
       copyWith(networks: {...networks, network: enabled});
@@ -366,6 +385,14 @@ AutoTranscriptionKind? transcribableMediaKind(Map<String, dynamic> content) {
   return null;
 }
 
+/// Own messages transcribed automatically: what the user records in the
+/// chat. Own videos, audio files and shared reels are left to an explicit
+/// Transcribe.
+const ownAutoTranscriptionKinds = {
+  AutoTranscriptionKind.voice,
+  AutoTranscriptionKind.round,
+};
+
 /// Everything needed to decide automatic eligibility, without content.
 class AutoTranscriptionCandidate {
   /// null = no transcribable speech media (see [transcribableMediaKind]).
@@ -405,6 +432,10 @@ class AutoTranscriptionCandidate {
 /// Codes: disabled, unsupported, kind_disabled, outgoing, before_enabled,
 /// too_old, chat_disabled, network_disabled, ignored, muted, duration_limit,
 /// budget. A per-kind switch applies in every chat, also with "Always".
+/// `outgoing` for an own message when [TranscriptionPolicy.outgoing] is off
+/// or the message is not a voice note or round (own videos, audio files and
+/// reels are transcribed on demand only); own messages skip the ignore and
+/// mute rules (they describe incoming attention).
 /// `duration_limit` and `budget` mean "eligible, but over a limit": the worker
 /// records them as `auto_skipped_duration` / `auto_skipped_budget` so the
 /// client can explain why no transcript appeared.
@@ -417,7 +448,10 @@ String? autoTranscriptionBlock(
   final kind = candidate.kind;
   if (kind == null) return 'unsupported';
   if (!policy.kindEnabled(kind)) return 'kind_disabled';
-  if (candidate.outgoing) return 'outgoing';
+  if (candidate.outgoing &&
+      (!policy.outgoing || !ownAutoTranscriptionKinds.contains(kind))) {
+    return 'outgoing';
+  }
   final timestamp = candidate.timestamp;
   if (timestamp == null) return 'too_old';
   final enabledAt = policy.enabledAt;
@@ -428,18 +462,21 @@ String? autoTranscriptionBlock(
   final override = policy.chatOverrides[candidate.roomId];
   if (override == false) return 'chat_disabled';
   // "Always" is an explicit per-chat choice; it outranks network, mute and
-  // ignore rules, but never own messages, time windows or cost limits.
+  // ignore rules, but never the own-message switch, time windows or cost
+  // limits.
   if (override != true) {
     if (!policy.networkEnabled(candidate.network)) return 'network_disabled';
-    if (_ignored(candidate.chatMetadata) ||
-        _ignored(candidate.personMetadata)) {
+    if (!candidate.outgoing &&
+        (_ignored(candidate.chatMetadata) ||
+            _ignored(candidate.personMetadata))) {
       return 'ignored';
     }
-    if (_muted(
-      candidate.chatMetadata,
-      candidate.personMetadata,
-      candidate.networkMetadata,
-    )) {
+    if (!candidate.outgoing &&
+        _muted(
+          candidate.chatMetadata,
+          candidate.personMetadata,
+          candidate.networkMetadata,
+        )) {
       return 'muted';
     }
   }

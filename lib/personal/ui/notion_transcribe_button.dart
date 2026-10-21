@@ -61,32 +61,26 @@ List<Widget> notionTranscriptionLanguageItems({
 ];
 
 /// Outlined split pill: the left segment starts (or retries) a manual
-/// transcription, the right segment picks its language. While a job runs the
-/// left segment shows a spinner and the right segment cancels it.
+/// transcription; the right segment picks its language. Running jobs use
+/// the inline progress and cancellation controls in the transcript panel.
 ///
 /// Visual height 36 (grows with the text scale), hit height at least 48. [foregroundColor] adapts the pill to the
 /// bubble it sits on (incoming/outgoing); it defaults to `onSurface`.
 class NotionTranscribeSplitButton extends StatelessWidget {
   final String label;
   final IconData icon;
-  final bool busy;
   final String? language;
   final VoidCallback? onTranscribe;
   final ValueChanged<String?>? onLanguageSelected;
-  final VoidCallback? onCancel;
-  final bool cancelling;
   final Color? foregroundColor;
 
   const NotionTranscribeSplitButton({
     super.key,
     this.label = 'Transcribe',
     this.icon = Icons.notes_rounded,
-    this.busy = false,
     this.language,
     this.onTranscribe,
     this.onLanguageSelected,
-    this.onCancel,
-    this.cancelling = false,
     this.foregroundColor,
   });
 
@@ -117,8 +111,7 @@ class NotionTranscribeSplitButton extends StatelessWidget {
     );
     ButtonStyle segment(OutlinedBorder shape) => TextButton.styleFrom(
       foregroundColor: foreground,
-      // A running job stays readable; only an unavailable action fades.
-      disabledForegroundColor: foreground.withValues(alpha: busy ? .82 : .38),
+      disabledForegroundColor: foreground.withValues(alpha: .38),
       overlayColor: foreground,
       minimumSize: Size(visualHeight, height),
       tapTargetSize: MaterialTapTargetSize.padded,
@@ -130,102 +123,56 @@ class NotionTranscribeSplitButton extends StatelessWidget {
     final primary = TextButton(
       key: const ValueKey('transcribe-primary'),
       style: segment(startShape),
-      onPressed: busy ? null : onTranscribe,
+      onPressed: onTranscribe,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Glyph ↔ spinner morph when a job starts or ends.
-          NotionMorphSwitcher(
-            rotate: false,
-            child: busy
-                ? SizedBox.square(
-                    key: const ValueKey('busy'),
-                    dimension: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: foreground,
-                    ),
-                  )
-                : Icon(icon, key: ValueKey(icon), size: 18),
-          ),
+          Icon(icon, size: 18),
           const SizedBox(width: 6),
           Flexible(
-            child: Text(
-              cancelling ? 'Cancelling…' : label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
         ],
       ),
     );
 
-    final Widget? trailing = busy
-        ? onCancel == null
-              ? null
-              : Tooltip(
-                  message: 'Cancel transcription',
-                  excludeFromSemantics: true,
-                  child: TextButton(
-                    key: const ValueKey('transcribe-cancel'),
-                    style: segment(endShape).copyWith(
-                      padding: const WidgetStatePropertyAll(
-                        EdgeInsets.symmetric(horizontal: NotionSpace.xs),
-                      ),
-                    ),
-                    onPressed: cancelling ? null : onCancel,
-                    child: Semantics(
-                      label: 'Cancel transcription',
-                      excludeSemantics: true,
-                      child: const Icon(
-                        Icons.close_rounded,
-                        size: NotionSize.iconSm,
-                      ),
-                    ),
-                  ),
-                )
-        : MenuAnchor(
-            alignmentOffset: const Offset(0, 4),
-            menuChildren: notionTranscriptionLanguageItems(
-              selected: language,
-              onSelected: (value) => onLanguageSelected?.call(value),
+    final trailing = MenuAnchor(
+      alignmentOffset: const Offset(0, 4),
+      menuChildren: notionTranscriptionLanguageItems(
+        selected: language,
+        onSelected: (value) => onLanguageSelected?.call(value),
+      ),
+      builder: (context, controller, _) => TextButton(
+        key: const ValueKey('transcribe-language'),
+        style: segment(endShape).copyWith(
+          padding: const WidgetStatePropertyAll(
+            EdgeInsetsDirectional.only(
+              start: NotionSpace.xs,
+              end: NotionSpace.xxs,
             ),
-            builder: (context, controller, _) => TextButton(
-              key: const ValueKey('transcribe-language'),
-              style: segment(endShape).copyWith(
-                padding: const WidgetStatePropertyAll(
-                  EdgeInsetsDirectional.only(
-                    start: NotionSpace.xs,
-                    end: NotionSpace.xxs,
-                  ),
-                ),
+          ),
+        ),
+        onPressed: onLanguageSelected == null
+            ? null
+            : () => controller.isOpen ? controller.close() : controller.open(),
+        child: Semantics(
+          label:
+              'Transcription language: ${notionTranscriptionLanguageName(language)}',
+          excludeSemantics: true,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                notionTranscriptionLanguageCode(language),
+                textDirection: TextDirection.ltr,
               ),
-              onPressed: onLanguageSelected == null
-                  ? null
-                  : () => controller.isOpen
-                        ? controller.close()
-                        : controller.open(),
-              child: Semantics(
-                label:
-                    'Transcription language: ${notionTranscriptionLanguageName(language)}',
-                excludeSemantics: true,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      notionTranscriptionLanguageCode(language),
-                      textDirection: TextDirection.ltr,
-                    ),
-                    const SizedBox(width: 2),
-                    const Icon(
-                      Icons.expand_more_rounded,
-                      size: NotionSize.iconSm,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
+              const SizedBox(width: 2),
+              const Icon(Icons.expand_more_rounded, size: NotionSize.iconSm),
+            ],
+          ),
+        ),
+      ),
+    );
 
     return Material(
       type: MaterialType.transparency,
@@ -252,13 +199,11 @@ class NotionTranscribeSplitButton extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Flexible(child: primary),
-              if (trailing != null) ...[
-                SizedBox(
-                  height: 20,
-                  child: VerticalDivider(width: 1, thickness: 1, color: line),
-                ),
-                trailing,
-              ],
+              SizedBox(
+                height: 20,
+                child: VerticalDivider(width: 1, thickness: 1, color: line),
+              ),
+              trailing,
             ],
           ),
         ],

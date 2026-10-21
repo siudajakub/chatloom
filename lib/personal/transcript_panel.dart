@@ -26,40 +26,41 @@ const _busyStates = {
   JobState.processing,
 };
 
-/// Short, user-facing reason for a failed or skipped transcription job.
+/// Short, human reason for a failed or skipped transcription job. Never an
+/// error code: the panel shows it next to a Retry button.
 String transcriptionErrorText(String? errorCode) => switch (errorCode) {
   'protected_media' ||
   'invalid_round_format' ||
   'invalid_media_format' ||
-  'not_audio' => 'Protected or unsupported media',
-  'no_audio_track' => 'This video has no audio track',
+  'not_audio' => 'This media can’t be transcribed',
+  'no_audio_track' => 'This video has no sound',
   'media_conversion_failed' ||
   'invalid_audio_duration' ||
-  'empty_audio' => 'Couldn’t read the audio track',
+  'empty_audio' => 'Couldn’t read the audio',
   'empty_transcript' => 'No speech detected',
   'source_too_large' || 'audio_chunk_too_large' => 'Too large to transcribe',
   'local_source_unavailable' ||
-  'source_status_unknown' => 'Source temporarily unavailable',
-  'auto_skipped_duration' ||
+  'source_status_unknown' ||
+  'source_unavailable' ||
+  'room_unavailable' => 'Couldn’t load the audio',
+  'auto_skipped_duration' => 'Too long to transcribe automatically',
   'auto_skipped_size' ||
-  'auto_skipped_budget' => 'Not transcribed automatically (limit)',
-  'invalid_language' => 'Unsupported transcription language',
+  'auto_skipped_size_cap' ||
+  'auto_skipped_unknown_size' => 'Too large to transcribe automatically',
+  'auto_skipped_budget' => 'Daily limit for automatic transcripts reached',
+  'invalid_language' => 'This language isn’t supported',
   final String code when code.startsWith('openai_') =>
-    'Transcription service error',
-  _ => 'Couldn’t process this audio',
+    'Transcription service unavailable',
+  _ => 'Couldn’t transcribe this message',
 };
 
-/// Busy label for a running transcription. [state] is the job's busy state,
-/// or null before a job exists (a manual request starting, or an automatic
-/// transcription pending).
-String transcriptionBusyLabel(JobState? state, {bool requesting = false}) =>
-    switch (state) {
-      JobState.waitingSync => 'Waiting for sync',
-      JobState.waitingKeys => 'Waiting for keys',
-      JobState.queued => 'Queued',
-      JobState.processing => 'Transcribing…',
-      _ => requesting ? 'Starting…' : 'Transcribing…',
-    };
+/// A busy job the worker cannot finish until something outside it changes;
+/// the panel then says so under its placeholder. Ordinary progress (queued,
+/// processing, a quick retry) has no text at all.
+String? transcriptionDelayText(TranscriptionJob job) =>
+    job.state == JobState.waitingKeys
+    ? 'Waiting for this message to decrypt'
+    : null;
 
 /// Transcription controls and result for one voice note, audio, round or
 /// video message (also media sent as a file).
@@ -68,8 +69,12 @@ String transcriptionBusyLabel(JobState? state, {bool requesting = false}) =>
 /// its automatic-pending flag) actually changes, so a timeline full of voice
 /// messages does not rebuild on every private-sync notification. Renders
 /// nothing for media the paired worker cannot transcribe, and for automatic
-/// jobs that found no audio track (a silent clip). Automatic work shows a
-/// subtle "Transcribing…" line instead of the manual controls.
+/// jobs that found no audio track (a silent clip).
+///
+/// Telegram-style: while a transcript is on its way (automatic, or asked for
+/// with Transcribe) the bubble shows shimmering placeholder lines and no
+/// status text, then the text fades in at the same place. Only a failure,
+/// a skipped limit or a job stuck on missing keys is explained in words.
 class TranscriptPanel extends StatefulWidget {
   final Event event;
 
@@ -97,6 +102,8 @@ class TranscriptPanel extends StatefulWidget {
 }
 
 enum _Phase { idle, busy, done, error }
+
+const _failedStates = {JobState.failed, JobState.unknown, JobState.conflict};
 
 class _TranscriptPanelState extends State<TranscriptPanel> {
   late PersonalClient personal;
@@ -260,42 +267,28 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
         job.errorCode == 'no_audio_track') {
       return const SizedBox.shrink();
     }
-    final autoPending = job == null && _autoPending();
     final busy =
         _requesting ||
-        autoPending ||
+        (job == null && _autoPending()) ||
         (job != null && _busyStates.contains(job.state));
     final hasText = job?.state == JobState.done && (job?.text ?? '').isNotEmpty;
     final phase = busy
         ? _Phase.busy
         : hasText
         ? _Phase.done
-        : job != null &&
-              {
-                JobState.failed,
-                JobState.unknown,
-                JobState.conflict,
-              }.contains(job.state)
-        ? _Phase.error
-        : job?.state == JobState.cancelled &&
-              (job?.errorCode?.startsWith('auto_skipped_') ?? false) &&
-              job?.errorCode != 'auto_skipped_kind'
+        : _failed(job)
         ? _Phase.error
         : _Phase.idle;
-    final subtle =
-        phase == _Phase.busy &&
-        !_requesting &&
-        (autoPending || (job?.automatic ?? false));
 
     final child = switch (phase) {
-      _Phase.busy when subtle => _autoBusy(job, foreground),
       _Phase.busy => _busy(job, foreground),
       _Phase.done => _done(job!, foreground),
       _Phase.error => _error(job!, foreground),
       _Phase.idle => _idle(job, foreground),
     };
     // The panel grows to the new phase while the phases fade through
-    // (requesting → transcribing → text, or an error).
+    // (placeholder → text, or an error). Every busy step (pending, queued,
+    // processing) is one phase, so the placeholder never restarts.
     // Keep the timeline selection recognizer out of this message surface.
     // Copy remains available in Transcript options.
     return SelectionContainer.disabled(
@@ -310,10 +303,7 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
           curve: NotionMotion.emphasized,
           child: NotionFadeThrough(
             duration: NotionMotion.short,
-            child: KeyedSubtree(
-              key: ValueKey(subtle ? 'auto-busy' : phase),
-              child: child,
-            ),
+            child: KeyedSubtree(key: ValueKey(phase), child: child),
           ),
         ),
       ),
@@ -328,67 +318,75 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
     ),
   );
 
-  Widget _busy(TranscriptionJob? job, Color foreground) {
-    final cancelling =
-        job != null && personal.isTranscriptCancellationPending(job.id);
-    final label = transcriptionBusyLabel(
-      job != null && _busyStates.contains(job.state) ? job.state : null,
-      requesting: _requesting,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        NotionTranscribeSplitButton(
-          busy: true,
-          label: label,
-          language: job?.language ?? _language,
-          cancelling: cancelling,
-          foregroundColor: foreground,
-          onCancel: job == null ? null : () => _cancel(job),
-        ),
-        if (cancelling)
-          _caption(
-            'Cancellation requested. Processing may already have started.',
-            foreground,
-          ),
-      ],
-    );
+  /// Failed, unknown or skipped by a limit. A job switched off by the user
+  /// or the operator (kind or automatic transcription off) is not an error:
+  /// the plain Transcribe button stays.
+  static bool _failed(TranscriptionJob? job) {
+    if (job == null) return false;
+    final code = job.errorCode;
+    if (code == 'auto_disabled' || code == 'auto_skipped_kind') return false;
+    if (_failedStates.contains(job.state)) return true;
+    return job.state == JobState.cancelled &&
+        (code?.startsWith('auto_skipped_') ?? false);
   }
 
-  /// Automatic work in progress: one quiet line, no controls, so a fresh
-  /// voice note or video looks finished-in-a-moment rather than actionable.
-  Widget _autoBusy(TranscriptionJob? job, Color foreground) {
-    final label = transcriptionBusyLabel(
-      job != null && _busyStates.contains(job.state) ? job.state : null,
-    );
-    // Queued automatic work reads as "Transcribing…": the wait is short.
-    final text = label == 'Queued' ? 'Transcribing…' : label;
+  /// A transcript on its way: shimmering placeholder lines where the text
+  /// will appear, no status words. A request this device made by hand can
+  /// be cancelled (it may be a long video); automatic work cannot.
+  Widget _busy(TranscriptionJob? job, Color foreground) {
+    final manual =
+        job != null && !job.automatic && _busyStates.contains(job.state);
+    final cancelling =
+        job != null && personal.isTranscriptCancellationPending(job.id);
+    final delay = job == null ? null : transcriptionDelayText(job);
     return Semantics(
-      key: const ValueKey('transcript-auto-busy'),
+      key: const ValueKey('transcript-busy'),
+      container: true,
       liveRegion: true,
-      label: text,
-      child: ExcludeSemantics(
-        child: Padding(
-          padding: const EdgeInsetsDirectional.only(
-            start: _textInset,
-            top: NotionSpace.xxs,
-            bottom: NotionSpace.xxs,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox.square(
-                dimension: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  color: foreground.withValues(alpha: .6),
+      label: delay ?? 'Transcribing',
+      child: Padding(
+        padding: const EdgeInsetsDirectional.only(
+          start: _textInset,
+          top: NotionSpace.xxs,
+          bottom: NotionSpace.xxs,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // One row in every busy step, so the placeholder keeps its
+            // animation when a job appears or a cancel button joins it.
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: ExcludeSemantics(
+                    child: NotionShimmerLines(color: foreground),
+                  ),
                 ),
-              ),
-              const SizedBox(width: NotionSpace.xs),
-              _caption(text, foreground),
-            ],
-          ),
+                if (manual)
+                  IconButton(
+                    key: const ValueKey('transcribe-cancel'),
+                    tooltip: 'Cancel transcription',
+                    style: IconButton.styleFrom(
+                      foregroundColor: foreground.withValues(alpha: .72),
+                      disabledForegroundColor: foreground.withValues(
+                        alpha: .38,
+                      ),
+                      minimumSize: const Size.square(32),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                    onPressed: cancelling ? null : () => _cancel(job),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      size: NotionSize.iconSm,
+                    ),
+                  ),
+              ],
+            ),
+            if (delay != null)
+              ExcludeSemantics(child: _caption(delay, foreground)),
+          ],
         ),
       ),
     );
@@ -407,11 +405,6 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
       ),
       if (job?.state == JobState.done)
         _caption('No speech detected', foreground),
-      if (job?.state == JobState.cancelled &&
-          job?.errorCode != 'auto_skipped_kind')
-        _caption('Transcription cancelled.', foreground),
-      if (job?.state == JobState.paused)
-        _caption('Transcription paused.', foreground),
     ],
   );
 
@@ -422,6 +415,8 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
         'Changed on another device. Check the result before retrying.',
       _ => transcriptionErrorText(job.errorCode),
     };
+    // A limit is not a failure: asking by hand simply transcribes it.
+    final skipped = job.state == JobState.cancelled;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -432,7 +427,9 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                Icons.error_outline_rounded,
+                skipped
+                    ? Icons.info_outline_rounded
+                    : Icons.error_outline_rounded,
                 size: NotionSize.iconSm,
                 color: foreground.withValues(alpha: .72),
               ),
@@ -442,8 +439,8 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
           ),
         ),
         NotionTranscribeSplitButton(
-          label: 'Retry',
-          icon: Icons.refresh_rounded,
+          label: skipped ? 'Transcribe' : 'Retry',
+          icon: skipped ? Icons.notes_rounded : Icons.refresh_rounded,
           language: _language,
           foregroundColor: foreground,
           onTranscribe: _request,

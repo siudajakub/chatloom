@@ -7,6 +7,7 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
 import 'package:chatloom/personal/worker_readiness.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -96,7 +97,25 @@ class _FakePersonal extends PersonalClient {
   }
 }
 
-/// Spinners animate forever, so settle for a bounded time instead.
+/// No step-by-step status words while a transcript is on its way.
+const _statusWords = [
+  'Waiting for sync',
+  'Waiting for keys',
+  'Queued',
+  'Starting…',
+  'Transcribing…',
+  'Cancelling…',
+];
+
+void expectPlaceholderOnly(WidgetTester tester) {
+  expect(find.byType(NotionShimmerLines), findsOneWidget);
+  expect(find.byType(CircularProgressIndicator), findsNothing);
+  for (final word in _statusWords) {
+    expect(find.text(word), findsNothing, reason: word);
+  }
+}
+
+/// The placeholder animates forever, so settle for a bounded time instead.
 Future<void> settle(WidgetTester tester) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 400));
@@ -198,17 +217,13 @@ void main() {
     await tester.tap(find.text('Transcribe'));
     await settle(tester);
     expect(personal.requests, [null]);
-    expect(find.text('Waiting for sync'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    // Busy: primary disabled, the language segment turns into cancel.
-    expect(
-      tester
-          .widget<TextButton>(find.byKey(const ValueKey('transcribe-primary')))
-          .onPressed,
-      isNull,
-    );
+    // Busy: shimmering lines where the text will appear; a request made by
+    // hand keeps a small cancel button, the split button is gone.
+    expectPlaceholderOnly(tester);
     expect(find.byKey(const ValueKey('transcribe-cancel')), findsOneWidget);
+    expect(find.byKey(const ValueKey('transcribe-primary')), findsNothing);
     expect(find.text('Auto'), findsNothing);
+    expect(find.bySemanticsLabel('Transcribing'), findsOneWidget);
   });
 
   testWidgets('language menu offers Armenian and keeps the choice', (
@@ -239,24 +254,75 @@ void main() {
     expect(personal.requests, ['pl']);
   });
 
-  test('busy labels name the current step', () {
-    expect(transcriptionBusyLabel(null, requesting: true), 'Starting…');
-    expect(transcriptionBusyLabel(null), 'Transcribing…');
-    expect(transcriptionBusyLabel(JobState.waitingSync), 'Waiting for sync');
-    expect(transcriptionBusyLabel(JobState.waitingKeys), 'Waiting for keys');
-    expect(transcriptionBusyLabel(JobState.queued), 'Queued');
-    expect(transcriptionBusyLabel(JobState.processing), 'Transcribing…');
+  testWidgets('every busy step is the same quiet placeholder', (
+    tester,
+  ) async {
+    for (final origin in TranscriptionOrigin.values) {
+      for (final state in [
+        JobState.waitingSync,
+        JobState.queued,
+        JobState.processing,
+      ]) {
+        personal.setJob(voice, state, origin: origin);
+        await pump(tester);
+        await settle(tester);
+        expectPlaceholderOnly(tester);
+        expect(
+          find.byKey(const ValueKey('transcribe-cancel')),
+          origin == TranscriptionOrigin.manual ? findsOneWidget : findsNothing,
+          reason: 'Automatic work has no controls',
+        );
+      }
+    }
   });
 
-  testWidgets('a pending request says Starting…', (tester) async {
+  testWidgets('a pending request shows the placeholder at once', (
+    tester,
+  ) async {
     final gate = personal.transcribeGate = Completer<void>();
     await pump(tester);
     await tester.tap(find.text('Transcribe'));
     await settle(tester);
-    expect(find.text('Starting…'), findsOneWidget);
+    expectPlaceholderOnly(tester);
+    final placeholder = tester.state(find.byType(NotionShimmerLines));
     gate.complete();
     await settle(tester);
-    expect(find.text('Waiting for sync'), findsOneWidget);
+    expectPlaceholderOnly(tester);
+    expect(
+      tester.state(find.byType(NotionShimmerLines)),
+      same(placeholder),
+      reason: 'The placeholder does not restart when the job appears',
+    );
+  });
+
+  testWidgets('a job stuck on missing keys says so under the placeholder', (
+    tester,
+  ) async {
+    personal.setJob(
+      voice,
+      JobState.waitingKeys,
+      errorCode: 'waiting_keys',
+      origin: TranscriptionOrigin.auto,
+    );
+    await pump(tester);
+    await settle(tester);
+    expect(find.byType(NotionShimmerLines), findsOneWidget);
+    expect(find.text('Waiting for this message to decrypt'), findsOneWidget);
+    expect(find.textContaining('keys'), findsNothing);
+  });
+
+  testWidgets('automatic work switched off leaves the plain button', (
+    tester,
+  ) async {
+    personal.setJob(
+      voice,
+      JobState.failed,
+      errorCode: 'auto_disabled',
+      origin: TranscriptionOrigin.auto,
+    );
+    await pump(tester);
+    expect(find.text('Transcribe'), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline_rounded), findsNothing);
   });
 
   testWidgets('a failed start blames private sync only when disconnected', (
@@ -296,14 +362,14 @@ void main() {
   test('error codes map to short reasons', () {
     expect(
       transcriptionErrorText('protected_media'),
-      'Protected or unsupported media',
+      'This media can’t be transcribed',
     );
     for (final code in [
       'media_conversion_failed',
       'invalid_audio_duration',
       'empty_audio',
     ]) {
-      expect(transcriptionErrorText(code), 'Couldn’t read the audio track');
+      expect(transcriptionErrorText(code), 'Couldn’t read the audio');
     }
     expect(transcriptionErrorText('empty_transcript'), 'No speech detected');
     expect(
@@ -316,33 +382,54 @@ void main() {
     );
     expect(
       transcriptionErrorText('local_source_unavailable'),
-      'Source temporarily unavailable',
+      'Couldn’t load the audio',
     );
     expect(
       transcriptionErrorText('source_status_unknown'),
-      'Source temporarily unavailable',
+      'Couldn’t load the audio',
     );
     expect(
       transcriptionErrorText('openai_rate_limited'),
-      'Transcription service error',
+      'Transcription service unavailable',
     );
     expect(
       transcriptionErrorText('auto_skipped_budget'),
-      'Not transcribed automatically (limit)',
+      'Daily limit for automatic transcripts reached',
     );
-    expect(transcriptionErrorText(null), 'Couldn’t process this audio');
-    expect(transcriptionErrorText('whatever'), 'Couldn’t process this audio');
+    expect(
+      transcriptionErrorText('auto_skipped_duration'),
+      'Too long to transcribe automatically',
+    );
+    expect(
+      transcriptionErrorText('auto_skipped_size_cap'),
+      'Too large to transcribe automatically',
+    );
+    expect(transcriptionErrorText(null), 'Couldn’t transcribe this message');
+    expect(
+      transcriptionErrorText('whatever'),
+      'Couldn’t transcribe this message',
+    );
+    // Human words only: no error code ever reaches the bubble.
+    for (final code in [
+      'protected_media',
+      'openai_partial_failure',
+      'auto_skipped_unknown_size',
+      'room_unavailable',
+      'transcription_failed',
+    ]) {
+      expect(transcriptionErrorText(code), isNot(contains('_')));
+    }
   });
 
   testWidgets('failed job shows the mapped reason and Retry', (tester) async {
     personal.setJob(voice, JobState.failed, errorCode: 'protected_media');
     await pump(tester);
-    expect(find.text('Protected or unsupported media'), findsOneWidget);
+    expect(find.text('This media can’t be transcribed'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
     await tester.tap(find.text('Retry'));
     await settle(tester);
     expect(personal.requests, [null]);
-    expect(find.text('Waiting for sync'), findsOneWidget);
+    expectPlaceholderOnly(tester);
   });
 
   testWidgets('skipped automatic job explains the limit', (tester) async {
@@ -350,10 +437,15 @@ void main() {
       voice,
       JobState.cancelled,
       errorCode: 'auto_skipped_duration',
+      origin: TranscriptionOrigin.auto,
     );
     await pump(tester);
-    expect(find.text('Not transcribed automatically (limit)'), findsOneWidget);
-    expect(find.text('Retry'), findsOneWidget);
+    expect(find.text('Too long to transcribe automatically'), findsOneWidget);
+    // Not a failure: asking by hand transcribes it.
+    expect(find.text('Retry'), findsNothing);
+    await tester.tap(find.text('Transcribe'));
+    await settle(tester);
+    expect(personal.requests, [null]);
   });
 
   testWidgets('unknown result warns about cost', (tester) async {
@@ -365,29 +457,42 @@ void main() {
     );
   });
 
-  testWidgets('automatic pending shows a spinner, then the transcript', (
-    tester,
-  ) async {
-    personal.autoPending = true;
+  testWidgets('a message arriving in an open chat shows the placeholder, '
+      'then its transcript in place', (tester) async {
+    // The bubble is built before the client knows anything automatic.
     await pump(tester);
-    expect(find.text('Transcribing…'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(find.byKey(const ValueKey('transcribe-cancel')), findsNothing);
-    personal.autoPending = false;
-    personal.setJob(voice, JobState.processing, language: 'en');
+    expect(find.text('Transcribe'), findsOneWidget);
+    // Private sync comes up: an automatic transcript is expected.
+    personal.autoPending = true;
+    personal.poke();
     await settle(tester);
-    expect(find.text('Transcribing…'), findsOneWidget);
-    expect(find.byKey(const ValueKey('transcribe-cancel')), findsOneWidget);
+    expectPlaceholderOnly(tester);
+    expect(find.byKey(const ValueKey('transcribe-cancel')), findsNothing);
+    final placeholder = tester.state(find.byType(NotionShimmerLines));
+    // The worker's job arrives through the journal: same placeholder.
+    personal.autoPending = false;
+    for (final state in [JobState.queued, JobState.processing]) {
+      personal.setJob(
+        voice,
+        state,
+        language: 'en',
+        origin: TranscriptionOrigin.auto,
+      );
+      await settle(tester);
+      expectPlaceholderOnly(tester);
+      expect(tester.state(find.byType(NotionShimmerLines)), same(placeholder));
+    }
     personal.setJob(
       voice,
       JobState.done,
       language: 'en',
       text: 'See you at five',
+      origin: TranscriptionOrigin.auto,
     );
     await settle(tester);
     expect(find.text('See you at five'), findsOneWidget);
     expect(find.text('Transcript · EN'), findsOneWidget);
-    expect(find.text('Transcribing…'), findsNothing);
+    expect(find.byType(NotionShimmerLines), findsNothing);
   });
 
   testWidgets('cancel requests cancellation and disables itself', (
@@ -395,17 +500,17 @@ void main() {
   ) async {
     personal.setJob(voice, JobState.queued);
     await pump(tester);
-    expect(find.text('Queued'), findsOneWidget);
+    expectPlaceholderOnly(tester);
     await tester.tap(find.byKey(const ValueKey('transcribe-cancel')));
     await settle(tester);
     expect(personal.cancels, ['transcript:\$voice']);
-    expect(find.text('Cancelling…'), findsOneWidget);
     expect(
       tester
-          .widget<TextButton>(find.byKey(const ValueKey('transcribe-cancel')))
+          .widget<IconButton>(find.byKey(const ValueKey('transcribe-cancel')))
           .onPressed,
       isNull,
     );
+    expectPlaceholderOnly(tester);
   });
 
   testWidgets('done shows readable transcript with menu actions', (
@@ -488,7 +593,7 @@ void main() {
     personal.setJob(other, JobState.queued);
     expect(tester.binding.hasScheduledFrame, isTrue);
     await settle(tester);
-    expect(find.text('Queued'), findsOneWidget);
+    expect(find.byType(NotionShimmerLines), findsOneWidget);
     expect(find.text('Transcribe'), findsNWidgets(2));
   });
 
@@ -619,11 +724,8 @@ void main() {
     ) async {
       personal.setJob(clip, JobState.queued, origin: TranscriptionOrigin.auto);
       await pump(tester, events: [clip]);
-      expect(
-        find.byKey(const ValueKey('transcript-auto-busy')),
-        findsOneWidget,
-      );
-      expect(find.text('Transcribing…'), findsOneWidget);
+      expect(find.byKey(const ValueKey('transcript-busy')), findsOneWidget);
+      expectPlaceholderOnly(tester);
       expect(find.byKey(const ValueKey('transcribe-cancel')), findsNothing);
       expect(find.text('Transcribe'), findsNothing);
       personal.setJob(
@@ -634,7 +736,7 @@ void main() {
       );
       await settle(tester);
       expect(find.text('Hello from the video'), findsOneWidget);
-      expect(find.byKey(const ValueKey('transcript-auto-busy')), findsNothing);
+      expect(find.byKey(const ValueKey('transcript-busy')), findsNothing);
     });
 
     testWidgets('a silent clip found automatically renders nothing', (
@@ -656,7 +758,7 @@ void main() {
     ) async {
       personal.setJob(clip, JobState.failed, errorCode: 'no_audio_track');
       await pump(tester, events: [clip]);
-      expect(find.text('This video has no audio track'), findsOneWidget);
+      expect(find.text('This video has no sound'), findsOneWidget);
     });
 
     testWidgets('a kind switched off leaves the manual button', (tester) async {
@@ -668,7 +770,7 @@ void main() {
       );
       await pump(tester);
       expect(find.text('Transcribe'), findsOneWidget);
-      expect(find.text('Not transcribed automatically (limit)'), findsNothing);
+      expect(find.byIcon(Icons.info_outline_rounded), findsNothing);
     });
   });
 }

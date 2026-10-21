@@ -125,6 +125,7 @@ void main() {
     test('absent policy is automatic everywhere with documented limits', () {
       final policy = TranscriptionPolicy.fromValue(null);
       expect(policy.auto, isTrue);
+      expect(policy.outgoing, isTrue, reason: 'J: own messages too');
       expect(policy.enabledAt, isNull);
       expect(policy.defaultLanguage, isNull);
       expect(policy.maxSeconds, 300);
@@ -156,6 +157,20 @@ void main() {
       });
       expect(TranscriptionPolicy.fromValue('garbage').auto, isFalse);
       expect(TranscriptionPolicy.fromValue({'auto': 'yes'}).auto, isFalse);
+      // The own-message switch: absent = on (older apps drop it when they
+      // save), malformed = off, explicit off survives a round trip.
+      expect(TranscriptionPolicy.fromValue({'auto': true}).outgoing, isTrue);
+      expect(
+        TranscriptionPolicy.fromValue({'outgoing': 'yes'}).outgoing,
+        isFalse,
+      );
+      final own = TranscriptionPolicy.defaults.withOutgoing(false);
+      expect(own.toJson()['outgoing'], isFalse);
+      expect(
+        TranscriptionPolicy.fromValue(jsonDecode(jsonEncode(own.toJson()))),
+        own,
+      );
+      expect(own.withOutgoing(true), TranscriptionPolicy.defaults);
       expect(
         TranscriptionPolicy.fromValue({'version': 2, 'auto': true}).auto,
         isFalse,
@@ -201,10 +216,9 @@ void main() {
       expect(autoEligible(policy, candidate(), now: now), isTrue);
     });
 
-    test('own, unsupported, old and pre-enable messages are excluded', () {
+    test('unsupported, old and pre-enable messages are excluded', () {
       expect(block(candidate(), TranscriptionPolicy.disabled), 'disabled');
       expect(block(candidate(kind: null)), 'unsupported');
-      expect(block(candidate(outgoing: true)), 'outgoing');
       expect(
         block(candidate(timestamp: now.subtract(const Duration(hours: 25)))),
         'too_old',
@@ -272,10 +286,81 @@ void main() {
           .withNetwork('telegram', false)
           .withChatOverride('!room:beeper.local', true);
       expect(block(candidate(chat: {'muted': true}), always), isNull);
-      expect(block(candidate(outgoing: true), always), 'outgoing');
+      expect(
+        block(candidate(outgoing: true), always.withOutgoing(false)),
+        'outgoing',
+      );
       expect(block(candidate(durationMs: 301000), always), 'duration_limit');
       final never = policy.withChatOverride('!room:beeper.local', false);
       expect(block(candidate(), never), 'chat_disabled');
+    });
+
+    test('own messages are eligible unless switched off; mute and ignore '
+        'describe incoming attention only', () {
+      final own = candidate(outgoing: true);
+      expect(block(own), isNull);
+      expect(
+        block(candidate(outgoing: true, kind: AutoTranscriptionKind.round)),
+        isNull,
+      );
+      // What the user records, not what they share: own videos, audio files
+      // and reels stay on demand.
+      for (final kind in [
+        AutoTranscriptionKind.video,
+        AutoTranscriptionKind.audio,
+        AutoTranscriptionKind.reel,
+      ]) {
+        expect(
+          block(
+            candidate(outgoing: true, kind: kind),
+            policy.withKind(kind, true),
+          ),
+          'outgoing',
+          reason: kind.name,
+        );
+      }
+      expect(block(own, policy.withOutgoing(false)), 'outgoing');
+      expect(
+        block(own, TranscriptionPolicy.disabled.withOutgoing(true)),
+        'disabled',
+        reason: 'The main switch still gates everything',
+      );
+      expect(block(candidate(outgoing: true, chat: {'muted': true})), isNull);
+      expect(
+        block(candidate(outgoing: true, person: {'ignored': true})),
+        isNull,
+      );
+      expect(
+        block(candidate(outgoing: true, chat: {'muted': true}), policy),
+        isNull,
+      );
+      // Everything else applies as for incoming messages.
+      expect(
+        block(own, policy.withChatOverride('!room:beeper.local', false)),
+        'chat_disabled',
+      );
+      expect(
+        block(own, policy.withNetwork('telegram', false)),
+        'network_disabled',
+      );
+      expect(
+        block(own, policy.withKind(AutoTranscriptionKind.voice, false)),
+        'kind_disabled',
+      );
+      expect(
+        block(candidate(outgoing: true, durationMs: 300001)),
+        'duration_limit',
+      );
+      expect(block(own, policy.copyWith(dailyBudgetUsd: 0)), 'budget');
+      expect(
+        block(
+          candidate(
+            outgoing: true,
+            timestamp: now.subtract(const Duration(hours: 25)),
+          ),
+        ),
+        'too_old',
+      );
     });
 
     test('duration cap and zero budget are reported as limits', () {

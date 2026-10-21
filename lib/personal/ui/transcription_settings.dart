@@ -169,12 +169,22 @@ class TranscriptionSettingsSection extends StatelessWidget {
           key: const ValueKey('transcription-auto'),
           title: 'Transcribe automatically',
           subtitle:
-              'Incoming voice messages, round videos and videos are transcribed on the server as soon as they arrive; only their audio is sent to OpenAI. Your own messages, disappearing messages, muted and ignored chats are skipped.'
+              'Voice messages, round videos and videos are transcribed on the server as soon as they arrive or you send them; only their audio is sent to OpenAI. Disappearing messages are never sent; muted and ignored chats are skipped.'
               '${policy.kindEnabled(AutoTranscriptionKind.reel) ? '' : ' Instagram reels only when you tap Transcribe.'}'
               '${policy.auto && !personal.autoTranscriptionAvailable ? ' Currently off on the worker: tap Transcribe on a message instead.' : ''}',
           value: policy.auto,
           onChanged: editable
               ? (value) => _save(policy.withAuto(value, DateTime.now()))
+              : null,
+        ),
+        NotionSettingsToggle(
+          key: const ValueKey('transcription-outgoing'),
+          title: 'Your own messages',
+          subtitle:
+              'Voice messages and round videos you send are transcribed right after sending',
+          value: policy.outgoing,
+          onChanged: editable && policy.auto
+              ? (value) => _save(policy.withOutgoing(value))
               : null,
         ),
         NotionListRow(

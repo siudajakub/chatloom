@@ -68,12 +68,15 @@ Event voice(
   Duration age = const Duration(seconds: 20),
   bool outgoing = false,
   bool marker = true,
+  String? transactionId,
 }) => Event(
   room: room,
   eventId: id,
   type: EventTypes.Message,
   senderId: outgoing ? room.client.userID! : '@anna:example.invalid',
   originServerTs: DateTime.now().subtract(age),
+  // The sending device's remote echo carries its transaction id.
+  unsigned: transactionId == null ? null : {'transaction_id': transactionId},
   content: {
     'msgtype': MessageTypes.Audio,
     'body': 'Voice message',
@@ -421,7 +424,11 @@ void main() {
   test('a worker watching its own sync gets a grace period in cloud rooms '
       'and per-kind switches apply', () async {
     personal.workerReadiness = heartbeat('scan', media: 2, live: true);
-    final clip = video(cloud, r'$fresh-clip');
+    final clip = video(
+      cloud,
+      r'$fresh-clip',
+      age: const Duration(seconds: 2),
+    );
     expect(personal.autoTranscriptPending(clip), isTrue);
     await flushTimers();
     expect(personal.requests, isEmpty, reason: 'the worker picks it up');
@@ -586,8 +593,14 @@ void main() {
     expect(odd.autoTranscriptionLive, isNull);
   });
 
-  test('local bridge rooms give the worker scan a grace period', () async {
-    final fresh = voice(local, r'$fresh');
+  test('local bridge rooms give the worker scan a short grace period', () async {
+    expect(
+      PersonalClient.autoTranscriptCatchUpDelay,
+      lessThanOrEqualTo(const Duration(seconds: 15)),
+      reason: 'A message missed by the worker must not sit on a spinner for '
+          'minutes in an open chat',
+    );
+    final fresh = voice(local, r'$fresh', age: const Duration(seconds: 2));
     expect(personal.autoTranscriptPending(fresh), isTrue);
     await flushTimers();
     expect(personal.requests, isEmpty);
@@ -595,7 +608,7 @@ void main() {
     final late = voice(
       local,
       r'$late',
-      age: const Duration(minutes: 2, seconds: 30),
+      age: PersonalClient.autoTranscriptCatchUpDelay + const Duration(seconds: 1),
     );
     expect(personal.autoTranscriptPending(late), isTrue);
     await flushTimers();
@@ -608,12 +621,8 @@ void main() {
   });
 
   test(
-    'own, muted, disabled, offline and old messages are left alone',
+    'muted, disabled, offline and old messages are left alone',
     () async {
-      expect(
-        personal.autoTranscriptPending(voice(cloud, r'$own', outgoing: true)),
-        isFalse,
-      );
       expect(
         personal.autoTranscriptPending(
           voice(cloud, r'$old', age: const Duration(hours: 25)),
@@ -651,6 +660,181 @@ void main() {
       expect(personal.requests, hasLength(1));
     },
   );
+
+  group('own messages', () {
+    test('are requested right after sending, from the sending device', () async {
+      final sent = voice(
+        cloud,
+        r'$sent',
+        outgoing: true,
+        age: const Duration(seconds: 1),
+        transactionId: 'txn-sent',
+      );
+      expect(personal.autoTranscriptionBlockFor(sent, DateTime.now()), isNull);
+      expect(personal.autoTranscriptPending(sent), isTrue);
+      await flushTimers();
+      final request = personal.requests.single;
+      expect(request.payload['source']['eventId'], r'$sent');
+      expect(
+        request.payload['origin'],
+        'auto',
+        reason: 'The worker applies its switch, length and daily limits',
+      );
+      // Another device of the account (no transaction id) leaves the request
+      // to the sender for a moment.
+      final elsewhere = voice(
+        cloud,
+        r'$elsewhere',
+        outgoing: true,
+        age: const Duration(seconds: 1),
+      );
+      expect(personal.autoTranscriptPending(elsewhere), isTrue);
+      await flushTimers();
+      expect(personal.requests, hasLength(1));
+      // Never swept up later: an older own message keeps the button.
+      final older = voice(
+        cloud,
+        r'$older-own',
+        outgoing: true,
+        age: const Duration(minutes: 4),
+        transactionId: 'txn-older',
+      );
+      expect(personal.autoTranscriptPending(older), isFalse);
+      await flushTimers();
+      expect(personal.requests, hasLength(1));
+    });
+
+    test('wait a moment in local bridge rooms for the local index', () async {
+      final sent = voice(
+        local,
+        r'$sent-local',
+        outgoing: true,
+        age: Duration.zero,
+        transactionId: 'txn-local',
+      );
+      expect(personal.autoTranscriptPending(sent), isTrue);
+      await flushTimers();
+      expect(personal.requests, isEmpty);
+      expect(
+        PersonalClient.ownLocalRequestDelay,
+        lessThan(PersonalClient.autoTranscriptCatchUpDelay),
+      );
+    });
+
+    test('follow the synced switch; muted chats still count, disappearing '
+        'chats never', () async {
+      await personal.put('org:${cloud.id}', {'muted': true});
+      final muted = voice(
+        cloud,
+        r'$own-muted',
+        outgoing: true,
+        age: const Duration(seconds: 1),
+        transactionId: 'txn-muted',
+      );
+      expect(personal.autoTranscriptPending(muted), isTrue);
+      await flushTimers();
+      expect(
+        personal.requests.map((op) => op.payload['source']['eventId']),
+        [r'$own-muted'],
+      );
+      await personal.setTranscriptionPolicy(
+        TranscriptionPolicy.defaults.withOutgoing(false),
+      );
+      final off = voice(
+        cloud,
+        r'$own-off',
+        outgoing: true,
+        age: const Duration(seconds: 1),
+        transactionId: 'txn-off',
+      );
+      expect(
+        personal.autoTranscriptionBlockFor(off, DateTime.now()),
+        'outgoing',
+      );
+      expect(personal.autoTranscriptPending(off), isFalse);
+      await personal.setTranscriptionPolicy(TranscriptionPolicy.defaults);
+      local.state(beeperDisappearingTimerKey, {
+        'type': 'after_send',
+        'timer': 60000,
+      });
+      final vanishing = voice(
+        local,
+        r'$own-vanishing',
+        outgoing: true,
+        age: Duration.zero,
+        transactionId: 'txn-vanishing',
+      );
+      expect(
+        personal.autoTranscriptionBlockFor(vanishing, DateTime.now()),
+        'disappearing',
+      );
+      expect(personal.autoTranscriptPending(vanishing), isFalse);
+      await flushTimers();
+      expect(
+        personal.requests.map((op) => op.payload['source']['eventId']),
+        [r'$own-muted'],
+      );
+    });
+
+    test('the confirmed send is requested without a bubble on screen', () async {
+      personal.workerReadiness = heartbeat('scan', media: 3);
+      client.onTimelineEvent.add(
+        voice(
+          cloud,
+          r'$echo',
+          outgoing: true,
+          age: Duration.zero,
+          transactionId: 'txn-echo',
+        ),
+      );
+      // Local echoes (no event id yet), text and incoming media are ignored
+      // here; incoming media is the bubble's and the worker's business.
+      client.onTimelineEvent.add(
+        voice(cloud, 'txn-pending', outgoing: true, age: Duration.zero),
+      );
+      client.onTimelineEvent.add(
+        voice(cloud, r'$incoming', age: Duration.zero),
+      );
+      client.onTimelineEvent.add(cloud.message(r'$text', 'hello'));
+      // An own video is shared, not recorded: on demand only.
+      client.onTimelineEvent.add(
+        Event(
+          room: cloud,
+          eventId: r'$own-clip',
+          type: EventTypes.Message,
+          senderId: client.userID,
+          originServerTs: DateTime.now(),
+          unsigned: {'transaction_id': 'txn-clip'},
+          content: {
+            'msgtype': 'm.video',
+            'body': 'clip.mp4',
+            'url': 'mxc://example.invalid/clip',
+            'info': {'mimetype': 'video/mp4', 'duration': 30000},
+          },
+        ),
+      );
+      await flushTimers();
+      expect(
+        personal.requests.map((op) => op.payload['source']['eventId']),
+        [r'$echo'],
+      );
+    });
+
+    test('nothing is asked for while the worker switch is off', () async {
+      personal.workerReadiness = heartbeat('off');
+      client.onTimelineEvent.add(
+        voice(
+          cloud,
+          r'$echo-off',
+          outgoing: true,
+          age: Duration.zero,
+          transactionId: 'txn-echo-off',
+        ),
+      );
+      await flushTimers();
+      expect(personal.requests, isEmpty);
+    });
+  });
 
   test('an expired pending window notifies so the spinner clears', () async {
     final event = voice(
@@ -712,6 +896,7 @@ void main() {
       );
       expect(find.text('Transcribe automatically'), findsOneWidget);
       expect(find.textContaining('sent to OpenAI'), findsOneWidget);
+      expect(find.text('Your own messages'), findsOneWidget);
       expect(find.text('Telegram'), findsOneWidget);
       expect(find.text('Automatic: 0 completed'), findsOneWidget);
       expect(
@@ -728,6 +913,13 @@ void main() {
         await Future.wait(runs);
         await tester.pump();
       }
+
+      await tester.tap(find.byKey(const ValueKey('transcription-outgoing')));
+      await saved();
+      expect(personal.transcriptionPolicy.outgoing, isFalse);
+      await tester.tap(find.byKey(const ValueKey('transcription-outgoing')));
+      await saved();
+      expect(personal.transcriptionPolicy.outgoing, isTrue);
 
       await tester.tap(find.text('Default language'));
       await tester.pumpAndSettle();
