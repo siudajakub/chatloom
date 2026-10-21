@@ -38,7 +38,6 @@ void main() {
               builder: (context) => NotionInboxPage(
                 pins: const [],
                 networks: const [],
-                onCompose: () {},
                 onSettings: () => settings++,
                 onSearch: () => ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(

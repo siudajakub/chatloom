@@ -185,6 +185,11 @@ HealthIssue? pushRegistrationIssue(PushRegistrationPhase? phase) {
       'Notifications aren’t set up',
       'This device has no notification token. Retry notification setup.',
     ),
+    PushRegistrationPhase.firebaseUnavailable => (
+      'Notifications can’t work in this build',
+      'This ChatLoom build has no push configuration. Install a build that '
+          'includes it; your data stays.',
+    ),
     PushRegistrationPhase.notAuthorized => (
       'Notifications aren’t set up',
       'The notification service rejected this account.',
@@ -203,7 +208,8 @@ HealthIssue? pushRegistrationIssue(PushRegistrationPhase? phase) {
     message: message,
     actionLabel: 'Fix',
     action: HealthAction.openRoute,
-    route: '/rooms/settings/push',
+    // The diagnostics page shows which step fails and re-registers in one tap.
+    route: '/rooms/settings/notifications/diagnostics',
     signature: 'push:${phase!.name}',
   );
 }

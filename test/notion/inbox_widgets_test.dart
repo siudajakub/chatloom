@@ -87,38 +87,35 @@ void main() {
       },
     );
   }
-  testWidgets('typing stays local; remote discovery needs an explicit press', (
+  testWidgets('search field typing stays local and Clear resets it', (
     tester,
   ) async {
     final text = TextEditingController();
     final focus = FocusNode();
     var local = 0;
-    var remote = 0;
-    var history = 0;
+    var closed = 0;
     await tester.pumpWidget(
       host(
-        NotionInboxSearch(
+        NotionSearchField(
           controller: text,
           focusNode: focus,
           onChanged: (_) => local++,
-          onClose: () {},
-          onHistorySearch: () => history++,
-          onPublicDiscovery: () => remote++,
+          onClose: () => closed++,
         ),
       ),
     );
+    // No clear button until there is something to clear.
+    expect(find.byTooltip('Clear search'), findsNothing);
     await tester.enterText(find.byType(TextField), 'colleague');
-    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
     expect(local, 1);
-    expect(remote, 0);
-    expect(history, 0);
-    await tester.tap(find.text('Discover publicly'));
-    expect(remote, 1);
-    await tester.tap(find.text('Clear'));
-    await tester.pump();
+    // The field offers no network or directory action of its own.
+    expect(find.text('Discover publicly'), findsNothing);
+    await tester.tap(find.byTooltip('Clear search'));
+    await tester.pumpAndSettle();
     expect(text.text, isEmpty);
     expect(local, 2);
-    expect(remote, 1);
+    expect(closed, 0);
     await tester.pumpWidget(const SizedBox());
     text.dispose();
     focus.dispose();
@@ -130,16 +127,14 @@ void main() {
       final text = TextEditingController();
       final focus = FocusNode();
       var closed = 0;
-      var remote = 0;
+      var changed = 0;
       await tester.pumpWidget(
         host(
-          NotionInboxSearch(
+          NotionSearchField(
             controller: text,
             focusNode: focus,
-            onChanged: (_) {},
+            onChanged: (_) => changed++,
             onClose: () => closed++,
-            onHistorySearch: () => remote++,
-            onPublicDiscovery: () => remote++,
           ),
         ),
       );
@@ -154,7 +149,7 @@ void main() {
       await tester.pump();
       expect(closed, composing ? 0 : 1);
       expect(text.text, 'fictional query');
-      expect(remote, 0);
+      expect(changed, 1);
       await tester.pumpWidget(const SizedBox.shrink());
       text.dispose();
       focus.dispose();
@@ -246,7 +241,6 @@ void main() {
           ),
         ],
         pins: pins,
-        onCompose: () {},
         onSettings: () {},
         onSearch: () {},
         onNetworkSelected: (_) {},
@@ -304,7 +298,6 @@ void main() {
                 ),
             ],
             pins: const [],
-            onCompose: () {},
             onSettings: () {},
             onSearch: () {},
             onNetworkSelected: (_) {},

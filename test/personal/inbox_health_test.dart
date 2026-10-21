@@ -154,8 +154,13 @@ void main() {
       );
       expect(
         pushRegistrationIssue(PushRegistrationPhase.failed)?.route,
-        '/rooms/settings/push',
+        '/rooms/settings/notifications/diagnostics',
       );
+      final noFirebase = pushRegistrationIssue(
+        PushRegistrationPhase.firebaseUnavailable,
+      );
+      expect(noFirebase?.title, 'Notifications can’t work in this build');
+      expect(noFirebase?.route, '/rooms/settings/notifications/diagnostics');
       PushDiagnosticsEntry entry(PushOutcome outcome, int minutes) =>
           PushDiagnosticsEntry(
             at: _now.subtract(Duration(minutes: minutes)),

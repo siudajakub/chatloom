@@ -17,8 +17,9 @@ class NotionInboxPage extends StatelessWidget {
   final IndexedWidgetBuilder? rowBuilder;
   final int? Function(Key key)? rowIndexOf;
   final List<NotionPinnedShortcut> pins;
-  final VoidCallback onCompose;
   final VoidCallback onSettings;
+
+  /// Opens the full-screen search, the one place to find and start chats.
   final VoidCallback onSearch;
   final ValueChanged<String?> onNetworkSelected;
   final List<String> networks;
@@ -27,7 +28,6 @@ class NotionInboxPage extends StatelessWidget {
   final ValueChanged<InboxFilter>? onViewSelected;
   final VoidCallback? onManageNetworks;
   final ScrollController? scrollController;
-  final Widget? searchTools;
   final Widget? status;
 
   /// A one-line status inside the glass header, under the title (for
@@ -42,7 +42,6 @@ class NotionInboxPage extends StatelessWidget {
     this.rowBuilder,
     this.rowIndexOf,
     required this.pins,
-    required this.onCompose,
     required this.onSettings,
     required this.onSearch,
     required this.onNetworkSelected,
@@ -52,7 +51,6 @@ class NotionInboxPage extends StatelessWidget {
     this.onViewSelected,
     this.onManageNetworks,
     this.scrollController,
-    this.searchTools,
     this.status,
     this.headerStatus,
     this.loading = false,
@@ -72,8 +70,9 @@ class NotionInboxPage extends StatelessWidget {
         safe.bottom +
         notionInboxDockHeight(MediaQuery.textScalerOf(context)) +
         36;
-    final showPins = pins.isNotEmpty && searchTools == null;
-    final emptyText = emptyMessage ?? 'No chats yet. Start a new chat.';
+    final showPins = pins.isNotEmpty;
+    final emptyText =
+        emptyMessage ?? 'No chats yet. Use Search to find people.';
     // One backdrop read for the glass header and dock (DESIGN.md "Glass").
     return BackdropGroup(
       child: Scaffold(
@@ -99,17 +98,16 @@ class NotionInboxPage extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text('Chats', style: NotionTokens.title),
-                            ),
-                            NotionIconButton(
-                              icon: Icons.edit_square,
-                              label: 'New chat',
-                              onPressed: onCompose,
-                            ),
-                          ],
+                        // New chats start from Search (dock), like Telegram
+                        // and Messenger; the title keeps the touch-row height.
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            minHeight: NotionSize.touchTarget,
+                          ),
+                          child: Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: Text('Chats', style: NotionTokens.title),
+                          ),
                         ),
                         _RetainedReveal(
                           revealOnMount: false,
@@ -125,17 +123,7 @@ class NotionInboxPage extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   sliver: SliverToBoxAdapter(child: status),
                 ),
-              // Search tools and pins grow in and out instead of jumping.
-              SliverToBoxAdapter(
-                child: _RetainedReveal(
-                  child: searchTools == null
-                      ? null
-                      : Padding(
-                          padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-                          child: searchTools,
-                        ),
-                ),
-              ),
+              // Pins grow in and out instead of jumping.
               SliverToBoxAdapter(
                 child: _RetainedReveal(
                   revealOnMount: false,
@@ -187,9 +175,7 @@ class NotionInboxPage extends StatelessWidget {
                     alignment: AlignmentDirectional.topCenter,
                     child: NotionEmptyState(
                       key: ValueKey(emptyText),
-                      icon: searchTools != null
-                          ? Icons.search_off
-                          : Icons.chat_bubble_outline,
+                      icon: Icons.chat_bubble_outline,
                       title: emptyText,
                     ),
                   ),
@@ -248,7 +234,7 @@ class NotionInboxPage extends StatelessWidget {
 const _skeletonRows = 8;
 
 /// Keeps showing the last non-null [child] while it collapses, so a section
-/// that goes away (search tools, pins) shrinks out instead of vanishing.
+/// that goes away (pins, the header status) shrinks out instead of vanishing.
 class _RetainedReveal extends StatefulWidget {
   const _RetainedReveal({required this.child, this.revealOnMount = true});
 
@@ -278,8 +264,9 @@ class _RetainedRevealState extends State<_RetainedReveal> {
 }
 
 /// Fades the row list in again whenever [signal] changes (another view,
-/// network or the end of the first load), instead of a hard cut. Settles at
-/// full opacity; nothing under reduced motion.
+/// network or the end of the first load), instead of a hard cut, from
+/// [NotionMotion.refreshFrom] (never blank). Settles at full opacity;
+/// nothing under reduced motion.
 class _SliverFadeOnChange extends StatefulWidget {
   const _SliverFadeOnChange({required this.signal, required this.sliver});
 
@@ -297,9 +284,14 @@ class _SliverFadeOnChangeState extends State<_SliverFadeOnChange>
     duration: NotionMotion.medium,
     value: 1,
   );
-  late final CurvedAnimation _opacity = CurvedAnimation(
+  late final CurvedAnimation _curve = CurvedAnimation(
     parent: _controller,
     curve: NotionMotion.standard,
+  );
+  // Never from 0: an empty first frame flashed the bare page through the
+  // glass dock and header.
+  late final Animation<double> _opacity = _curve.drive(
+    Tween(begin: NotionMotion.refreshFrom, end: 1),
   );
 
   @override
@@ -312,7 +304,7 @@ class _SliverFadeOnChangeState extends State<_SliverFadeOnChange>
 
   @override
   void dispose() {
-    _opacity.dispose();
+    _curve.dispose();
     _controller.dispose();
     super.dispose();
   }

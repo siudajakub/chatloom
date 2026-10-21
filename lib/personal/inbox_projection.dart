@@ -67,7 +67,9 @@ class InboxProjection {
   /// counts only as an explicit `com.beeper.room_type.v2: dm` sent by the
   /// room's joined bridge bot, and no bridge state may declare another type.
   /// A network group (also a 2-member one) therefore never merges, so the
-  /// person's composer can never send into a group.
+  /// person's composer can never send into a group. A room its bridge left
+  /// undeclared while declaring kinds elsewhere (bridgev2 groups, channels)
+  /// is not [Room.isDirectChatForDisplay], so even `m.direct` cannot merge it.
   /// Merging is presentation only; sending still targets a source room.
   static bool mergeable(Room? room) =>
       room != null &&
@@ -386,7 +388,7 @@ class InboxProjection {
       metadata: metadata,
       networks: kinds.map((kind) => kind.network),
       labelKeys: labels,
-      isGroup: group == null && !room.isDirectChatForDisplay,
+      isGroup: group == null && kinds.single.isGroup,
       technical: kinds.every((kind) => kind.technical),
       placement: placementFor(representative),
       unread: sourceRooms.any((r) => r.isUnread),

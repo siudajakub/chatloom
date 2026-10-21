@@ -13,16 +13,20 @@ import 'package:chatloom/pages/chat_list/chat_list_item.dart'
     show notionInboxAvatar;
 import 'package:chatloom/pages/chat_list/chat_list_view.dart';
 import 'package:chatloom/pages/chat_list/inbox_controller.dart';
+import 'package:chatloom/personal/bridge_contact_search.dart'
+    show BridgeDirectory;
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/person_route.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/personal_search_page.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/personal/ui/notion_search_page.dart';
 import 'package:chatloom/ui/notion/metadata_actions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/error_reporter.dart';
@@ -355,14 +359,12 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   List<Room> filterRooms() {
     final inbox = this.inbox;
     final network = selectedNetwork;
-    final query = searchController.text;
     final hideInSpaces = AppSettings.hideRoomsInSpaces.value;
     final key = (
       inbox,
       inbox.generation,
       personalFilter,
       personalLabel,
-      query,
       activeFilter,
       activeTag,
       network,
@@ -373,7 +375,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     final delegated = inbox.delegated;
     final roomFilter = getRoomFilterByActiveFilter(activeFilter);
     _selection = inbox.projection
-        .select(index, filter: personalFilter, query: query)
+        .select(index, filter: personalFilter)
         .where(roomFilter)
         .where(
           (room) =>
@@ -390,161 +392,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     return _selection;
   }
 
-  bool isSearchMode = false;
-  Future<QueryPublicRoomsResponse>? publicRoomsResponse;
-  String? searchServer;
-  Timer? _coolDown;
-  SearchUserDirectoryResponse? userSearchResult;
-  QueryPublicRoomsResponse? roomSearchResult;
-
-  bool isSearching = false;
-  bool publicDiscovery = false;
-  int _searchGeneration = 0;
-  int _searchScrollGeneration = 0;
-  final Map<String, double> _preSearchInboxOffsets = {};
-  static const String _serverStoreNamespace = 'im.fluffychat.search.server';
-
-  Future<void> setServer() async {
-    final matrix = Matrix.of(context);
-    final l10n = L10n.of(context);
-    final newServer = await showTextInputDialog(
-      useRootNavigator: false,
-      title: l10n.changeTheHomeserver,
-      context: context,
-      okLabel: l10n.ok,
-      cancelLabel: l10n.cancel,
-      prefixText: 'https://',
-      hintText: matrix.client.homeserver?.host,
-      initialText: searchServer,
-      keyboardType: TextInputType.url,
-      autocorrect: false,
-      validator: (server) =>
-          server.contains('.') == true ? null : l10n.invalidServerName,
-    );
-    if (newServer == null) return;
-    if (!mounted) return;
-    matrix.store.setString(_serverStoreNamespace, newServer);
-    _searchGeneration++;
-    setState(() {
-      searchServer = newServer;
-    });
-    _coolDown?.cancel();
-    // Changing the server does not disclose a query until the explicit search.
-    setState(() {
-      roomSearchResult = null;
-      userSearchResult = null;
-      publicDiscovery = false;
-      isSearching = false;
-    });
-  }
-
-  final TextEditingController searchController = TextEditingController();
-  final FocusNode searchFocusNode = FocusNode();
-
-  Future<void> _search() async {
-    final client = Matrix.of(context).client;
-    final generation = ++_searchGeneration;
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    if (!isSearching) {
-      setState(() {
-        isSearching = true;
-      });
-    }
-    SearchUserDirectoryResponse? userSearchResult;
-    QueryPublicRoomsResponse? roomSearchResult;
-    final searchQuery = searchController.text.trim();
-    try {
-      roomSearchResult = await client.queryPublicRooms(
-        server: searchServer,
-        filter: PublicRoomQueryFilter(genericSearchTerm: searchQuery),
-        limit: 20,
-      );
-      if (!mounted ||
-          generation != _searchGeneration ||
-          !publicDiscovery ||
-          client != Matrix.of(context).client)
-        return;
-
-      if (searchQuery.isValidMatrixIdStrict() &&
-          searchQuery.sigil == '#' &&
-          roomSearchResult.chunk.any(
-                (room) => room.canonicalAlias == searchQuery,
-              ) ==
-              false) {
-        final response = await client.getRoomIdByAlias(searchQuery);
-        final roomId = response.roomId;
-        if (roomId != null) {
-          roomSearchResult.chunk.add(
-            PublishedRoomsChunk(
-              name: searchQuery,
-              guestCanJoin: false,
-              numJoinedMembers: 0,
-              roomId: roomId,
-              worldReadable: false,
-              canonicalAlias: searchQuery,
-            ),
-          );
-        }
-      }
-      if (!mounted ||
-          generation != _searchGeneration ||
-          !publicDiscovery ||
-          client != Matrix.of(context).client)
-        return;
-      userSearchResult = await client.searchUserDirectory(
-        searchQuery,
-        limit: 20,
-      );
-    } catch (e) {
-      // Directory errors may embed the query or identifiers in their payload.
-      Logs().w('Public discovery failed (${e.runtimeType})');
-      if (!mounted ||
-          generation != _searchGeneration ||
-          client != Matrix.of(context).client)
-        return;
-      scaffoldMessenger.showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Public discovery could not be completed. Try again or choose another homeserver.',
-          ),
-        ),
-      );
-    }
-    if (!mounted ||
-        !isSearchMode ||
-        !publicDiscovery ||
-        generation != _searchGeneration ||
-        client != Matrix.of(context).client)
-      return;
-    setState(() {
-      isSearching = false;
-      this.roomSearchResult = roomSearchResult;
-      this.userSearchResult = userSearchResult;
-    });
-  }
-
-  void onSearchEnter(String text, {bool globalSearch = false}) {
-    _rememberInboxPositionBeforeSearch();
-    _searchGeneration++;
-    _coolDown?.cancel();
-    setState(() {
-      isSearchMode = true;
-      publicDiscovery = false;
-      isSearching = false;
-      roomSearchResult = null;
-      userSearchResult = null;
-    });
-  }
-
-  void discoverPublic() {
-    if (searchController.text.trim().isEmpty) return;
-    setState(() {
-      isSearchMode = true;
-      publicDiscovery = true;
-    });
-    _search();
-  }
-
   void openNavrail() {
     setState(() {
       AppSettings.displayNavigationRail.setItem(
@@ -553,58 +400,50 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     });
   }
 
-  void startSearch() {
-    _rememberInboxPositionBeforeSearch();
-    setState(() {
-      isSearchMode = true;
-    });
-    searchFocusNode.requestFocus();
-    _coolDown?.cancel();
-  }
-
-  void cancelSearch({bool unfocus = true}) {
-    final account = inboxAccountKey;
-    final originalOffset = isSearchMode
-        ? _preSearchInboxOffsets.remove(account)
-        : null;
-    final restoration = ++_searchScrollGeneration;
-    _searchGeneration++;
-    _coolDown?.cancel();
-    setState(() {
-      searchController.clear();
-      isSearchMode = false;
-      roomSearchResult = userSearchResult = null;
-      isSearching = false;
-      publicDiscovery = false;
-    });
-    if (unfocus) searchFocusNode.unfocus();
-    if (originalOffset != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted ||
-            restoration != _searchScrollGeneration ||
-            inboxAccountKey != account ||
-            isSearchMode ||
-            activeSpaceId != null ||
-            !scrollController.hasClients)
-          return;
-        final position = scrollController.position;
-        if (!position.hasContentDimensions) return;
-        scrollController.jumpTo(
-          originalOffset.clamp(
-            position.minScrollExtent,
-            position.maxScrollExtent,
+  /// Opens the full-screen search: chats, people on the connected networks
+  /// and recent messages. It is also where new chats start (Telegram,
+  /// Messenger); the app never searches the Matrix directory.
+  void openSearch() {
+    final client = Matrix.of(context).client;
+    final navigator = Navigator.of(context);
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (_) => NotionSearchPage(
+          personal: personal,
+          inbox: inbox,
+          directory: BridgeDirectory.of(client),
+          onOpenRoom: onChatTap,
+          onOpenMessage: openMessage,
+          onSearchHistory: (query) => navigator.push(
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  PersonalSearchPage(personal: personal, initialQuery: query),
+            ),
           ),
-        );
-      });
-    }
+          onSelectView: (view) => setPersonalFilter(view, null),
+          spaces: spaces,
+          onSelectSpace: setActiveSpace,
+        ),
+      ),
+    );
   }
 
-  void _rememberInboxPositionBeforeSearch() {
-    if (isSearchMode) return;
-    _searchScrollGeneration++;
-    if (scrollController.hasClients && scrollController.position.hasPixels) {
-      _preSearchInboxOffsets[inboxAccountKey] = scrollController.offset;
+  /// Opens [room] at [eventId] (a search hit); a merged person's source
+  /// event opens in the person chat.
+  void openMessage(Room room, String eventId) {
+    final group = InboxProjection(personal).groupFor(room);
+    if (group != null) {
+      context.go(
+        personChatLocation(group.id, sourceRoomId: room.id, eventId: eventId),
+      );
+      return;
     }
+    context.go(
+      Uri(
+        path: '/rooms/${room.id}',
+        queryParameters: {'event': eventId},
+      ).toString(),
+    );
   }
 
   final ScrollController scrollController = ScrollController();
@@ -746,9 +585,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (mounted) {
-        searchServer = Matrix.of(
-          context,
-        ).store.getString(_serverStoreNamespace);
         Matrix.of(context).backgroundPush?.setupPush(context);
         UpdateNotifier.showUpdateDialog(context);
         UpdateNotifier.showUpdateAvailableBanner(context);
@@ -780,14 +616,10 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   void dispose() {
     _cancelFirstSyncWait();
     if (identical(_shortcutOwner, this)) _shortcutOwner = null;
-    _searchScrollGeneration++;
-    _coolDown?.cancel();
     _intentDataStreamSubscription?.cancel();
     _intentFileStreamSubscription?.cancel();
     _callEventSubscription?.cancel();
     scrollController.removeListener(_onScroll);
-    searchController.dispose();
-    searchFocusNode.dispose();
     scrollController.dispose();
     scrolledToTop.dispose();
     _clientStream.close();
@@ -1126,20 +958,11 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
   void setActiveClient(Client client) {
     _cancelFirstSyncWait();
-    _searchScrollGeneration++;
-    _searchGeneration++;
-    _coolDown?.cancel();
     context.go('/rooms');
     setState(() {
       activeFilter = ActiveFilter.allChats;
       personalFilter = InboxFilter.inbox;
       personalLabel = null;
-      searchController.clear();
-      isSearchMode = false;
-      publicDiscovery = false;
-      isSearching = false;
-      roomSearchResult = null;
-      userSearchResult = null;
       _activeSpaceId = null;
       Matrix.of(context).setActiveClient(client);
     });
@@ -1150,20 +973,11 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
   void setActiveBundle(String bundle) {
     _cancelFirstSyncWait();
-    _searchScrollGeneration++;
-    _searchGeneration++;
-    _coolDown?.cancel();
     context.go('/rooms');
     setState(() {
       _activeSpaceId = null;
       personalFilter = InboxFilter.inbox;
       personalLabel = null;
-      searchController.clear();
-      isSearchMode = false;
-      publicDiscovery = false;
-      isSearching = false;
-      roomSearchResult = null;
-      userSearchResult = null;
       Matrix.of(context).activeBundle = bundle;
       if (!Matrix.of(
         context,

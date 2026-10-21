@@ -1,24 +1,14 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:chatloom/config/themes.dart';
-import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat_list/chat_list.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
-import 'package:chatloom/pages/chat_list/client_chooser_button.dart';
 import 'package:chatloom/pages/chat_list/inbox_health_status.dart';
 import 'package:chatloom/pages/chat_list/space_view.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
-import 'package:chatloom/personal/organization_page.dart';
-import 'package:chatloom/personal/personal_search_page.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
-import 'package:chatloom/personal/ui/notion_search_controls.dart';
-import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/public_room_dialog.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
-import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -108,191 +98,27 @@ class ChatListViewBody extends StatelessWidget {
           },
           pins: pins,
           loading: inbox.loading,
-          emptyMessage: controller.searchController.text.trim().isNotEmpty
-              ? 'No matching chats in the current view. Try another name or change the filter.'
-              : controller.selectedNetwork != null
+          emptyMessage: controller.selectedNetwork != null
               ? 'No chats from this network in the current view.'
               : controller.personalFilter != InboxFilter.inbox ||
                     controller.activeFilter != ActiveFilter.allChats
               ? 'No chats in ${inboxViewLabel(controller.personalFilter)}. Choose another view or network.'
-              : 'No chats yet. Start a new chat.',
+              : 'No chats yet. Use Search to find people on your networks.',
           // Connection, encryption and private sync, bridges, push and the
           // worker in one row; it takes no space while there is nothing to say.
           status: InboxHealthStatus(key: ValueKey(client), client: client),
           headerStatus: ConnectionStatusLine(client: client),
-          onCompose: () => context.go('/rooms/newprivatechat'),
           onSettings: () => context.go('/rooms/settings'),
-          onSearch: controller.startSearch,
+          // Search is also where new chats start (no separate compose button).
+          onSearch: controller.openSearch,
           networks: controller.availableNetworks,
           selectedNetwork: controller.selectedNetwork,
           selectedView: controller.personalFilter,
           onViewSelected: (view) => controller.setPersonalFilter(view, null),
           onManageNetworks: () => context.push('/rooms/settings/networks'),
           onNetworkSelected: controller.setNetwork,
-          searchTools: controller.isSearchMode
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    NotionInboxSearch(
-                      controller: controller.searchController,
-                      focusNode: controller.searchFocusNode,
-                      onChanged: controller.onSearchEnter,
-                      onClose: controller.cancelSearch,
-                      searchingPublic: controller.isSearching,
-                      onHistorySearch: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              PersonalSearchPage(personal: controller.personal),
-                        ),
-                      ),
-                      onPublicDiscovery: controller.discoverPublic,
-                      options: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          TextButton.icon(
-                            onPressed: () => _showOptions(context),
-                            icon: const Icon(Icons.tune, size: 18),
-                            label: const Text('Inbox view'),
-                          ),
-                          ClientChooserButton(controller),
-                        ],
-                      ),
-                    ),
-                    if (controller.publicDiscovery) _publicResults(context),
-                  ],
-                )
-              : null,
         );
       },
-    );
-  }
-
-  void _showOptions(BuildContext context) => showModalBottomSheet<void>(
-    context: context,
-    sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
-    isScrollControlled: true,
-    builder: (context) => SafeArea(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Inbox view', style: NotionTokens.heading),
-              const SizedBox(height: 12),
-              PersonalInboxFilters(
-                personal: controller.personal,
-                value: controller.personalFilter,
-                labelKey: controller.personalLabel,
-                onChanged: (filter, label) {
-                  controller.setPersonalFilter(filter, label);
-                  Navigator.of(context).pop();
-                },
-              ),
-              Wrap(
-                children: [
-                  for (final filter in ActiveFilter.values.where(
-                    (f) => f != ActiveFilter.tag,
-                  ))
-                    TextButton(
-                      onPressed: () {
-                        controller.setActiveFilter(filter, null);
-                        Navigator.of(context).pop();
-                      },
-                      child: Text(filter.toLocalizedString(context)),
-                    ),
-                ],
-              ),
-              if (controller.spaces.isNotEmpty) ...[
-                const Divider(),
-                Text('Spaces', style: NotionTokens.heading),
-                for (final space in controller.spaces)
-                  TextButton.icon(
-                    onPressed: () {
-                      controller.setActiveSpace(space.id);
-                      Navigator.of(context).pop();
-                    },
-                    icon: const Icon(Icons.workspaces_outlined),
-                    label: Text(space.getLocalizedDisplayname()),
-                  ),
-              ],
-              IconButton(
-                tooltip: 'Sync & transcriptions',
-                icon: const Icon(Icons.sync_outlined),
-                onPressed: () => context.push('/rooms/settings/sync'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-
-  Widget _publicResults(BuildContext context) {
-    final publicRooms = controller.roomSearchResult?.chunk
-        .where((r) => r.roomType != 'm.space')
-        .toList();
-    final publicSpaces = controller.roomSearchResult?.chunk
-        .where((r) => r.roomType == 'm.space')
-        .toList();
-    final users = controller.userSearchResult?.results;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 12),
-        Text('Public discovery', style: NotionTokens.heading),
-        Text(
-          'This query is sent to the selected homeserver directory.',
-          style: TextStyle(
-            fontSize: 12,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-        ),
-        TextButton.icon(
-          onPressed: controller.setServer,
-          icon: const Icon(Icons.edit_outlined, size: 16),
-          label: Text(
-            controller.searchServer ??
-                Matrix.of(context).client.homeserver?.host ??
-                'Choose homeserver',
-          ),
-        ),
-        if (!controller.isSearching &&
-            publicRooms?.isEmpty == true &&
-            publicSpaces?.isEmpty == true &&
-            users?.isEmpty == true)
-          const Text(
-            'No results in this directory. Other networks and message history were not searched.',
-          ),
-        if (publicRooms?.isNotEmpty == true) ...[
-          const Text('Public rooms'),
-          PublicRoomsHorizontalList(publicRooms: publicRooms),
-        ],
-        if (publicSpaces?.isNotEmpty == true) ...[
-          const Text('Public spaces'),
-          PublicRoomsHorizontalList(publicRooms: publicSpaces),
-        ],
-        if (users?.isNotEmpty == true) ...[
-          const Text('People'),
-          SizedBox(
-            height: 106,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: users!.length,
-              itemBuilder: (context, i) => _SearchItem(
-                title:
-                    users[i].displayName ??
-                    users[i].userId.localpart ??
-                    'Unknown name',
-                avatar: users[i].avatarUrl,
-                onPressed: () =>
-                    UserDialog.show(context: context, profile: users[i]),
-              ),
-            ),
-          ),
-        ],
-      ],
     );
   }
 }
@@ -301,79 +127,3 @@ const _rowKeyPrefix = 'chat_list_item_';
 
 /// Stable inbox row key (also used by tests and captures).
 String chatListItemKey(String roomId) => '$_rowKeyPrefix$roomId';
-
-class PublicRoomsHorizontalList extends StatelessWidget {
-  const PublicRoomsHorizontalList({super.key, required this.publicRooms});
-
-  final List<PublishedRoomsChunk>? publicRooms;
-
-  @override
-  Widget build(BuildContext context) {
-    final publicRooms = this.publicRooms;
-    return AnimatedContainer(
-      clipBehavior: Clip.hardEdge,
-      decoration: const BoxDecoration(),
-      height: publicRooms == null || publicRooms.isEmpty ? 0 : 106,
-      duration: ChatLoomThemes.animationDuration,
-      curve: ChatLoomThemes.animationCurve,
-      child: publicRooms == null
-          ? null
-          : ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: publicRooms.length,
-              itemBuilder: (context, i) => _SearchItem(
-                title:
-                    publicRooms[i].name ??
-                    publicRooms[i].canonicalAlias?.localpart ??
-                    L10n.of(context).group,
-                avatar: publicRooms[i].avatarUrl,
-                onPressed: () => showNotionCustomDialog(
-                  context: context,
-                  builder: (c) => PublicRoomDialog(
-                    roomAlias:
-                        publicRooms[i].canonicalAlias ?? publicRooms[i].roomId,
-                    chunk: publicRooms[i],
-                  ),
-                ),
-              ),
-            ),
-    );
-  }
-}
-
-class _SearchItem extends StatelessWidget {
-  final String title;
-  final Uri? avatar;
-  final void Function() onPressed;
-
-  const _SearchItem({
-    required this.title,
-    this.avatar,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onPressed,
-    child: SizedBox(
-      width: 84,
-      child: Column(
-        mainAxisSize: .min,
-        children: [
-          const SizedBox(height: 8),
-          Avatar(mxContent: avatar, name: title),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text(
-              title,
-              maxLines: 2,
-              textAlign: TextAlign.center,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}

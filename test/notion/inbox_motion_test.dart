@@ -52,7 +52,6 @@ NotionInboxPage _page({
   loading: loading,
   emptyMessage: empty,
   pins: const [],
-  onCompose: () {},
   onSettings: () {},
   onSearch: () {},
   onNetworkSelected: (_) {},

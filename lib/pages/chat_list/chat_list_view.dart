@@ -13,14 +13,10 @@ class ChatListView extends StatelessWidget {
   Widget build(BuildContext context) {
     final wide = ChatLoomThemes.isColumnMode(context);
     return PopScope(
-      canPop: !controller.isSearchMode && controller.activeSpaceId == null,
+      canPop: controller.activeSpaceId == null,
       onPopInvokedWithResult: (pop, _) {
         if (pop) return;
-        if (controller.activeSpaceId != null) {
-          controller.clearActiveSpace();
-          return;
-        }
-        if (controller.isSearchMode) controller.cancelSearch();
+        if (controller.activeSpaceId != null) controller.clearActiveSpace();
       },
       child: Row(
         children: [

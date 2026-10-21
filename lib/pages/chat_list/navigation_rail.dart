@@ -7,7 +7,6 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat_list/navi_rail_item.dart';
-import 'package:chatloom/pages/chat_list/start_chat_fab.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/stream_extension.dart';
 import 'package:chatloom/widgets/avatar.dart';
@@ -121,11 +120,6 @@ class SpacesNavigationRail extends StatelessWidget {
                       },
                     ),
                   ),
-                  if (ChatLoomThemes.isColumnMode(context))
-                    Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: StartChatFab(),
-                    ),
                 ],
               ),
             );
