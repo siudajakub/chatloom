@@ -220,7 +220,7 @@ void main() {
     // "2 more" lists every issue with its own fix.
     await tester.tap(find.text('2 more'));
     await tester.pumpAndSettle();
-    expect(find.text('Encryption and sync'), findsOneWidget);
+    expect(find.text('What needs attention'), findsOneWidget);
     expect(find.text('Try again'), findsOneWidget);
     expect(find.text('Review'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());

@@ -74,15 +74,30 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     PersonalPrivacy.surfaceForeground = state == AppLifecycleState.resumed;
-    if (state != AppLifecycleState.resumed) {
-      unawaited(
-        RoundPlaybackCoordinator.shared.stopAll().catchError((Object _) {}),
-      );
-      unawaited(
-        RoundCaptureController.interruptActive().catchError((Object _) {}),
-      );
-    } else if (!_isLocked) {
-      RoundPlaybackCoordinator.shared.resume();
+    switch (state) {
+      case AppLifecycleState.resumed:
+        if (!_isLocked) RoundPlaybackCoordinator.shared.resume();
+      case AppLifecycleState.inactive:
+        // Notification shade, recents peek, permission and biometric dialogs:
+        // the app is still on screen. Voice keeps playing (Telegram). Round
+        // rows and the mini player stop their videos themselves, because a
+        // round's played receipt is foreground-only. Capture always stops.
+        unawaited(
+          RoundCaptureController.interruptActive().catchError((Object _) {}),
+        );
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        // Background: voice pauses and keeps its position, everything else
+        // stops; a lock (below) stops voice too. Nothing resumes by itself.
+        unawaited(
+          RoundPlaybackCoordinator.shared
+              .stopAll(retain: state != AppLifecycleState.detached)
+              .catchError((Object _) {}),
+        );
+        unawaited(
+          RoundCaptureController.interruptActive().catchError((Object _) {}),
+        );
     }
     if (isActive && state == AppLifecycleState.hidden && !_isLocked) {
       showLockScreen();

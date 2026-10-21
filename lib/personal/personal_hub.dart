@@ -8,7 +8,6 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/automatic_push.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
-import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -19,6 +18,7 @@ import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/personal/ui/sync_changes_section.dart';
 import 'package:chatloom/personal/ui/transcription_settings.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/background_push.dart';
@@ -659,59 +659,9 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                     onTap: () => run(personal.retry),
                   ),
                 ),
-                NotionSizeReveal(
-                  visible: personal.pending.isNotEmpty,
-                  child: ListTile(
-                    leading: const NotionDelayedSpinner(),
-                    title: NotionAnimatedCount(
-                      count: personal.pending.length,
-                      format: (count) => '$count changes awaiting confirmation',
-                    ),
-                  ),
-                ),
-                if (personal.conflicts.keys.any(
-                  (key) =>
-                      !key.startsWith('label:') && !key.startsWith('labels:'),
-                )) ...[
-                  const ListTile(
-                    title: Text('Conflicts — both versions retained'),
-                  ),
-                  for (final conflict in personal.conflicts.entries.where(
-                    (e) =>
-                        !e.key.startsWith('label:') &&
-                        !e.key.startsWith('labels:'),
-                  ))
-                    _pressable(
-                      ListTile(
-                        onTap: () => run(() async {
-                          if (conflict.key.startsWith('draft:')) {
-                            await Navigator.of(context).push<void>(
-                              MaterialPageRoute(
-                                builder: (_) => DraftConflictPage(
-                                  personal: personal,
-                                  entityKey: conflict.key,
-                                ),
-                              ),
-                            );
-                          } else {
-                            await resolvePersonalMetadataConflict(
-                              context,
-                              personal,
-                              conflict.key,
-                            );
-                          }
-                        }),
-                        title: Text(
-                          conflict.key.startsWith('draft:')
-                              ? 'Two draft versions'
-                              : 'Concurrent change',
-                        ),
-                        subtitle: const Text(
-                          'Reopen the affected draft or setting before choosing a version.',
-                        ),
-                      ),
-                    ),
-                ],
+                // What still waits for the worker and what changed on two
+                // devices, each named and with its one-tap action.
+                SyncChangesSection(personal: personal, run: run),
                 for (final copy in personal.values.entries.where(
                   (e) => e.key.startsWith('draft-copy:'),
                 ))

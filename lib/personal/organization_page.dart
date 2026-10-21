@@ -11,6 +11,7 @@ import 'package:chatloom/personal/private_avatar.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/cover_resize_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -669,58 +670,106 @@ class PrivateAvatarPreview extends StatefulWidget {
 }
 
 class _PrivateAvatarPreviewState extends State<PrivateAvatarPreview> {
+  Map<String, dynamic>? _value;
   String? _fingerprint;
   Future<Uint8List?>? _loading;
+
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: widget.personal,
-    builder: (context, _) {
-      final value = widget.personal.values[privateAvatarKey(widget.entityId)];
-      final fingerprint = value == null ? null : jsonEncode(value);
-      if (fingerprint != _fingerprint) {
-        _fingerprint = fingerprint;
-        _loading = value == null
-            ? null
-            : _download(Map<String, dynamic>.from(value));
-      }
-      final fallback =
-          widget.fallback ??
-          Container(
-            width: widget.radius * 2,
-            height: widget.radius * 2,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
-            ),
-            child: const Icon(Icons.person_outline),
-          );
-      if (_loading == null) return fallback;
-      return FutureBuilder<Uint8List?>(
-        future: _loading,
-        initialData: cachedPrivateAvatar(value),
-        // A freshly decrypted avatar fades through the placeholder; a cached
-        // one is there on the first frame.
-        builder: (context, snapshot) => NotionFadeThrough(
-          alignment: Alignment.center,
-          child: snapshot.data == null
-              ? KeyedSubtree(key: const ValueKey('fallback'), child: fallback)
-              : ClipRRect(
-                  key: const ValueKey('avatar'),
-                  borderRadius: BorderRadius.circular(
-                    NotionTokens.avatarRadius,
+  void initState() {
+    super.initState();
+    widget.personal.addListener(_personalChanged);
+    _read();
+  }
+
+  @override
+  void didUpdateWidget(PrivateAvatarPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.personal, widget.personal)) {
+      oldWidget.personal.removeListener(_personalChanged);
+      widget.personal.addListener(_personalChanged);
+    }
+    if (!identical(oldWidget.personal, widget.personal) ||
+        oldWidget.entityId != widget.entityId) {
+      _read();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.personal.removeListener(_personalChanged);
+    super.dispose();
+  }
+
+  /// Every row listens to the private store, which notifies for any change
+  /// of any value; only a change of this row's avatar value rebuilds it.
+  void _personalChanged() {
+    if (mounted && _read()) setState(() {});
+  }
+
+  /// Picks up this entity's avatar value; true when it changed. The replica
+  /// replaces a value's map on every update, so an identical map is
+  /// unchanged without encoding it.
+  bool _read() {
+    final value = widget.personal.values[privateAvatarKey(widget.entityId)];
+    if (identical(value, _value)) return false;
+    _value = value;
+    final fingerprint = value == null ? null : jsonEncode(value);
+    if (fingerprint == _fingerprint) return false;
+    _fingerprint = fingerprint;
+    _loading = value == null
+        ? null
+        : _download(Map<String, dynamic>.from(value));
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final value = _value;
+    final size = widget.radius * 2;
+    final fallback =
+        widget.fallback ??
+        Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+          ),
+          child: const Icon(Icons.person_outline),
+        );
+    if (_loading == null) return fallback;
+    // Decode the uploaded original at the avatar's physical size.
+    final decodeSize = (size * MediaQuery.devicePixelRatioOf(context))
+        .ceil()
+        .clamp(1, 1024);
+    return FutureBuilder<Uint8List?>(
+      future: _loading,
+      initialData: cachedPrivateAvatar(value),
+      // A freshly decrypted avatar fades through the placeholder; a cached
+      // one is there on the first frame.
+      builder: (context, snapshot) => NotionFadeThrough(
+        alignment: Alignment.center,
+        child: snapshot.data == null
+            ? KeyedSubtree(key: const ValueKey('fallback'), child: fallback)
+            : ClipRRect(
+                key: const ValueKey('avatar'),
+                borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
+                child: Image(
+                  image: CoverResizeImage(
+                    MemoryImage(snapshot.data!),
+                    width: decodeSize,
+                    height: decodeSize,
                   ),
-                  child: Image.memory(
-                    snapshot.data!,
-                    width: widget.radius * 2,
-                    height: widget.radius * 2,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => fallback,
-                  ),
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => fallback,
                 ),
-        ),
-      );
-    },
-  );
+              ),
+      ),
+    );
+  }
+
   Future<Uint8List?> _download(Map<String, dynamic> value) =>
       downloadPrivateAvatarValue(widget.personal.client, value);
 }
@@ -1044,50 +1093,81 @@ class BookmarkSearchPage extends StatefulWidget {
 class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
   final _search = TextEditingController();
   String? _network;
-  final _events = <String, Future<Event?>>{};
+
+  /// Last loaded event per bookmark; kept on screen while it is refreshed.
   final _loaded = <String, Event?>{};
-  int _generation = 0;
+
+  /// Latest request per bookmark key; an older answer never overwrites it.
+  final _requests = <String, int>{};
+  int _requestSeq = 0;
+  final _staleRooms = <String>{};
+  Timer? _refresh;
   StreamSubscription? _sync;
+
+  /// Receipts and typing sync constantly; only a timeline change (new
+  /// event, edit, redaction) or leaving a room can change a saved message.
+  static const refreshDelay = Duration(milliseconds: 600);
+
   @override
   void initState() {
     super.initState();
-    _sync = widget.personal.client.onSync.stream.listen((_) {
-      if (mounted) {
-        setState(() {
-          _generation++;
-          _events.clear();
-          _loaded.clear();
-        });
-      }
+    _sync = widget.personal.client.onSync.stream.listen((sync) {
+      final rooms = bookmarkRoomsChangedBy(sync);
+      if (!mounted || rooms.isEmpty) return;
+      _staleRooms.addAll(rooms);
+      _refresh?.cancel();
+      _refresh = Timer(refreshDelay, _refreshStale);
     });
   }
 
   @override
   void dispose() {
+    _refresh?.cancel();
     _sync?.cancel();
     _search.dispose();
     super.dispose();
   }
 
-  Future<Event?> _event(SourceEventRef source) async {
-    final generation = _generation;
-    if (source.conversation.accountId != widget.personal.client.userID) {
-      return null;
-    }
-    try {
-      final event = await widget.personal.client
-          .getRoomById(source.conversation.roomId)
-          ?.getEventById(source.eventId);
-      if (mounted && generation == _generation) {
-        setState(() => _loaded[source.key] = event);
+  void _refreshStale() {
+    _refresh = null;
+    if (!mounted) return;
+    final rooms = Set.of(_staleRooms);
+    _staleRooms.clear();
+    for (final entry in widget.personal.values.entries) {
+      if (!entry.key.startsWith('bookmark:')) continue;
+      final source = _source(entry.value);
+      if (source == null ||
+          !rooms.contains(source.conversation.roomId) ||
+          !_requests.containsKey(source.key)) {
+        continue;
       }
-      return event;
-    } catch (_) {
-      if (mounted && generation == _generation) {
-        setState(() => _loaded[source.key] = null);
-      }
-      return null;
+      unawaited(_fetch(source, refresh: true));
     }
+  }
+
+  /// Requests [source] once; the row shows a skeleton until it answers.
+  void _ensureLoaded(SourceEventRef source) {
+    if (_requests.containsKey(source.key)) return;
+    unawaited(_fetch(source));
+  }
+
+  Future<void> _fetch(SourceEventRef source, {bool refresh = false}) async {
+    final request = _requests[source.key] = ++_requestSeq;
+    Event? event;
+    var failed = false;
+    if (source.conversation.accountId == widget.personal.client.userID) {
+      try {
+        event = await widget.personal.client
+            .getRoomById(source.conversation.roomId)
+            ?.getEventById(source.eventId);
+      } catch (_) {
+        failed = true;
+      }
+    }
+    if (!mounted || _requests[source.key] != request) return;
+    // A failed refresh (offline) keeps what was already shown.
+    if (failed && refresh && _loaded.containsKey(source.key)) return;
+    setState(() => _loaded[source.key] = event);
   }
 
   Future<void> _removeBookmark(String key) async {
@@ -1265,18 +1345,18 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
     if (_network != null && entry.value['network'] != _network) {
       return const SizedBox.shrink();
     }
-    return FutureBuilder<Event?>(
-      future: _events.putIfAbsent(source.key, () => _event(source)),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const NotionSkeleton(
-            child: ListTile(
-              title: Text('Loading saved message…'),
-              subtitle: Text('Conversation · Network'),
-            ),
-          );
-        }
-        final event = snapshot.data;
+    if (!_loaded.containsKey(source.key)) {
+      _ensureLoaded(source);
+      return const NotionSkeleton(
+        child: ListTile(
+          title: Text('Loading saved message…'),
+          subtitle: Text('Conversation · Network'),
+        ),
+      );
+    }
+    return Builder(
+      builder: (context) {
+        final event = _loaded[source.key];
         final transcript = widget.personal.transcripts.values
             .where(
               (j) => j.source.key == source.key && j.state == JobState.done,
@@ -1345,6 +1425,18 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
     );
   }
 }
+
+/// Rooms of [sync] whose saved messages may have changed: joined rooms with
+/// timeline events (new, edited or redacted messages) and rooms that were
+/// left. Receipt, typing and account-data-only syncs return nothing.
+@visibleForTesting
+Set<String> bookmarkRoomsChangedBy(SyncUpdate sync) => {
+  for (final entry
+      in sync.rooms?.join?.entries ??
+          const <MapEntry<String, JoinedRoomUpdate>>[])
+    if (entry.value.timeline?.events?.isNotEmpty ?? false) entry.key,
+  ...?sync.rooms?.leave?.keys,
+};
 
 class PersonalInboxFilters extends StatelessWidget {
   final PersonalClient personal;

@@ -34,17 +34,24 @@ class UrlLauncher {
   Future<void> launchUrl() async {
     final l10n = L10n.of(context);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
-    if (url!.toLowerCase().startsWith(AppConfig.deepLinkPrefix) ||
-        url!.toLowerCase().startsWith(AppConfig.inviteLinkPrefix) ||
-        {'#', '@', '!', '+', '\$'}.contains(url![0]) ||
-        url!.toLowerCase().startsWith(AppConfig.schemePrefix)) {
+    final url = this.url;
+    if (url == null || url.trim().isEmpty) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text(l10n.cantOpenUri(url ?? ''))),
+      );
+      return;
+    }
+    if (url.toLowerCase().startsWith(AppConfig.deepLinkPrefix) ||
+        url.toLowerCase().startsWith(AppConfig.inviteLinkPrefix) ||
+        {'#', '@', '!', '+', '\$'}.contains(url[0]) ||
+        url.toLowerCase().startsWith(AppConfig.schemePrefix)) {
       return openMatrixToUrl();
     }
-    final uri = Uri.tryParse(url!);
+    final uri = Uri.tryParse(url);
     if (uri == null) {
       // we can't open this thing
       scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text(l10n.cantOpenUri(url!))),
+        SnackBar(content: Text(l10n.cantOpenUri(url))),
       );
       return;
     }
@@ -93,34 +100,46 @@ class UrlLauncher {
           return;
         }
       }
-      launchUrlString(url!);
+      launchUrlString(url);
       return;
     }
     if (uri.host.isEmpty) {
       scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text(l10n.cantOpenUri(url!))),
+        SnackBar(content: Text(l10n.cantOpenUri(url))),
       );
       return;
     }
     // okay, we have either an http or an https URI.
     // As some platforms have issues with opening unicode URLs, we are going to help
     // them out by punycode-encoding them for them ourself.
-    final newHost = uri.host
-        .split('.')
-        .map((hostPartEncoded) {
-          final hostPart = Uri.decodeComponent(hostPartEncoded);
-          final hostPartPunycode = punycodeEncode(hostPart);
-          return hostPartPunycode != '$hostPart-'
-              ? 'xn--$hostPartPunycode'
-              : hostPart;
-        })
-        .join('.');
+    final newHost = punycodeHost(uri.host);
     // Force LaunchMode.externalApplication, otherwise url_launcher will default
     // to opening links in a webview on mobile platforms.
     launchUrlString(
       uri.replace(host: newHost).toString(),
       mode: LaunchMode.externalApplication,
     );
+  }
+
+  /// [host] with every non-ASCII label punycode-encoded. A label with a
+  /// malformed `%` escape (or one the encoder rejects) leaves the host as
+  /// it is: the browser decides, instead of the link throwing.
+  @visibleForTesting
+  static String punycodeHost(String host) {
+    try {
+      return host
+          .split('.')
+          .map((hostPartEncoded) {
+            final hostPart = Uri.decodeComponent(hostPartEncoded);
+            final hostPartPunycode = punycodeEncode(hostPart);
+            return hostPartPunycode != '$hostPart-'
+                ? 'xn--$hostPartPunycode'
+                : hostPart;
+          })
+          .join('.');
+    } catch (_) {
+      return host;
+    }
   }
 
   Future<void> openMatrixToUrl() async {

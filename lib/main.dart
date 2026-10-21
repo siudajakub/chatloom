@@ -15,6 +15,7 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/utils/background_startup_recovery.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/error_reporter.dart';
+import 'package:chatloom/utils/flutter_error_routing.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/start_push_foreground_service.dart';
@@ -43,10 +44,8 @@ bool isIntegrationTest = false;
 void main(List<String> args) => runZonedGuarded(() async {
   PersonalPerformanceProbe.startupPhase('main');
   // Forward Flutter errors to global error reporter
-  FlutterError.onError = (details) => Zone.current.handleUncaughtError(
-    details.exception,
-    details.stack ?? StackTrace.current,
-  );
+  FlutterError.onError = (details) =>
+      routeFlutterError(details, Zone.current.handleUncaughtError);
 
   isIntegrationTest = args.singleOrNull == 'integration_test';
   if (PlatformInfos.isAndroid) {

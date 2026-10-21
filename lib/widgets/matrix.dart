@@ -16,6 +16,7 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/personal/voice_playback.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/init_with_restore.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
@@ -163,20 +164,78 @@ class MatrixState extends State<Matrix> {
 
   Client? _loginClientCandidate;
 
-  AudioPlayer? audioPlayer;
+  AudioPlayer? _audioPlayer;
+  Stream<Duration>? _audioProgress;
+  StreamSubscription<ProcessingState>? _audioCompletion;
+  List<Event> Function()? _audioContinuation;
+
+  /// The one voice player (a single decoder): a new note replaces it.
+  AudioPlayer? get audioPlayer => _audioPlayer;
+  set audioPlayer(AudioPlayer? player) {
+    if (identical(player, _audioPlayer)) return;
+    _audioPlayer = player;
+    _audioProgress = null;
+    _audioContinuation = null;
+    unawaited(_audioCompletion?.cancel());
+    _audioCompletion = null;
+  }
+
+  /// Position updates for the voice UI, created once per player: 5–10 per
+  /// second instead of `positionStream`'s up to 60 on short notes.
+  Stream<Duration> audioProgress(AudioPlayer player) =>
+      identical(player, _audioPlayer)
+      ? _audioProgress ??= player.createPositionStream(
+          minPeriod: const Duration(milliseconds: 100),
+          maxPeriod: const Duration(milliseconds: 200),
+        )
+      : const Stream<Duration>.empty();
+
+  /// Voice notes played in this session (in memory), for continuation.
+  final voicePlayed = VoicePlayedNotes();
+
+  /// The voice speed, remembered across notes and restarts like Telegram.
+  double get voiceSpeed {
+    try {
+      return VoicePlayback.validSpeed(
+        AppSettings.personalVoicePlaybackSpeed.value,
+      );
+    } catch (_) {
+      return 1;
+    }
+  }
+
+  Future<void> setVoiceSpeed(AudioPlayer player, double speed) async {
+    await player.setSpeed(speed);
+    try {
+      await AppSettings.personalVoicePlaybackSpeed.setItem(speed);
+    } catch (_) {
+      /* The player keeps the speed for this note. */
+    }
+  }
+
   RoundPlaybackHandle? audioPlaybackHandle;
   RoundPlaybackHandle reserveAudio() =>
       audioPlaybackHandle ??= RoundPlaybackCoordinator.shared.register(
-        pause: () async {
-          final current = audioPlayer;
-          if (current == null) {
-            await closeAudioPlayer();
-          } else {
-            await current.pause();
-          }
-        },
+        pause: _pauseAudio,
         stop: closeAudioPlayer,
+        // Backgrounding without a lock pauses the note and keeps its
+        // position; a lock or an account switch still closes it.
+        retain: _pauseAudio,
       );
+  Future<void> _pauseAudio() async {
+    final current = audioPlayer;
+    if (current == null) {
+      await closeAudioPlayer();
+      return;
+    }
+    try {
+      await current.pause();
+    } catch (_) {
+      // A player that cannot pause is released; it never keeps playing.
+      await closeAudioPlayer();
+    }
+  }
+
   Future<void> playAudio() async {
     final player = audioPlayer;
     if (player == null) return;
@@ -186,6 +245,60 @@ class MatrixState extends State<Matrix> {
         identical(player, audioPlayer)) {
       unawaited(player.play().catchError((Object _) {}));
     }
+  }
+
+  /// Watches [player], just created for a note, for its end. Then it is
+  /// released and, given a [continuation], the following voice notes play
+  /// (Telegram). [continuation] is read only once the note has ended.
+  void watchAudio(AudioPlayer player, {List<Event> Function()? continuation}) {
+    if (!identical(player, audioPlayer)) return;
+    _audioContinuation = continuation;
+    unawaited(_audioCompletion?.cancel());
+    _audioCompletion = player.processingStateStream
+        .where((state) => state == ProcessingState.completed)
+        .take(1)
+        .listen(
+          (_) => unawaited(_audioCompleted(player)),
+          onError: (Object _) {},
+        );
+  }
+
+  Future<void> _audioCompleted(AudioPlayer player) async {
+    if (!identical(player, audioPlayer)) return;
+    var queue = const <Event>[];
+    try {
+      queue = _audioContinuation?.call() ?? const <Event>[];
+    } catch (_) {
+      /* No continuation. */
+    }
+    final speed = voiceSpeed;
+    final coordinator = RoundPlaybackCoordinator.shared;
+    // Reserved while the ended note still holds audio, so nothing the user
+    // starts meanwhile is taken over by a slow download of the next one.
+    final token =
+        queue.isNotEmpty &&
+            audioPlaybackHandle?.isCurrent == true &&
+            PersonalPrivacy.surfaceUnlocked
+        ? coordinator.beginContinuation()
+        : null;
+    try {
+      await closeAudioPlayer();
+    } catch (_) {
+      /* Released either way. */
+    }
+    if (token == null) return;
+    await VoiceContinuation.run(
+      queue,
+      token: token,
+      speed: speed,
+      allowed: () =>
+          mounted && PersonalPrivacy.surfaceUnlocked && !coordinator.suspended,
+      detached: (items) => RoundMiniPlayerController.shared.continueQueue(
+        items,
+        token: token,
+        speed: speed,
+      ),
+    );
   }
 
   ManagedMediaFile? audioLease;
@@ -356,11 +469,7 @@ class MatrixState extends State<Matrix> {
 
           if (loggedInWithMultipleClients) {
             final snackbarContext =
-                ChatLoomApp
-                    .router
-                    .routerDelegate
-                    .navigatorKey
-                    .currentContext ??
+                ChatLoomApp.router.routerDelegate.navigatorKey.currentContext ??
                 context;
 
             if (!snackbarContext.mounted) return;
@@ -427,15 +536,31 @@ class MatrixState extends State<Matrix> {
       _registerSubs(c.clientName);
     }
 
-    if (PlatformInfos.isDesktop) {
+    if (PlatformInfos.isDesktop || PlatformInfos.isMobile) {
+      // A Wi-Fi <-> mobile switch leaves the long-poll on a dead socket for up
+      // to 40 s plus the retry backoff; restart it at once while the app is
+      // open. The platform callback is event-driven: no polling.
+      final recovery = SyncNetworkRecovery(
+        foreground: () =>
+            !PlatformInfos.isMobile ||
+            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+      );
       _networkChanges = Connectivity().onConnectivityChanged.listen(
-        (networks) =>
-            unawaited(wakeSyncOnNetworkRecovery(widget.clients, networks)),
-        onError: (Object _, StackTrace __) {
+        (networks) => unawaited(
+          recovery
+              .onNetworksChanged(widget.clients, networks)
+              .catchError((Object _) {}),
+        ),
+        onError: (Object _, StackTrace _) {
           // Keep automatic retries if the optional platform watcher is unavailable.
           Logs().w('Network recovery watcher unavailable');
         },
       );
+    }
+    if (PlatformInfos.isMobile) {
+      for (final client in widget.clients) {
+        client.syncErrorMaxTimeoutSec = foregroundSyncRetryCapSec;
+      }
     }
 
     if (PlatformInfos.isMobile) {
@@ -479,6 +604,9 @@ class MatrixState extends State<Matrix> {
                 : PresenceType.unavailable)
           : PresenceType.offline;
       if (PlatformInfos.isMobile) {
+        // The loop only runs in the foreground on phones; keep its retries
+        // short there (see [foregroundSyncRetryCapSec]).
+        client.syncErrorMaxTimeoutSec = foregroundSyncRetryCapSec;
         client.backgroundSync = foreground;
         client.requestHistoryOnLimitedTimeline = !foreground;
         Logs().v('Set background sync to', foreground);

@@ -8,6 +8,7 @@ import 'package:chatloom/personal/diagnostics.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/journal_replay_batch.dart';
 import 'package:chatloom/personal/journal_trust.dart';
+import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -24,6 +25,11 @@ class PersonalClient extends ChangeNotifier {
   static final _instances = <Client, PersonalClient>{};
   static PersonalClient of(Client client) =>
       _instances.putIfAbsent(client, () => PersonalClient._(client));
+
+  /// Tests: makes [of] return [personal] for [client] (until disposed).
+  @visibleForTesting
+  static void debugUse(Client client, PersonalClient personal) =>
+      _instances[client] = personal;
   final Client client;
   final _changes = StreamController<int>.broadcast();
   int _changeVersion = 0;
@@ -64,12 +70,31 @@ class PersonalClient extends ChangeNotifier {
     if (!_replaying) notifyListeners();
   }
 
-  PersonalClient._(this.client) : _openStore = PersonalStore.open;
+  PersonalClient._(this.client) : _openStore = PersonalStore.open {
+    _watchDelivery();
+  }
   @visibleForTesting
   PersonalClient.forTesting(
     this.client, {
     required Future<PersonalStore> Function() openStore,
-  }) : _openStore = openStore;
+  }) : _openStore = openStore {
+    _watchDelivery();
+  }
+
+  /// Final send outcomes (SDK local echo sent/error, bridge send-status
+  /// reports) go to [reportDeliveryOutcome] once each.
+  StreamSubscription<Event>? _deliveryWatch;
+  void _watchDelivery() {
+    _deliveryWatch = client.onTimelineEvent.stream.listen((event) {
+      final failed = deliveryOutcomeOf(
+        event,
+        ownUserId: client.userID,
+        now: DateTime.now(),
+      );
+      if (failed != null) reportDeliveryOutcome(event.room, failed: failed);
+    });
+  }
+
   final Future<PersonalStore> Function() _openStore;
   String? _localAccountId;
   PrivateSyncFailure? syncFailure;
@@ -182,6 +207,7 @@ class PersonalClient extends ChangeNotifier {
   }
 
   Future<void> _drain() async {
+    await _reissueUnconfirmed();
     _publishedCommands.removeWhere((id) => !pending.containsKey(id));
     for (final id in List<String>.from(pending.keys)) {
       if (!ready || _disposed) return;
@@ -202,6 +228,76 @@ class PersonalClient extends ChangeNotifier {
     if (ready) {
       unawaited(stagePending().catchError((Object _) => _notifyIfChanged()));
     }
+  }
+
+  // ── Unconfirmed changes and conflicts (2026-10-20) ──────────────────────
+  // The worker answers a journal command within seconds. A command it has
+  // not answered although it kept publishing heartbeats for
+  // [unconfirmedAfter] since was most likely never readable for it (for
+  // example sent before its device existed, in a session it could only get
+  // from key backup, which it does not trust). A resend with the same id
+  // returns the old event, so such a change is re-issued under a fresh id.
+
+  /// How long a running worker may leave a published command unanswered.
+  static const unconfirmedAfter = Duration(minutes: 5);
+
+  /// When [op] was first published, or null if it was not yet.
+  DateTime? publishedAt(PersonalOperation op) {
+    final replica = _replica;
+    if (replica == null || !replica.isAttempted(op.opId)) return null;
+    // Records from before publication times were kept use creation time.
+    return replica.attemptedAt(op.opId) ?? op.createdAt.toUtc();
+  }
+
+  /// True when [op] was published and the worker, demonstrably running
+  /// (a fresh heartbeat newer than the publication by [unconfirmedAfter]),
+  /// still has not answered it.
+  bool isUnconfirmed(PersonalOperation op, {DateTime? now}) {
+    final since = publishedAt(op);
+    final heartbeat = workerReadiness;
+    return since != null &&
+        heartbeat != null &&
+        heartbeat.freshAt(now ?? DateTime.now()) &&
+        heartbeat.receivedAt.isAfter(since.add(unconfirmedAfter));
+  }
+
+  /// How often the change behind [op] was re-issued automatically.
+  int reissueCount(PersonalOperation op) =>
+      _replica?.reissueCount(op.opId) ?? 0;
+
+  Future<void> _reissueUnconfirmed() async {
+    final replica = _replica;
+    if (replica == null) return;
+    final now = DateTime.now();
+    for (final op in List.of(pending.values)) {
+      if (!ready || _disposed) return;
+      if (!isUnconfirmed(op, now: now)) continue;
+      // Only metadata changes and the pairing request; paid or sending jobs
+      // are resent only on request ([resendPending]).
+      await replica.reissue(op.opId, automatic: true);
+    }
+  }
+
+  /// Sends an unconfirmed command again under a fresh id (see
+  /// [PersonalReplica.reissue]); the worker's revision check keeps a job
+  /// that did run from running twice.
+  Future<void> resendPending(String opId) async {
+    await _ensureLocal();
+    if (!ready) throw StateError('Private encrypted sync is not connected');
+    await _replica!.reissue(opId);
+    _dispatch();
+  }
+
+  /// One-tap resolution of a metadata conflict: keep this device's version
+  /// (written again over the other one) or use the other version (adopted
+  /// locally; nothing is published). See [PersonalReplica.resolveConflict].
+  Future<void> resolveConflict(String entity, {required bool keepLocal}) async {
+    await _ensureLocal();
+    if (keepLocal && !ready) {
+      throw StateError('Private encrypted sync is not connected');
+    }
+    await _replica!.resolveConflict(entity, keepLocal: keepLocal);
+    _dispatch();
   }
 
   String get _prefix => 'account:${_localAccountId ?? client.userID}:';
@@ -358,6 +454,10 @@ class PersonalClient extends ChangeNotifier {
         conflict: oldConflicts[entity],
       );
     }
+    _checkActive();
+    // Conflicts recorded by older versions although both sides are equal
+    // (echoes of this device's own writes) need no choice: settle them.
+    await replica.settleObsoleteConflicts();
     _checkActive();
     _replica = replica;
     if (syncFailure == PrivateSyncFailure.storageUnavailable) _clearFailure();
@@ -1238,6 +1338,13 @@ class PersonalClient extends ChangeNotifier {
   bool get workerTranscribesAllMedia =>
       (workerReadiness?.transcriptionMedia ?? 0) >= 2;
 
+  /// True when the worker treats Instagram reels as their own kind
+  /// (heartbeat `transcriptionMedia` >= 3) and so honours the reel switch.
+  /// A worker reporting 2 transcribes a reel automatically like any video
+  /// while videos are on; on demand it transcribes reels either way.
+  bool get workerSeparatesReels =>
+      (workerReadiness?.transcriptionMedia ?? 0) >= 3;
+
   /// The kind of [e] the paired worker can transcribe, or null. Panels use
   /// it to decide whether to offer transcription at all.
   AutoTranscriptionKind? transcribableKind(Event e) {
@@ -1467,13 +1574,16 @@ class PersonalClient extends ChangeNotifier {
   }
 
   ImmediateOutbox? _immediate;
-  Future<ImmediateSendResult> sendImmediate(
-    Room room,
-    String text, {
-    Event? replyTo,
-    String? editEventId,
-    String? threadId,
-  }) async {
+
+  /// Per source room: completes when the previous text send's local echo is
+  /// in the timeline (or that send ended), so messages keep their order
+  /// while each one is still sent as soon as possible.
+  final _sendOrder = <String, Future<void>>{};
+
+  /// Transaction IDs whose local echo the SDK stored and showed (bounded).
+  final _echoed = <String>{};
+
+  Future<ImmediateOutbox> _immediateOutbox() async {
     // Immediate sends need the local encrypted outbox, not the optional
     // worker journal or its potentially long history reconstruction.
     await _ensureLocal();
@@ -1481,7 +1591,7 @@ class PersonalClient extends ChangeNotifier {
     if (store == null || client.deviceID == null) {
       throw StateError('Encrypted outbox unavailable');
     }
-    _immediate ??= ImmediateOutbox(
+    return _immediate ??= ImmediateOutbox(
       deviceId: client.deviceID!,
       get: (key) {
         _checkActive();
@@ -1495,57 +1605,133 @@ class PersonalClient extends ChangeNotifier {
         _checkActive();
         return store.delete('${_prefix}outbox:$key');
       },
-      sendToTransport: (payload, txid) async {
-        _checkActive();
-        final sourceRoom = client.getRoomById(payload['roomId'] as String);
-        if (sourceRoom == null) {
-          throw const ImmediateTransportRejected('sourceUnavailable');
-        }
-        final replyId = payload['replyId'] as String?;
-        final sourceReply = replyId == null
-            ? null
-            : await sourceRoom.getEventById(replyId);
-        _checkActive();
-        if (replyId != null && sourceReply == null) {
-          throw const ImmediateTransportRejected('replyUnavailable');
-        }
-        try {
-          return await sourceRoom.sendTextEvent(
-            payload['text'] as String,
-            txid: txid,
-            inReplyTo: sourceReply,
-            editEventId: payload['editId'] as String?,
-            threadRootEventId: payload['threadId'] as String?,
-            parseCommands: false,
-          );
-        } on PersonalCapabilityUnavailable {
-          throw const ImmediateTransportRejected('bridge_unavailable');
-        } on MatrixException catch (e) {
-          if ({
-            'M_FORBIDDEN',
-            'M_UNKNOWN_TOKEN',
-            'M_UNAUTHORIZED',
-            'M_BAD_JSON',
-            'M_NOT_JSON',
-            'M_TOO_LARGE',
-          }.contains(e.errcode)) {
-            throw const ImmediateTransportRejected();
-          }
-          rethrow;
-        }
-      },
+      sendToTransport: _sendImmediateTransport,
     );
-    return _immediate!.send({
-      'roomId': room.id,
-      'text': text,
-      'replyId': replyTo?.eventId,
-      'editId': editEventId,
-      'threadId': threadId,
-    });
+  }
+
+  Future<String?> _sendImmediateTransport(
+    Map<String, dynamic> payload,
+    String txid,
+  ) async {
+    final roomId = payload['roomId'] as String;
+    final previous = _sendOrder[roomId];
+    final queued = Completer<void>();
+    _sendOrder[roomId] = queued.future;
+    StreamSubscription<Event>? echo;
+    try {
+      if (previous != null) await previous;
+      _checkActive();
+      final sourceRoom = client.getRoomById(roomId);
+      if (sourceRoom == null) {
+        throw const ImmediateTransportRejected('sourceUnavailable');
+      }
+      echo = client.onTimelineEvent.stream.listen((event) {
+        if (event.roomId != roomId ||
+            (event.transactionId != txid && event.eventId != txid)) {
+          return;
+        }
+        if (_echoed.length > 256) _echoed.remove(_echoed.first);
+        _echoed.add(txid);
+        if (!queued.isCompleted) queued.complete();
+      });
+      final replyId = payload['replyId'] as String?;
+      final sourceReply = replyId == null
+          ? null
+          : await sourceRoom.getEventById(replyId);
+      _checkActive();
+      if (replyId != null && sourceReply == null) {
+        throw const ImmediateTransportRejected('replyUnavailable');
+      }
+      try {
+        return await sourceRoom.sendTextEvent(
+          payload['text'] as String,
+          txid: txid,
+          inReplyTo: sourceReply,
+          editEventId: payload['editId'] as String?,
+          threadRootEventId: payload['threadId'] as String?,
+          parseCommands: false,
+        );
+      } on PersonalCapabilityUnavailable {
+        throw const ImmediateTransportRejected('bridge_unavailable');
+      } on MatrixException catch (e) {
+        if ({
+          'M_FORBIDDEN',
+          'M_UNKNOWN_TOKEN',
+          'M_UNAUTHORIZED',
+          'M_BAD_JSON',
+          'M_NOT_JSON',
+          'M_TOO_LARGE',
+        }.contains(e.errcode)) {
+          throw const ImmediateTransportRejected();
+        }
+        rethrow;
+      }
+    } finally {
+      await echo?.cancel();
+      if (!queued.isCompleted) queued.complete();
+      if (identical(_sendOrder[roomId], queued.future)) {
+        _sendOrder.remove(roomId);
+      }
+    }
+  }
+
+  /// Sends [text] through the encrypted outbox. [onDurable] runs once the
+  /// attempt is persisted and before any network I/O: the composer clears
+  /// there and the local echo shows the network result. It never runs when
+  /// the outbox cannot persist; the caller then keeps the text.
+  Future<ImmediateSendResult> sendImmediate(
+    Room room,
+    String text, {
+    Event? replyTo,
+    String? editEventId,
+    String? threadId,
+    ImmediateDurable? onDurable,
+  }) async {
+    final outbox = await _immediateOutbox();
+    // Every press of send is a new message: the same text twice is two
+    // messages, while an attempt left by an earlier process is resumed.
+    return outbox.send(
+      {
+        'roomId': room.id,
+        'text': text,
+        'replyId': replyTo?.eventId,
+        'editId': editEventId,
+        'threadId': threadId,
+      },
+      fresh: true,
+      onDurable: onDurable,
+    );
   }
 
   Future<void> completeImmediate(String actionId) async =>
       _immediate?.complete(actionId);
+
+  /// The outbox action of a text local echo (`immediate-<id>`), or null.
+  static String? immediateActionOf(Event event) {
+    final txid = event.transactionId ?? event.eventId;
+    final match = RegExp(
+      r'^immediate-([A-Za-z0-9_-]{1,128})$',
+    ).firstMatch(txid);
+    return match?[1];
+  }
+
+  /// Explicit retry of a failed or unconfirmed text send from its bubble:
+  /// same payload, same Matrix transaction ID, so it is never duplicated.
+  Future<ImmediateSendResult> retryImmediate(String actionId) async =>
+      (await _immediateOutbox()).retry(actionId);
+
+  /// Retires an unsent attempt deleted from its bubble.
+  Future<void> discardImmediate(String actionId) async =>
+      (await _immediateOutbox()).discard(actionId);
+
+  /// Stored state of an attempt (unknown vs rejected), or null.
+  Future<ImmediateSendResult?> immediateState(String actionId) async =>
+      (await _immediateOutbox()).lookup(actionId);
+
+  /// Whether the SDK showed a local echo for [transactionId], i.e. a failed
+  /// send has its own bubble with Retry. False means the send failed before
+  /// it reached the timeline and the caller must give the text back.
+  bool localEchoShown(String transactionId) => _echoed.contains(transactionId);
 
   Future<void> savePersonalDraft(
     String key,
@@ -1688,6 +1874,7 @@ class PersonalClient extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _deliveryWatch?.cancel();
     if (identical(_instances[client], this)) _instances.remove(client);
     cancelAutoTranscriptionTimers();
     _sync?.cancel();

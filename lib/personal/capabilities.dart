@@ -10,17 +10,65 @@ export 'package:personal_core/bridge_capabilities.dart';
 /// Separates bridge declarations from local Matrix encryption/power/ownership.
 /// No hardcoded native Matrix defaults or network-name-based inferred support.
 abstract final class RoomCapabilities {
+  static const _bridgeStateTypes = [
+    'm.bridge',
+    'uk.half-shot.bridge',
+    'com.beeper.bridge',
+  ];
+
+  /// Parsed declarations per room and state key. Every message row asks
+  /// several times per build; the bridge features are re-parsed only when
+  /// one of the state events they are derived from changes.
+  static final _declaredCache = Expando<Map<String?, _DeclaredEntry>>();
+
   static BridgeRoomCapabilities declared(Room room, {String? stateKey}) {
     final states = room.states[bridgeFeaturesEventType];
     if (states == null || states.isEmpty) {
       return BridgeRoomCapabilities.fromState(null);
     }
+    final sources = _declarationSources(room, states);
+    final cache = _declaredCache[room] ??= {};
+    final cached = cache[stateKey];
+    if (cached != null && cached.matches(sources)) return cached.value;
+    final value = _parseDeclared(room, states, stateKey);
+    cache[stateKey] = _DeclaredEntry(sources, value);
+    return value;
+  }
+
+  /// The state events a declaration is derived from, as they are now. The
+  /// SDK replaces a state event object on every change; a redaction rewrites
+  /// the event in place but always replaces its `unsigned` map.
+  static List<Object?> _declarationSources(
+    Room room,
+    Map<String, StrippedStateEvent> features,
+  ) {
+    final sources = <Object?>[];
+    void add(String type, Map<String, StrippedStateEvent>? events) {
+      sources.add(type);
+      if (events == null) return;
+      for (final entry in events.entries) {
+        final event = entry.value;
+        sources
+          ..add(entry.key)
+          ..add(event)
+          ..add(event is Event ? event.unsigned : null);
+      }
+    }
+
+    add(bridgeFeaturesEventType, features);
+    for (final type in _bridgeStateTypes) {
+      add(type, room.states[type]);
+    }
+    return sources;
+  }
+
+  static BridgeRoomCapabilities _parseDeclared(
+    Room room,
+    Map<String, StrippedStateEvent> states,
+    String? stateKey,
+  ) {
     final bridgeKeys = <String>{};
-    for (final type in [
-      'm.bridge',
-      'uk.half-shot.bridge',
-      'com.beeper.bridge',
-    ]) {
+    for (final type in _bridgeStateTypes) {
       bridgeKeys.addAll(room.states[type]?.keys ?? []);
     }
     // Multiple advertised sources need a caller-selected state key. Never
@@ -165,6 +213,21 @@ abstract final class RoomCapabilities {
         CapabilityResult(CapabilityStatus.unavailable, reason),
         source: 'matrix.permission',
       );
+}
+
+class _DeclaredEntry {
+  final List<Object?> sources;
+  final BridgeRoomCapabilities value;
+  const _DeclaredEntry(this.sources, this.value);
+
+  bool matches(List<Object?> current) {
+    if (current.length != sources.length) return false;
+    for (var i = 0; i < current.length; i++) {
+      final a = current[i], b = sources[i];
+      if (!(identical(a, b) || (a is String && a == b))) return false;
+    }
+    return true;
+  }
 }
 
 /// Safe product reason from the capability adapter, never raw transport error.
