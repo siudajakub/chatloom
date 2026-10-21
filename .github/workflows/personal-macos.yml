@@ -3,11 +3,12 @@ name: Personal macOS
 on:
   workflow_dispatch:
   push:
-    branches: [codex/macos-client]
+    branches: [main]
     paths:
       - '.github/workflows/personal-macos.yml'
       - 'macos/**'
       - 'lib/**'
+      - 'packages/**'
       - 'integration_test/macos/**'
       - 'test/**'
       - 'scripts/build-personal-macos.py'
@@ -63,6 +64,8 @@ jobs:
           test/personal/round_video/round_capture_profile_test.dart
           test/notion/two_column_accessibility_test.dart
           test/notion/settings_widgets_test.dart
+          test/notion/compact_audio_player_test.dart
+          test/personal/transcript_panel_test.dart
           test/utils/session_backup_writer_test.dart
           test/personal/recording_lifecycle_test.dart
           test/personal/integration/notification_eligibility_test.dart

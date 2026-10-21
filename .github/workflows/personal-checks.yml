@@ -2,7 +2,7 @@ name: Personal client synthetic checks
 on:
   workflow_dispatch:
   push:
-    branches: [main, personal/client]
+    branches: [main]
   pull_request:
     paths:
       - '.github/workflows/personal-checks.yml'
@@ -38,6 +38,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Android release tooling safety regressions
+        run: python3 -m unittest discover -s scripts -p test_build_personal_release.py -v
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -127,6 +129,8 @@ jobs:
           test/notion/inbox_widgets_test.dart
           test/notion/conversation_widgets_test.dart
           test/notion/two_column_accessibility_test.dart
+          test/notion/compact_audio_player_test.dart
+          test/personal/transcript_panel_test.dart
           test/personal/bridged_message_content_test.dart
       - name: Require build headroom after dependencies and analysis
         shell: bash
