@@ -44,6 +44,7 @@ void main() {
   ) async {
     var likes = 0;
     var plays = 0;
+    var expands = 0;
     String? selected;
     await tester.pumpWidget(
       MaterialApp(
@@ -64,6 +65,7 @@ void main() {
                     progress: 0,
                     controls: false,
                     onPlay: () => plays++,
+                    onExpand: () => expands++,
                   ),
                 ),
               ),
@@ -77,7 +79,13 @@ void main() {
     await tester.tap(find.text('1:06'));
     await tester.pumpAndSettle();
     expect(likes, 1);
+    expect(expands, 0);
     expect(selected, isNull);
+    await tester.tap(find.text('1:06'));
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+    expect(expands, 1);
+    expect(likes, 1);
     await tester.tap(find.byTooltip('Play audio'));
     await tester.pumpAndSettle();
     expect(plays, 1);
@@ -132,7 +140,7 @@ void main() {
     },
   );
 
-  testWidgets('play, skips, speed and save are independent actions', (
+  testWidgets('play and speed stay visible; save moves to more options', (
     tester,
   ) async {
     final calls = <String>[];
@@ -145,8 +153,6 @@ void main() {
               duration: '0:18 / 1:06',
               progress: .27,
               onPlay: () => calls.add('play'),
-              onSeekBack: () => calls.add('back'),
-              onSeekForward: () => calls.add('forward'),
               onSpeed: () => calls.add('speed'),
               onDownload: () => calls.add('save'),
             ),
@@ -154,23 +160,22 @@ void main() {
         ),
       ),
     );
-    for (final tooltip in [
-      'Play audio',
-      'Rewind 10 seconds',
-      'Forward 10 seconds',
-      'Playback speed',
-      'Download audio',
-    ]) {
+    for (final tooltip in ['Play audio', 'Playback speed']) {
       await tester.tap(find.byTooltip(tooltip));
       await tester.pump();
     }
-    expect(calls, ['play', 'back', 'forward', 'speed', 'save']);
+    expect(find.byTooltip('Download audio'), findsNothing);
+    expect(find.byIcon(Icons.replay_10_rounded), findsNothing);
+    expect(find.byIcon(Icons.forward_10_rounded), findsNothing);
+    await tester.tap(find.byTooltip('More options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Download audio'));
+    await tester.pumpAndSettle();
+    expect(calls, ['play', 'speed', 'save']);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('an inactive note is one row: no skips, speed or save', (
-    tester,
-  ) async {
+  testWidgets('speed appears beside time for the active note', (tester) async {
     Widget block(bool controls) => MaterialApp(
       home: Scaffold(
         body: SizedBox(
@@ -180,8 +185,6 @@ void main() {
             progress: 0,
             controls: controls,
             onPlay: () {},
-            onSeekBack: () {},
-            onSeekForward: () {},
             onSpeed: () {},
             onDownload: () {},
           ),
@@ -191,22 +194,14 @@ void main() {
     await tester.pumpWidget(block(false));
     final compact = tester.getSize(find.byType(NotionAudioFileBlock)).height;
     expect(find.byTooltip('Play audio'), findsOneWidget);
-    for (final tooltip in [
-      'Rewind 10 seconds',
-      'Forward 10 seconds',
-      'Playback speed',
-      'Download audio',
-    ]) {
+    for (final tooltip in ['Playback speed', 'Download audio']) {
       expect(find.byTooltip(tooltip), findsNothing);
     }
-    // Becoming active reveals the row (size + fade), then settles.
+    // Speed fits beside time, without an extra toolbar row.
     await tester.pumpWidget(block(true));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Playback speed'), findsOneWidget);
-    expect(
-      tester.getSize(find.byType(NotionAudioFileBlock)).height,
-      greaterThan(compact),
-    );
+    expect(tester.getSize(find.byType(NotionAudioFileBlock)).height, compact);
     await tester.pumpWidget(block(false));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Playback speed'), findsNothing);
@@ -229,7 +224,6 @@ void main() {
             downloading: busy,
             onPlay: () {},
             onSeek: (v) => sought = v,
-            onSeekBack: () {},
             onSpeed: () {},
           ),
         ),
@@ -246,11 +240,7 @@ void main() {
     expect(slider.value, .27);
     expect(find.byTooltip('Play audio'), findsNothing);
     expect(
-      tester
-          .widget<IconButton>(
-            find.widgetWithIcon(IconButton, Icons.replay_10_rounded),
-          )
-          .onPressed,
+      tester.widget<TextButton>(find.byType(TextButton)).onPressed,
       isNull,
     );
     expect(sought, isNull);
@@ -301,7 +291,9 @@ void main() {
     }
   });
 
-  final output = Platform.environment['VOICE_CAPTURE_DIR'];
+  final output =
+      Platform.environment['NOTION_CAPTURE_DIR'] ??
+      Platform.environment['VOICE_CAPTURE_DIR'];
   final captures = <Map<String, Object?>>[];
   setUpAll(() async {
     await (FontLoader('Roboto')
@@ -408,8 +400,6 @@ void main() {
                                     : const [],
                                 onPlay: () {},
                                 onSeek: (_) {},
-                                onSeekBack: () {},
-                                onSeekForward: () {},
                                 onSpeed: () {},
                                 onDownload: () {},
                               ),

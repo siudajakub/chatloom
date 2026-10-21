@@ -66,6 +66,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
   /// caption below it. The subscriptions are made once per player.
   final _transport = ValueNotifier<int>(0);
   AudioPlayer? _bound;
+  RawDialogRoute<void>? _stageRoute;
   List<StreamSubscription<Object?>> _subscriptions = const [];
   List<double> _waveform = const [];
 
@@ -99,6 +100,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
   /// Follows the shared player when it starts, ends or moves to another note.
   void _rebind() {
     final player = _player;
+    if (player == null) _releaseStage();
     if (identical(player, _bound)) return;
     _cancelSubscriptions();
     _bound = player;
@@ -155,6 +157,10 @@ class AudioPlayerState extends State<AudioPlayerWidget>
   void didUpdateWidget(AudioPlayerWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.event, widget.event)) {
+      if (oldWidget.event.eventId != widget.event.eventId ||
+          !identical(oldWidget.event.room.client, widget.event.room.client)) {
+        _releaseStage();
+      }
       VoicePlayback.targets.unregister(oldWidget.event, this);
       VoicePlayback.targets.register(widget.event, this);
       _waveform = _parseWaveform();
@@ -167,6 +173,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
     matrix.voiceMessageEventId.removeListener(_rebind);
     VoicePlayback.targets.unregister(widget.event, this);
     _cancelSubscriptions();
+    _releaseStage();
     _transport.dispose();
     final shared = matrix;
     final messenger = _messenger;
@@ -211,6 +218,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
       _starting = true;
       _downloadProgress = null;
     });
+    _tick(null);
     try {
       _clearBannersAfterFrame();
       final currentPlayer = _player;
@@ -232,7 +240,10 @@ class AudioPlayerState extends State<AudioPlayerWidget>
     } catch (_) {
       if (mounted) _showPlaybackError();
     } finally {
-      if (mounted) setState(() => _starting = false);
+      if (mounted) {
+        setState(() => _starting = false);
+        _tick(null);
+      }
     }
   }
 
@@ -249,13 +260,17 @@ class AudioPlayerState extends State<AudioPlayerWidget>
       _starting = true;
       _downloadProgress = null;
     });
+    _tick(null);
     _reveal();
     try {
       return await _load(continuation: token, queue: rest);
     } catch (_) {
       return RoundStartResult.failed;
     } finally {
-      if (mounted) setState(() => _starting = false);
+      if (mounted) {
+        setState(() => _starting = false);
+        _tick(null);
+      }
     }
   }
 
@@ -344,6 +359,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
                       ? progressPercentage
                       : null;
                 });
+                _tick(null);
               }
             : null,
       );
@@ -386,6 +402,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
       setState(() {
         _downloadProgress = null;
       });
+      _tick(null);
       if (!autoplay) {
         ScaffoldMessenger.of(
           context,
@@ -489,7 +506,84 @@ class AudioPlayerState extends State<AudioPlayerWidget>
     }
   }
 
-  Widget _buildTransport(BuildContext context) {
+  /// Enlarges the existing transport, keeping the shared engine and position.
+  Future<void> _openStage() async {
+    if (_stageRoute != null || !mounted) return;
+    if (_player == null) {
+      await _onButtonTap();
+      if (!mounted || _player == null || _stageRoute != null) return;
+    }
+    final navigator = Navigator.of(context, rootNavigator: true);
+    late final RawDialogRoute<void> route;
+    route = RawDialogRoute<void>(
+      barrierColor: NotionMediaColors.stageScrim,
+      barrierDismissible: true,
+      barrierLabel: 'Close audio player',
+      transitionDuration: NotionMotion.reduced(context)
+          ? Duration.zero
+          : NotionMotion.short,
+      pageBuilder: (context, _, _) => RepaintBoundary(
+        key: const ValueKey('voice-expanded-stage'),
+        child: SafeArea(
+          child: Material(
+            type: MaterialType.transparency,
+            child: Padding(
+              padding: const EdgeInsets.all(NotionSpace.md),
+              child: Column(
+                children: [
+                  Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: IconButton(
+                      tooltip: 'Close audio player',
+                      color: NotionMediaColors.onScrim,
+                      onPressed: navigator.pop,
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: NotionSize.dialogMaxWidth,
+                        ),
+                        child: ValueListenableBuilder<int>(
+                          valueListenable: _transport,
+                          builder: (context, _, _) => !mounted
+                              ? const SizedBox.shrink()
+                              : _buildTransport(context, expanded: true),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: NotionSize.touchTarget),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    _stageRoute = route;
+    unawaited(
+      navigator.push(route).whenComplete(() {
+        if (identical(_stageRoute, route)) _stageRoute = null;
+      }),
+    );
+  }
+
+  void _releaseStage() {
+    final route = _stageRoute;
+    _stageRoute = null;
+    if (route == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final navigator = route.navigator;
+      if (navigator != null && navigator.mounted && route.isActive) {
+        navigator.removeRoute(route);
+      }
+    });
+  }
+
+  Widget _buildTransport(BuildContext context, {bool expanded = false}) {
     final audioPlayer = _player;
     final actualDuration = audioPlayer?.duration;
     final total = actualDuration != null && actualDuration > Duration.zero
@@ -513,13 +607,13 @@ class AudioPlayerState extends State<AudioPlayerWidget>
           : '${notionAudioTime(audioPlayer?.position ?? Duration.zero)} / ${notionAudioTime(total)}',
       seekDuration: total,
       waveform: _waveform,
-      foregroundColor: widget.color,
+      foregroundColor: expanded ? NotionMediaColors.onScrim : widget.color,
       progress: fraction,
       playing:
           audioPlayer?.playing == true && audioPlayer?.isAtEndPosition == false,
       downloading: loading,
       downloadProgress: _downloadProgress,
-      // Telegram: one row; skips, speed and save only for the active note.
+      // Speed stays beside the time; secondary actions live in the menu.
       controls: audioPlayer != null,
       onPlay: _onButtonTap,
       onSeek: !canSeek
@@ -528,18 +622,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
               audioPlayer,
               Duration(milliseconds: (duration * value).round()),
             ),
-      onSeekBack: !canSeek
-          ? null
-          : () => _seek(
-              audioPlayer,
-              audioPlayer.position - const Duration(seconds: 10),
-            ),
-      onSeekForward: !canSeek
-          ? null
-          : () => _seek(
-              audioPlayer,
-              audioPlayer.position + const Duration(seconds: 10),
-            ),
+      onExpand: expanded ? null : _openStage,
       onDownload: () => widget.event.saveFile(context),
       speed: audioPlayer?.speed ?? matrix.voiceSpeed,
       onSpeed: audioPlayer == null || _starting

@@ -1,8 +1,11 @@
 // Offline SDK adapter checks: no account, files, codec, HTTP or microphone.
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/events/audio_player.dart';
 import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -15,7 +18,9 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';
@@ -166,6 +171,12 @@ void main() {
   setUpAll(() async {
     SharedPreferences.setMockInitialValues({});
     await AppSettings.init(loadWebConfigFile: false);
+    await (FontLoader('Roboto')
+          ..addFont(rootBundle.load('assets/notion/fonts/Roboto-Regular.ttf')))
+        .load();
+    await (FontLoader(
+      'MaterialIcons',
+    )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
   });
   late PathProviderPlatform originalPaths;
   setUp(() {
@@ -181,6 +192,7 @@ void main() {
   Future<(_Player, _Matrix)> mount(
     WidgetTester tester, {
     bool playing = false,
+    bool presentation = false,
   }) async {
     rebuild = ValueNotifier(0);
     shown = ValueNotifier(true);
@@ -207,28 +219,63 @@ void main() {
       ..audioPlayer = player
       ..voiceMessageEventId.value = event.eventId;
     await tester.pumpWidget(
-      Provider<MatrixState>.value(
-        value: matrix,
-        child: MaterialApp(
-          home: Scaffold(
-            body: Builder(
-              builder: (context) {
-                matrix.viewContext = context;
-                return ListenableBuilder(
-                  listenable: Listenable.merge([rebuild, shown]),
-                  builder: (context, _) => SizedBox(
-                    width: 300,
-                    child: shown.value
-                        ? AudioPlayerWidget(
-                            event,
-                            color: Colors.black,
-                            linkColor: Colors.black,
-                            fontSize: 15,
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                );
-              },
+      RepaintBoundary(
+        key: const ValueKey('voice-fixture-screen'),
+        child: Provider<MatrixState>.value(
+          value: matrix,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: presentation ? NotionTheme.build(Brightness.dark) : null,
+            home: Scaffold(
+              appBar: presentation ? AppBar(title: const Text('Anna')) : null,
+              body: Builder(
+                builder: (context) {
+                  matrix.viewContext = context;
+                  final audio = ListenableBuilder(
+                    listenable: Listenable.merge([rebuild, shown]),
+                    builder: (context, _) => SizedBox(
+                      width: 300,
+                      child: shown.value
+                          ? AudioPlayerWidget(
+                              event,
+                              color: presentation
+                                  ? context.notion.colors.text
+                                  : Colors.black,
+                              linkColor: presentation
+                                  ? context.notion.colors.text
+                                  : Colors.black,
+                              fontSize: 15,
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  );
+                  if (!presentation) return audio;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: NotionSpace.xl),
+                      const Center(child: Text('Dzisiaj · 16:44')),
+                      const SizedBox(height: NotionSpace.xl),
+                      const ConversationBubble(
+                        outgoing: false,
+                        body: Text('Spotkamy się o piątej?'),
+                      ),
+                      const ConversationBubble(
+                        outgoing: true,
+                        body: Text('Jasne, pasuje.'),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(NotionSpace.md),
+                        child: audio,
+                      ),
+                      const ConversationBubble(
+                        outgoing: false,
+                        body: Text('Daj znać, kiedy będziesz na miejscu.'),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -245,23 +292,19 @@ void main() {
   }
 
   testWidgets(
-    'real adapter clamps jumps, seeks paused audio and cycles speed',
+    'real adapter clamps seeks, keeps audio paused and cycles speed',
     (tester) async {
       final (player, matrix) = await mount(tester);
       expect(find.text('0:18 / 1:06'), findsOneWidget);
-      await tester.tap(find.byTooltip('Rewind 10 seconds'));
-      await tester.pump();
-      expect(player.position, const Duration(seconds: 8));
-      await tester.tap(find.byTooltip('Rewind 10 seconds'));
-      await tester.pump();
-      expect(player.position, Duration.zero);
-      player.position = const Duration(seconds: 64);
-      await tester.tap(find.byTooltip('Forward 10 seconds'));
-      await tester.pump();
-      expect(player.position, const Duration(seconds: 66));
       final block = tester.widget<NotionAudioFileBlock>(
         find.byType(NotionAudioFileBlock),
       );
+      block.onSeek!(-.2);
+      await tester.pump();
+      expect(player.position, Duration.zero);
+      block.onSeek!(1.2);
+      await tester.pump();
+      expect(player.position, const Duration(seconds: 66));
       block.onSeek!(.5);
       await tester.pump();
       expect(player.position, const Duration(seconds: 33));
@@ -275,6 +318,81 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('expanded voice shares transport and close preserves playback', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final (player, matrix) = await mount(
+      tester,
+      playing: true,
+      presentation: true,
+    );
+    final block = tester.widget<NotionAudioFileBlock>(
+      find.byType(NotionAudioFileBlock),
+    );
+    block.onExpand!();
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Close audio player'), findsOneWidget);
+    expect(matrix.audioPlayer, same(player));
+    expect(player.listeners, 4);
+    final output =
+        Platform.environment['NOTION_CAPTURE_DIR'] ??
+        Platform.environment['VOICE_CAPTURE_DIR'];
+    if (output != null) {
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(const ValueKey('voice-fixture-screen')),
+      );
+      await tester.runAsync(() async {
+        final image = await boundary.toImage(pixelRatio: 2);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        final file = File('$output/expanded-voice.png');
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      });
+    }
+    final staged = tester.widget<NotionAudioFileBlock>(
+      find.byType(NotionAudioFileBlock).last,
+    );
+    staged.onSeek!(.5);
+    await tester.pump();
+    expect(player.position, const Duration(seconds: 33));
+    await tester.tap(find.byTooltip('Close audio player'));
+    await tester.pumpAndSettle();
+    expect(player.playing, isTrue);
+    expect(matrix.audioPlayer, same(player));
+    expect(player.position, const Duration(seconds: 33));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('losing voice ownership removes the expanded route', (
+    tester,
+  ) async {
+    final (_, matrix) = await mount(tester);
+    tester
+        .widget<NotionAudioFileBlock>(find.byType(NotionAudioFileBlock))
+        .onExpand!();
+    await tester.pumpAndSettle();
+    matrix.voiceMessageEventId.value = r'$another-voice';
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Close audio player'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('disposing a staged voice removes the route safely', (
+    tester,
+  ) async {
+    await mount(tester);
+    tester
+        .widget<NotionAudioFileBlock>(find.byType(NotionAudioFileBlock))
+        .onExpand!();
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('duration and speed streams refresh the compact controls', (
     tester,
@@ -294,7 +412,6 @@ void main() {
       find.byType(NotionAudioFileBlock),
     );
     expect(block.onSeek, isNull);
-    expect(block.onSeekBack, isNull);
     expect(find.text('0:18 / 1:06'), findsOneWidget);
   });
 
@@ -307,8 +424,6 @@ void main() {
     );
     matrix.voiceMessageEventId.value = r'$another-voice';
     block.onSeek!(.9);
-    block.onSeekBack!();
-    block.onSeekForward!();
     block.onSpeed!();
     await tester.pump();
     expect(player.seeks, isEmpty);
@@ -361,26 +476,34 @@ void main() {
     },
   );
 
-  testWidgets('only the active note shows skips, speed and save', (
-    tester,
-  ) async {
-    final (_, matrix) = await mount(tester);
-    expect(find.byTooltip('Rewind 10 seconds'), findsOneWidget);
-    expect(find.byTooltip('Playback speed'), findsOneWidget);
-    expect(find.byTooltip('Download audio'), findsOneWidget);
-    matrix.voiceMessageEventId.value = r'$another-voice';
-    await tester.pump();
-    await tester.pump(NotionMotion.long);
-    expect(find.byTooltip('Rewind 10 seconds'), findsNothing);
-    expect(find.byTooltip('Playback speed'), findsNothing);
-    expect(find.byTooltip('Download audio'), findsNothing);
-    expect(find.byTooltip('Play audio'), findsOneWidget);
-    matrix.voiceMessageEventId.value = voice.eventId;
-    await tester.pump();
-    await tester.pump(NotionMotion.long);
-    expect(find.byTooltip('Playback speed'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'speed follows the active note; save and expand stay in the menu',
+    (tester) async {
+      final (_, matrix) = await mount(tester);
+      Future<void> checkSecondaryActions() async {
+        expect(find.byTooltip('Download audio'), findsNothing);
+        expect(find.byTooltip('Rewind 10 seconds'), findsNothing);
+        await tester.tap(find.byTooltip('More options'));
+        await tester.pumpAndSettle();
+        expect(find.text('Download audio'), findsOneWidget);
+        expect(find.text('Expand audio player'), findsOneWidget);
+        Navigator.of(tester.element(find.text('Download audio'))).pop();
+        await tester.pumpAndSettle();
+      }
+
+      expect(find.byTooltip('Playback speed'), findsOneWidget);
+      await checkSecondaryActions();
+      matrix.voiceMessageEventId.value = r'$another-voice';
+      await tester.pump();
+      expect(find.byTooltip('Playback speed'), findsNothing);
+      expect(find.byTooltip('Play audio'), findsOneWidget);
+      await checkSecondaryActions();
+      matrix.voiceMessageEventId.value = voice.eventId;
+      await tester.pump();
+      expect(find.byTooltip('Playback speed'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('a paused note keeps its player and position when recycled', (
     tester,

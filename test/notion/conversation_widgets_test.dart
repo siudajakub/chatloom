@@ -143,7 +143,10 @@ void main() {
       await tester.tap(find.byTooltip('Play audio'));
       expect(plays, 1);
       expect(downloads, 0);
-      await tester.tap(find.byTooltip('Download audio'));
+      await tester.tap(find.byTooltip('More options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Download audio'));
+      await tester.pumpAndSettle();
       expect(downloads, 1);
       final slider = tester.widget<Slider>(find.byType(Slider));
       slider.onChanged!(.65);

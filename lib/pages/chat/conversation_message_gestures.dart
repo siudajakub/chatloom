@@ -76,6 +76,18 @@ class ConversationMessagePress {
   final ConversationMenuPointer? pointer;
 }
 
+/// Chrome that opens on a single tap while leaving double taps to the message.
+/// Unlike playback buttons, its tap may wait for the reaction gesture to fail.
+class ConversationMessageChromeTap extends SingleChildRenderObjectWidget {
+  const ConversationMessageChromeTap({super.key, required super.child});
+
+  @override
+  RenderProxyBox createRenderObject(BuildContext context) =>
+      _MessageChromeTapRegion();
+}
+
+class _MessageChromeTapRegion extends RenderProxyBox {}
+
 /// Touch gestures of one message surface, the single owner of how a bubble
 /// reacts to a finger (Telegram/Messenger):
 ///
@@ -267,6 +279,10 @@ class _ConversationMessageGesturesState
     if (root == null || !root.attached || !root.hasSize) return false;
     final result = BoxHitTestResult();
     root.hitTest(result, position: root.globalToLocal(position));
+    // These regions deliberately share their tap surface with quick reactions.
+    if (result.path.any((entry) => entry.target is _MessageChromeTapRegion)) {
+      return false;
+    }
     for (final entry in result.path) {
       final target = entry.target;
       if (identical(target, root)) break;
