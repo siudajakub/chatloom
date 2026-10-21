@@ -212,6 +212,7 @@ in new code; read `context.notion` instead.
 | `NotionReactionChip`, `NotionReactionOverlap`, `NotionReactionBar`, `NotionReactionBurst` | reaction pills under a bubble, the long-press reaction pill, the double-tap burst (`notion_reactions.dart`, tokens `NotionReactions.*`) |
 | `NotionGlassSurface`, `NotionGlassBar`, `NotionGlassScope` | glass chrome and overlays (see Glass) |
 | `NotionGlassPanel`, `NotionGlassMenuRow`, `NotionGlassDivider`, `NotionGlassPill` | the dock's language: glass menus, dialogs, sheets, pill buttons (see Glass) |
+| `NotionMediaPlaybackControls`, `NotionMediaActionsButton` | Focused media transport over `stageScrim`: play/pause, time, seek, speed; secondary actions in one menu. Data and callbacks only; `seekControl` accepts a voice waveform instead of the slider. |
 | `NotionPressable`, `NotionEntrance`, `NotionSkeleton`, `NotionFadeThrough`, `NotionPop`, ... | motion (see Motion) |
 
 Each primitive has a golden in `test/notion/goldens/primitives/`.

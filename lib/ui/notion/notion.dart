@@ -14,6 +14,7 @@ export 'notion_entrance.dart';
 export 'notion_glass.dart';
 export 'notion_loops.dart';
 export 'notion_media_viewer.dart';
+export 'notion_media_playback_controls.dart';
 export 'notion_modal_routes.dart';
 export 'notion_motion.dart';
 export 'notion_pressable.dart';
