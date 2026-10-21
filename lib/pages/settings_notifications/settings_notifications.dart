@@ -21,8 +21,16 @@ import '../../widgets/matrix.dart';
 import 'settings_notifications_view.dart';
 
 class SettingsNotifications extends StatefulWidget {
+  /// Push providers and registered pushers (Push setup → details).
   final bool registrationDetails;
-  const SettingsNotifications({super.key, this.registrationDetails = false});
+
+  /// The account's Matrix push rules (Notifications → Advanced).
+  final bool serverRules;
+  const SettingsNotifications({
+    super.key,
+    this.registrationDetails = false,
+    this.serverRules = false,
+  });
 
   @override
   SettingsNotificationsController createState() =>

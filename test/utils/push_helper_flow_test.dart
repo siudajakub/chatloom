@@ -183,7 +183,7 @@ class _Fixture {
     bool test = false,
   }) async {
     final l10n = await L10n.delegate.load(const Locale('en'));
-    await pushHelper(
+    final outcome = await pushHelper(
       PushNotification(
         roomId: _roomId,
         eventId: eventId,
@@ -195,6 +195,8 @@ class _Fixture {
       flutterLocalNotificationsPlugin: plugin,
       test: test,
     );
+    // The background catch-up decides on the returned outcome.
+    expect(outcome, await _lastOutcome());
   }
 }
 

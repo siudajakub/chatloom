@@ -61,8 +61,9 @@ PersonalClient Function(Client client) pushPersonalClientOf = PersonalClient.of;
 /// before any network fetch. The fetch is bounded so a generic alert still
 /// fits; that alert has its own small budget. [test] marks the diagnostics
 /// test notification: it bypasses only the "already read" and "chat open on
-/// screen" checks and adds "(test)" to the title.
-Future<void> pushHelper(
+/// screen" checks and adds "(test)" to the title. Returns the recorded
+/// outcome (a failure is rethrown after recording it).
+Future<PushOutcome> pushHelper(
   PushNotification notification, {
   List<Client>? clients,
   L10n? l10n,
@@ -135,6 +136,7 @@ Future<void> pushHelper(
       elapsed: clock.elapsed,
     );
   }
+  return outcome;
 }
 
 /// Content-free FCM reminder wake: decrypt the journal before selecting a

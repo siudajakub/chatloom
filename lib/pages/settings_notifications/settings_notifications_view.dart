@@ -61,6 +61,8 @@ class SettingsNotificationsView extends StatelessWidget {
         title: Text(
           controller.widget.registrationDetails
               ? 'Notification registration details'
+              : controller.widget.serverRules
+              ? 'Server notification rules'
               : 'Notifications',
         ),
       ),
@@ -81,7 +83,8 @@ class SettingsNotificationsView extends StatelessWidget {
                 ).client.clientName];
             return Column(
               children: [
-                if (!controller.widget.registrationDetails) ...[
+                if (!controller.widget.registrationDetails &&
+                    !controller.widget.serverRules) ...[
                   SettingsSwitchListTile.adaptive(
                     title: 'Show sender and message preview',
                     subtitle:
@@ -95,6 +98,54 @@ class SettingsNotificationsView extends StatelessWidget {
                       title: L10n.of(context).playSoundOnNotification,
                       setting: AppSettings.webNotificationSound,
                     ),
+                  const NotionSectionHeader(title: 'Delivery'),
+                  if (pushService != null)
+                    ListenableBuilder(
+                      listenable: pushService.registrationChanges,
+                      builder: (context, _) => NotionListRow(
+                        leading: const Icon(Icons.phonelink_setup_outlined),
+                        title: 'Push setup & registration',
+                        subtitle: pushService.registrationDescription(
+                          Matrix.of(context).client,
+                        ),
+                        onTap: () => context.push('/rooms/settings/push'),
+                      ),
+                    )
+                  else
+                    NotionListRow(
+                      leading: const Icon(Icons.phonelink_setup_outlined),
+                      title: 'Push setup & registration',
+                      subtitle: 'Registration status is unavailable.',
+                      onTap: () => context.push('/rooms/settings/push'),
+                    ),
+                  NotionListRow(
+                    leading: const Icon(Icons.troubleshoot_outlined),
+                    title: 'Notification diagnostics',
+                    subtitle: 'Checks, recent outcomes and a test notification',
+                    onTap: () => context.push(
+                      '/rooms/settings/notifications/diagnostics',
+                    ),
+                  ),
+                  if (PlatformInfos.isAndroid)
+                    const BatteryOptimizationStatus(),
+                  const NotionSectionHeader(title: 'Advanced'),
+                  NotionListRow(
+                    leading: const Icon(Icons.rule_outlined),
+                    title: 'Server notification rules',
+                    subtitle: 'Matrix push rules of your account',
+                    onTap: () =>
+                        context.push('/rooms/settings/notifications/rules'),
+                  ),
+                ],
+                if (controller.widget.serverRules) ...[
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: NotionSpace.xs),
+                    child: Text(
+                      'These rules are stored on your account and decide which '
+                      'events notify every device. Per-chat rules live in '
+                      'Networks.',
+                    ),
+                  ),
                   const NotionSectionHeader(title: 'Rules'),
                   if (pushRules == null)
                     const NotionListRow(
@@ -160,36 +211,6 @@ class SettingsNotificationsView extends StatelessWidget {
                           ),
                         ),
                     ],
-                  const NotionSectionHeader(title: 'Troubleshooting'),
-                  if (pushService != null)
-                    ListenableBuilder(
-                      listenable: pushService.registrationChanges,
-                      builder: (context, _) => NotionListRow(
-                        leading: const Icon(Icons.phonelink_setup_outlined),
-                        title: 'Push setup & registration',
-                        subtitle: pushService.registrationDescription(
-                          Matrix.of(context).client,
-                        ),
-                        onTap: () => context.push('/rooms/settings/push'),
-                      ),
-                    )
-                  else
-                    NotionListRow(
-                      leading: const Icon(Icons.phonelink_setup_outlined),
-                      title: 'Push setup & registration',
-                      subtitle: 'Registration status is unavailable.',
-                      onTap: () => context.push('/rooms/settings/push'),
-                    ),
-                  NotionListRow(
-                    leading: const Icon(Icons.troubleshoot_outlined),
-                    title: 'Notification diagnostics',
-                    subtitle: 'Checks, recent outcomes and a test notification',
-                    onTap: () => context.push(
-                      '/rooms/settings/notifications/diagnostics',
-                    ),
-                  ),
-                  if (PlatformInfos.isAndroid)
-                    const BatteryOptimizationStatus(),
                 ],
                 if (controller.widget.registrationDetails) ...[
                   if (kDebugMode && lastReceivedPush != null)

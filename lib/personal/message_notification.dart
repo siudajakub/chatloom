@@ -60,9 +60,8 @@ Future<bool> appLockPinConfigured(Future<String?> Function() read) async {
   }
 }
 
-/// Intended lock-screen text (see the library comment for the platform limit).
+/// Generic title used while the app lock is configured.
 const messagePublicTitle = 'New message';
-const messagePublicBody = 'Unlock to view';
 
 /// Separate Android channels so users can tune messages and reminders apart.
 abstract final class PersonalNotificationChannels {
@@ -204,9 +203,7 @@ MessagingStyleInformation messagingStyle({
         .map(
           (m) => _withIcon(
             m,
-            m.person?.key == senderKey
-                ? senderIcon
-                : knownIcons[m.person?.key],
+            m.person?.key == senderKey ? senderIcon : knownIcons[m.person?.key],
           ),
         ),
     message,

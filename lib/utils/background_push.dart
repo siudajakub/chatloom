@@ -21,6 +21,7 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
 import 'package:chatloom/personal/push_registration.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
+import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/push_helper.dart';
 import 'package:chatloom/widgets/chatloom_app.dart';
@@ -38,6 +39,7 @@ import 'package:unifiedpush_ui/unifiedpush_ui.dart';
 import '../config/app_config.dart';
 import '../config/setting_keys.dart';
 import '../widgets/matrix.dart';
+import 'background_push_catch_up.dart';
 import 'platform_infos.dart';
 import 'push_registration_retry.dart';
 import 'start_push_foreground_service.dart';
@@ -730,7 +732,7 @@ class BackgroundPush {
           );
           return;
         }
-        await pushHelper(
+        final outcome = await pushHelper(
           PushNotification.fromJson(data),
           clients: clients,
           l10n: l10n,
@@ -738,7 +740,32 @@ class BackgroundPush {
           flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
           test: kind == PushKind.test,
         );
+        if (kind == PushKind.message) await _catchUpAfter(outcome);
       });
+
+  /// Catch-up after a message notification shown in the background (see
+  /// [PushCatchUp]); runs inside the push's short foreground service.
+  @visibleForTesting
+  final pushCatchUp = PushCatchUp();
+
+  Future<void> _catchUpAfter(PushOutcome outcome) async {
+    if (!PushCatchUp.wanted(
+      outcome,
+      mobile: PlatformInfos.isMobile,
+      lifecycle: WidgetsBinding.instance.lifecycleState,
+    )) {
+      return;
+    }
+    // The gateway's pushes carry no account: the single signed-in one.
+    final client = selectNotificationClient<Client>(
+      clients,
+      null,
+      (client) => client.clientName,
+      isLoggedIn: (client) => client.isLogged(),
+    );
+    if (client == null) return;
+    await pushCatchUp.run(client);
+  }
 
   /// Runs the real FCM message path with the gateway's exact data map for
   /// the newest message from someone else. Only the "already read" and
@@ -1021,13 +1048,14 @@ class BackgroundPush {
         await PushDiagnostics.received(
           data['event_id'] is String ? PushKind.message : PushKind.countOnly,
         );
-        await pushHelper(
+        final outcome = await pushHelper(
           PushNotification.fromJson(data),
           clients: clients,
           l10n: l10n,
           activeRoomId: matrix?.activeRoomId,
           flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
         );
+        await _catchUpAfter(outcome);
       });
 }
 
