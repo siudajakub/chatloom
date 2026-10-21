@@ -33,7 +33,9 @@ void main() {
       List<int>.generate(32, (_) => Random.secure().nextInt(256)),
     );
     final temporary = await getTemporaryDirectory();
-    final directory = await Directory('${temporary.path}/$marker').create();
+    final directory = await Directory(
+      '${temporary.path}/$marker',
+    ).create(recursive: true);
     final path = '${directory.path}/smoke.db';
     SqlCipherJsonDatabase? database;
     try {
