@@ -32,9 +32,12 @@ Inside it are the application ZIP, `manifest.json` and `SHA256SUMS`. The manifes
 records the commit, actual executable architectures, version, native smoke-test
 result and ZIP digest. Every embedded Mach-O image must contain those same
 architecture slices.
-The packages contain one native architecture each. This avoids an upstream
-`webcrypto`/BoringSSL cross-build linker failure in the Intel slice on an ARM
-runner. The pinned cryptographic libraries and native hooks remain unchanged.
+The packages contain one native architecture each. The Intel build also uses a
+scoped CMake adapter to add two existing upstream P-256 assembly files omitted
+from `webcrypto` 0.6.1's Apple source list. The adapter verifies the package's
+CMake hash and leaves dependency caches, cryptographic source code and native
+hook source files unchanged. The smoke suite exercises P-256 key agreement.
+`flutter-queue.py` and the release wrapper select this adapter on Intel Macs.
 
 Extract the application ZIP with Archive Utility and copy `Personal Chat.app`
 to Applications. Its visible name is ChatLoom; the existing bundle identifier

@@ -15,11 +15,26 @@ import 'package:just_audio/just_audio.dart';
 import 'package:ogg_caf_converter/ogg_caf_converter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
+import 'package:webcrypto/webcrypto.dart' as webcrypto;
 
 import 'fixtures/macos_media.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('macOS upstream P-256 native agreement', (_) async {
+    final alice = await webcrypto.EcdhPrivateKey.generateKey(
+      webcrypto.EllipticCurve.p256,
+    );
+    final bob = await webcrypto.EcdhPrivateKey.generateKey(
+      webcrypto.EllipticCurve.p256,
+    );
+    final left = await alice.privateKey.deriveBits(256, bob.publicKey);
+    final right = await bob.privateKey.deriveBits(256, alice.publicKey);
+    expect(left, hasLength(32));
+    expect(left, orderedEquals(right));
+    expect(left.any((byte) => byte != 0), isTrue);
+  });
 
   testWidgets('macOS native crypto, Keychain and encrypted restart', (_) async {
     expect(Platform.isMacOS, isTrue);

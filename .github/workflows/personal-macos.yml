@@ -12,6 +12,8 @@ on:
       - 'integration_test/fixtures/**'
       - 'test/**'
       - 'scripts/build-personal-macos.py'
+      - 'scripts/macos*'
+      - 'scripts/flutter-queue.py'
       - 'pubspec.*'
 
 permissions:
@@ -49,6 +51,8 @@ jobs:
         run: flutter pub get --enforce-lockfile
       - name: Analyze application
         run: flutter analyze lib --no-fatal-infos
+      - name: Prepare the scoped Intel native toolchain fix
+        run: python3 scripts/macos_native_toolchain.py
       - name: Desktop and recorder regressions
         run: >-
           flutter test --no-pub

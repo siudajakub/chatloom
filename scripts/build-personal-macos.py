@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import sys
 
+from macos_native_toolchain import prepare_native_environment
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -42,7 +44,7 @@ def main():
                       'DEVELOPMENT_TEAM =\nPROVISIONING_PROFILE_SPECIFIER =\n'
                       f'ARCHS = {architecture}\nEXCLUDED_ARCHS = {excluded}\n'
                       'ONLY_ACTIVE_ARCH = YES\n')
-    env = {**os.environ, 'XCODE_XCCONFIG_FILE': str(config)}
+    env = {**prepare_native_environment(), 'XCODE_XCCONFIG_FILE': str(config)}
     # An empty access-group array in the inherited template is invalid for
     # ad-hoc signing. Preserve all other sandbox entitlements and restore files.
     entitlements = [ROOT / 'macos/Runner' / name for name in
@@ -62,7 +64,7 @@ def main():
             (ROOT / 'build/macos-smoke-result.json').write_text(json.dumps({
                 'revision': revision, 'status': 'PASS',
                 'configuration': 'debug',
-                'checks': ['vodozemac', 'Keychain', 'SQLCipher restart',
+                'checks': ['P-256 native agreement', 'vodozemac', 'Keychain', 'SQLCipher restart',
                            'SQLCipher wrong-key preservation',
                            'native Opus/CAF audio decode', 'native H.264/AAC video decode'],
             }) + '\n')
