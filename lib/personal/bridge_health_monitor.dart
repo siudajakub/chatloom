@@ -73,6 +73,11 @@ class BridgeHealthMonitor extends ChangeNotifier {
             : a.label.compareTo(b.label),
       );
 
+  /// What this device saw of [network] (per-login notices, last remote
+  /// message, recent deliveries), for the Networks page's details. Read
+  /// only; `null` when nothing was seen.
+  BridgeSignals? signalsFor(String network) => _signals[network];
+
   /// The problem of [room]'s network, if any.
   BridgeHealth? problemFor(Room room) {
     final network = bridgeNetworkOfRoom(room);

@@ -43,6 +43,7 @@ class BridgeStateReport {
     this.error,
     this.userAction,
     this.roomId,
+    this.remoteName,
   });
 
   /// Canonical network (`whatsapp`, `instagram`, ...).
@@ -61,6 +62,11 @@ class BridgeStateReport {
 
   /// Management room the notice arrived in (the "Open bridge" target).
   final String? roomId;
+
+  /// The bridge's display name of the signed-in account (`remote_name`, e.g.
+  /// the account's own phone number or username). Shown only to the account
+  /// owner on the Networks page; never logged.
+  final String? remoteName;
 
   static const _states = {
     'STARTING',
@@ -112,6 +118,7 @@ class BridgeStateReport {
       error: text(state['error']),
       userAction: text(state['user_action']),
       roomId: roomId,
+      remoteName: text(state['remote_name']),
     );
   }
 
@@ -210,6 +217,7 @@ class BridgeHealth {
     required this.signature,
     this.since,
     this.managementRoomId,
+    this.summary = '',
   });
 
   final String network;
@@ -217,6 +225,10 @@ class BridgeHealth {
 
   /// "WhatsApp is signed out".
   final String title;
+
+  /// The same verdict without the network name, for a row that already
+  /// shows it: "Signed out", "Reconnecting". Falls back to [title].
+  final String summary;
 
   /// What it means for the user, one sentence.
   final String reason;
@@ -245,7 +257,8 @@ class BridgeHealth {
       other.reason == reason &&
       other.signature == signature &&
       other.since == since &&
-      other.managementRoomId == managementRoomId;
+      other.managementRoomId == managementRoomId &&
+      other.summary == summary;
 
   @override
   int get hashCode => Object.hash(
@@ -256,6 +269,7 @@ class BridgeHealth {
     signature,
     since,
     managementRoomId,
+    summary,
   );
 }
 
@@ -320,7 +334,7 @@ BridgeHealth evaluateBridgeHealth(
   final room = signals.managementRoomId;
   if (worst != null) {
     final state = worst.state;
-    final (title, reason) = switch (state) {
+    final (title, reason, summary) = switch (state) {
       BridgeHealthState.loggedOut => (
         '$label is signed out',
         worst.stateEvent == 'UNCONFIGURED'
@@ -328,28 +342,36 @@ BridgeHealth evaluateBridgeHealth(
                   'arrive until you sign in in the bridge chat.'
             : 'Messages won’t arrive until you sign in again in the bridge '
                   'chat.',
+        worst.stateEvent == 'UNCONFIGURED' ? 'Not signed in' : 'Signed out',
       ),
       BridgeHealthState.disconnected => (
         worst.stateEvent == 'BRIDGE_UNREACHABLE'
             ? '$label bridge isn’t running'
             : '$label is disconnected',
         'Messages may not arrive or be delivered until it reconnects.',
+        worst.stateEvent == 'BRIDGE_UNREACHABLE'
+            ? 'Bridge isn’t running'
+            : 'Disconnected',
       ),
-      _ => worst.userAction == 'OPEN_NATIVE'
-          ? (
-              '$label needs its phone app',
-              'Open $label on your phone so the bridge stays connected.',
-            )
-          : (
-              '$label is reconnecting',
-              'Messages may be delayed.',
-            ),
+      _ =>
+        worst.userAction == 'OPEN_NATIVE'
+            ? (
+                '$label needs its phone app',
+                'Open $label on your phone so the bridge stays connected.',
+                'Open the app on your phone',
+              )
+            : (
+                '$label is reconnecting',
+                'Messages may be delayed.',
+                'Reconnecting',
+              ),
     };
     return BridgeHealth(
       network: network,
       state: state,
       title: title,
       reason: reason,
+      summary: summary,
       since: worst.at,
       managementRoomId: room,
       signature:
@@ -370,6 +392,7 @@ BridgeHealth evaluateBridgeHealth(
       network: network,
       state: BridgeHealthState.degraded,
       title: '$label isn’t delivering messages',
+      summary: 'Messages aren’t being delivered',
       reason:
           '${recentFailures.length} recent messages to $label failed. The '
           'bridge may be disconnected.',
@@ -385,6 +408,7 @@ BridgeHealth evaluateBridgeHealth(
         ? BridgeHealthState.ok
         : BridgeHealthState.unknown,
     title: '$label is connected',
+    summary: 'Connected',
     reason: '',
     managementRoomId: room,
     signature: 'bridge:$network:ok',

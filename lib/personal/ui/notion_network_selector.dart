@@ -36,6 +36,9 @@ class NotionNetworkGlyph extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final glyph = _networkGlyphKey(network);
+    // Vivid intensity draws the mark in its brand colour; otherwise it
+    // follows the surrounding icon colour (monochrome).
+    final brand = context.notion.palette.network(glyph);
     if (![
       'whatsapp',
       'slack',
@@ -43,14 +46,14 @@ class NotionNetworkGlyph extends StatelessWidget {
       'messenger',
       'facebook',
     ].contains(glyph)) {
-      return Icon(notionNetworkIcon(network), size: size);
+      return Icon(notionNetworkIcon(network), size: size, color: brand);
     }
     return SizedBox.square(
       dimension: size,
       child: CustomPaint(
         painter: _NetworkGlyphPainter(
           glyph!,
-          Theme.of(context).colorScheme.onSurface,
+          brand ?? Theme.of(context).colorScheme.onSurface,
           Theme.of(context).colorScheme.surfaceContainer,
         ),
       ),
