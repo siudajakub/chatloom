@@ -493,10 +493,11 @@ void main() {
       expect(stage.isStaged(video), isTrue);
       expect(stage.actions, isNot(same(rowActions)));
       expect(
-        find.byTooltip('Stop playback'),
+        find.byTooltip('More options'),
         findsOneWidget,
-        reason: 'only the stage button, the mini bar is hidden',
+        reason: 'only the stage menu, the mini bar is hidden',
       );
+      expect(find.byTooltip('Stop playback'), findsNothing);
       await tester.runAsync(control.stop);
       await tester.pumpAndSettle();
       expect(stage.isOpen, isFalse);

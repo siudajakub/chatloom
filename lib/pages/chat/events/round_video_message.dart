@@ -1159,25 +1159,40 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       error: _error,
       onToggle: _toggle,
       onCancel: _cancel,
-      onReportPlayed: _canReportPlayed ? _reportPlayed : null,
+
       actions: [
-        if (policy.canExport && widget.onExport != null)
-          RoundSideAction(
-            tooltip: 'Save round video',
-            onPressed: () => _action(widget.onExport!),
-            icon: Icons.download_outlined,
-          ),
-        if (policy.canForward && widget.onForward != null)
-          RoundSideAction(
-            tooltip: 'Forward in Telegram',
-            onPressed: () => _action(widget.onForward!),
-            icon: Icons.forward_outlined,
-          ),
-        if (policy.canTranscribe && widget.onTranscribe != null)
-          RoundSideAction(
-            tooltip: 'Transcribe',
-            onPressed: () => _action(widget.onTranscribe!),
-            icon: Icons.transcribe_outlined,
+        if (policy.canExport && widget.onExport != null ||
+            policy.canForward && widget.onForward != null ||
+            policy.canTranscribe && widget.onTranscribe != null ||
+            _canReportPlayed)
+          NotionMediaActionsButton(
+            backgroundColor: NotionMediaColors.scrim,
+            actions: [
+              if (policy.canExport && widget.onExport != null)
+                NotionMediaAction(
+                  label: 'Save round video',
+                  icon: Icons.download_outlined,
+                  onPressed: () => _action(widget.onExport!),
+                ),
+              if (policy.canForward && widget.onForward != null)
+                NotionMediaAction(
+                  label: 'Forward in Telegram',
+                  icon: Icons.forward_outlined,
+                  onPressed: () => _action(widget.onForward!),
+                ),
+              if (policy.canTranscribe && widget.onTranscribe != null)
+                NotionMediaAction(
+                  label: 'Transcribe',
+                  icon: Icons.transcribe_outlined,
+                  onPressed: () => _action(widget.onTranscribe!),
+                ),
+              if (_canReportPlayed)
+                NotionMediaAction(
+                  label: 'Send playback receipt',
+                  icon: Icons.mark_chat_read_outlined,
+                  onPressed: _reportPlayed,
+                ),
+            ],
           ),
       ],
     );

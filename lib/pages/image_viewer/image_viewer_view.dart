@@ -71,51 +71,37 @@ class ImageViewerView extends StatelessWidget {
                           redacted: event.redacted,
                         ) !=
                         null;
-                    return Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          style: iconButtonStyle,
-                          icon: const Icon(Icons.reply_outlined),
-                          onPressed:
-                              !event.redacted &&
-                                  policy.canForward &&
-                                  (!round ||
-                                      TelegramRoundService.of(
-                                        event.room.client,
-                                      ).canNativeForward(event))
+                    final canForward =
+                        !event.redacted &&
+                        policy.canForward &&
+                        (!round ||
+                            TelegramRoundService.of(
+                              event.room.client,
+                            ).canNativeForward(event));
+                    final canExport = !event.redacted && policy.canExport;
+                    return NotionMediaActionsButton(
+                      actions: [
+                        NotionMediaAction(
+                          label: round ? 'Forward in Telegram' : 'Forward',
+                          icon: Icons.reply_outlined,
+                          onPressed: canForward
                               ? controller.forwardAction
                               : null,
-                          color: NotionMediaColors.onScrim,
-                          tooltip: round
-                              ? 'Przekazywanie w Telegramie wymaga wsparcia mostu'
-                              : L10n.of(context).share,
                         ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          style: iconButtonStyle,
-                          icon: const Icon(Icons.download_outlined),
-                          onPressed: !event.redacted && policy.canExport
+                        NotionMediaAction(
+                          label: L10n.of(context).downloadFile,
+                          icon: Icons.download_outlined,
+                          onPressed: canExport
                               ? () => controller.saveFileAction(context)
                               : null,
-                          color: NotionMediaColors.onScrim,
-                          tooltip: L10n.of(context).downloadFile,
                         ),
-                        const SizedBox(width: 8),
                         if (PlatformInfos.isMobile)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: Builder(
-                              builder: (context) => IconButton(
-                                style: iconButtonStyle,
-                                onPressed: !event.redacted && policy.canExport
-                                    ? () => controller.shareFileAction(context)
-                                    : null,
-                                tooltip: L10n.of(context).share,
-                                color: NotionMediaColors.onScrim,
-                                icon: Icon(Icons.adaptive.share_outlined),
-                              ),
-                            ),
+                          NotionMediaAction(
+                            label: L10n.of(context).share,
+                            icon: Icons.adaptive.share_outlined,
+                            onPressed: canExport
+                                ? () => controller.shareFileAction(context)
+                                : null,
                           ),
                       ],
                     );
@@ -130,7 +116,22 @@ class ImageViewerView extends StatelessWidget {
             children: [
               // Fades in with the route and out while the media is swiped
               // away.
-              Positioned.fill(child: NotionMediaBackdrop(drag: drag)),
+              Positioned.fill(
+                child: AnimatedBuilder(
+                  animation: controller.pageController,
+                  builder: (context, _) {
+                    final event = controller.pageController.hasClients
+                        ? controller.currentEvent
+                        : controller.widget.event;
+                    return NotionMediaBackdrop(
+                      drag: drag,
+                      color: event.messageType == MessageTypes.Video
+                          ? NotionMediaColors.stageScrim
+                          : NotionMediaColors.viewer,
+                    );
+                  },
+                ),
+              ),
               NotionDismissTransform(
                 drag: drag,
                 child: KeyboardListener(
@@ -193,7 +194,10 @@ class ImageViewerView extends StatelessWidget {
   Widget _page(BuildContext context, Event event) {
     final policy = RoundMediaPolicy.fromContent(event.content);
     final round =
-        RoundVideoDescriptor.fromContent(event.content, redacted: event.redacted) !=
+        RoundVideoDescriptor.fromContent(
+          event.content,
+          redacted: event.redacted,
+        ) !=
         null;
     if (!policy.canPlay || round || event.redacted) {
       return _VerticalDismiss(

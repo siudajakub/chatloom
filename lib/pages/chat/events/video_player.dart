@@ -88,7 +88,7 @@ class EventVideoPlayer extends StatelessWidget {
           spacing: 8,
           children: [
             Material(
-              color: Colors.black,
+              color: context.notion.colors.surface,
               borderRadius: frameRadius,
               child: InkWell(
                 onTap: uploading
@@ -135,23 +135,47 @@ class EventVideoPlayer extends StatelessWidget {
                               ? OutgoingUploadOverlay(
                                   progress: uploadProgressOf(event),
                                 )
-                              : CircleAvatar(
-                                  child: supportsVideoPlayer
-                                      ? const Icon(Icons.play_arrow_outlined)
-                                      : const Icon(
-                                          Icons.file_download_outlined,
-                                        ),
+                              : DecoratedBox(
+                                  decoration: const ShapeDecoration(
+                                    color: NotionMediaColors.scrim,
+                                    shape: CircleBorder(),
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(
+                                      NotionSpace.sm,
+                                    ),
+                                    child: Icon(
+                                      supportsVideoPlayer
+                                          ? Icons.play_arrow_outlined
+                                          : Icons.file_download_outlined,
+                                      color: NotionMediaColors.onScrim,
+                                      size: NotionSize.iconLg,
+                                    ),
+                                  ),
                                 ),
                         ),
                         if (duration != null)
                           Positioned(
-                            bottom: 8,
-                            left: 16,
-                            child: Text(
-                              '${duration.inMinutes.toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
-                              style: TextStyle(
-                                color: Colors.white,
-                                backgroundColor: Colors.black.withAlpha(32),
+                            bottom: NotionSpace.xs,
+                            left: NotionSpace.md,
+                            child: DecoratedBox(
+                              decoration: const BoxDecoration(
+                                color: NotionMediaColors.scrim,
+                                borderRadius: NotionRadius.pillAll,
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: NotionSpace.xs,
+                                  vertical: NotionSpace.xxs,
+                                ),
+                                child: Text(
+                                  NotionMediaPlaybackControls.formatTime(
+                                    duration,
+                                  ),
+                                  style: NotionType.caption.copyWith(
+                                    color: NotionMediaColors.onScrim,
+                                  ),
+                                ),
                               ),
                             ),
                           ),

@@ -252,9 +252,6 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
   );
   bool _closing = false;
 
-  /// Slider position while dragging; the video seeks once on release.
-  double? _dragMs;
-
   @override
   void initState() {
     super.initState();
@@ -297,13 +294,19 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
         builder: (context) {
           final size = MediaQuery.sizeOf(context);
           final padding = MediaQuery.paddingOf(context);
+          const controlsHeight = NotionSize.touchTarget * 2 + NotionSpace.md;
           final diameter = math
               .min(
-                size.shortestSide - 2 * NotionSpace.inset,
+                math.min(
+                  size.width - 2 * NotionSpace.inset,
+                  size.height -
+                      padding.vertical -
+                      2 * NotionSpace.md -
+                      controlsHeight,
+                ),
                 RoundVideoStage.maxDiameter,
               )
               .clamp(RoundVideoView.minDiameter, RoundVideoStage.maxDiameter);
-          const controlsHeight = 176.0;
           final top = math.max(
             padding.top + NotionSpace.md,
             (size.height - diameter - controlsHeight) / 2,
@@ -370,17 +373,6 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
       );
     },
   );
-
-  /// Seeks once per drag; the preview holds until the seek lands so the
-  /// thumb does not jump back to the old position.
-  Future<void> _seekTo(RoundStageActions actions, double ms) async {
-    setState(() => _dragMs = ms);
-    try {
-      await actions.seek(Duration(milliseconds: ms.round()));
-    } finally {
-      if (mounted && _dragMs == ms) setState(() => _dragMs = null);
-    }
-  }
 
   /// The owner's circle, or null. Never throws into this build: an
   /// exception here would replace the whole stage with an ErrorWidget (a
@@ -539,124 +531,68 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
       value.isInitialized && !value.hasError;
 
   Widget _controls(RoundStageActions actions) {
-    final buttonStyle = TextButton.styleFrom(
-      foregroundColor: roundVideoOnScrim,
-    );
     return ValueListenableBuilder<VideoPlayerValue>(
       valueListenable: widget.video,
-      builder: (context, value, _) {
-        final totalMs = math.max(1, value.duration.inMilliseconds).toDouble();
-        final currentMs = (_dragMs ?? value.position.inMilliseconds.toDouble())
-            .clamp(0.0, totalMs);
-        final shownPosition = Duration(milliseconds: currentMs.round());
-        final speed = value.playbackSpeed;
-        return IconTheme.merge(
-          data: const IconThemeData(color: roundVideoOnScrim),
-          child: DefaultTextStyle.merge(
-            style: NotionType.caption.copyWith(color: roundVideoOnScrim),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      '${RoundVideoView.formatTime(shownPosition)} / '
-                      '${RoundVideoView.formatTime(value.duration)}',
-                    ),
-                    const Spacer(),
-                    Semantics(
-                      label: 'Playback speed',
-                      hint: 'Long press for more speeds',
-                      child: TextButton(
-                        style: buttonStyle,
-                        // Same tap cycle as voice messages.
-                        onPressed: () =>
-                            actions.setSpeed(RoundVideoView.nextSpeed(speed)),
-                        onLongPress: () => showRoundSpeedPicker(
-                          context,
-                          speed: speed,
-                          onChanged: (value) => actions.setSpeed(value),
-                        ),
-                        child: Text(RoundVideoView.speedLabel(speed)),
-                      ),
-                    ),
-                  ],
-                ),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: roundVideoOnScrim,
-                    thumbColor: roundVideoOnScrim,
-                    inactiveTrackColor: roundVideoOnScrim.withAlpha(80),
+      builder: (context, value, _) => NotionMediaPlaybackControls(
+        playing: value.isPlaying,
+        position: value.position,
+        duration: value.duration,
+        speed: value.playbackSpeed,
+        playLabel: 'Play round video',
+        pauseLabel: 'Pause round video',
+        onToggle: _ready(value) ? actions.toggle : null,
+        onSeek: _ready(value) ? actions.seek : null,
+        onSpeedCycle: !_ready(value)
+            ? null
+            : () => actions.setSpeed(
+                RoundVideoView.nextSpeed(value.playbackSpeed),
+              ),
+        onSpeedPicker: !_ready(value)
+            ? null
+            : () => showRoundSpeedPicker(
+                context,
+                speed: value.playbackSpeed,
+                onChanged: actions.setSpeed,
+              ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NotionMediaActionsButton(
+              actions: [
+                if (actions.save != null)
+                  NotionMediaAction(
+                    label: 'Save round video',
+                    icon: Icons.download_outlined,
+                    onPressed: actions.save,
                   ),
-                  child: Slider(
-                    value: currentMs,
-                    max: totalMs,
-                    semanticFormatterCallback: (value) =>
-                        RoundVideoView.formatTime(
-                          Duration(milliseconds: value.round()),
-                        ),
-                    onChangeStart: (value) => setState(() => _dragMs = value),
-                    onChanged: (value) => setState(() => _dragMs = value),
-                    onChangeEnd: (value) => unawaited(_seekTo(actions, value)),
+                if (actions.forward != null)
+                  NotionMediaAction(
+                    label: 'Forward in Telegram',
+                    icon: Icons.forward_outlined,
+                    onPressed: actions.forward,
                   ),
-                ),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: NotionSpace.xs,
-                  children: [
-                    IconButton(
-                      tooltip: value.isPlaying
-                          ? 'Pause round video'
-                          : 'Play round video',
-                      color: roundVideoOnScrim,
-                      onPressed: actions.toggle,
-                      icon: NotionMorphSwitcher(
-                        child: Icon(
-                          value.isPlaying ? Icons.pause : Icons.play_arrow,
-                          key: ValueKey(value.isPlaying),
-                        ),
-                      ),
-                    ),
-                    if (actions.save != null)
-                      IconButton(
-                        tooltip: 'Save round video',
-                        color: roundVideoOnScrim,
-                        onPressed: actions.save,
-                        icon: const Icon(Icons.download_outlined),
-                      ),
-                    if (actions.forward != null)
-                      IconButton(
-                        tooltip: 'Forward in Telegram',
-                        color: roundVideoOnScrim,
-                        onPressed: actions.forward,
-                        icon: const Icon(Icons.forward_outlined),
-                      ),
-                    IconButton(
-                      tooltip: 'Stop playback',
-                      color: roundVideoOnScrim,
-                      onPressed: actions.stop,
-                      icon: const Icon(Icons.stop),
-                    ),
-                    IconButton(
-                      tooltip: 'Shrink round video',
-                      color: roundVideoOnScrim,
-                      onPressed: widget.controller.shrink,
-                      icon: const Icon(Icons.close_fullscreen),
-                    ),
-                  ],
-                ),
                 if (actions.reportPlayed != null && _canReport(actions))
-                  TextButton(
-                    style: buttonStyle,
+                  NotionMediaAction(
+                    label: 'Send playback receipt',
+                    icon: Icons.done_all,
                     onPressed: actions.reportPlayed,
-                    child: const Text('Send playback receipt'),
                   ),
+                NotionMediaAction(
+                  label: 'Stop playback',
+                  icon: Icons.stop,
+                  onPressed: actions.stop,
+                ),
               ],
             ),
-          ),
-        );
-      },
+            IconButton(
+              tooltip: 'Shrink round video',
+              color: roundVideoOnScrim,
+              onPressed: widget.controller.shrink,
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

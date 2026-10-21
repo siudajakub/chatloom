@@ -113,7 +113,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Pause round video'));
     expect(first.toggles, 1);
-    await tester.tap(find.byTooltip('Save round video'));
+    expect(find.text('Save round video'), findsNothing);
+    await tester.tap(find.byTooltip('More options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save round video'));
+    await tester.pumpAndSettle();
     expect(first.saves, 1);
     // Row recycled → mini player owns the same controller.
     stage.rebind(video, second.actions(save: false));
@@ -122,7 +126,10 @@ void main() {
     await tester.tap(find.bySemanticsLabel('Round video, enlarged'));
     expect(second.toggles, 1);
     expect(first.toggles, 1);
-    await tester.tap(find.byTooltip('Stop playback'));
+    await tester.tap(find.byTooltip('More options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Stop playback'));
+    await tester.pumpAndSettle();
     expect(second.stops, 1);
     stage.release(video);
     await tester.pumpAndSettle();
