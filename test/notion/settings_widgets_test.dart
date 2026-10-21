@@ -23,6 +23,31 @@ NotionSettingsPage _index({
 
 void main() {
   testWidgets(
+    'desktop without notifications keeps reminders and scheduled tools',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NotionSettingsPage(
+            data: const NotionSettingsData(
+              name: 'Fictional account',
+              avatar: Icon(Icons.person_outline),
+              notificationsAvailable: false,
+            ),
+            actions: const NotionSettingsActions(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Notifications'), findsNothing);
+      await tester.scrollUntilVisible(find.text('Reminders'), 100);
+      expect(find.text('Reminders'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Scheduled messages'), 100);
+      expect(find.text('Scheduled messages'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'all categories and tools are direct, single destinations without overflow',
     (tester) async {
       final visited = <String>[];

@@ -515,9 +515,12 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
           : 'Review before sending',
     RoundCaptureState.canceled => 'Recording cancelled',
     RoundCaptureState.failed => switch (_controller.errorCode) {
-      'permission_denied' => 'Camera and microphone access is required.',
+      'permission_denied' =>
+        Platform.isMacOS
+            ? 'Allow ChatLoom in System Settings → Privacy & Security → Camera and Microphone.'
+            : 'Camera and microphone access is required.',
       'unsupported_android' || 'unsupported_platform' =>
-        'Round video recording requires Android 7 or later.',
+        'Round video recording requires Android 7 or later, or macOS.',
       'recording_too_short' => 'The recording is too short. Record again.',
       'interrupted' => 'Recording was interrupted. Record again.',
       _ => 'The recording could not be prepared. Record again.',

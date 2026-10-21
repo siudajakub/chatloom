@@ -51,7 +51,10 @@ jobs:
           test/personal/round_video/round_capture_controller_test.dart
           test/personal/round_video/round_capture_profile_test.dart
           test/notion/two_column_accessibility_test.dart
+          test/notion/settings_widgets_test.dart
+          test/utils/session_backup_writer_test.dart
       - name: Account-free native storage and crypto smoke test
+        timeout-minutes: 20
         run: python3 scripts/build-personal-macos.py --smoke-test
       - name: Build and verify release bundle
         run: python3 scripts/build-personal-macos.py

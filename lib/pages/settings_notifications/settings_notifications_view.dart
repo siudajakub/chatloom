@@ -31,6 +31,17 @@ class SettingsNotificationsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!PlatformInfos.supportsSystemNotifications) {
+      return NotionScaffold(
+        title: 'Notifications',
+        body: const NotionEmptyState(
+          icon: Icons.notifications_off_outlined,
+          title: 'System notifications are off',
+          message:
+              'Conversation reminders and scheduled messages are available in Tools.',
+        ),
+      );
+    }
     final pushRules = Matrix.of(context).client.globalPushRules;
     final pushCategories = [
       if (pushRules?.override?.isNotEmpty ?? false)

@@ -172,7 +172,7 @@ String roundFailureMessage(Object error) {
       'permission_denied' =>
         'Allow camera and microphone access to record round videos.',
       'unsupported_android' || 'unsupported_platform' =>
-        'Round video recording requires Android 7 or later.',
+        'Round video recording requires Android 7 or later, or macOS.',
       'interrupted' || 'busy' || 'stale_camera' =>
         'The camera was interrupted. Nothing was sent. Try again.',
       _ => roundFailureFallback,

@@ -18,6 +18,7 @@ final class RoundCapture: NSObject, FlutterTexture,
   private var session: AVCaptureSession?
   private var movie: AVCaptureMovieFileOutput?
   private var videoInput: AVCaptureDeviceInput?
+  private var previewOutput: AVCaptureVideoDataOutput?
   private var captureID: String?
   private var directory: URL?
   private var output: URL?
@@ -71,7 +72,11 @@ final class RoundCapture: NSObject, FlutterTexture,
       initialize(args, id: id, result: result)
       return
     }
-    guard id == captureID else { fail(result, "canceled"); return }
+    guard id == captureID else {
+      if call.method == "cancel" || call.method == "dispose" { reply(result) }
+      else { fail(result, "canceled") }
+      return
+    }
     switch call.method {
     case "start", "resume":
       guard exporter == nil, stopAction == nil, movie?.isRecording == false else {
@@ -163,12 +168,15 @@ final class RoundCapture: NSObject, FlutterTexture,
     canceled = false
     interrupted = false
     authorize(.video) { video in
-      guard video else { self.fail(result, "permission_denied"); return }
-      self.authorize(.audio) { audio in
-        self.queue.async {
-          guard !self.canceled, self.captureID == id else { self.fail(result, "canceled"); return }
-          guard audio else { self.fail(result, "permission_denied"); return }
-          self.openCamera(result)
+      self.queue.async {
+        guard !self.canceled, self.captureID == id else { self.fail(result, "canceled"); return }
+        guard video else { self.fail(result, "permission_denied"); return }
+        self.authorize(.audio) { audio in
+          self.queue.async {
+            guard !self.canceled, self.captureID == id else { self.fail(result, "canceled"); return }
+            guard audio else { self.fail(result, "permission_denied"); return }
+            self.openCamera(result)
+          }
         }
       }
     }
@@ -211,11 +219,11 @@ final class RoundCapture: NSObject, FlutterTexture,
       }
       capture.addOutput(preview); capture.addOutput(recording)
       if let connection = recording.connection(with: .video),
-         recording.availableVideoCodecTypes.contains(.h264) {
+         recording.supportedOutputSettingsKeys(for: connection).contains(AVVideoCodecKey) {
         recording.setOutputSettings([AVVideoCodecKey: AVVideoCodecType.h264], for: connection)
       }
       capture.commitConfiguration()
-      session = capture; movie = recording; videoInput = input
+      session = capture; movie = recording; videoInput = input; previewOutput = preview
       sessionObserver = NotificationCenter.default.addObserver(
         forName: AVCaptureSession.runtimeErrorNotification, object: capture, queue: nil
       ) { [weak self] _ in self?.interrupt() }
@@ -245,6 +253,7 @@ final class RoundCapture: NSObject, FlutterTexture,
 
   func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                      from connection: AVCaptureConnection) {
+    guard let preview = previewOutput, output === preview else { return }
     guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
     bufferLock.lock(); pixelBuffer = buffer; bufferLock.unlock()
     DispatchQueue.main.async {
@@ -257,7 +266,7 @@ final class RoundCapture: NSObject, FlutterTexture,
       fail(result, "capture"); return
     }
     let remaining = maxDuration - Int(CMTimeGetSeconds(recorded) * 1000)
-    guard remaining >= 100 else { fail(result, "too_short"); return }
+      guard remaining >= 100 else { fail(result, "recording_too_short"); return }
     segmentIndex += 1
     let url = directory.appendingPathComponent("segment-\(segmentIndex).mov")
     movie.maxRecordedDuration = CMTime(value: Int64(remaining), timescale: 1000)
@@ -269,6 +278,7 @@ final class RoundCapture: NSObject, FlutterTexture,
   func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo url: URL,
                   from connections: [AVCaptureConnection], error: Error?) {
     queue.async {
+      guard let current = self.movie, output === current else { return }
       if self.canceled { self.cleanup(); self.completeStop(); return }
       if let error = error as NSError?,
          error.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool != true {
@@ -315,7 +325,7 @@ final class RoundCapture: NSObject, FlutterTexture,
         cursor = CMTimeAdd(cursor, length)
       }
       let duration = CMTimeMinimum(cursor, CMTime(value: Int64(maxDuration), timescale: 1000))
-      guard CMTimeGetSeconds(duration) >= 0.8 else { finishError("too_short"); return }
+      guard CMTimeGetSeconds(duration) >= 0.8 else { finishError("recording_too_short"); return }
       export(composition, range: CMTimeRange(start: .zero, duration: duration))
     } catch { finishError("capture") }
   }
@@ -387,7 +397,8 @@ final class RoundCapture: NSObject, FlutterTexture,
             CMFormatDescriptionGetMediaSubType(a) == kAudioFormatMPEG4AAC,
             Int(dimensions.width) == side, Int(dimensions.height) == side,
             duration >= 800, duration <= maxDuration,
-            let bytes = size?.int64Value, bytes > 0, bytes <= maxBytes else {
+            let bytes = size?.int64Value, bytes > 0, bytes <= maxBytes,
+            try hasFastStart(staging) else {
         finishError("invalid_output"); return
       }
       // A failed trim leaves the last validated file in place.
@@ -395,17 +406,54 @@ final class RoundCapture: NSObject, FlutterTexture,
         finishError("capture"); return
       }
       try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: output.path)
-      let descriptor: [String: Any] = [
+      var descriptor: [String: Any] = [
         "captureId": captureID ?? "", "path": output.path,
         "width": side, "height": side, "durationMs": duration, "sizeBytes": bytes,
         "videoCodec": "h264", "audioCodec": "aac", "cornersSanitized": true,
         "fastStart": true, "wasInterrupted": interrupted]
+      let generator = AVAssetImageGenerator(asset: AVURLAsset(url: output))
+      generator.appliesPreferredTrackTransform = true
+      if let image = try? generator.copyCGImage(at: .zero, actualTime: nil),
+         let jpeg = NSBitmapImageRep(cgImage: image).representation(
+            using: .jpeg, properties: [.compressionFactor: 0.8]) {
+        let thumbnail = output.deletingLastPathComponent().appendingPathComponent("thumb.jpg")
+        do {
+          try jpeg.write(to: thumbnail, options: .atomic)
+          try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: thumbnail.path)
+          descriptor["thumbnailPath"] = thumbnail.path
+        } catch { /* A thumbnail failure must not discard the validated video. */ }
+      }
       if let result = pendingFinish {
         pendingFinish = nil; reply(result, descriptor)
       } else {
         event("completed", descriptor)
       }
     } catch { finishError("capture") }
+  }
+
+  /// Do not claim fast-start based only on the encoder's optimization hint.
+  private func hasFastStart(_ url: URL) throws -> Bool {
+    let data = try Data(contentsOf: url, options: .mappedIfSafe)
+    var offset = 0
+    func integer(_ start: Int, _ count: Int) -> UInt64 {
+      data[start..<(start + count)].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+    }
+    while offset + 8 <= data.count {
+      var length = integer(offset, 4)
+      let type = String(bytes: data[(offset + 4)..<(offset + 8)], encoding: .ascii)
+      let header = length == 1 ? 16 : 8
+      if length == 1 {
+        guard offset + 16 <= data.count else { return false }
+        length = integer(offset + 8, 8)
+      } else if length == 0 {
+        length = UInt64(data.count - offset)
+      }
+      guard length >= UInt64(header), length <= UInt64(data.count - offset) else { return false }
+      if type == "moov" { return true }
+      if type == "mdat" { return false }
+      offset += Int(length)
+    }
+    return false
   }
 
   private func switchCamera(_ args: [String: Any], result: @escaping FlutterResult) {
@@ -459,7 +507,7 @@ final class RoundCapture: NSObject, FlutterTexture,
     if let observer = sessionObserver {
       NotificationCenter.default.removeObserver(observer); sessionObserver = nil
     }
-    session?.stopRunning(); session = nil; movie = nil; videoInput = nil
+    session?.stopRunning(); session = nil; movie = nil; videoInput = nil; previewOutput = nil
     for url in segments { try? FileManager.default.removeItem(at: url) }
     segments = []; recorded = .zero; stopAction = nil
     captureID = nil

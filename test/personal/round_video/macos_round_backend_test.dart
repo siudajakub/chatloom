@@ -66,7 +66,9 @@ void main() {
       PreparedRoundMedia? media;
       MacOSRoundCaptureBackend? backend;
       try {
-        final access = await MediaAccess.open(directory: directory);
+        final access = await MediaAccess.open(
+          directory: Directory('${directory.path}/media'),
+        );
         backend = MacOSRoundCaptureBackend(access, channel: channel);
         final preview = await backend.initialize(
           const RoundCaptureProfile(maxBytes: 100000),

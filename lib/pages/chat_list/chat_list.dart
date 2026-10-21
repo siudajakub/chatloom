@@ -154,6 +154,7 @@ class ChatList extends StatefulWidget {
 
 class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   static ChatListController? _shortcutOwner;
+  bool _searchOpen = false;
   OwnedAsyncWait? _firstSyncWait;
   int _firstSyncGeneration = 0;
 
@@ -405,29 +406,34 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   /// and recent messages. It is also where new chats start (Telegram,
   /// Messenger); the app never searches the Matrix directory.
   void openSearch() {
-    if (!mounted || !PersonalPrivacy.surfaceUnlocked) return;
+    if (!mounted || !PersonalPrivacy.surfaceUnlocked || _searchOpen) return;
+    _searchOpen = true;
     final client = Matrix.of(context).client;
     final navigator = Navigator.of(context);
-    navigator.push(
-      MaterialPageRoute<void>(
-        builder: (_) => NotionSearchPage(
-          personal: personal,
-          inbox: inbox,
-          directory: BridgeDirectory.of(client),
-          onOpenRoom: onChatTap,
-          onOpenMessage: openMessage,
-          onSearchHistory: (query) => navigator.push(
-            MaterialPageRoute<void>(
-              builder: (_) =>
-                  PersonalSearchPage(personal: personal, initialQuery: query),
+    navigator
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => NotionSearchPage(
+              personal: personal,
+              inbox: inbox,
+              directory: BridgeDirectory.of(client),
+              onOpenRoom: onChatTap,
+              onOpenMessage: openMessage,
+              onSearchHistory: (query) => navigator.push(
+                MaterialPageRoute<void>(
+                  builder: (_) => PersonalSearchPage(
+                    personal: personal,
+                    initialQuery: query,
+                  ),
+                ),
+              ),
+              onSelectView: (view) => setPersonalFilter(view, null),
+              spaces: spaces,
+              onSelectSpace: setActiveSpace,
             ),
           ),
-          onSelectView: (view) => setPersonalFilter(view, null),
-          spaces: spaces,
-          onSelectSpace: setActiveSpace,
-        ),
-      ),
-    );
+        )
+        .whenComplete(() => _searchOpen = false);
   }
 
   /// Opens [room] at [eventId] (a search hit); a merged person's source

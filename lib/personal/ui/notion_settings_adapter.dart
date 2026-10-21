@@ -306,6 +306,7 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
         };
         return NotionSettingsPage(
           data: NotionSettingsData(
+            notificationsAvailable: PlatformInfos.supportsSystemNotifications,
             name: name,
             avatar: avatar,
             selectedPath: GoRouterState.of(context).uri.path,

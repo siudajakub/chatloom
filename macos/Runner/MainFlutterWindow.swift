@@ -17,6 +17,12 @@ class MainFlutterWindow: NSWindow {
 
     title = "ChatLoom"
     minSize = NSSize(width: 720, height: 520)
+    if !setFrameUsingName("ChatLoomMainWindow") {
+      let available = screen?.visibleFrame.size ?? NSSize(width: 1280, height: 900)
+      setContentSize(NSSize(width: min(1120, available.width - 80),
+                            height: min(780, available.height - 80)))
+      center()
+    }
     setFrameAutosaveName("ChatLoomMainWindow")
     isReleasedWhenClosed = false
 

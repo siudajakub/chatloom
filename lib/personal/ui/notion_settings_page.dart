@@ -96,12 +96,14 @@ class NotionSettingsData {
   final String selectedPath;
   final Map<NotionSettingsCategory, String> summaries;
   final String? status;
+  final bool notificationsAvailable;
   const NotionSettingsData({
     required this.name,
     required this.avatar,
     this.selectedPath = '/rooms/settings',
     this.summaries = const {},
     this.status,
+    this.notificationsAvailable = true,
   });
 }
 
@@ -227,7 +229,11 @@ class NotionSettingsPage extends StatelessWidget {
                     child: Divider(),
                   ),
                   for (final category in NotionSettingsCategory.values.where(
-                    (c) => c != NotionSettingsCategory.account && !c.isTool,
+                    (c) =>
+                        c != NotionSettingsCategory.account &&
+                        !c.isTool &&
+                        (data.notificationsAvailable ||
+                            c != NotionSettingsCategory.notifications),
                   ))
                     row(category),
                   const Padding(
