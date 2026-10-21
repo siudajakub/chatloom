@@ -107,9 +107,16 @@ class SettingsChatView extends StatelessWidget {
               if (AppSettings.doubleTapToReact.value)
                 ListTile(
                   title: Text(L10n.of(context).doubleTapReaction),
+                  // Empty: the network's first quick reaction (a heart
+                  // wherever the network has one).
+                  subtitle: AppSettings.doubleTapReaction.value.isEmpty
+                      ? const Text('Automatic: each network’s first reaction')
+                      : null,
                   trailing: Text(
-                    AppSettings.doubleTapReaction.value,
-                    style: const TextStyle(fontSize: 24),
+                    AppSettings.doubleTapReaction.value.isEmpty
+                        ? NotionReactions.defaults.first
+                        : AppSettings.doubleTapReaction.value,
+                    style: NotionType.heading,
                   ),
                   onTap: () async {
                     final emoji = await showAdaptiveBottomSheet<String>(
@@ -120,6 +127,12 @@ class SettingsChatView extends StatelessWidget {
                           leading: CloseButton(
                             onPressed: () => Navigator.of(context).pop(null),
                           ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(''),
+                              child: const Text('Automatic'),
+                            ),
+                          ],
                         ),
                         body: SizedBox(
                           height: double.infinity,

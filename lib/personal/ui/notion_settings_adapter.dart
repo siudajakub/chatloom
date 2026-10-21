@@ -3,6 +3,7 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/pages/settings/settings.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/sync_changes.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/personal/ui/notion_settings_page.dart';
@@ -27,7 +28,7 @@ class NotionSettingsAdapter extends StatefulWidget {
 
 class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
   PersonalClient? _personal;
-  (bool, int)? _personalSummary;
+  String? _personalSummary;
   Future<Uri?>? _accountManage;
   Future<bool>? _passwordAvailable;
   @override
@@ -47,7 +48,7 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
     if (_personal != next) {
       _personal?.removeListener(_personalChanged);
       _personal = next..addListener(_personalChanged);
-      _personalSummary = (next.ready, next.pending.length);
+      _personalSummary = SyncChanges.settingsSummary(next);
       _accountManage = null;
       _passwordAvailable = null;
       // Revalidating private sync is not needed to draw this page; do it
@@ -77,7 +78,7 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
   void _personalChanged() {
     final personal = _personal;
     if (personal == null) return;
-    final summary = (personal.ready, personal.pending.length);
+    final summary = SyncChanges.settingsSummary(personal);
     if (summary == _personalSummary) return;
     _personalSummary = summary;
     _refresh();
@@ -317,11 +318,9 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                   : 'Incognito off · App lock, devices and recovery',
               NotionSettingsCategory.appearance:
                   '$appearance · Text size and wallpaper',
-              NotionSettingsCategory.sync: personal.ready
-                  ? (personal.pending.isEmpty
-                        ? 'Private sync configured · Services and transcriptions'
-                        : '${personal.pending.length} changes awaiting confirmation')
-                  : 'Private sync not connected',
+              NotionSettingsCategory.sync: SyncChanges.settingsSummary(
+                personal,
+              ),
             },
             status: snapshot.hasError
                 ? 'Profile unavailable. Open Account to retry.'

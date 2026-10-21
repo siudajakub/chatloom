@@ -59,6 +59,9 @@ enum AppSettings<T> {
 
   /// Voice note capture: higher bitrate (Opus 96 kbps / AAC 128 kbps).
   personalVoiceHighQuality<bool>('pl.personal.voice.high_quality', false),
+
+  /// Voice note playback speed, remembered across notes (Telegram).
+  personalVoicePlaybackSpeed<double>('pl.personal.voice.playback_speed', 1.0),
   personalRoundHighQuality<bool>('pl.personal.round.high_quality', false),
   personalRoundStabilization<bool>('pl.personal.round.stabilization', true),
   personalRoundNoiseReduction<bool>('pl.personal.round.noise_reduction', true),
@@ -113,8 +116,14 @@ enum AppSettings<T> {
   chatFilter<String>('chat.fluffy.chat_filter', 'allChats'),
   hideRoomsInSpaces<bool>('chat.fluffy.hideRoomsInSpaces', false),
   showThumbnailsInTimeline<bool>('chat.fluffy.showThumbnailsInTimeline', true),
-  doubleTapToReact<bool>('chat.fluffy.double_tap_to_react', false),
-  doubleTapReaction<String>('chat.fluffy.double_tap_reaction', '👍'),
+
+  /// Double tap reacts with the network's first quick reaction (on by
+  /// default, like Messenger/Instagram/Telegram).
+  doubleTapToReact<bool>('chat.fluffy.double_tap_to_react', true),
+
+  /// An emoji the user picked for double tap; empty means automatic: the
+  /// network's first quick reaction, a heart wherever it has one.
+  doubleTapReaction<String>('chat.fluffy.double_tap_reaction', ''),
   benchmarksInLogs<bool>('chat.fluffy.benchmarks_in_logs', false),
   autoSendErrorReports<bool?>('chat.fluffy.auto_send_eror_reports', null),
   knownErrorHashes<List<String>>('chat.fluffy.known_crash_hashes', []),
@@ -166,12 +175,6 @@ enum AppSettings<T> {
 
     if (store.getBool(AppSettings.sendOnEnter.key) == null) {
       await store.setBool(AppSettings.sendOnEnter.key, !PlatformInfos.isMobile);
-    }
-    if (store.getBool(AppSettings.doubleTapToReact.key) == null) {
-      await store.setBool(
-        AppSettings.doubleTapToReact.key,
-        PlatformInfos.isMobile,
-      );
     }
 
     // Load configuration from config.json file or MDM:

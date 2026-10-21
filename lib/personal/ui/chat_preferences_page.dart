@@ -4,8 +4,10 @@ import 'dart:async';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/sync_changes.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/personal/ui/sync_changes_section.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/foundation.dart';
@@ -137,20 +139,60 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
         const Text(
           'Applies to current and future groups. Individual chat exceptions take priority.',
         ),
-        NotionSizeReveal(
-          visible: personal.pending.values.any((op) => op.entityId == key),
-          child: const Text(
-            'Saved locally · awaiting private sync confirmation.',
-          ),
-        ),
-        NotionSizeReveal(
-          visible: personal.conflicts.containsKey(key),
-          child: const Text(
-            'Conflicting changes. Review them in Sync & transcriptions.',
-          ),
-        ),
+        ..._syncState({key}),
       ],
     );
+  }
+
+  /// The sync state of [keys] with its one-tap action: an unconfirmed change
+  /// can be sent again, a conflict is resolved right here.
+  List<Widget> _syncState(Set<String> keys) {
+    final changes = SyncChanges.of(personal);
+    final pending = changes.pending
+        .where((change) => keys.contains(change.entity))
+        .firstOrNull;
+    final conflict = changes.conflicts
+        .where((change) => keys.contains(change.entity))
+        .firstOrNull;
+    return [
+      NotionSizeReveal(
+        visible: pending != null,
+        child: pending == null
+            ? const SizedBox.shrink()
+            : SyncPendingRow(
+                personal: personal,
+                change: pending,
+                run: _runSync,
+                title: 'Your latest change',
+              ),
+      ),
+      NotionSizeReveal(
+        visible: conflict != null,
+        child: conflict == null
+            ? const SizedBox.shrink()
+            : SyncConflictTile(
+                personal: personal,
+                conflict: conflict,
+                run: _runSync,
+                title: 'Changed on another device too',
+              ),
+      ),
+    ];
+  }
+
+  Future<void> _runSync(Future<void> Function() action) async {
+    if (!_active) return;
+    setState(() => _error = null);
+    try {
+      await action();
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error =
+              'Could not save this choice. Check private sync and try again.',
+        );
+      }
+    }
   }
 
   List<Widget> _conversation(Room room, InboxProjection projection) {
@@ -172,16 +214,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
         projection.displayName(room),
         style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
       ),
-      NotionSizeReveal(
-        visible: personal.pending.values.any(
-          (op) =>
-              op.entityId == key ||
-              sources.any((source) => op.entityId == 'org:${source.id}'),
-        ),
-        child: const Text(
-          'Saved locally · awaiting private sync confirmation.',
-        ),
-      ),
+      ..._syncState({key, for (final source in sources) 'org:${source.id}'}),
       if (group != null)
         const Text(
           'Visibility applies to this person across all merged sources.',

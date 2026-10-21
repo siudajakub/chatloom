@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/sync_changes.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
+import 'package:chatloom/personal/ui/sync_changes_section.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:material_ui/material_ui.dart';
@@ -28,7 +30,40 @@ const transcriptionKindLabels = <AutoTranscriptionKind, (String, String)>{
     'Only the audio track is sent; clips without sound are skipped',
   ),
   AutoTranscriptionKind.audio: ('Other audio', 'Audio files and recordings'),
+  AutoTranscriptionKind.reel: (
+    'Instagram reels',
+    'Reels, posts and stories shared from Instagram',
+  ),
 };
+
+/// Subtitle of a per-kind switch. Instagram reels say plainly that they are
+/// transcribed on demand (J, 2026-10-20) and when the background service
+/// still treats them as ordinary videos.
+String transcriptionKindSubtitle(
+  AutoTranscriptionKind kind,
+  TranscriptionPolicy policy, {
+  required bool workerOnline,
+  required bool allMedia,
+  required bool separatesReels,
+}) {
+  final base = transcriptionKindLabels[kind]!.$2;
+  if (kind == AutoTranscriptionKind.reel) {
+    final mode = policy.kindEnabled(kind)
+        ? 'Automatic'
+        : 'On demand · tap Transcribe under a reel';
+    final outdated = workerOnline && allMedia && !separatesReels;
+    return outdated
+        ? '$mode · until the background service is updated, reels follow Videos'
+        : '$mode · $base';
+  }
+  if ((kind == AutoTranscriptionKind.video ||
+          kind == AutoTranscriptionKind.audio) &&
+      workerOnline &&
+      !allMedia) {
+    return '$base · needs a worker update';
+  }
+  return base;
+}
 
 String transcriptionUsdLabel(double value) => '\$${value.toStringAsFixed(2)}';
 
@@ -114,9 +149,13 @@ class TranscriptionSettingsSection extends StatelessWidget {
     final unknown = jobs.where((job) => job.state == JobState.unknown).length;
     final networks = _networks(policy).toList()
       ..sort((a, b) => notionNetworkLabel(a).compareTo(notionNetworkLabel(b)));
-    final pending = personal.pending.values.any(
-      (op) => op.entityId == transcriptionPolicyEntity,
-    );
+    final changes = SyncChanges.of(personal);
+    final pending = changes.pending
+        .where((change) => change.entity == transcriptionPolicyEntity)
+        .firstOrNull;
+    final conflict = changes.conflicts
+        .where((change) => change.entity == transcriptionPolicyEntity)
+        .firstOrNull;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -131,6 +170,7 @@ class TranscriptionSettingsSection extends StatelessWidget {
           title: 'Transcribe automatically',
           subtitle:
               'Incoming voice messages, round videos and videos are transcribed on the server as soon as they arrive; only their audio is sent to OpenAI. Your own messages, disappearing messages, muted and ignored chats are skipped.'
+              '${policy.kindEnabled(AutoTranscriptionKind.reel) ? '' : ' Instagram reels only when you tap Transcribe.'}'
               '${policy.auto && !personal.autoTranscriptionAvailable ? ' Currently off on the worker: tap Transcribe on a message instead.' : ''}',
           value: policy.auto,
           onChanged: editable
@@ -206,13 +246,13 @@ class TranscriptionSettingsSection extends StatelessWidget {
           NotionSettingsToggle(
             key: ValueKey('transcription-kind-${entry.key.name}'),
             title: entry.value.$1,
-            subtitle:
-                entry.key == AutoTranscriptionKind.video ||
-                    entry.key == AutoTranscriptionKind.audio
-                ? personal.workerTranscribesAllMedia || !personal.workerOnline
-                      ? entry.value.$2
-                      : '${entry.value.$2} · needs a worker update'
-                : entry.value.$2,
+            subtitle: transcriptionKindSubtitle(
+              entry.key,
+              policy,
+              workerOnline: personal.workerOnline,
+              allMedia: personal.workerTranscribesAllMedia,
+              separatesReels: personal.workerSeparatesReels,
+            ),
             value: policy.kindEnabled(entry.key),
             onChanged: editable && policy.auto
                 ? (value) => _save(policy.withKind(entry.key, value))
@@ -231,25 +271,29 @@ class TranscriptionSettingsSection extends StatelessWidget {
                   : null,
             ),
         ],
+        // The policy's own sync state, with its one-tap action: an
+        // unconfirmed change can be sent again, a conflict resolved here.
         NotionSizeReveal(
-          visible: pending,
-          child: Padding(
-            padding: const EdgeInsets.only(top: NotionSpace.xs),
-            child: Text(
-              'Saved locally · awaiting private sync confirmation.',
-              style: tokens.typography.footnoteMuted,
-            ),
-          ),
+          visible: pending != null,
+          child: pending == null
+              ? const SizedBox.shrink()
+              : SyncPendingRow(
+                  personal: personal,
+                  change: pending,
+                  run: run,
+                  title: 'Your latest change',
+                ),
         ),
         NotionSizeReveal(
-          visible: personal.conflicts.containsKey(transcriptionPolicyEntity),
-          child: Padding(
-            padding: const EdgeInsets.only(top: NotionSpace.xs),
-            child: Text(
-              'Conflicting changes from another device. Review them in Sync & transcriptions.',
-              style: tokens.typography.footnoteMuted,
-            ),
-          ),
+          visible: conflict != null,
+          child: conflict == null
+              ? const SizedBox.shrink()
+              : SyncConflictTile(
+                  personal: personal,
+                  conflict: conflict,
+                  run: run,
+                  title: 'Changed on another device too',
+                ),
         ),
         const NotionSectionHeader(title: 'Usage'),
         NotionListRow(

@@ -173,9 +173,14 @@ class NotionSettingsPage extends StatelessWidget {
       );
     }
 
+    // Rows scroll under the glass header, like every list page
+    // (DESIGN.md "Glass").
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         toolbarHeight: NotionTokens.headerHeight,
+        backgroundColor: Colors.transparent,
+        flexibleSpace: const NotionGlassBar(),
         leading: NotionIconButton(
           icon: Icons.chevron_left,
           label: 'Back to chats',
@@ -190,43 +195,51 @@ class NotionSettingsPage extends StatelessWidget {
           // Rows rise in once after the push; rows built later by
           // scrolling appear without animation.
           child: NotionEntranceScope(
-            child: ListView(
-              key: const PageStorageKey('notion-settings'),
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 32),
-              children: NotionEntrance.stagger([
-                row(NotionSettingsCategory.account),
-                NotionSizeReveal(
-                  visible: data.status != null,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Semantics(
-                      liveRegion: true,
-                      child: NotionFadeThrough(
-                        child: Text(
-                          data.status ?? '',
-                          key: ValueKey(data.status),
+            // Inside the Scaffold the top padding includes the header.
+            child: Builder(
+              builder: (context) => ListView(
+                key: const PageStorageKey('notion-settings'),
+                padding: EdgeInsets.fromLTRB(
+                  8,
+                  8 + MediaQuery.paddingOf(context).top,
+                  8,
+                  32,
+                ),
+                children: NotionEntrance.stagger([
+                  row(NotionSettingsCategory.account),
+                  NotionSizeReveal(
+                    visible: data.status != null,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Semantics(
+                        liveRegion: true,
+                        child: NotionFadeThrough(
+                          child: Text(
+                            data.status ?? '',
+                            key: ValueKey(data.status),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Divider(),
-                ),
-                for (final category in NotionSettingsCategory.values.where(
-                  (c) => c != NotionSettingsCategory.account && !c.isTool,
-                ))
-                  row(category),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(12, 24, 12, 6),
-                  child: Text('Tools', style: NotionTokens.heading),
-                ),
-                for (final category in NotionSettingsCategory.values.where(
-                  (c) => c.isTool,
-                ))
-                  row(category),
-              ]),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Divider(),
+                  ),
+                  for (final category in NotionSettingsCategory.values.where(
+                    (c) => c != NotionSettingsCategory.account && !c.isTool,
+                  ))
+                    row(category),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(12, 24, 12, 6),
+                    child: Text('Tools', style: NotionTokens.heading),
+                  ),
+                  for (final category in NotionSettingsCategory.values.where(
+                    (c) => c.isTool,
+                  ))
+                    row(category),
+                ]),
+              ),
             ),
           ),
         ),

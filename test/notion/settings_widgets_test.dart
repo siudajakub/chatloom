@@ -34,7 +34,9 @@ void main() {
               : category.title,
         );
         await tester.scrollUntilVisible(target, 100);
-        await tester.ensureVisible(target);
+        // Rows scroll under the glass header: centre the row instead of
+        // aligning it with the (covered) top edge of the viewport.
+        await Scrollable.ensureVisible(tester.element(target), alignment: .5);
         await tester.pumpAndSettle();
         await tester.tap(target);
       }

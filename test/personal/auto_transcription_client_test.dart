@@ -124,6 +124,23 @@ Event video(
   },
 );
 
+/// A reel shared from Instagram, as mautrix-meta delivers it: the post's own
+/// video with the post's link as `external_url` (see personal_core).
+Event reel(Room room, String id) => Event(
+  room: room,
+  eventId: id,
+  type: EventTypes.Message,
+  senderId: '@anna:example.invalid',
+  originServerTs: DateTime.now().subtract(const Duration(seconds: 20)),
+  content: {
+    'msgtype': 'm.video',
+    'body': 'Caption of the shared post',
+    'url': 'mxc://example.invalid/reel',
+    'info': {'mimetype': 'video/mp4', 'duration': 30000},
+    'external_url': 'https://www.instagram.com/reel/Cfixture/',
+  },
+);
+
 Future<void> flushTimers() =>
     Future<void>.delayed(const Duration(milliseconds: 20));
 
@@ -425,6 +442,133 @@ void main() {
     );
   });
 
+  test(
+    'Instagram reels are offered on demand, never requested automatically',
+    () async {
+      final shared = reel(cloud, r'$reel');
+      expect(
+        PersonalClient.autoTranscriptionKind(shared),
+        AutoTranscriptionKind.reel,
+      );
+      // A worker that refuses videos refuses reels too.
+      expect(personal.transcribableKind(shared), isNull);
+      personal.workerReadiness = heartbeat('scan', media: 2);
+      expect(personal.transcribableKind(shared), AutoTranscriptionKind.reel);
+      expect(personal.workerSeparatesReels, isFalse);
+      expect(
+        personal.autoTranscriptionBlockFor(shared, DateTime.now()),
+        'kind_disabled',
+      );
+      expect(personal.autoTranscriptPending(shared), isFalse);
+      await flushTimers();
+      expect(personal.requests, isEmpty, reason: 'no automatic request');
+      // Other Instagram videos keep the video policy.
+      expect(personal.autoTranscriptPending(video(cloud, r'$clip')), isTrue);
+      await flushTimers();
+      expect(personal.requests.single.payload['origin'], 'auto');
+      // On demand, a reel is requested like any other media.
+      await personal.transcribe(shared);
+      final manual = personal.requests.singleWhere(
+        (op) => op.entityId == personal.transcriptId(shared),
+      );
+      expect(manual.payload.containsKey('origin'), isFalse);
+      // Switched on, reels are automatic as well.
+      personal.workerReadiness = heartbeat('scan', media: 3);
+      expect(personal.workerSeparatesReels, isTrue);
+      await personal.setTranscriptionPolicy(
+        TranscriptionPolicy.defaults.withKind(AutoTranscriptionKind.reel, true),
+      );
+      expect(
+        personal.autoTranscriptionBlockFor(
+          reel(cloud, r'$reel2'),
+          DateTime.now(),
+        ),
+        isNull,
+      );
+    },
+  );
+
+  group('unconfirmed changes and conflicts', () {
+    test('a change the running worker never answers is re-issued', () async {
+      await personal.setTranscriptionPolicy(
+        TranscriptionPolicy.defaults.copyWith(maxSeconds: 60),
+      );
+      final first = personal.pending.values.single;
+      expect(personal.isUnconfirmed(first), isFalse);
+      // Let the publication attempt finish, then stop this client.
+      await flushTimers();
+      personal.fakeReady = false;
+      // Published long before the worker's current heartbeat.
+      final replicaKey =
+          'account:${client.userID}:replica:$transcriptionPolicyEntity';
+      final record = Map<String, dynamic>.from(store.records[replicaKey]!);
+      record['attempted'] = [first.opId];
+      record['attemptedAt'] = {
+        first.opId: DateTime.now()
+            .subtract(const Duration(minutes: 30))
+            .millisecondsSinceEpoch,
+      };
+      store.records[replicaKey] = record;
+      final reloaded = _Personal(client, store)
+        ..workerReadiness = heartbeat('scan');
+      addTearDown(() => reloaded.fakeReady = false);
+      await reloaded.loadLocal();
+      final stuck = reloaded.pending.values.single;
+      expect(reloaded.publishedAt(stuck), isNotNull);
+      expect(reloaded.isUnconfirmed(stuck), isTrue);
+      // A worker without a fresh heartbeat is offline, not unconfirmed.
+      reloaded.workerReadiness = WorkerReadiness(
+        receivedAt: DateTime.now().subtract(const Duration(hours: 1)),
+        autoTranscription: 'scan',
+      );
+      expect(reloaded.isUnconfirmed(stuck), isFalse);
+      reloaded.workerReadiness = heartbeat('scan');
+      await reloaded.resendPending(stuck.opId);
+      final fresh = reloaded.pending.values.single;
+      expect(fresh.opId, isNot(stuck.opId));
+      expect(fresh.payload['value'], stuck.payload['value']);
+      expect(reloaded.reissueCount(fresh), 1);
+    });
+
+    test(
+      'echo conflicts saved by older versions are settled on start',
+      () async {
+        final key = 'account:${client.userID}:replica:org:fixture';
+        store.records[key] = {
+          'revision': 3,
+          'generation': 1,
+          'commands': <String, dynamic>{},
+          'attempted': <String>[],
+          'appliedResults': <String>[],
+          'serverValue': {'archived': true},
+          'localValue': {'archived': true},
+          'conflict': {
+            'state': 'conflict',
+            'revision': 4,
+            'existingValue': {'archived': true},
+            'proposedValue': {'archived': true},
+          },
+        };
+        store.records['account:${client.userID}:replica:transcript:fixture'] = {
+          'revision': 2,
+          'generation': 0,
+          'commands': <String, dynamic>{},
+          'attempted': <String>[],
+          'appliedResults': <String>[],
+          'jobKind': 'transcript',
+          'job': {'state': 'processing', 'errorCode': 'already_exists'},
+          'conflict': {'state': 'conflict', 'errorCode': 'already_exists'},
+        };
+        final reloaded = _Personal(client, store);
+        addTearDown(() => reloaded.fakeReady = false);
+        await reloaded.loadLocal();
+        expect(reloaded.conflicts, isEmpty);
+        expect(reloaded.values['org:fixture'], {'archived': true});
+        expect(reloaded.revisions['org:fixture'], 4);
+      },
+    );
+  });
+
   test('heartbeat capabilities parse defensively', () {
     final at = DateTime.now();
     final parsed = WorkerReadiness.fromPayload({
@@ -631,6 +775,61 @@ void main() {
       expect(personal.transcriptionPolicy.auto, isFalse);
       expect(telegram().value, isFalse);
       expect(personal.transcriptionPolicy.defaultLanguage, 'hy');
+    });
+
+    testWidgets('Instagram reels are on demand and say so', (tester) async {
+      final personal = await fakeZonePersonal();
+      personal.workerReadiness = heartbeat('scan', media: 2);
+      final runs = <Future<void>>[];
+      await mount(
+        tester,
+        ListenableBuilder(
+          listenable: personal,
+          builder: (context, _) => TranscriptionSettingsSection(
+            personal: personal,
+            run: (action) {
+              final future = action();
+              runs.add(future);
+              return future;
+            },
+          ),
+        ),
+      );
+      NotionSettingsToggle reels() => tester.widget<NotionSettingsToggle>(
+        find.byKey(const ValueKey('transcription-kind-reel')),
+      );
+      expect(find.text('Instagram reels'), findsOneWidget);
+      expect(reels().value, isFalse);
+      expect(
+        reels().subtitle,
+        'On demand · tap Transcribe under a reel · until the background '
+        'service is updated, reels follow Videos',
+      );
+      expect(
+        find.textContaining('Instagram reels only when you tap Transcribe'),
+        findsOneWidget,
+      );
+      personal.workerReadiness = heartbeat('scan', media: 3);
+      personal.notifyListeners();
+      await tester.pump();
+      expect(
+        reels().subtitle,
+        'On demand · tap Transcribe under a reel · '
+        'Reels, posts and stories shared from Instagram',
+      );
+      await tester.tap(find.byKey(const ValueKey('transcription-kind-reel')));
+      await tester.pumpAndSettle();
+      await Future.wait(runs);
+      await tester.pump();
+      expect(
+        personal.transcriptionPolicy.kindEnabled(AutoTranscriptionKind.reel),
+        isTrue,
+      );
+      expect(
+        personal.transcriptionPolicy.kindEnabled(AutoTranscriptionKind.video),
+        isTrue,
+      );
+      expect(reels().subtitle, startsWith('Automatic'));
     });
 
     test('usage costs use cents and never round small spend to zero', () {

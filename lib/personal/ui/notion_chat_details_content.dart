@@ -163,14 +163,19 @@ class _SharedPreviewBlock extends StatelessWidget {
             ? 'Voice message'
             : event.body,
         thumbnail: image
-            ? MxcImage(
+            ? _MediaSource(
                 event: event,
-                width: 144,
-                height: 92,
-                fit: BoxFit.cover,
-                isThumbnail: true,
-                animated: false,
-                placeholder: _thumbnailPlaceholder,
+                child: MxcImage(
+                  event: event,
+                  width: 144,
+                  height: 92,
+                  fit: BoxFit.cover,
+                  isThumbnail: true,
+                  animated: false,
+                  cacheKey: _thumbnailCacheKey(event),
+                  cacheName: event.room.id,
+                  placeholder: _thumbnailPlaceholder,
+                ),
               )
             : null,
         audio: event.messageType == MessageTypes.Audio,
@@ -179,6 +184,29 @@ class _SharedPreviewBlock extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Hero tag of a details thumbnail; distinct from the timeline bubble's
+/// event-id tag, so a chat and its details side by side never clash.
+Object _mediaHeroTag(Event event) => ('details-media', event.eventId);
+
+/// Memory-cache key of a details thumbnail, so the flying copy of the
+/// thumbnail (the hero shuttle) paints from the first frame.
+String _thumbnailCacheKey(Event event) => 'details:${event.eventId}';
+
+/// A details thumbnail the full-screen viewer flies out of and back into.
+class _MediaSource extends StatelessWidget {
+  const _MediaSource({required this.event, required this.child});
+
+  final Event event;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Hero(
+    tag: _mediaHeroTag(event),
+    createRectTween: NotionMediaHero.rectTween,
+    child: child,
+  );
 }
 
 void _openEvent(BuildContext context, Event event) {
@@ -192,9 +220,11 @@ void _openEvent(BuildContext context, Event event) {
     return;
   }
   if (event.messageType == MessageTypes.Image && event.showThumbnail) {
-    showNotionCustomDialog(
-      context: context,
-      builder: (_) => ImageViewer(event, outerContext: context),
+    showImageViewer(
+      context,
+      event,
+      heroTag: _mediaHeroTag(event),
+      sourceRadius: NotionRadius.smAll,
     );
   } else {
     // Reuse the actual source conversation for protected/video/audio playback,
@@ -659,14 +689,19 @@ class _NotionConversationContentPageState
                               fit: StackFit.expand,
                               children: [
                                 if (_thumbnailAllowed(event))
-                                  MxcImage(
+                                  _MediaSource(
                                     event: event,
-                                    width: 240,
-                                    height: 240,
-                                    fit: BoxFit.cover,
-                                    isThumbnail: true,
-                                    animated: false,
-                                    placeholder: _thumbnailPlaceholder,
+                                    child: MxcImage(
+                                      event: event,
+                                      width: 240,
+                                      height: 240,
+                                      fit: BoxFit.cover,
+                                      isThumbnail: true,
+                                      animated: false,
+                                      cacheKey: _thumbnailCacheKey(event),
+                                      cacheName: event.room.id,
+                                      placeholder: _thumbnailPlaceholder,
+                                    ),
                                   )
                                 else
                                   ColoredBox(
