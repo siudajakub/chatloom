@@ -8,11 +8,12 @@ on:
       - '.github/workflows/personal-macos.yml'
       - 'macos/**'
       - 'lib/**'
-      - 'integration_test/macos_smoke_test.dart'
-      - 'integration_test/fixtures/**'
+      - 'integration_test/macos/**'
       - 'test/**'
       - 'scripts/build-personal-macos.py'
-      - 'scripts/macos*'
+      - 'scripts/macos/**'
+      - 'scripts/macos_native_toolchain.py'
+      - 'scripts/macos-webcrypto.cmake'
       - 'scripts/flutter-queue.py'
       - 'pubspec.*'
 
@@ -52,7 +53,7 @@ jobs:
       - name: Analyze application
         run: flutter analyze lib --no-fatal-infos
       - name: Prepare the scoped Intel native toolchain fix
-        run: python3 scripts/macos_native_toolchain.py
+        run: python3 scripts/macos/native_toolchain.py
       - name: Desktop and recorder regressions
         run: >-
           flutter test --no-pub
@@ -67,9 +68,9 @@ jobs:
           test/personal/integration/notification_eligibility_test.dart
       - name: Account-free native storage and crypto smoke test
         timeout-minutes: 20
-        run: python3 scripts/build-personal-macos.py --smoke-test
+        run: python3 scripts/macos/build.py --smoke-test
       - name: Build and verify release bundle
-        run: python3 scripts/build-personal-macos.py
+        run: python3 scripts/macos/build.py
       - name: Upload app and verification manifest
         uses: actions/upload-artifact@v4
         with:

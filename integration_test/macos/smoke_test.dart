@@ -17,7 +17,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:webcrypto/webcrypto.dart' as webcrypto;
 
-import 'fixtures/macos_media.dart';
+import 'fixtures/media.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();

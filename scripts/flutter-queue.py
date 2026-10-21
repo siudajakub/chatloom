@@ -33,7 +33,7 @@ import subprocess
 import sys
 import time
 
-from macos_native_toolchain import prepare_native_environment
+from macos.native_toolchain import prepare_native_environment
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT.parent
