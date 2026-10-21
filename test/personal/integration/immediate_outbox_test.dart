@@ -189,8 +189,143 @@ Future<void> main() async {
     'Caller mutation changed frozen target',
   );
   check(!frozen.toString().contains('fixture-text'), 'Result leaked content');
+  await outbox.complete(frozen.actionId);
+
+  // Durable callback: strictly after the in-flight record is persisted and
+  // before the transport; the composer clears there, not after the network.
+  final order = <String>[];
+  hold = Completer<void>();
+  final durablePayload = {...payload, 'text': 'durable-text'};
+  final durable = outbox.send(
+    durablePayload,
+    fresh: true,
+    onDurable: (attempt) {
+      final stored = store.records.values.where(
+        (v) => v['actionId'] == attempt.actionId && v.containsKey('payload'),
+      );
+      check(
+        stored.length == 1 && stored.single['state'] == 'inFlight',
+        'Durable callback before the record was persisted',
+      );
+      check(
+        attempt.transactionId == 'immediate-${attempt.actionId}',
+        'Durable attempt lost its transaction ID',
+      );
+      check(!attempt.toString().contains('durable'), 'Attempt leaked content');
+      order.add('durable:${attempt.actionId}');
+    },
+  );
+  await Future<void>.delayed(Duration.zero);
+  check(order.length == 1, 'Durable callback waited for the network');
+  final beforeRelease = requests;
+  hold.complete();
+  hold = null;
+  final durableResult = await durable;
+  check(
+    durableResult.state == ImmediateSendState.accepted &&
+        requests == beforeRelease &&
+        order.single == 'durable:${durableResult.actionId}',
+    'Durable send did not complete once',
+  );
+  await outbox.complete(durableResult.actionId);
+
+  // Storage failure: no callback, no transport; the caller keeps its text.
+  store.rejectPreparedWrite = true;
+  var called = false;
+  final beforeFail = requests;
+  final noStore = await outbox.send(
+    {...payload, 'text': 'unstored-text'},
+    fresh: true,
+    onDurable: (_) => called = true,
+  );
+  check(
+    !called &&
+        noStore.state == ImmediateSendState.failed &&
+        requests == beforeFail,
+    'Callback or transport ran without durable storage',
+  );
+  store.rejectPreparedWrite = false;
+
+  // A throwing UI callback never stops a durable send.
+  final throwing = await outbox.send(
+    {...payload, 'text': 'callback-throws'},
+    fresh: true,
+    onDurable: (_) => throw StateError('fixture'),
+  );
+  check(
+    throwing.state == ImmediateSendState.accepted,
+    'Callback failure blocked the send',
+  );
+  await outbox.complete(throwing.actionId);
+
+  // The same text sent twice in one process is two messages, sent
+  // concurrently with different transaction IDs.
+  final repeatPayload = {...payload, 'text': 'ok'};
+  hold = Completer<void>();
+  final beforeRepeat = requests;
+  final firstOk = outbox.send(repeatPayload, fresh: true);
+  final secondOk = outbox.send(repeatPayload, fresh: true);
+  await Future<void>.delayed(const Duration(milliseconds: 1));
+  check(requests == beforeRepeat + 2, 'Fresh sends were serialized');
+  hold.complete();
+  hold = null;
+  final oks = await Future.wait([firstOk, secondOk]);
+  check(
+    oks[0].transactionId != oks[1].transactionId &&
+        oks.every((r) => r.state == ImmediateSendState.accepted),
+    'Repeated fresh text was coalesced',
+  );
+  // Accepted but not completed (crash before the draft clear): after a
+  // restart the same text resumes the first live record, never resends.
+  outbox = instance();
+  final beforeResume = requests;
+  final resumed = await outbox.send(repeatPayload, fresh: true);
+  check(
+    resumed.actionId == oks[0].actionId && requests == beforeResume,
+    'Restart duplicated an accepted fresh send',
+  );
+  await outbox.complete(oks[0].actionId);
+  await outbox.complete(oks[1].actionId);
+
+  // Retry from the bubble keeps the transaction ID; delete retires it.
+  timeoutAfterAccept = true;
+  final shaky = await outbox.send({...payload, 'text': 'shaky'}, fresh: true);
+  check(shaky.state == ImmediateSendState.unknown, 'Unknown not kept');
+  check(
+    (await outbox.lookup(shaky.actionId))?.state == ImmediateSendState.unknown,
+    'Lookup lost the unknown state',
+  );
+  var retried = false;
+  final bubbleRetry = await outbox.retry(
+    shaky.actionId,
+    onDurable: (_) => retried = true,
+  );
+  check(
+    retried &&
+        bubbleRetry.transactionId == shaky.transactionId &&
+        bubbleRetry.state == ImmediateSendState.accepted,
+    'Retry changed the transaction ID',
+  );
+  timeoutAfterAccept = true;
+  final dropped = await outbox.send({...payload, 'text': 'drop'}, fresh: true);
+  await outbox.discard(dropped.actionId);
+  check(
+    (await outbox.retry(dropped.actionId)).errorCode == 'actionCompleted',
+    'A deleted attempt could be retried',
+  );
+  outbox = instance();
+  final again = await outbox.send({...payload, 'text': 'drop'}, fresh: true);
+  check(
+    again.actionId != dropped.actionId,
+    'A deleted attempt was resumed instead of sending a new message',
+  );
+  check(
+    (await outbox.lookup('missing-action')) == null,
+    'Lookup invented a record',
+  );
   stdout.writeln(
     'PASS immediate outbox acceptance retention, crash/retry, '
-    'concurrency, device isolation, immutable target and storage fault tests',
+    'concurrency, device isolation, immutable target, storage fault, '
+    'durable callback, fresh repeat, retry and delete tests',
   );
 }
