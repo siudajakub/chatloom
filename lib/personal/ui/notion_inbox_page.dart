@@ -29,6 +29,10 @@ class NotionInboxPage extends StatelessWidget {
   final ScrollController? scrollController;
   final Widget? searchTools;
   final Widget? status;
+
+  /// A one-line status inside the glass header, under the title (for
+  /// example "Connecting…"). Grows in and out; null hides it.
+  final Widget? headerStatus;
   final bool loading;
   final String? emptyMessage;
   const NotionInboxPage({
@@ -50,6 +54,7 @@ class NotionInboxPage extends StatelessWidget {
     this.scrollController,
     this.searchTools,
     this.status,
+    this.headerStatus,
     this.loading = false,
     this.emptyMessage,
   });
@@ -90,15 +95,25 @@ class NotionInboxPage extends StatelessWidget {
                       NotionSpace.inset,
                       NotionSpace.xxs,
                     ),
-                    child: Row(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(
-                          child: Text('Chats', style: NotionTokens.title),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text('Chats', style: NotionTokens.title),
+                            ),
+                            NotionIconButton(
+                              icon: Icons.edit_square,
+                              label: 'New chat',
+                              onPressed: onCompose,
+                            ),
+                          ],
                         ),
-                        NotionIconButton(
-                          icon: Icons.edit_square,
-                          label: 'New chat',
-                          onPressed: onCompose,
+                        _RetainedReveal(
+                          revealOnMount: false,
+                          child: headerStatus,
                         ),
                       ],
                     ),

@@ -145,35 +145,6 @@ class _NetworkGlyphPainter extends CustomPainter {
       oldDelegate.background != background;
 }
 
-class _MenuPointerPainter extends CustomPainter {
-  final Color fill;
-  final Color border;
-  const _MenuPointerPainter(this.fill, this.border);
-  @override
-  void paint(Canvas canvas, Size size) {
-    final path = Path()
-      ..moveTo(0, 0)
-      ..lineTo(size.width / 2, size.height)
-      ..lineTo(size.width, 0)
-      ..close();
-    canvas.drawPath(path, Paint()..color = fill);
-    canvas.drawPath(
-      Path()
-        ..moveTo(0, 0)
-        ..lineTo(size.width / 2, size.height)
-        ..lineTo(size.width, 0),
-      Paint()
-        ..color = border
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _MenuPointerPainter oldDelegate) =>
-      oldDelegate.fill != fill || oldDelegate.border != border;
-}
-
 /// Production selector; the modal route's barrier consumes the outside tap.
 Future<String?> showNotionNetworkSelector(
   BuildContext context, {
@@ -185,13 +156,14 @@ Future<String?> showNotionNetworkSelector(
   ValueChanged<InboxFilter>? onViewSelected,
   VoidCallback? onManageNetworks,
 }) {
-  // Grow from the dock pill: the scale origin is the pointer's tip, in the
-  // root navigator's coordinates (the same space as [anchor]).
+  // Grow from the dock pill: the scale origin is the middle of the pill's
+  // top edge, in the root navigator's coordinates (the same space as
+  // [anchor]).
   final root = Navigator.of(context, rootNavigator: true).context;
   final window =
       (root.findRenderObject() as RenderBox?)?.size ??
       MediaQuery.sizeOf(context);
-  final origin = Offset(anchor.center.dx, anchor.top - 3);
+  final origin = Offset(anchor.center.dx, anchor.top);
   return showNotionPopover<String>(
     context: context,
     alignment: window.isEmpty
@@ -207,7 +179,10 @@ Future<String?> showNotionNetworkSelector(
           constraints.maxWidth - 32,
           scale > 1.4 ? 300.0 : 196.0,
         );
-        final bottom = math.max(16.0, constraints.maxHeight - anchor.top + 12);
+        final bottom = math.max(
+          16.0,
+          constraints.maxHeight - anchor.top + NotionSpace.xs,
+        );
         final right = math.max(16.0, constraints.maxWidth - anchor.right);
         final maxHeight = math.max(
           96.0,
@@ -237,67 +212,39 @@ Future<String?> showNotionNetworkSelector(
                   },
                   child: Focus(
                     autofocus: true,
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        // The dock's glass: tint, hairline, blur once the
-                        // popover has grown (DESIGN.md "Glass").
-                        NotionGlassPanel(
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(maxHeight: maxHeight),
-                            child: SingleChildScrollView(
-                              child: NotionNetworkMenu(
-                                networks: networks,
-                                selected: selected,
-                                selectedView: selectedView,
-                                onViewSelected: onViewSelected == null
-                                    ? null
-                                    : (view) {
-                                        Navigator.of(context).pop();
-                                        onViewSelected(view);
-                                      },
-                                onManageNetworks: onManageNetworks == null
-                                    ? null
-                                    : () {
-                                        Navigator.of(context).pop();
-                                        onManageNetworks();
-                                      },
-                                onSelected: (network) {
-                                  onSelected(network);
-                                  Navigator.of(context).pop(network);
-                                },
-                              ),
-                            ),
+                    // One glass surface: tint, hairline and blur once the
+                    // popover has grown (DESIGN.md "Glass"). No pointer, like
+                    // Telegram and Messenger menus: the panel grows from the
+                    // dock pill, and a separate pointer could not share the
+                    // panel's blur (it painted a translucent, unblurred patch
+                    // over the dock).
+                    child: NotionGlassPanel(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: maxHeight),
+                        child: SingleChildScrollView(
+                          child: NotionNetworkMenu(
+                            networks: networks,
+                            selected: selected,
+                            selectedView: selectedView,
+                            onViewSelected: onViewSelected == null
+                                ? null
+                                : (view) {
+                                    Navigator.of(context).pop();
+                                    onViewSelected(view);
+                                  },
+                            onManageNetworks: onManageNetworks == null
+                                ? null
+                                : () {
+                                    Navigator.of(context).pop();
+                                    onManageNetworks();
+                                  },
+                            onSelected: (network) {
+                              onSelected(network);
+                              Navigator.of(context).pop(network);
+                            },
                           ),
                         ),
-                        Positioned(
-                          bottom: -9,
-                          // Keep the pointer off the rounded corners.
-                          right:
-                              (constraints.maxWidth -
-                                      right -
-                                      anchor.center.dx -
-                                      9)
-                                  .clamp(
-                                    NotionRadius.lg,
-                                    math.max(
-                                      NotionRadius.lg,
-                                      width - NotionRadius.lg - 18,
-                                    ),
-                                  ),
-                          child: CustomPaint(
-                            size: const Size(18, 9),
-                            painter: _MenuPointerPainter(
-                              notionGlassEnabled(context)
-                                  ? context.notion.glass.overlayTint
-                                  : context.notion.glass.overlayTint.withValues(
-                                      alpha: 1,
-                                    ),
-                              context.notion.glass.border,
-                            ),
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),

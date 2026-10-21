@@ -21,14 +21,68 @@ class NotionPinnedShortcut {
   });
 }
 
-class NotionPinnedShortcuts extends StatelessWidget {
+/// Pinned chats as a two-up carousel. A chat pinned while the carousel is
+/// on screen pops its card in and the carousel slides to it; cards that were
+/// there before (or are built by swiping) appear as they are.
+class NotionPinnedShortcuts extends StatefulWidget {
   final List<NotionPinnedShortcut> pins;
   const NotionPinnedShortcuts({super.key, required this.pins});
+
+  @override
+  State<NotionPinnedShortcuts> createState() => _NotionPinnedShortcutsState();
+}
+
+class _NotionPinnedShortcutsState extends State<NotionPinnedShortcuts> {
+  final PageController _pages = PageController();
+
+  /// Names shown so far; anything else is a new pin.
+  Set<String>? _known;
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
+
+  /// Brings the page holding [index] into view after this frame.
+  void _reveal(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_pages.hasClients) return;
+      final page = index ~/ 2;
+      if ((_pages.page ?? 0).round() == page) return;
+      if (NotionMotion.reduced(context)) {
+        _pages.jumpToPage(page);
+      } else {
+        _pages.animateToPage(
+          page,
+          duration: NotionMotion.long,
+          curve: NotionMotion.emphasized,
+        );
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final pins = widget.pins;
     if (pins.isEmpty) return const SizedBox.shrink();
     final ordered = List<NotionPinnedShortcut>.of(pins)
       ..sort((a, b) => a.order.compareTo(b.order));
+    final names = {for (final pin in ordered) pin.name};
+    final known = _known;
+    final fresh = known == null ? const <String>{} : names.difference(known);
+    _known = names;
+    if (fresh.isNotEmpty) {
+      _reveal(ordered.indexWhere((pin) => fresh.contains(pin.name)));
+    }
+    Widget card(NotionPinnedShortcut pin) => NotionPop(
+      key: ValueKey(pin.name),
+      // Same wrapper for every card, so a card never remounts.
+      playOnMount: fresh.contains(pin.name),
+      bounce: false,
+      from: NotionMotion.dialogFrom,
+      child: _PinnedCard(pin: pin),
+    );
     final scale = MediaQuery.textScalerOf(context).scale(16) / 16;
     final height = 58.0 + math.max(44.0, 28 * scale + 16);
     return Column(
@@ -48,18 +102,16 @@ class NotionPinnedShortcuts extends StatelessWidget {
             builder: (context, constraints) {
               final cardWidth = (constraints.maxWidth - 12) / 2;
               return PageView.builder(
+                controller: _pages,
                 itemCount: (ordered.length + 1) ~/ 2,
                 itemBuilder: (context, page) => Row(
                   children: [
-                    SizedBox(
-                      width: cardWidth,
-                      child: _PinnedCard(pin: ordered[page * 2]),
-                    ),
+                    SizedBox(width: cardWidth, child: card(ordered[page * 2])),
                     const SizedBox(width: 12),
                     if (page * 2 + 1 < ordered.length)
                       SizedBox(
                         width: cardWidth,
-                        child: _PinnedCard(pin: ordered[page * 2 + 1]),
+                        child: card(ordered[page * 2 + 1]),
                       )
                     else
                       SizedBox(width: cardWidth),

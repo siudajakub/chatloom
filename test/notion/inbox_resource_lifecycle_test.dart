@@ -207,13 +207,17 @@ void main() {
       expect(inbox.debugFullBuilds, builds);
       expect(ConversationClassifier.debugComputations, classified);
 
-      // Only error/recovered transitions republish (offline banner).
+      // Only error/recovered transitions republish (offline banner). The
+      // notice waits out a short blip (the SDK retries after 3 s).
       client.onSyncStatus.add(
         SyncStatusUpdate(
           SyncStatus.error,
           error: SdkError(exception: Exception('fixture offline')),
         ),
       );
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.textContaining('Showing loaded chats'), findsNothing);
+      await tester.pump(const Duration(seconds: 4));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.textContaining('Showing loaded chats'), findsOneWidget);
       client.onSyncStatus.add(

@@ -5,6 +5,9 @@ import 'package:material_ui/material_ui.dart';
 /// Diameter of the manual-unread dot.
 const double _unreadDot = 10;
 
+/// Diameter of a typing dot in the preview line (the dots are 4.5× as wide).
+const double _typingDot = 4;
+
 /// The actual inbox row presenter, also used by account-free visual captures.
 class NotionInboxRow extends StatelessWidget {
   final Widget avatar;
@@ -18,6 +21,14 @@ class NotionInboxRow extends StatelessWidget {
   final String? notificationLabel;
   final bool draft;
   final bool redacted;
+
+  /// Someone is typing: [preview] holds the typing text, shown in the accent
+  /// colour after three animated dots (Telegram).
+  final bool typing;
+
+  /// Pinned chat: a pin glyph pops into the badge slot while nothing is
+  /// unread.
+  final bool pinned;
   final Widget? previewLeading;
   final Widget? action;
   final VoidCallback onTap;
@@ -27,6 +38,9 @@ class NotionInboxRow extends StatelessWidget {
   /// (and usually moves to the top): the row flashes a soft highlight once.
   /// Null on first build and for own messages, so nothing flashes on scroll.
   final Object? highlight;
+
+  /// Flash once on first build too (a row a merge or unmerge just created).
+  final bool highlightOnMount;
   const NotionInboxRow({
     super.key,
     required this.avatar,
@@ -41,10 +55,13 @@ class NotionInboxRow extends StatelessWidget {
     this.notificationLabel,
     this.draft = false,
     this.redacted = false,
+    this.typing = false,
+    this.pinned = false,
     this.previewLeading,
     this.action,
     this.onLongPress,
     this.highlight,
+    this.highlightOnMount = false,
   });
 
   @override
@@ -66,7 +83,13 @@ class NotionInboxRow extends StatelessWidget {
       else if (unread)
         'Unread',
       if (muted) notificationLabel ?? 'Notifications limited',
+      if (pinned) 'Pinned',
     ];
+    final previewColor = typing
+        ? colors.accent
+        : hasUnread && !muted && !draft
+        ? colors.text
+        : secondary;
     return Semantics(
       button: true,
       selected: selected,
@@ -75,6 +98,7 @@ class NotionInboxRow extends StatelessWidget {
       onLongPress: onLongPress,
       child: NotionRowHighlight(
         trigger: highlight,
+        playOnMount: highlightOnMount,
         borderRadius: NotionRadius.rowAll,
         child: NotionPressable(
           scale: NotionMotion.pressRow,
@@ -157,18 +181,34 @@ class NotionInboxRow extends StatelessWidget {
                                     previewLeading!,
                                     const SizedBox(width: 4),
                                   ],
+                                  // Typing dots grow in before the text and
+                                  // shrink away when the message arrives.
+                                  NotionSizeReveal(
+                                    visible: typing,
+                                    axis: Axis.horizontal,
+                                    alignment:
+                                        AlignmentDirectional.centerStart,
+                                    duration: NotionMotion.short,
+                                    child: Padding(
+                                      padding: const EdgeInsetsDirectional.only(
+                                        end: NotionSpace.xxs,
+                                      ),
+                                      child: NotionTypingDots(
+                                        size: _typingDot,
+                                        color: colors.accent,
+                                      ),
+                                    ),
+                                  ),
                                   Expanded(
                                     child: _InboxCrossFade(
                                       child: Text(
                                         preview,
-                                        key: ValueKey(preview),
+                                        key: ValueKey((preview, typing)),
                                         maxLines: large ? 2 : 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: NotionType.footnote.copyWith(
                                           height: 1.3,
-                                          color: hasUnread && !muted && !draft
-                                              ? colors.text
-                                              : secondary,
+                                          color: previewColor,
                                           fontStyle: draft
                                               ? FontStyle.italic
                                               : null,
@@ -261,6 +301,23 @@ class NotionInboxRow extends StatelessWidget {
                                           color: badgeColor,
                                           shape: BoxShape.circle,
                                         ),
+                                      ),
+                                    )
+                                  : pinned
+                                  // Pinned and read: the pin takes the slot
+                                  // (Telegram); it pops in on pinning.
+                                  ? Padding(
+                                      key: const ValueKey('pinned'),
+                                      padding: const EdgeInsets.only(
+                                        top: NotionSpace.xxs,
+                                      ),
+                                      child: Icon(
+                                        Icons.push_pin_outlined,
+                                        key: const ValueKey(
+                                          'notion_inbox_pin',
+                                        ),
+                                        size: NotionType.body.fontSize,
+                                        color: secondary,
                                       ),
                                     )
                                   : const SizedBox.shrink(

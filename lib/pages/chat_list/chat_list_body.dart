@@ -10,16 +10,15 @@ import 'package:chatloom/pages/chat_list/space_view.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/personal_search_page.dart';
+import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_search_controls.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/sync_status_localization.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/public_room_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:chatloom/widgets/avatar.dart';
-import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -73,8 +72,6 @@ class ChatListViewBody extends StatelessWidget {
                   ),
                 )
                 .toList();
-        final failed = inbox.syncFailed;
-        final status = client.onSyncStatus.value;
         final positions = <String, int>{
           for (final (index, room) in rooms.indexed) room.id: index,
         };
@@ -83,9 +80,12 @@ class ChatListViewBody extends StatelessWidget {
           rowCount: rooms.length,
           rowBuilder: (context, index) {
             final room = rooms[index];
+            final entity = projection.entityFor(room);
             return ChatListItem(
               room,
               projection: projection,
+              flash: controller.rowFlash(entity),
+              flashOnMount: controller.takeFreshFlash(entity),
               space: delegated[room.id],
               key: ValueKey(chatListItemKey(room.id)),
               onTap: () => controller.onChatTap(room),
@@ -116,38 +116,10 @@ class ChatListViewBody extends StatelessWidget {
                     controller.activeFilter != ActiveFilter.allChats
               ? 'No chats in ${inboxViewLabel(controller.personalFilter)}. Choose another view or network.'
               : 'No chats yet. Start a new chat.',
-          // Connection first, then encryption and private sync health; each
-          // takes no space while there is nothing to say.
-          status: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // The offline notice grows in and shrinks away with the
-              // connection instead of shifting the list in one jump.
-              NotionSizeReveal(
-                visible: failed && status != null,
-                revealOnMount: true,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: NotionSpace.xs),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: NotionCallout(
-                      icon: Icons.cloud_off_outlined,
-                      title: status?.calcLocalizedString(context) ?? '',
-                      message: 'Showing loaded chats.',
-                      actionLabel: 'Retry',
-                      onAction: () => showFutureLoadingDialog(
-                        context: context,
-                        future: () =>
-                            client.oneShotSync(timeout: Duration.zero),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              InboxHealthStatus(key: ValueKey(client), client: client),
-            ],
-          ),
+          // Connection, encryption and private sync, bridges, push and the
+          // worker in one row; it takes no space while there is nothing to say.
+          status: InboxHealthStatus(key: ValueKey(client), client: client),
+          headerStatus: ConnectionStatusLine(client: client),
           onCompose: () => context.go('/rooms/newprivatechat'),
           onSettings: () => context.go('/rooms/settings'),
           onSearch: controller.startSearch,
@@ -197,6 +169,7 @@ class ChatListViewBody extends StatelessWidget {
 
   void _showOptions(BuildContext context) => showModalBottomSheet<void>(
     context: context,
+    sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
     isScrollControlled: true,
     builder: (context) => SafeArea(
       child: SingleChildScrollView(
@@ -354,9 +327,8 @@ class PublicRoomsHorizontalList extends StatelessWidget {
                     publicRooms[i].canonicalAlias?.localpart ??
                     L10n.of(context).group,
                 avatar: publicRooms[i].avatarUrl,
-                onPressed: () => showAdaptiveDialog(
+                onPressed: () => showNotionCustomDialog(
                   context: context,
-                  barrierDismissible: true,
                   builder: (c) => PublicRoomDialog(
                     roomAlias:
                         publicRooms[i].canonicalAlias ?? publicRooms[i].roomId,

@@ -293,6 +293,29 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   InboxController? _inbox;
   bool _inboxVisible = true;
 
+  /// Rows (by inbox entity) that a merge, unmerge or undo just produced:
+  /// each flashes once so the eye finds where the chats went (Telegram
+  /// animates such moves; the inbox does not reorder with motion).
+  final Map<String, int> _rowFlashes = {};
+  final Set<String> _freshFlashes = {};
+
+  /// Flash counter of [entity]; a change replays the row highlight.
+  int rowFlash(String entity) => _rowFlashes[entity] ?? 0;
+
+  /// True once for a row created by such a change, so it flashes when it
+  /// first mounts (it has no earlier state to compare with).
+  bool takeFreshFlash(String entity) => _freshFlashes.remove(entity);
+
+  void _flashRows(Iterable<String> entities) {
+    for (final entity in entities) {
+      _rowFlashes[entity] = rowFlash(entity) + 1;
+      _freshFlashes.add(entity);
+    }
+  }
+
+  static Iterable<String> _sourceEntities(PersonGroup group) =>
+      group.members.map((member) => member.roomId);
+
   /// Cached inbox of the active account; recreated when the account changes.
   InboxController get inbox {
     final client = Matrix.of(context).client;
@@ -951,6 +974,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       return;
     }
     if (!mounted || !_sameInbox(owner, account)) return;
+    _flashRows(['person:${plan.group.id}']);
     _refreshInbox();
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -961,8 +985,14 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
           ),
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () =>
-                _runGroupChange(owner, account, () => undoMerge(owner, plan)),
+            onPressed: () {
+              _flashRows([
+                ..._sourceEntities(plan.group),
+                if (plan.previous != null) 'person:${plan.previous!.id}',
+                for (final absorbed in plan.absorbed) 'person:${absorbed.id}',
+              ]);
+              _runGroupChange(owner, account, () => undoMerge(owner, plan));
+            },
           ),
         ),
       );
@@ -979,6 +1009,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       confirmLabel: 'Unmerge',
     );
     if (!confirmed || !mounted || !_sameInbox(owner, account)) return;
+    _flashRows(_sourceEntities(group));
     _runGroupChange(owner, account, () => owner.removeGroup(group.id));
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -987,8 +1018,10 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
           content: const Text('Chats unmerged'),
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () =>
-                _runGroupChange(owner, account, () => owner.putGroup(group)),
+            onPressed: () {
+              _flashRows(['person:${group.id}']);
+              _runGroupChange(owner, account, () => owner.putGroup(group));
+            },
           ),
         ),
       );

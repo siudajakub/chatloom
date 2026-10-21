@@ -79,9 +79,16 @@ class ChatListItem extends StatefulWidget {
   final void Function()? onForget;
   final void Function() onTap;
   final String? filter;
+
+  /// Changes when a merge, unmerge or undo just produced this row: it
+  /// flashes once ([flashOnMount] when the row is new).
+  final int flash;
+  final bool flashOnMount;
   const ChatListItem(
     this.room, {
     this.projection,
+    this.flash = 0,
+    this.flashOnMount = false,
     this.activeChat = false,
     required this.onTap,
     this.onLongPress,
@@ -202,7 +209,10 @@ class _ChatListItemState extends State<ChatListItem> {
         i18n: MatrixLocals(l10n),
       );
     }
-    final preview = room.membership == Membership.invite
+    final invite = room.membership == Membership.invite;
+    final showsTyping =
+        !invite && !conflict && draft == null && typingText.isNotEmpty;
+    final preview = invite
         ? room
                   .getState(EventTypes.RoomMember, room.client.userID!)
                   ?.content
@@ -214,7 +224,7 @@ class _ChatListItemState extends State<ChatListItem> {
         ? 'Draft conflict — review in chat'
         : draft != null
         ? 'Draft: $draft'
-        : typingText.isNotEmpty
+        : showsTyping
         ? typingText
         : lastPreview == null || lastPreview.isEmpty
         ? l10n.noMessagesYet
@@ -230,7 +240,10 @@ class _ChatListItemState extends State<ChatListItem> {
       notificationLabel: notificationLabel,
       selected: widget.activeChat,
       draft: draft != null || conflict,
-      redacted: lastEvent?.redacted == true && draft == null,
+      redacted:
+          lastEvent?.redacted == true && draft == null && !showsTyping,
+      typing: showsTyping,
+      pinned: metadata.isPinned,
       previewLeading: room.hasActiveMatrixRtcCall
           ? ActiveCallIndicator(room: room)
           : lastEvent?.status.isSending == true
@@ -239,7 +252,10 @@ class _ChatListItemState extends State<ChatListItem> {
           : lastEvent?.relationshipType == RelationshipTypes.thread
           ? const Icon(Icons.forum_outlined, size: 12)
           : null,
-      highlight: _highlight == 0 ? null : _highlight,
+      highlight: _highlight == 0 && widget.flash == 0
+          ? null
+          : (_highlight, widget.flash),
+      highlightOnMount: widget.flashOnMount,
       onTap: widget.onTap,
       onLongPress: widget.onLongPress == null
           ? null
