@@ -18,6 +18,8 @@ import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/personal/ui/reminders_page.dart'
+    show requestConversationReminder;
 import 'package:chatloom/personal/ui/sync_changes_section.dart';
 import 'package:chatloom/personal/ui/transcription_settings.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -37,6 +39,9 @@ import 'package:personal_core/personal_core.dart';
 import 'package:uuid/uuid.dart';
 
 import 'person_route.dart';
+
+export 'package:chatloom/personal/ui/reminders_page.dart'
+    show requestConversationReminder;
 
 Future<String?> personalText(
   BuildContext context,
@@ -246,10 +251,9 @@ Future<bool> schedulePersonalAttachment(
 }
 
 enum PersonalSettingsSection {
-  sync('Sync & transcriptions'),
+  sync('Private sync'),
   people('People & merged conversations'),
-  transcriptions('Transcriptions'),
-  reminders('Reminders'),
+  transcriptions('Transcription'),
   scheduled('Scheduled messages'),
   push('Push setup & registration');
 
@@ -678,13 +682,6 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                       ),
                     ],
                   ),
-                NotionListRow(
-                  leading: const Icon(Icons.description_outlined),
-                  title: 'Transcriptions',
-                  subtitle:
-                      'Automatic transcription, language, limits and usage',
-                  onTap: () => context.push('/rooms/settings/transcriptions'),
-                ),
               ],
               PersonalSettingsSection.push => <Widget>[
                 _pressable(
@@ -785,38 +782,6 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                   const ListTile(
                     subtitle: Text(
                       'Merge two or more conversations for one person using the add button. Every message keeps its source network.',
-                    ),
-                  ),
-              ],
-              PersonalSettingsSection.reminders => <Widget>[
-                for (final e in personal.reminders.entries)
-                  ListTile(
-                    title: Text(_reminderChatName(personal, e.value)),
-                    subtitle: Text(_reminderSubtitle(context, e.value)),
-                    trailing: IconButton(
-                      tooltip: 'Cancel',
-                      icon: const Icon(Icons.close),
-                      onPressed:
-                          !personal.ready ||
-                              personal.pending.values.any(
-                                (op) => op.entityId == e.key,
-                              )
-                          ? null
-                          : () => run(() async {
-                              await personal.command(
-                                'reminder.cancel',
-                                e.key,
-                                {'id': e.key},
-                                baseRevision: e.value['revision'] as int? ?? 0,
-                              );
-                            }),
-                    ),
-                  ),
-                if (personal.reminders.isEmpty)
-                  const ListTile(
-                    title: Text('No reminders'),
-                    subtitle: Text(
-                      'Create a reminder from a conversation to bring it back at the right time.',
                     ),
                   ),
               ],
@@ -1189,128 +1154,3 @@ List<PopupMenuEntry<String>> conversationQuickActions({
     ),
   ),
 ];
-
-/// Chat name for a reminder row, respecting private nicknames.
-String _reminderChatName(PersonalClient p, Map<String, dynamic> reminder) {
-  try {
-    final conversation = reminder['conversation'];
-    final roomId = conversation is Map ? conversation['roomId'] : null;
-    final room = roomId is String ? p.client.getRoomById(roomId) : null;
-    if (room != null) return InboxProjection(p).displayName(room);
-  } catch (_) {}
-  return 'Conversation reminder';
-}
-
-String _reminderSubtitle(BuildContext context, Map<String, dynamic> reminder) {
-  final due = reminder['dueAt'];
-  final at = due is String ? DateTime.tryParse(due)?.toLocal() : null;
-  final localizations = MaterialLocalizations.of(context);
-  final when = at == null
-      ? 'No date'
-      : '${localizations.formatMediumDate(at)} · '
-            '${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(at), alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context))}';
-  final state = switch (reminder['state']) {
-    'queued' => 'Scheduled',
-    'waitingKeys' || 'waitingSync' => 'Waiting to check for replies',
-    'done' => 'Done',
-    'cancelled' => 'Cancelled',
-    'conflict' => 'Not saved',
-    _ => 'Pending',
-  };
-  return '$when · $state';
-}
-
-Future<void> requestConversationReminder(
-  BuildContext context,
-  PersonalClient p,
-  Room room, {
-  required bool Function() isCurrent,
-}) async {
-  // The message the user is looking at; the reminder notification shows it.
-  final anchor = room.lastEvent?.eventId;
-  final anchorEventId =
-      anchor != null && anchor.startsWith(r'$') && anchor.length <= 255
-      ? anchor
-      : null;
-  final account = p.client.userID;
-  final generation = PersonalPrivacy.surfaceGeneration;
-  bool current() =>
-      context.mounted &&
-      isCurrent() &&
-      account != null &&
-      p.client.userID == account &&
-      identical(p.client.getRoomById(room.id), room) &&
-      room.membership == Membership.join &&
-      PersonalPrivacy.surfaceUnlocked &&
-      PersonalPrivacy.surfaceGeneration == generation;
-  await p.load();
-  if (!current()) return;
-  final due = await personalDate(context);
-  if (due == null || !current()) return;
-  if (!context.mounted) return;
-  var untilReply = true, archive = false;
-  final options = await showNotionCustomDialog<Map<String, bool>>(
-    context: context,
-    builder: (context) => StatefulBuilder(
-      builder: (context, set) => AlertDialog(
-        title: const Text('Remind me about this conversation'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CheckboxListTile(
-              title: const Text('Remind me only if there is no reply'),
-              value: untilReply,
-              onChanged: (value) => set(() => untilReply = value ?? false),
-            ),
-            CheckboxListTile(
-              title: const Text('Archive this conversation until the reminder'),
-              value: archive,
-              onChanged: (value) => set(() => archive = value ?? false),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, {
-              'untilReply': untilReply,
-              'archive': archive,
-            }),
-            child: const Text('Save reminder'),
-          ),
-        ],
-      ),
-    ),
-  );
-  if (options == null || !current()) return;
-  if (!due.isAfter(DateTime.now())) throw StateError('Past date');
-  final id = const Uuid().v4();
-  await p.command('reminder.create', id, {
-    'id': id,
-    'conversation': p.ref(room).toJson(),
-    'dueAt': due.toUtc().toIso8601String(),
-    'untilReply': options['untilReply'],
-    'anchorEventId': ?anchorEventId,
-  });
-  if (!current()) return;
-  if (options['archive'] == true) {
-    final projection = InboxProjection(p);
-    final metadata = projection.metadataFor(room).setArchived(true);
-    final group = projection.groupFor(room);
-    final sources = group == null
-        ? [room]
-        : group.members
-              .map((member) => p.client.getRoomById(member.roomId))
-              .whereType<Room>();
-    await p.put(projection.metadataKey(room), {
-      ...metadata.toJson(),
-      'archivedAt': DateTime.now().toUtc().toIso8601String(),
-      'archiveSources': {
-        for (final source in sources) source.id: source.lastEvent?.eventId,
-      },
-    });
-  }
-}

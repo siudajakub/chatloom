@@ -32,35 +32,13 @@ class NewGroupView extends StatelessWidget {
         ),
         title: NotionFadeThrough(
           alignment: AlignmentDirectional.centerStart,
-          child: Text(
-            controller.createGroupType == CreateGroupType.space
-                ? L10n.of(context).newSpace
-                : L10n.of(context).createGroup,
-            key: ValueKey(controller.createGroupType),
-          ),
+          child: Text(L10n.of(context).createGroup),
         ),
       ),
       body: MaxWidthBody(
         child: Column(
           mainAxisSize: .min,
           children: NotionEntrance.stagger(<Widget>[
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: SegmentedButton<CreateGroupType>(
-                selected: {controller.createGroupType},
-                onSelectionChanged: controller.setCreateGroupType,
-                segments: [
-                  ButtonSegment(
-                    value: CreateGroupType.group,
-                    label: Text(L10n.of(context).group),
-                  ),
-                  ButtonSegment(
-                    value: CreateGroupType.space,
-                    label: Text(L10n.of(context).space),
-                  ),
-                ],
-              ),
-            ),
             const SizedBox(height: 16),
             NotionPressable(
               scale: NotionMotion.pressIcon,
@@ -102,9 +80,7 @@ class NewGroupView extends StatelessWidget {
                 readOnly: controller.loading,
                 decoration: InputDecoration(
                   prefixIcon: const Icon(Icons.people_outlined),
-                  labelText: controller.createGroupType == CreateGroupType.space
-                      ? L10n.of(context).spaceName
-                      : L10n.of(context).groupName,
+                  labelText: L10n.of(context).groupName,
                 ),
               ),
             ),
@@ -112,11 +88,7 @@ class NewGroupView extends StatelessWidget {
             SwitchListTile.adaptive(
               contentPadding: const EdgeInsets.symmetric(horizontal: 32),
               secondary: const Icon(Icons.public_outlined),
-              title: Text(
-                controller.createGroupType == CreateGroupType.space
-                    ? L10n.of(context).spaceIsPublic
-                    : L10n.of(context).groupIsPublic,
-              ),
+              title: Text(L10n.of(context).groupIsPublic),
               value: controller.publicGroup,
               onChanged: controller.loading ? null : controller.setPublicGroup,
             ),
@@ -132,32 +104,18 @@ class NewGroupView extends StatelessWidget {
                     : controller.setGroupCanBeFound,
               ),
             ),
-            NotionSizeReveal(
-              visible: controller.createGroupType != CreateGroupType.space,
-              child: SwitchListTile.adaptive(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 32),
-                secondary: Icon(
-                  Icons.lock_outlined,
-                  color: theme.colorScheme.onSurface,
-                ),
-                title: Text(
-                  L10n.of(context).enableEncryption,
-                  style: TextStyle(color: theme.colorScheme.onSurface),
-                ),
-                value: !controller.publicGroup,
-                onChanged: null,
+            SwitchListTile.adaptive(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 32),
+              secondary: Icon(
+                Icons.lock_outlined,
+                color: theme.colorScheme.onSurface,
               ),
-            ),
-            NotionSizeReveal(
-              visible: controller.createGroupType == CreateGroupType.space,
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 32),
-                trailing: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Icon(Icons.info_outlined),
-                ),
-                subtitle: Text(L10n.of(context).newSpaceDescription),
+              title: Text(
+                L10n.of(context).enableEncryption,
+                style: TextStyle(color: theme.colorScheme.onSurface),
               ),
+              value: !controller.publicGroup,
+              onChanged: null,
             ),
             Padding(
               padding: const EdgeInsets.all(16.0),
@@ -167,9 +125,7 @@ class NewGroupView extends StatelessWidget {
                   expand: true,
                   busy: controller.loading,
                   onPressed: controller.submitAction,
-                  label: controller.createGroupType == CreateGroupType.space
-                      ? L10n.of(context).createNewSpace
-                      : L10n.of(context).createGroupAndInviteUsers,
+                  label: L10n.of(context).createGroupAndInviteUsers,
                 ),
               ),
             ),

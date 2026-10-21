@@ -20,13 +20,13 @@ class _StartupApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ThemeBuilder(
     preferences: store,
-    builder: (context, themeMode, primaryColor) => MaterialApp(
+    builder: (context, themeMode, appearance) => MaterialApp(
       themeMode: themeMode,
-      theme: ChatLoomThemes.buildTheme(context, Brightness.light, primaryColor),
+      theme: ChatLoomThemes.buildTheme(context, Brightness.light, appearance),
       darkTheme: ChatLoomThemes.buildTheme(
         context,
         Brightness.dark,
-        primaryColor,
+        appearance,
       ),
       home: home,
     ),

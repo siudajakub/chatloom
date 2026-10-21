@@ -16,6 +16,7 @@ import 'package:chatloom/utils/init_with_restore.dart';
 import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call_member.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/sync_network_recovery.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -150,6 +151,19 @@ abstract class ClientManager {
     }
     PersonalPrivacy.bind(client);
     return client;
+  }
+
+  /// Phone sync settings for an app lifecycle change. The loop runs only in
+  /// the foreground (FCM wakes the app otherwise), with short retries there
+  /// (see [foregroundSyncRetryCapSec]). Background syncs happen only for a
+  /// push (catch-up, reminder wake, key retry): they never page history into
+  /// chats that came back limited, which cost a request per chat for
+  /// nothing. Notifications come from pushes, and an opened chat pages its
+  /// own history, exactly as after a foreground catch-up.
+  static void applyMobileLifecycle(Client client, {required bool foreground}) {
+    client.syncErrorMaxTimeoutSec = foregroundSyncRetryCapSec;
+    client.requestHistoryOnLimitedTimeline = false;
+    client.backgroundSync = foreground;
   }
 
   static WindowsInitializationSettings get windowsNotificationSettings =>

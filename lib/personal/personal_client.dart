@@ -72,6 +72,7 @@ class PersonalClient extends ChangeNotifier {
 
   PersonalClient._(this.client) : _openStore = PersonalStore.open {
     _watchDelivery();
+    _watchOwnMedia();
   }
   @visibleForTesting
   PersonalClient.forTesting(
@@ -79,6 +80,7 @@ class PersonalClient extends ChangeNotifier {
     required Future<PersonalStore> Function() openStore,
   }) : _openStore = openStore {
     _watchDelivery();
+    _watchOwnMedia();
   }
 
   /// Final send outcomes (SDK local echo sent/error, bridge send-status
@@ -481,10 +483,12 @@ class PersonalClient extends ChangeNotifier {
     if (_disposed || _replica == null) return Future<void>.value();
     _syncPending = true;
     final id = journal?.id;
-    _syncReplayRequested |=
+    final journalTouched =
         id != null &&
         (update.rooms?.join?.containsKey(id) == true ||
             update.rooms?.leave?.containsKey(id) == true);
+    if (journalTouched) _membershipValidated = false;
+    _syncReplayRequested |= journalTouched;
     // Stream.listen does not await async callbacks. Retain at most one active
     // pass plus a merged wake, including journal activity arriving during I/O.
     return _syncing ??= _drainSync();
@@ -518,9 +522,16 @@ class PersonalClient extends ChangeNotifier {
         await _attaching;
       } else if (_timeline == null || problem != null) {
         await _attach();
-      } else {
-        // Still validate membership on empty syncs; only history replay is skipped.
+      } else if (replayRequested || !_membershipValidated) {
         await _validate();
+      } else {
+        // Membership changes of the journal arrive in its own sync section,
+        // which takes the branch above. Syncs of other rooms (every message
+        // elsewhere, every idle long-poll answer) check the members this
+        // device knows, without the /members request [_validate] makes
+        // whenever the room summary lacks member counts. Replay and every
+        // publication still validate in full.
+        _validateLocal();
       }
       // Also replay activity that arrived after attach's initial replay but
       // before its pending-publication await finished.
@@ -534,8 +545,8 @@ class PersonalClient extends ChangeNotifier {
   }
 
   /// Cheap for an already-live journal: no participants request, replay or
-  /// notification. Every sync still validates membership and replays journal
-  /// activity, and each publication validates again.
+  /// notification. Every sync touching the journal validates membership and
+  /// replays its activity, and each publication validates again.
   Future<void> load() {
     _checkActive();
     if (_loading == null && _liveAndUnchanged()) return Future<void>.value();
@@ -651,7 +662,11 @@ class PersonalClient extends ChangeNotifier {
     });
   }
 
+  // The last [_validate] passed and no sync touched the journal since.
+  bool _membershipValidated = false;
+
   Future<void> _validate() async {
+    _membershipValidated = false;
     _checkActive();
     final room = journal;
     if (room == null || !room.encrypted || !PersonalPrivacy.isJournal(room)) {
@@ -665,6 +680,27 @@ class PersonalClient extends ChangeNotifier {
               m.membership == Membership.invite) &&
           m.id != client.userID,
     )) {
+      _setFailure(
+        StateError('Unsafe journal membership'),
+        PersonalFailurePhase.journalValidation,
+      );
+      throw StateError('Unsafe journal membership');
+    }
+    _membershipValidated = true;
+  }
+
+  /// [_validate] from local state only: no request, no await.
+  void _validateLocal() {
+    _checkActive();
+    final room = journal;
+    if (room == null || !room.encrypted || !PersonalPrivacy.isJournal(room)) {
+      _membershipValidated = false;
+      throw StateError('Invalid encrypted journal');
+    }
+    if (room
+        .getParticipants(const [Membership.join, Membership.invite])
+        .any((member) => member.id != client.userID)) {
+      _membershipValidated = false;
       _setFailure(
         StateError('Unsafe journal membership'),
         PersonalFailurePhase.journalValidation,
@@ -1231,17 +1267,31 @@ class PersonalClient extends ChangeNotifier {
   // The synced TranscriptionPolicy (journal metadata) is shared with the
   // worker. Automatic work needs BOTH that policy and the worker operator
   // switch, which the worker reports as heartbeat `autoTranscription: scan`.
-  // Local bridge rooms are scanned by the worker; cloud rooms are invisible
-  // to that scan, so a visible message there is requested by this device on
-  // the policy's behalf. Old workers (no field) ignore `origin: auto` and
-  // would run such a request as an unlimited manual job: never ask them.
+  // The worker picks up incoming messages itself (local index scan, and its
+  // own Matrix sync when it reports `autoTranscriptionLive`); a visible
+  // message it missed is requested by this device on the policy's behalf.
+  // Own messages are never picked up by the worker: the device that sent one
+  // asks at once (2026-10-21, J: "my own voice messages too, immediately").
+  // Old workers (no field) ignore `origin: auto` and would run such a
+  // request as an unlimited manual job: never ask them.
 
-  /// How long the panel shows "Transcribing…" while no job is visible.
+  /// How long the panel shows its loading placeholder while no job is
+  /// visible.
   static const autoTranscriptPendingWindow = Duration(minutes: 3);
 
-  /// Grace period for the worker's own scan of local bridge rooms before
-  /// this device asks instead (idempotent: same entity id, conflict-safe).
-  static const autoTranscriptCatchUpDelay = Duration(minutes: 2);
+  /// Grace for the worker's own pick-up of an incoming message (its sync
+  /// feed or the 3-s local index scan, normally 2–6 s with the journal round
+  /// trip) before this device asks instead. It was 2 min: a message that
+  /// arrived in an open chat and was missed by the worker sat on a spinner
+  /// for two minutes, while a chat opened later asked at once. Asking for a
+  /// job the worker already created is refused at no cost and only teaches
+  /// this device the job's state (same entity id, no second job or charge).
+  static const autoTranscriptCatchUpDelay = Duration(seconds: 12);
+
+  /// An own message sent from this device into a local bridge room is
+  /// exported by the worker from the local index, which lists it a moment
+  /// after the bridge delivered it.
+  static const ownLocalRequestDelay = Duration(seconds: 3);
 
   Object? _policyValue;
   TranscriptionPolicy _policy = TranscriptionPolicy.defaults;
@@ -1251,6 +1301,34 @@ class PersonalClient extends ChangeNotifier {
   DateTime? _autoPendingExpiresAt;
   DateTime? _autoBaseline;
   Future<void>? _autoBaselineLoading;
+
+  /// Own voice notes and round videos get their transcript requested the
+  /// moment the server confirms them (the send's remote echo), also when no
+  /// bubble is on screen. Every timeline event of every room passes here,
+  /// so the cheap checks come first.
+  StreamSubscription<Event>? _ownMediaWatch;
+  void _watchOwnMedia() {
+    _ownMediaWatch = client.onTimelineEvent.stream.listen((event) {
+      if (_disposed ||
+          event.type != EventTypes.Message ||
+          !event.eventId.startsWith(r'$')) {
+        return;
+      }
+      // Voice notes are m.audio, rounds m.video (see ownAutoTranscriptionKinds).
+      final msgtype = event.content['msgtype'];
+      if (msgtype != MessageTypes.Audio && msgtype != MessageTypes.Video) {
+        return;
+      }
+      try {
+        if (_ownMessage(event)) autoTranscriptPending(event);
+      } catch (_) {
+        // A room or identity that cannot be read yet: the bubble asks later.
+      }
+    }, onError: (_) {});
+  }
+
+  /// Sent by this account, here or from a bridged app (its ghost).
+  bool _ownMessage(Event e) => OwnSenderResolver.of(client).isOwnEvent(e);
 
   /// True when the worker reports its operator switch on. Only then does
   /// this device show automatic progress or send `origin: auto` requests.
@@ -1402,7 +1480,7 @@ class PersonalClient extends ChangeNotifier {
         kind: kind,
         network: network,
         roomId: room.id,
-        outgoing: OwnSenderResolver.of(client).isOwnEvent(e),
+        outgoing: _ownMessage(e),
         timestamp: e.originServerTs,
         durationMs: duration is int && duration >= 0 ? duration : null,
         chatMetadata: values['org:${room.id}'],
@@ -1414,11 +1492,14 @@ class PersonalClient extends ChangeNotifier {
   }
 
   /// True while an automatic transcription for [e] is expected but no job is
-  /// visible yet, so the panel shows "Transcribing…". Requires the policy,
-  /// a fresh heartbeat of a worker whose operator switch is on
-  /// ([autoTranscriptionAvailable]), an incoming eligible message, no job and
-  /// a message younger than [autoTranscriptPendingWindow]. Also schedules
-  /// the catch-up request for a visible message the worker did not pick up.
+  /// visible yet, so the panel shows its loading placeholder. Requires the
+  /// policy, a fresh heartbeat of a worker whose operator switch is on
+  /// ([autoTranscriptionAvailable]), an eligible message, no job and a
+  /// message younger than [autoTranscriptPendingWindow]. Also schedules the
+  /// request: at once for an own message sent from this device, after
+  /// [autoTranscriptCatchUpDelay] for anything the worker may pick up
+  /// itself. Own messages are only asked for right after sending (within the
+  /// pending window), never swept up later.
   bool autoTranscriptPending(Event e) {
     if (!ready ||
         !transcriptionPolicy.auto ||
@@ -1437,18 +1518,33 @@ class PersonalClient extends ChangeNotifier {
     final now = DateTime.now();
     if (autoTranscriptionBlockFor(e, now) != null) return false;
     final age = now.difference(e.originServerTs);
-    _scheduleAutoCatchUp(
-      e,
-      id,
-      // Give the scanning worker time to pick up local-bridge messages
-      // first (and cloud rooms too when it watches its own sync); older
-      // workers cannot see cloud rooms, so those are asked for right away.
-      e.room.id.endsWith(':beeper.local') ||
-              workerReadiness?.autoTranscriptionLive == true
-          ? autoTranscriptCatchUpDelay - age
-          : Duration.zero,
-    );
-    if (age >= autoTranscriptPendingWindow) return false;
+    final local = e.room.id.endsWith(':beeper.local');
+    if (_ownMessage(e)) {
+      if (age >= autoTranscriptPendingWindow) return false;
+      _scheduleAutoCatchUp(
+        e,
+        id,
+        // The sending device (its transaction id) asks; another device of
+        // the account or a bridged app's message waits for that request.
+        e.transactionId == null
+            ? autoTranscriptCatchUpDelay - age
+            : local
+            ? ownLocalRequestDelay
+            : Duration.zero,
+      );
+    } else {
+      _scheduleAutoCatchUp(
+        e,
+        id,
+        // Give the scanning worker a moment to pick up local-bridge messages
+        // first (and cloud rooms too when it watches its own sync); older
+        // workers cannot see cloud rooms, so those are asked for right away.
+        local || workerReadiness?.autoTranscriptionLive == true
+            ? autoTranscriptCatchUpDelay - age
+            : Duration.zero,
+      );
+      if (age >= autoTranscriptPendingWindow) return false;
+    }
     _armAutoPendingExpiry(e.originServerTs.add(autoTranscriptPendingWindow));
     return true;
   }
@@ -1875,6 +1971,7 @@ class PersonalClient extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _deliveryWatch?.cancel();
+    _ownMediaWatch?.cancel();
     if (identical(_instances[client], this)) _instances.remove(client);
     cancelAutoTranscriptionTimers();
     _sync?.cancel();

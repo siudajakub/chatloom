@@ -436,19 +436,8 @@ class MatrixState extends State<Matrix> {
     });
     onKeyVerificationRequestSub[name] ??= c.onKeyVerificationRequest.stream
         .listen((KeyVerification request) async {
-          var hidPopup = false;
-          request.onUpdate = () {
-            if (!hidPopup &&
-                {
-                  KeyVerificationState.done,
-                  KeyVerificationState.error,
-                }.contains(request.state)) {
-              ChatLoomApp.router.pop('dialog');
-            }
-            hidPopup = true;
-          };
-          request.onUpdate = null;
-          hidPopup = true;
+          // Already cancelled by the requesting device: nothing to answer.
+          if (request.isDone) return;
           await KeyVerificationDialog(request: request).show(
             ChatLoomApp.router.routerDelegate.navigatorKey.currentContext ??
                 context,
@@ -609,10 +598,8 @@ class MatrixState extends State<Matrix> {
           : PresenceType.offline;
       if (PlatformInfos.isMobile) {
         // The loop only runs in the foreground on phones; keep its retries
-        // short there (see [foregroundSyncRetryCapSec]).
-        client.syncErrorMaxTimeoutSec = foregroundSyncRetryCapSec;
-        client.backgroundSync = foreground;
-        client.requestHistoryOnLimitedTimeline = !foreground;
+        // short there (see [ClientManager.applyMobileLifecycle]).
+        ClientManager.applyMobileLifecycle(client, foreground: foreground);
         Logs().v('Set background sync to', foreground);
       } else if (foreground) {
         // Resume promptly even if the desktop sync loop is backing off offline.

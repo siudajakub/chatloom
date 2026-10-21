@@ -13,10 +13,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 abstract class UpdateNotifier {
   static const String versionStoreKey = 'last_known_version';
 
-  /// Upstream checked FluffyChat's GitHub releases for a Windows installer.
-  /// ChatLoom has no public release feed, so no update banner is shown.
-  static Future<void> showUpdateAvailableBanner(BuildContext context) async {}
-
   static Future<void> showUpdateDialog(BuildContext context) async {
     final l10n = L10n.of(context);
     final currentVersion = await PlatformInfos.getVersion();

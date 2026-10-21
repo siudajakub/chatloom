@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart';
@@ -53,12 +54,13 @@ extension LocalizedExceptionExtension on Object {
         case MatrixError.M_LIMIT_EXCEEDED:
           return L10n.of(context).tooManyRequestsWarning;
         default:
-          if (exceptionContext == ExceptionContext.joinRoom) {
-            return L10n.of(context).unableToJoinChat;
-          }
-          return L10n.of(
-            context,
-          ).serverRespondedWithError((this as MatrixException).errorMessage);
+          // Never the errcode or the server's own text (M_UNKNOWN: …).
+          return humanErrorText(
+            this,
+            action: exceptionContext == ExceptionContext.joinRoom
+                ? ErrorAction.join
+                : ErrorAction.generic,
+          );
       }
     }
     if (this is InvalidPassphraseException) {
@@ -109,7 +111,8 @@ extension LocalizedExceptionExtension on Object {
       return L10n.of(context).unableToJoinChat;
     }
 
-    return L10n.of(context).unexpectedErrorOccurded(toString());
+    // Exception text can carry server messages, paths or IDs.
+    return humanErrorText(this);
   }
 }
 

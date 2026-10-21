@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:chatloom/config/isrg_x1.dart';
 import 'package:chatloom/config/isrg_x2.dart';
+import 'package:chatloom/personal/media/upload_progress.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
@@ -35,7 +36,11 @@ class CustomHttpClient {
     return HttpClient(context: context);
   }
 
+  /// Upload progress is counted next to the socket, below the retry client
+  /// (which buffers whole request bodies).
   static http.Client createHTTPClient() => retry.RetryClient(
-    PlatformInfos.isAndroid ? IOClient(customHttpClient()) : http.Client(),
+    UploadProgressClient(
+      PlatformInfos.isAndroid ? IOClient(customHttpClient()) : http.Client(),
+    ),
   );
 }

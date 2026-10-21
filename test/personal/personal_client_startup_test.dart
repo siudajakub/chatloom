@@ -153,6 +153,11 @@ class _Journal implements Room {
   }
 }
 
+SyncUpdate _journalSync(Room journal, String batch) => SyncUpdate(
+  nextBatch: batch,
+  rooms: RoomsUpdate(join: {journal.id: JoinedRoomUpdate()}),
+);
+
 void main() {
   test(
     'opening multiple surfaces reuses the active journal timeline',
@@ -226,7 +231,7 @@ void main() {
     final gate = Completer<void>();
     journal.participantGate = gate.future;
     for (var i = 0; i < 100; i++) {
-      client.onSync.add(SyncUpdate(nextBatch: 'burst-$i'));
+      client.onSync.add(_journalSync(journal, 'burst-$i'));
     }
     await Future<void>.delayed(Duration.zero);
     expect(journal.activeParticipantReads, 1);
@@ -235,9 +240,42 @@ void main() {
     journal.participantGate = null;
     await Future<void>.delayed(Duration.zero);
     expect(journal.activeParticipantReads, 0);
-    expect(journal.participantReads - before, lessThanOrEqualTo(2));
+    expect(journal.participantReads - before, lessThanOrEqualTo(4));
     expect(personal.ready, isTrue);
   });
+
+  test(
+    'syncs of other rooms need no members request; journal syncs validate',
+    () async {
+      final client = _Client();
+      final personal = PersonalClient.forTesting(
+        client,
+        openStore: () async => _Store(),
+      );
+      addTearDown(personal.dispose);
+      addTearDown(client.onSync.close);
+      final journal = _Journal();
+      personal.journal = journal;
+      await personal.load();
+      final before = journal.participantReads;
+      // Messages elsewhere and idle long-poll answers.
+      for (var i = 0; i < 50; i++) {
+        client.onSync.add(SyncUpdate(nextBatch: 'other-$i'));
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(journal.participantReads, before);
+      expect(personal.ready, isTrue);
+
+      // A member joining the journal arrives in its own sync section.
+      journal.trusted = false;
+      client.onSync.add(_journalSync(journal, 'journal-1'));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(journal.participantReads, greaterThan(before));
+      expect(personal.ready, isFalse);
+      expect(personal.syncFailure, PrivateSyncFailure.membershipUntrusted);
+    },
+  );
 
   test(
     'Matrix ACK prevents pending-command resend on unrelated sync',
