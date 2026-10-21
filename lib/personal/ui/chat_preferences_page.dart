@@ -3,7 +3,6 @@ import 'dart:async';
 
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
-import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/sync_changes.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
@@ -22,12 +21,6 @@ String privateNotificationLabel(PersonalNotificationMode mode) =>
       PersonalNotificationMode.muted => 'Muted',
     };
 
-String placementLabel(ChatPlacement placement) => switch (placement) {
-  ChatPlacement.inbox => 'Main list',
-  ChatPlacement.groups => 'Groups',
-  ChatPlacement.ignored => 'Ignored',
-};
-
 // The durable replica coalesces later edits without changing an attempted command.
 // Pending synchronization must not lock an ignored chat out of being restored.
 bool canEditChatPreferences(PersonalClient personal, String key) =>
@@ -36,8 +29,12 @@ bool canEditChatPreferences(PersonalClient personal, String key) =>
 /// Account-bound private rules. Does not write native Matrix notification rules.
 class ChatPreferencesPage extends StatefulWidget {
   final PersonalClient personal;
-  final Room? room;
-  const ChatPreferencesPage({super.key, required this.personal, this.room});
+  final Room room;
+  const ChatPreferencesPage({
+    super.key,
+    required this.personal,
+    required this.room,
+  });
   @override
   State<ChatPreferencesPage> createState() => _ChatPreferencesPageState();
 }
@@ -91,58 +88,6 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
     for (final mode in PersonalNotificationMode.values)
       mode.name: privateNotificationLabel(mode),
   };
-
-  Widget _network(String network, InboxProjection projection) {
-    final key = 'network-policy:$network';
-    final policy = projection.networkPreferences(network);
-    final enabled = _canEdit(key);
-    Future<void> update(Map<String, dynamic> patch) =>
-        _save(key, {...policy.toJson(), ...patch});
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Divider(height: 32),
-        Text(
-          notionNetworkLabel(network),
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-        ),
-        PreferenceChoice(
-          title: 'Groups appear in',
-          value: policy.groupPlacement.name,
-          choices: {
-            for (final placement in ChatPlacement.values)
-              placement.name: placementLabel(placement),
-          },
-          onChanged: enabled
-              ? (value) => update({'groupPlacement': value})
-              : null,
-        ),
-        PreferenceChoice(
-          title: 'Notifications for this network',
-          value: policy.notifications?.name ?? 'inherit',
-          choices: _notificationChoices,
-          onChanged: enabled
-              ? (value) =>
-                    update({'notifications': value == 'inherit' ? null : value})
-              : null,
-        ),
-        PreferenceChoice(
-          title: 'Notifications for all groups',
-          value: policy.groupNotifications?.name ?? 'inherit',
-          choices: _notificationChoices,
-          onChanged: enabled
-              ? (value) => update({
-                  'groupNotifications': value == 'inherit' ? null : value,
-                })
-              : null,
-        ),
-        const Text(
-          'Applies to current and future groups. Individual chat exceptions take priority.',
-        ),
-        ..._syncState({key}),
-      ],
-    );
-  }
 
   /// The sync state of [keys] with its one-tap action: an unconfirmed change
   /// can be sent again, a conflict is resolved right here.
@@ -336,27 +281,8 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
     animation: personal,
     builder: (context, _) {
       final projection = InboxProjection(personal);
-      final networks =
-          {
-            for (final room in personal.client.rooms)
-              if (!room.isSpace &&
-                  !PersonalPrivacy.isJournal(room) &&
-                  !projection.classifier.classify(room).technical)
-                projection.classifier.classify(room).network,
-            for (final key in personal.values.keys)
-              if (key.startsWith('network-policy:'))
-                key.substring('network-policy:'.length),
-          }.toList()..sort(
-            (a, b) => notionNetworkLabel(a).compareTo(notionNetworkLabel(b)),
-          );
       return Scaffold(
-        appBar: AppBar(
-          title: Text(
-            widget.room == null
-                ? 'Networks & chat rules'
-                : 'Visibility & notifications',
-          ),
-        ),
+        appBar: AppBar(title: const Text('Visibility & notifications')),
         body: Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
@@ -403,13 +329,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  if (widget.room case final room?)
-                    ..._conversation(room, projection)
-                  else ...[
-                    if (networks.isEmpty) const Text('No networks loaded yet.'),
-                    for (final network in networks)
-                      _network(network, projection),
-                  ],
+                  ..._conversation(widget.room, projection),
                 ]),
               ),
             ),

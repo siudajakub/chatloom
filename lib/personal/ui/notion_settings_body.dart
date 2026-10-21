@@ -84,11 +84,15 @@ class NotionSettingsScaffold extends StatelessWidget {
   final String title;
   final Widget child;
   final bool withScrolling;
+
+  /// Header actions, e.g. an add button.
+  final List<Widget> actions;
   const NotionSettingsScaffold({
     super.key,
     required this.title,
     required this.child,
     this.withScrolling = true,
+    this.actions = const [],
   });
 
   @override
@@ -98,6 +102,9 @@ class NotionSettingsScaffold extends StatelessWidget {
       centerTitle: false,
       toolbarHeight: NotionTokens.headerHeight,
       automaticallyImplyLeading: MediaQuery.sizeOf(context).width <= 840,
+      actions: actions.isEmpty
+          ? null
+          : [...actions, const SizedBox(width: NotionSpace.xxs)],
     ),
     body: NotionSettingsBody(withScrolling: withScrolling, child: child),
   );

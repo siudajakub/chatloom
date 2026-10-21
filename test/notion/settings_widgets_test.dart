@@ -79,24 +79,66 @@ void main() {
     },
   );
 
-  test('secondary and legacy routes select the owning category', () {
+  test('secondary routes select the owning category', () {
     const cases = {
       '/rooms/settings': NotionSettingsCategory.account,
+      '/rooms/settings/account': NotionSettingsCategory.account,
       '/rooms/settings/devices': NotionSettingsCategory.security,
       '/rooms/settings/recovery': NotionSettingsCategory.security,
-      '/rooms/settings/security/password': NotionSettingsCategory.account,
-      '/rooms/settings/security/3pid': NotionSettingsCategory.account,
       '/rooms/settings/security/ignorelist': NotionSettingsCategory.security,
       '/rooms/settings/people': NotionSettingsCategory.chats,
-      '/rooms/settings/organization': NotionSettingsCategory.chats,
-      '/rooms/settings/transcriptions': NotionSettingsCategory.sync,
+      '/rooms/settings/chat/media': NotionSettingsCategory.chats,
+      '/rooms/settings/networks': NotionSettingsCategory.networks,
+      '/rooms/settings/transcriptions': NotionSettingsCategory.transcription,
+      '/rooms/settings/reminders': NotionSettingsCategory.reminders,
       '/rooms/settings/push': NotionSettingsCategory.notifications,
       '/rooms/settings/notifications/registration':
           NotionSettingsCategory.notifications,
-      '/rooms/settings/homeserver': NotionSettingsCategory.about,
+      '/rooms/settings/notifications/rules':
+          NotionSettingsCategory.notifications,
+      '/rooms/settings/sync': NotionSettingsCategory.advanced,
+      '/rooms/settings/advanced': NotionSettingsCategory.advanced,
     };
     for (final entry in cases.entries) {
       expect(NotionSettingsCategory.forPath(entry.key), entry.value);
+    }
+  });
+
+  testWidgets('index groups everyday settings, tools and Advanced last', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(home: _index(open: (_) {})));
+    await tester.pumpAndSettle();
+    double top(String text) => tester.getTopLeft(find.text(text)).dy;
+    final order = [
+      'Fictional account',
+      'Appearance',
+      'Notifications',
+      'Privacy & security',
+      'Chats & media',
+      'Networks',
+      'Transcription',
+      'Tools',
+      'Reminders',
+      'Scheduled messages',
+      'Bookmarks',
+      'Advanced',
+    ];
+    for (var i = 1; i < order.length; i++) {
+      expect(top(order[i]), greaterThan(top(order[i - 1])), reason: order[i]);
+    }
+    // FluffyChat leftovers are gone from the index.
+    for (final removed in [
+      'About & help',
+      'Homeserver',
+      'Sync & transcriptions',
+      'Chats & organization',
+    ]) {
+      expect(find.text(removed), findsNothing);
     }
   });
 
@@ -241,10 +283,9 @@ void main() {
               ),
               home: width > 840
                   ? TwoColumnLayout(
-                      hasNavigationRail: false,
                       mainView: index,
                       sideView: const NotionSettingsScaffold(
-                        title: 'Sync & transcriptions',
+                        title: 'Private sync',
                         child: Text('Changes awaiting confirmation'),
                       ),
                     )

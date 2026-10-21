@@ -18,12 +18,9 @@ enum AppSettings<T> {
 
   /// Max lines for unselected HTML/text bubbles; 0 = unlimited (no fade).
   messagePreviewMaxLines<int>('chat.fluffy.message_preview_max_lines', 50),
-  audioRecordingNumChannels<int>('audioRecordingNumChannels', 1),
   audioRecordingAutoGain<bool>('audioRecordingAutoGain', true),
   audioRecordingEchoCancel<bool>('audioRecordingEchoCancel', false),
   audioRecordingNoiseSuppress<bool>('audioRecordingNoiseSuppress', true),
-  audioRecordingBitRate<int>('audioRecordingBitRate', 64000),
-  audioRecordingSamplingRate<int>('audioRecordingSamplingRate', 44100),
   showNoGoogle<bool>('chat.fluffy.show_no_google', false),
   unifiedPushRegistered<bool>('chat.fluffy.unifiedpush.registered', false),
   unifiedPushEndpoint<String>('chat.fluffy.unifiedpush.endpoint', ''),
@@ -36,11 +33,17 @@ enum AppSettings<T> {
     'event_id_only',
   ),
   renderHtml<bool>('chat.fluffy.renderHtml', true),
-  fontSizeFactor<double>('chat.fluffy.font_size_factor', 1.0),
   hideRedactedEvents<bool>('chat.fluffy.hideRedactedEvents', false),
   hideUnknownEvents<bool>('chat.fluffy.hideUnknownEvents', true),
   autoplayImages<bool>('chat.fluffy.autoplay_images', true),
   personalIncognito<bool>('pl.personal.incognito', true),
+
+  /// Accent preset of the colour system (`NotionAccent.name`). Read by
+  /// `ThemeController`, which rebuilds the theme live when it changes.
+  appearanceAccent<String>('pl.personal.appearance.accent', 'blue'),
+
+  /// Colour intensity (`NotionIntensity.name`): muted, balanced or vivid.
+  appearanceIntensity<String>('pl.personal.appearance.intensity', 'balanced'),
 
   /// Prefetch voice notes and round videos (ciphertext into the encrypted
   /// media cache) as soon as a chat is open, so playback starts instantly.
@@ -80,12 +83,7 @@ enum AppSettings<T> {
   sendPublicReadReceipts<bool>('chat.fluffy.send_public_read_receipts', true),
   swipeRightToLeftToReply<bool>('chat.fluffy.swipeRightToLeftToReply', true),
   sendOnEnter<bool>('chat.fluffy.send_on_enter', false),
-  displayNavigationRail<bool>('chat.fluffy.display_navigation_rail', false),
   shareKeysWith<String>('chat.fluffy.share_keys_with_2', 'all'),
-  noEncryptionWarningShown<bool>(
-    'chat.fluffy.no_encryption_warning_shown',
-    false,
-  ),
   displayChatDetailsColumn('chat.fluffy.display_chat_details_column', false),
   // AppConfig-mirrored settings
   applicationName<String>('chat.fluffy.application_name', 'ChatLoom'),
@@ -93,8 +91,6 @@ enum AppSettings<T> {
     'chat.fluffy.default_homeserver',
     'matrix.beeper.com',
   ),
-  // colorSchemeSeed stored as ARGB int
-  colorSchemeSeedInt<int>('chat.fluffy.color_scheme_seed', 0xFF5625BA),
   emojiSuggestionLocale<String>('emoji_suggestion_locale', ''),
   enableSoftLogout<bool>('chat.fluffy.enable_soft_logout', true),
   enableMatrixNativeOIDC<bool>('chat.fluffy.enable_matrix_native_oidc', true),
@@ -113,7 +109,6 @@ enum AppSettings<T> {
   sendTimelineEventTimeout<int>('chat.fluffy.send_timeline_event_timeout', 15),
   webNotificationSound<bool>('chat.fluffy.web_notification_sound', true),
   chatFilter<String>('chat.fluffy.chat_filter', 'allChats'),
-  hideRoomsInSpaces<bool>('chat.fluffy.hideRoomsInSpaces', false),
   showThumbnailsInTimeline<bool>('chat.fluffy.showThumbnailsInTimeline', true),
 
   /// Double tap reacts with the network's first quick reaction (on by
@@ -124,10 +119,6 @@ enum AppSettings<T> {
   /// network's first quick reaction, a heart wherever it has one.
   doubleTapReaction<String>('chat.fluffy.double_tap_reaction', ''),
   benchmarksInLogs<bool>('chat.fluffy.benchmarks_in_logs', false),
-  autoSendErrorReports<bool?>('chat.fluffy.auto_send_eror_reports', null),
-  knownErrorHashes<List<String>>('chat.fluffy.known_crash_hashes', []),
-  checkForUpdates<bool>('chat.fluffy.check_for_updates', true),
-  lastUpdateCheckDate<String>('chat.fluffy.last_update_check_date', ''),
   fallbackLiveKitInstance<String>(
     'chat.fluffy.fallback_live_kit_instance',
     'https://livekit-jwt.fluffy.chat',
@@ -158,19 +149,6 @@ enum AppSettings<T> {
     if (AppSettings._store != null) return AppSettings.store;
 
     final store = AppSettings._store = await SharedPreferences.getInstance();
-
-    // Migrate wrong datatype for fontSizeFactor
-    final fontSizeFactorString = Result(
-      () => store.getString(AppSettings.fontSizeFactor.key),
-    ).asValue?.value;
-    if (fontSizeFactorString != null) {
-      Logs().i('Migrate wrong datatype for fontSizeFactor!');
-      await store.remove(AppSettings.fontSizeFactor.key);
-      final fontSizeFactor = double.tryParse(fontSizeFactorString);
-      if (fontSizeFactor != null) {
-        await store.setDouble(AppSettings.fontSizeFactor.key, fontSizeFactor);
-      }
-    }
 
     if (store.getBool(AppSettings.sendOnEnter.key) == null) {
       await store.setBool(AppSettings.sendOnEnter.key, !PlatformInfos.isMobile);
@@ -281,22 +259,4 @@ extension AppSettingsDoubleExtension on AppSettings<double> {
   }
 
   Future<void> setItem(double value) => AppSettings.store.setDouble(key, value);
-}
-
-extension AppSettingsStringListExtension on AppSettings<List<String>> {
-  List<String> get value {
-    final value = Result(() => AppSettings.store.getStringList(key));
-    final error = value.asError;
-    if (error != null) {
-      Logs().e(
-        'Unable to fetch $key from storage. Removing entry...',
-        error.error,
-        error.stackTrace,
-      );
-    }
-    return value.asValue?.value ?? defaultValue;
-  }
-
-  Future<void> setItem(List<String> value) =>
-      AppSettings.store.setStringList(key, value);
 }

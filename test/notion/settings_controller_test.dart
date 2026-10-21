@@ -192,67 +192,6 @@ void main() {
     expect(second.logouts, 0);
     expect(tester.takeException(), isNull);
   });
-  for (final identityStep in [false, true]) {
-    testWidgets(
-      'delete confirmation cannot act on a changed account: identityStep=$identityStep',
-      (tester) async {
-        final first = _Account(
-          account: '@first:example.invalid',
-          encrypted: false,
-        );
-        final second = _Account(
-          account: '@second:example.invalid',
-          encrypted: false,
-        );
-        final matrix = _ActiveMatrix(first);
-        final key = GlobalKey<SettingsController>();
-        await _mount(tester, matrix, key);
-        final labels = L10n.of(key.currentState!.context);
-        final action = key.currentState!.deleteAccountAction();
-        await tester.pumpAndSettle();
-        if (identityStep) {
-          await tester.tap(find.text(labels.ok));
-          await tester.pumpAndSettle();
-          await tester.enterText(find.byType(TextField), first.account);
-          await tester.pumpAndSettle();
-        }
-        matrix.active = second;
-        await _mount(tester, matrix, key);
-        await tester.tap(find.text(identityStep ? labels.delete : labels.ok));
-        await tester.pumpAndSettle();
-        await action;
-        expect(first.logouts, 0);
-        expect(second.logouts, 0);
-        expect(find.byType(TextField), findsNothing);
-        expect(tester.takeException(), isNull);
-      },
-    );
-  }
-  testWidgets(
-    'session export confirmation cannot export the newly active account',
-    (tester) async {
-      final first = _Account(
-        account: '@first:example.invalid',
-        encrypted: false,
-      );
-      final second = _Account(
-        account: '@second:example.invalid',
-        encrypted: false,
-      );
-      final matrix = _ActiveMatrix(first);
-      final key = GlobalKey<SettingsController>();
-      await _mount(tester, matrix, key);
-      final labels = L10n.of(key.currentState!.context);
-      final action = key.currentState!.dehydrateAction();
-      await tester.pumpAndSettle();
-      matrix.active = second;
-      await _mount(tester, matrix, key);
-      await tester.tap(find.text(labels.ok));
-      await tester.pumpAndSettle();
-      await action;
-      expect(first.logouts, 0);
-      expect(second.logouts, 0);
-      expect(tester.takeException(), isNull);
-    },
-  );
+  // Delete account and session export were removed from ChatLoom (wave 4,
+  // confirmed by J): the Beeper account is managed in Beeper.
 }

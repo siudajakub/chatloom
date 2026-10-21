@@ -8,9 +8,6 @@ import 'dart:ui';
 import 'package:chatloom/ui/notion/notion_tokens.dart';
 
 abstract class AppConfig {
-  static const Color primaryColor = Color(0xFF261386);
-
-  static const Color chatColor = primaryColor;
   static const double messageFontSize = 16.0;
   static const bool allowOtherHomeservers = true;
   static const bool enableRegistration = true;
@@ -30,7 +27,6 @@ abstract class AppConfig {
 
   /// Legacy FluffyChat radius, aligned with the Notion card radius.
   static const double borderRadius = NotionRadius.md;
-  static const double spaceBorderRadius = 11.0;
   static const double columnWidth = 360.0;
 
   static const String appId = 'pl.personal.chat';

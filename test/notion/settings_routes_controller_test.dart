@@ -8,6 +8,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_settings_adapter.dart';
 import 'package:chatloom/personal/ui/notion_settings_page.dart';
+import 'package:chatloom/personal/ui/reminders_page.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -210,13 +211,85 @@ void main() {
     },
   );
 
+  test('settings routes keep ChatLoom pages and drop FluffyChat leftovers', () {
+    final outer = AppRoutes.routes.whereType<ShellRoute>().single;
+    final rooms = outer.routes.whereType<GoRoute>().firstWhere(
+      (r) => r.path == '/rooms',
+    );
+    final shell = rooms.routes.whereType<ShellRoute>().single;
+    final settings = shell.routes.whereType<GoRoute>().single;
+    final paths = <String>{};
+    void collect(GoRoute route, String prefix) {
+      final path = prefix.isEmpty ? route.path : '$prefix/${route.path}';
+      paths.add(path);
+      for (final child in route.routes.whereType<GoRoute>()) {
+        collect(child, path);
+      }
+    }
+
+    for (final child in settings.routes.whereType<GoRoute>()) {
+      collect(child, '');
+    }
+    for (final kept in [
+      'account',
+      'style',
+      'notifications',
+      'notifications/diagnostics',
+      'notifications/registration',
+      'notifications/rules',
+      'push',
+      'security',
+      'security/ignorelist',
+      'devices',
+      'recovery',
+      'chat',
+      'chat/media',
+      'people',
+      'networks',
+      'transcriptions',
+      'reminders',
+      'scheduled',
+      'bookmarks',
+      'sync',
+      'advanced',
+    ]) {
+      expect(paths, contains(kept));
+    }
+    for (final removed in [
+      'about',
+      'homeserver',
+      'addaccount',
+      'organization',
+      'chat/emotes',
+      'security/password',
+      'security/3pid',
+    ]) {
+      expect(paths, isNot(contains(removed)));
+    }
+    // Every settings index row opens a registered route.
+    for (final category in NotionSettingsCategory.values) {
+      if (category == NotionSettingsCategory.account) continue;
+      expect(paths, contains(category.path), reason: category.title);
+    }
+    // Room stickers & emotes were a FluffyChat leftover as well.
+    final room = rooms.routes.whereType<GoRoute>().firstWhere(
+      (r) => r.path == ':roomid',
+    );
+    final details = room.routes.whereType<GoRoute>().firstWhere(
+      (r) => r.path == 'details',
+    );
+    expect(
+      details.routes.whereType<GoRoute>().map((r) => r.path),
+      isNot(contains('emotes')),
+    );
+  });
+
   for (final entry in const {
     'account': 'Change display name',
     'security': 'Incognito mode',
-    'chat': 'Conversation preferences',
+    'chat': 'Voice messages & round videos',
     'style': 'Appearance',
-    'organization': 'Choose a conversation',
-    'networks': 'No networks loaded yet.',
+    'networks': 'No networks yet',
     'people': 'Merge conversations',
     'sync': 'Private sync not connected',
     'transcriptions': 'Transcription service',
@@ -226,8 +299,9 @@ void main() {
     'push': 'Set up notifications automatically',
     'notifications': 'Push setup & registration',
     'notifications/registration': 'Could not load registered devices',
+    'notifications/rules': 'Rules are not available yet',
     'recovery': 'Key backup',
-    'about': 'App information',
+    'advanced': 'App information',
   }.entries) {
     testWidgets(
       'actual route ${entry.key} works offline and returns to index',
@@ -280,6 +354,90 @@ void main() {
       },
     );
   }
+
+  testWidgets('reminders page lists saving, upcoming and recent reminders', (
+    tester,
+  ) async {
+    await _mount(tester, path: '/rooms/settings/reminders');
+    expect(find.text('No reminders'), findsOneWidget);
+    final context = tester.element(find.byType(RemindersPage));
+    final personal = PersonalClient.of(Matrix.of(context).client);
+    final now = DateTime.now();
+    const conversation = {
+      'accountId': '@settings-fixture:example.invalid',
+      'roomId': '!fixture:example.invalid',
+      'network': 'telegram',
+    };
+    personal.reminders['upcoming'] = {
+      'kind': 'reminder',
+      'conversation': conversation,
+      'dueAt': now.add(const Duration(days: 2)).toUtc().toIso8601String(),
+      'state': 'queued',
+      'revision': 1,
+      'untilReply': true,
+    };
+    personal.reminders['fired'] = {
+      'kind': 'reminder',
+      'conversation': conversation,
+      'dueAt': now.subtract(const Duration(hours: 2)).toUtc().toIso8601String(),
+      'state': 'done',
+      'revision': 2,
+    };
+    // Fired by the worker's grace although it could not read the history.
+    personal.reminders['unchecked'] = {
+      'kind': 'reminder',
+      'conversation': conversation,
+      'dueAt': now.subtract(const Duration(hours: 4)).toUtc().toIso8601String(),
+      'state': 'done',
+      'due': true,
+      'revision': 3,
+      'untilReply': true,
+      'replyCheck': 'skipped',
+      'replyCheckError': 'waiting_keys',
+    };
+    personal.pending['op-new'] = PersonalOperation(
+      opId: 'op-new',
+      kind: 'reminder.create',
+      entityId: 'new',
+      createdAt: DateTime.utc(2026),
+      payload: {
+        'id': 'new',
+        'conversation': conversation,
+        'dueAt': now.add(const Duration(hours: 3)).toUtc().toIso8601String(),
+        'untilReply': false,
+      },
+    );
+    addTearDown(() {
+      personal.reminders.clear();
+      personal.pending.clear();
+    });
+    personal.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(find.text('No reminders'), findsNothing);
+    expect(find.text('Upcoming'), findsOneWidget);
+    expect(find.text('Recent'), findsOneWidget);
+    expect(find.textContaining('Saving…'), findsOneWidget);
+    expect(find.textContaining('Only if no reply'), findsOneWidget);
+    expect(find.textContaining('· Done'), findsNWidgets(2));
+    expect(
+      find.textContaining('Done · couldn’t check for replies'),
+      findsOneWidget,
+    );
+    // Private sync is not connected in the fixture: nothing can be changed.
+    expect(find.text('Private sync is unavailable'), findsOneWidget);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.ancestor(
+              of: find.byTooltip('New reminder'),
+              matching: find.byType(IconButton),
+            ),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('automatic push setup remains readable at 320 and 200 percent', (
     tester,

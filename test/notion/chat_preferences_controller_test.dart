@@ -489,53 +489,6 @@ void main() {
     },
   );
 
-  testWidgets(
-    'bulk group notification rule applies to a newly discovered group',
-    (tester) async {
-      final client = _Client();
-      final existing = room(client, 'existing-group', kind: 'group');
-      final dm = room(client, 'dm');
-      final personal = _Private(client);
-      await tester.pumpWidget(
-        host(ChatPreferencesPage(personal: personal), _Matrix(client)),
-      );
-      await tester.pumpAndSettle();
-      final choice = find.widgetWithText(
-        PreferenceChoice,
-        'Notifications for all groups',
-      );
-      await tester.ensureVisible(choice);
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.descendant(
-          of: choice,
-          matching: find.byType(DropdownButton<String>),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Muted').last);
-      await tester.pumpAndSettle();
-      final discovered = room(client, 'new-group', kind: 'group');
-      expect(
-        InboxProjection(personal).notificationModeFor(existing),
-        PersonalNotificationMode.muted,
-      );
-      expect(
-        InboxProjection(personal).notificationModeFor(discovered),
-        PersonalNotificationMode.muted,
-      );
-      expect(
-        InboxProjection(personal).notificationModeFor(dm),
-        PersonalNotificationMode.all,
-      );
-      expect(personal.writes, ['network-policy:telegram']);
-      expect(existing.writes, isEmpty);
-      expect(discovered.writes, isEmpty);
-      await tester.pumpWidget(const SizedBox());
-      personal.dispose();
-    },
-  );
-
   for (final width in [320.0, 1100.0]) {
     for (final scale in [1.0, 2.0]) {
       testWidgets('production category menu renders at $width and $scale', (
@@ -574,36 +527,5 @@ void main() {
         expect(tester.takeException(), isNull);
       });
     }
-  }
-  for (final width in [320.0, 1100.0]) {
-    testWidgets('network rules render at $width with 200 percent text', (
-      tester,
-    ) async {
-      tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = Size(width, 1000);
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final client = _Client();
-      room(client, 'group', kind: 'group');
-      final personal = _Private(client);
-      await tester.pumpWidget(
-        host(
-          ChatPreferencesPage(personal: personal),
-          _Matrix(client),
-          scale: 2,
-        ),
-      );
-      await tester.pumpAndSettle();
-      await capture(tester, 'network-rules-${width.toInt()}-200');
-      expect(tester.takeException(), isNull);
-      await tester.scrollUntilVisible(
-        find.text('Notifications for all groups'),
-        200,
-      );
-      expect(tester.takeException(), isNull);
-      await capture(tester, 'network-rules-${width.toInt()}-200-groups');
-      await tester.pumpWidget(const SizedBox());
-      personal.dispose();
-    });
   }
 }

@@ -6,7 +6,7 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// Settings → Chats & organization → Voice messages & round videos.
+/// Settings → Chats & media → Voice messages & round videos.
 ///
 /// Capture quality for voice notes (read by `RecordingViewModel` when a
 /// recording starts), round video capture options (Android camera pipeline)

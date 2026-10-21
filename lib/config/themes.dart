@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/ui/notion/notion_appearance.dart';
 import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:material_ui/material_ui.dart';
@@ -12,10 +13,7 @@ abstract class ChatLoomThemes {
 
   static const double maxTimelineWidth = columnWidth * 2;
 
-  static const double navRailWidth = 80.0;
-
-  static bool isColumnModeByWidth(double width) =>
-      width > columnWidth * 2 + navRailWidth;
+  static bool isColumnModeByWidth(double width) => width > columnWidth * 2;
 
   static bool isColumnMode(BuildContext context) =>
       isColumnModeByWidth(MediaQuery.sizeOf(context).width);
@@ -42,27 +40,13 @@ abstract class ChatLoomThemes {
   static const Duration animationDuration = NotionMotion.short;
   static const Curve animationCurve = NotionMotion.standard;
 
+  /// The app theme for [appearance] (accent preset and colour intensity,
+  /// chosen in Settings → Appearance).
   static ThemeData buildTheme(
     BuildContext context,
     Brightness brightness, [
-    Color? seed,
+    NotionAppearance appearance = NotionAppearance.standard,
   ]) {
-    return NotionTheme.build(brightness, seed);
+    return NotionTheme.build(brightness, appearance);
   }
-}
-
-extension BubbleColorTheme on ThemeData {
-  Color get bubbleColor => brightness == Brightness.light
-      ? colorScheme.primary
-      : colorScheme.primaryContainer;
-
-  Color get onBubbleColor => brightness == Brightness.light
-      ? colorScheme.onPrimary
-      : colorScheme.onPrimaryContainer;
-
-  Color get secondaryBubbleColor => HSLColor.fromColor(
-    brightness == Brightness.light
-        ? colorScheme.tertiary
-        : colorScheme.tertiaryContainer,
-  ).withSaturation(0.5).toColor();
 }

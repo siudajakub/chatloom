@@ -8,7 +8,6 @@ import 'package:chatloom/utils/beautify_string_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:go_router/go_router.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';
@@ -44,12 +43,6 @@ class SettingsSecurityView extends StatelessWidget {
               value,
               setting: AppSettings.sendPublicReadReceipts,
             ),
-          ),
-          SettingsSwitchListTile.adaptive(
-            title: L10n.of(context).shareCrashReports,
-            subtitle: L10n.of(context).shareCrashReportsDescription,
-            setting: AppSettings.autoSendErrorReports,
-            defaultValue: false,
           ),
           NotionListRow(
             leading: const Icon(Icons.block_outlined),

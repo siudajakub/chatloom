@@ -6,7 +6,6 @@
 import 'dart:async';
 
 import 'package:chatloom/config/themes.dart';
-import 'package:chatloom/pages/archive/archive.dart';
 import 'package:chatloom/pages/bootstrap/bootstrap_page.dart';
 import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat_access_settings/chat_access_settings_controller.dart';
@@ -23,14 +22,10 @@ import 'package:chatloom/pages/login/login.dart';
 import 'package:chatloom/pages/new_group/new_group.dart';
 import 'package:chatloom/pages/new_private_chat/new_private_chat.dart';
 import 'package:chatloom/pages/settings/settings.dart';
-import 'package:chatloom/pages/settings_3pid/settings_3pid.dart';
 import 'package:chatloom/pages/settings_chat/settings_chat.dart';
 import 'package:chatloom/pages/settings_chat/settings_media_view.dart';
-import 'package:chatloom/pages/settings_emotes/settings_emotes.dart';
-import 'package:chatloom/pages/settings_homeserver/settings_homeserver.dart';
 import 'package:chatloom/pages/settings_ignore_list/settings_ignore_list.dart';
 import 'package:chatloom/pages/settings_notifications/settings_notifications.dart';
-import 'package:chatloom/pages/settings_password/settings_password.dart';
 import 'package:chatloom/pages/settings_security/settings_security.dart';
 import 'package:chatloom/pages/settings_style/settings_style.dart';
 import 'package:chatloom/pages/sign_in/sign_in_page.dart';
@@ -38,8 +33,9 @@ import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/person_route.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_hub.dart';
-import 'package:chatloom/personal/ui/chat_preferences_page.dart';
+import 'package:chatloom/personal/ui/networks_page.dart';
 import 'package:chatloom/personal/ui/push_diagnostics_page.dart';
+import 'package:chatloom/personal/ui/reminders_page.dart';
 import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:chatloom/widgets/config_viewer.dart';
 import 'package:chatloom/widgets/layouts/empty_page.dart';
@@ -139,9 +135,6 @@ abstract class AppRoutes {
                 mainView: ChatList(
                   activeChat: state.pathParameters['roomid'],
                   activeGroup: state.pathParameters['groupId'],
-                  activeSpace: state.uri.queryParameters['spaceId'],
-                  displayNavigationRail:
-                      state.path?.startsWith('/rooms/settings') != true,
                 ),
                 sideView: child,
               )
@@ -159,43 +152,10 @@ abstract class AppRoutes {
                 // On phones the inbox is hidden under every child page, so it
                 // has no selected row; keep it identical while children
                 // change (see [_PageMemo]).
-                : ChatList(
-                    activeChat: null,
-                    activeSpace: state.uri.queryParameters['spaceId'],
-                  ),
-            memo: ('rooms', state.uri.queryParameters['spaceId']),
+                : const ChatList(activeChat: null),
+            memo: 'rooms',
           ),
           routes: [
-            GoRoute(
-              path: 'archive',
-              pageBuilder: (context, state) =>
-                  defaultPageBuilder(context, state, const Archive()),
-              routes: [
-                GoRoute(
-                  path: ':roomid',
-                  pageBuilder: (context, state) => defaultPageBuilder(
-                    context,
-                    state,
-                    ChatPage(
-                      key: ValueKey(state.uri),
-                      roomId: state.pathParameters['roomid']!,
-                      eventId: state.uri.queryParameters['event'],
-                      timeline: state.extra as Timeline?,
-                      action: state.uri.queryParameters['action'],
-                    ),
-                    memo: (
-                      'archived-chat',
-                      state.pathParameters['roomid'],
-                      state.uri.queryParameters['event'],
-                      state.uri.queryParameters['action'],
-                      _Identity(state.extra),
-                    ),
-                  ),
-                  redirect: loggedOutRedirect,
-                ),
-              ],
-              redirect: loggedOutRedirect,
-            ),
             GoRoute(
               path: 'newprivatechat',
               pageBuilder: (context, state) => defaultPageBuilder(
@@ -210,23 +170,8 @@ abstract class AppRoutes {
             ),
             GoRoute(
               path: 'newgroup',
-              pageBuilder: (context, state) => defaultPageBuilder(
-                context,
-                state,
-                NewGroup(spaceId: state.uri.queryParameters['space_id']),
-              ),
-              redirect: loggedOutRedirect,
-            ),
-            GoRoute(
-              path: 'newspace',
-              pageBuilder: (context, state) => defaultPageBuilder(
-                context,
-                state,
-                NewGroup(
-                  createGroupType: CreateGroupType.space,
-                  spaceId: state.uri.queryParameters['space_id'],
-                ),
-              ),
+              pageBuilder: (context, state) =>
+                  defaultPageBuilder(context, state, const NewGroup()),
               redirect: loggedOutRedirect,
             ),
             ShellRoute(
@@ -257,7 +202,6 @@ abstract class AppRoutes {
                               key: ValueKey('settings-index'),
                             ),
                             sideView: child,
-                            hasNavigationRail: false,
                           )
                         : child,
                   ),
@@ -285,7 +229,7 @@ abstract class AppRoutes {
                     for (final entry in const {
                       'account': SettingsSurface.account,
                       'recovery': SettingsSurface.recovery,
-                      'about': SettingsSurface.about,
+                      'advanced': SettingsSurface.advanced,
                     }.entries)
                       GoRoute(
                         path: entry.key,
@@ -300,7 +244,6 @@ abstract class AppRoutes {
                       'sync': PersonalSettingsSection.sync,
                       'people': PersonalSettingsSection.people,
                       'transcriptions': PersonalSettingsSection.transcriptions,
-                      'reminders': PersonalSettingsSection.reminders,
                       'scheduled': PersonalSettingsSection.scheduled,
                       'push': PersonalSettingsSection.push,
                     }.entries)
@@ -322,21 +265,39 @@ abstract class AppRoutes {
                       pageBuilder: (context, state) => defaultPageBuilder(
                         context,
                         state,
-                        ChatPreferencesPage(
+                        NetworksPage(
                           key: ValueKey(Matrix.of(context).client),
                           personal: PersonalClient.of(
                             Matrix.of(context).client,
                           ),
                         ),
                       ),
+                      routes: [
+                        GoRoute(
+                          path: ':network',
+                          redirect: loggedOutRedirect,
+                          pageBuilder: (context, state) => defaultPageBuilder(
+                            context,
+                            state,
+                            NetworkDetailPage(
+                              key: ValueKey(Matrix.of(context).client),
+                              personal: PersonalClient.of(
+                                Matrix.of(context).client,
+                              ),
+                              network: state.pathParameters['network']!
+                                  .toLowerCase(),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     GoRoute(
-                      path: 'organization',
+                      path: 'reminders',
                       redirect: loggedOutRedirect,
                       pageBuilder: (context, state) => defaultPageBuilder(
                         context,
                         state,
-                        OrganizationPage(
+                        RemindersPage(
                           key: ValueKey(Matrix.of(context).client),
                           personal: PersonalClient.of(
                             Matrix.of(context).client,
@@ -386,6 +347,15 @@ abstract class AppRoutes {
                             const PushDiagnosticsPage(),
                           ),
                         ),
+                        GoRoute(
+                          path: 'rules',
+                          redirect: loggedOutRedirect,
+                          pageBuilder: (context, state) => defaultPageBuilder(
+                            context,
+                            state,
+                            const SettingsNotifications(serverRules: true),
+                          ),
+                        ),
                       ],
                       redirect: loggedOutRedirect,
                     ),
@@ -416,16 +386,6 @@ abstract class AppRoutes {
                       ),
                       routes: [
                         GoRoute(
-                          path: 'emotes',
-                          pageBuilder: (context, state) => defaultPageBuilder(
-                            context,
-                            state,
-                            EmotesSettings(
-                              roomId: state.pathParameters['roomid'],
-                            ),
-                          ),
-                        ),
-                        GoRoute(
                           path: 'media',
                           pageBuilder: (context, state) => defaultPageBuilder(
                             context,
@@ -434,55 +394,6 @@ abstract class AppRoutes {
                           ),
                         ),
                       ],
-                      redirect: loggedOutRedirect,
-                    ),
-                    GoRoute(
-                      path: 'addaccount',
-                      redirect: loggedOutRedirect,
-                      pageBuilder: (context, state) => defaultPageBuilder(
-                        context,
-                        state,
-                        const IntroPagePresenter(),
-                      ),
-                      routes: [
-                        GoRoute(
-                          path: 'sign_in',
-                          pageBuilder: (context, state) => defaultPageBuilder(
-                            context,
-                            state,
-                            SignInPage(signUp: false),
-                          ),
-                          redirect: loggedOutRedirect,
-                        ),
-                        GoRoute(
-                          path: 'sign_up',
-                          pageBuilder: (context, state) => defaultPageBuilder(
-                            context,
-                            state,
-                            SignInPage(signUp: true),
-                          ),
-                          redirect: loggedOutRedirect,
-                        ),
-                        GoRoute(
-                          path: 'login',
-                          pageBuilder: (context, state) => defaultPageBuilder(
-                            context,
-                            state,
-                            Login(client: state.extra as Client),
-                          ),
-                          redirect: loggedOutRedirect,
-                        ),
-                      ],
-                    ),
-                    GoRoute(
-                      path: 'homeserver',
-                      pageBuilder: (context, state) {
-                        return defaultPageBuilder(
-                          context,
-                          state,
-                          const SettingsHomeserver(),
-                        );
-                      },
                       redirect: loggedOutRedirect,
                     ),
                     GoRoute(
@@ -495,17 +406,6 @@ abstract class AppRoutes {
                       ),
                       routes: [
                         GoRoute(
-                          path: 'password',
-                          pageBuilder: (context, state) {
-                            return defaultPageBuilder(
-                              context,
-                              state,
-                              const SettingsPassword(),
-                            );
-                          },
-                          redirect: loggedOutRedirect,
-                        ),
-                        GoRoute(
                           path: 'ignorelist',
                           pageBuilder: (context, state) {
                             return defaultPageBuilder(
@@ -516,15 +416,6 @@ abstract class AppRoutes {
                               ),
                             );
                           },
-                          redirect: loggedOutRedirect,
-                        ),
-                        GoRoute(
-                          path: '3pid',
-                          pageBuilder: (context, state) => defaultPageBuilder(
-                            context,
-                            state,
-                            const Settings3Pid(),
-                          ),
                           redirect: loggedOutRedirect,
                         ),
                       ],
@@ -670,15 +561,6 @@ abstract class AppRoutes {
             ),
             redirect: loggedOutRedirect,
           ),
-          GoRoute(
-            path: 'emotes',
-            pageBuilder: (context, state) => defaultPageBuilder(
-              context,
-              state,
-              EmotesSettings(roomId: state.pathParameters['roomid']),
-            ),
-            redirect: loggedOutRedirect,
-          ),
         ],
         redirect: loggedOutRedirect,
       ),
@@ -763,7 +645,8 @@ class _AppPageRoute<T> extends PageRoute<T>
     final navigator = this.navigator;
     if (navigator == null) return true;
     final context = navigator.context;
-    return ChatLoomThemes.isColumnMode(context) || NotionMotion.reduced(context);
+    return ChatLoomThemes.isColumnMode(context) ||
+        NotionMotion.reduced(context);
   }
 
   @override

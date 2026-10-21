@@ -5,43 +5,59 @@ import 'package:material_ui/material_ui.dart';
 final notionSettingsRevision = ValueNotifier<int>(0);
 
 /// One navigation catalogue for both the mobile index and desktop sidebar.
+///
+/// Order is the order on screen: the account row, the everyday settings,
+/// the ChatLoom tools, then Advanced (private sync, push setup, diagnostics
+/// and app information) last.
 enum NotionSettingsCategory {
-  account('Account', Icons.person_outline, 'account', 'Profile and account'),
+  account('Account', Icons.person_outline, 'account', 'Profile and sign out'),
+  appearance(
+    'Appearance',
+    Icons.palette_outlined,
+    'style',
+    'Theme, colours and wallpaper',
+  ),
+  notifications(
+    'Notifications',
+    Icons.notifications_none_outlined,
+    'notifications',
+    'Previews, push setup and diagnostics',
+  ),
   security(
     'Privacy & security',
     Icons.shield_outlined,
     'security',
     'Incognito, app lock, devices and recovery',
   ),
-  notifications(
-    'Notifications',
-    Icons.notifications_none_outlined,
-    'notifications',
-    'Rules, sounds and push setup',
-  ),
-  appearance(
-    'Appearance',
-    Icons.palette_outlined,
-    'style',
-    'Theme, text size and wallpaper',
-  ),
   chats(
-    'Chats & organization',
+    'Chats & media',
     Icons.forum_outlined,
     'chat',
-    'Messages, gestures and merged chats',
+    'Messages, gestures, voice and merged chats',
   ),
-  sync(
-    'Sync & transcriptions',
-    Icons.sync_outlined,
-    'sync',
-    'Private sync, services and conflicts',
+  networks(
+    'Networks',
+    Icons.hub_outlined,
+    'networks',
+    'Connection status, groups and notifications',
   ),
-  about(
-    'About & help',
-    Icons.help_outline,
-    'about',
-    'App information, privacy and server',
+  transcription(
+    'Transcription',
+    Icons.subtitles_outlined,
+    'transcriptions',
+    'Automatic transcripts, language and limits',
+  ),
+  reminders(
+    'Reminders',
+    Icons.alarm_outlined,
+    'reminders',
+    'Bring chats back at the right time',
+  ),
+  scheduled(
+    'Scheduled messages',
+    Icons.schedule_outlined,
+    'scheduled',
+    'Messages waiting to be sent',
   ),
   bookmarks(
     'Bookmarks',
@@ -49,39 +65,26 @@ enum NotionSettingsCategory {
     'bookmarks',
     'Find your saved messages',
   ),
-  reminders(
-    'Reminders',
-    Icons.notifications_active_outlined,
-    'reminders',
-    'Manage conversation reminders',
-  ),
-  scheduled(
-    'Scheduled messages',
-    Icons.schedule_outlined,
-    'scheduled',
-    'Review and manage scheduled sends',
+  advanced(
+    'Advanced',
+    Icons.tune,
+    'advanced',
+    'Private sync, push setup, diagnostics and app info',
   );
 
   final String title, path, summary;
   final IconData icon;
   const NotionSettingsCategory(this.title, this.icon, this.path, this.summary);
   String get route => '/rooms/settings/$path';
-  bool get isTool => index >= bookmarks.index;
+  bool get isTool => index >= reminders.index && index <= bookmarks.index;
 
   static NotionSettingsCategory forPath(String path) {
     final parts = Uri.parse(path).path.split('/').skip(3).toList();
     final leaf = parts.firstOrNull;
-    if (leaf == 'security' &&
-        parts.length > 1 &&
-        {'password', '3pid'}.contains(parts[1])) {
-      return account;
-    }
     return switch (leaf) {
       'devices' || 'recovery' => security,
-      'organization' || 'people' || 'networks' => chats,
-      'transcriptions' => sync,
-      'homeserver' => about,
-      'addaccount' => account,
+      'people' => chats,
+      'sync' => advanced,
       'push' => notifications,
       _ =>
         values.where((category) => category.path == leaf).firstOrNull ??
@@ -230,20 +233,33 @@ class NotionSettingsPage extends StatelessWidget {
                   ),
                   for (final category in NotionSettingsCategory.values.where(
                     (c) =>
+                        c.index < NotionSettingsCategory.reminders.index &&
                         c != NotionSettingsCategory.account &&
-                        !c.isTool &&
                         (data.notificationsAvailable ||
                             c != NotionSettingsCategory.notifications),
                   ))
                     row(category),
                   const Padding(
-                    padding: EdgeInsets.fromLTRB(12, 24, 12, 6),
-                    child: Text('Tools', style: NotionTokens.heading),
+                    padding: EdgeInsets.fromLTRB(
+                      NotionSpace.sm,
+                      NotionSpace.xl,
+                      NotionSpace.sm,
+                      NotionSpace.xxs,
+                    ),
+                    child: NotionSettingsGroupLabel('Tools'),
                   ),
                   for (final category in NotionSettingsCategory.values.where(
                     (c) => c.isTool,
                   ))
                     row(category),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: NotionSpace.sm,
+                      vertical: NotionSpace.xs,
+                    ),
+                    child: Divider(),
+                  ),
+                  row(NotionSettingsCategory.advanced),
                 ]),
               ),
             ),
@@ -252,4 +268,15 @@ class NotionSettingsPage extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Muted group label on the settings index ("Tools").
+class NotionSettingsGroupLabel extends StatelessWidget {
+  final String text;
+  const NotionSettingsGroupLabel(this.text, {super.key});
+  @override
+  Widget build(BuildContext context) => Semantics(
+    header: true,
+    child: Text(text, style: context.notion.typography.sectionLabel),
+  );
 }

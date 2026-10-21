@@ -3,8 +3,8 @@ import 'dart:async';
 
 import 'package:matrix/matrix.dart';
 
-/// Per-account values the settings screens show on open: profile, recovery
-/// state, account-management link and password capability.
+/// Per-account values the settings screens show on open: profile and
+/// recovery state.
 ///
 /// Each value is read synchronously from the last result, so a settings page
 /// renders complete on its first frame. A stale or missing value is refreshed
@@ -22,7 +22,6 @@ final class SettingsAccountCache {
 
   static const profileLifetime = Duration(minutes: 10);
   static const recoveryLifetime = Duration(minutes: 1);
-  static const serverLifetime = Duration(minutes: 30);
 
   final Client client;
 
@@ -36,14 +35,6 @@ final class SettingsAccountCache {
 
   bool? recoveryConnected;
   DateTime? _recoveryAt;
-
-  ({Uri? uri})? management;
-  DateTime? _managementAt;
-  Future<Uri?>? _managementLoading;
-
-  bool? passwordChange;
-  DateTime? _passwordAt;
-  Future<bool>? _passwordLoading;
 
   static bool _fresh(DateTime? at, Duration lifetime) =>
       at != null && DateTime.now().difference(at) < lifetime;
@@ -90,41 +81,5 @@ final class SettingsAccountCache {
   void rememberRecovery(bool? connected) {
     recoveryConnected = connected;
     _recoveryAt = connected == null ? null : DateTime.now();
-  }
-
-  /// Account management page of the homeserver, if any.
-  Future<Uri?> loadManagement({bool force = false}) {
-    final cached = management;
-    if (!force && cached != null && _fresh(_managementAt, serverLifetime)) {
-      return Future.value(cached.uri);
-    }
-    return _managementLoading ??= client
-        .getAuthMetadata()
-        .timeout(const Duration(seconds: 10))
-        .then((metadata) {
-          final uri = metadata.accountManagementUri;
-          management = (uri: uri);
-          _managementAt = DateTime.now();
-          return uri;
-        })
-        .whenComplete(() => _managementLoading = null);
-  }
-
-  /// Whether this account may change its password.
-  Future<bool> loadPasswordChange({bool force = false}) {
-    final cached = passwordChange;
-    if (!force && cached != null && _fresh(_passwordAt, serverLifetime)) {
-      return Future.value(cached);
-    }
-    return _passwordLoading ??= client
-        .getCapabilities()
-        .timeout(const Duration(seconds: 10))
-        .then((caps) {
-          final enabled = caps.mChangePassword?.enabled != false;
-          passwordChange = enabled;
-          _passwordAt = DateTime.now();
-          return enabled;
-        })
-        .whenComplete(() => _passwordLoading = null);
   }
 }

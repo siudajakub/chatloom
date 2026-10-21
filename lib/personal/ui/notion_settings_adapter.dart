@@ -8,7 +8,6 @@ import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/personal/ui/notion_settings_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/chatloom_share.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -16,8 +15,6 @@ import 'package:chatloom/widgets/theme_builder.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 
 class NotionSettingsAdapter extends StatefulWidget {
   final SettingsController controller;
@@ -29,8 +26,6 @@ class NotionSettingsAdapter extends StatefulWidget {
 class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
   PersonalClient? _personal;
   String? _personalSummary;
-  Future<Uri?>? _accountManage;
-  Future<bool>? _passwordAvailable;
   @override
   void initState() {
     super.initState();
@@ -49,16 +44,11 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
       _personal?.removeListener(_personalChanged);
       _personal = next..addListener(_personalChanged);
       _personalSummary = SyncChanges.settingsSummary(next);
-      _accountManage = null;
-      _passwordAvailable = null;
       // Revalidating private sync is not needed to draw this page; do it
       // after the page slid in, and not again within a few seconds.
       PersonalPageLoad.request(context, next);
     }
   }
-
-  Future<Uri?> _managementUrl({bool force = false}) =>
-      widget.controller.accountCache.loadManagement(force: force);
 
   /// Leaves settings. On phones this pops the settings shell (with the page
   /// transition and predictive back); in two-column mode, or when settings
@@ -106,21 +96,23 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
     _bindClient(client);
     final personal = _personal!;
     final surface = widget.controller.widget.surface;
-    if (surface == SettingsSurface.about) {
+    if (surface == SettingsSurface.advanced) {
       return NotionSettingsScaffold(
-        title: 'About & help',
+        title: 'Advanced',
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            NotionListRow(
+              leading: const Icon(Icons.sync_outlined),
+              title: 'Private sync',
+              subtitle: SyncChanges.settingsSummary(personal),
+              onTap: () => _route('/rooms/settings/sync'),
+            ),
             NotionListRow(
               leading: const Icon(Icons.info_outline),
               title: 'App information',
               subtitle: 'Version and licenses',
               onTap: () => PlatformInfos.showDialog(context),
-            ),
-            NotionListRow(
-              leading: const Icon(Icons.dns_outlined),
-              title: 'Homeserver',
-              onTap: () => _route('/rooms/settings/homeserver'),
             ),
           ],
         ),
@@ -172,9 +164,6 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
           size: 44,
         );
         if (surface == SettingsSurface.account) {
-          final cache = widget.controller.accountCache;
-          _accountManage ??= _managementUrl();
-          _passwordAvailable ??= cache.loadPasswordChange();
           return NotionSettingsScaffold(
             title: 'Account',
             child: Column(
@@ -183,13 +172,13 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                 Row(
                   children: [
                     avatar,
-                    const SizedBox(width: 16),
-                    Expanded(child: Text(name, style: NotionTokens.heading)),
+                    const SizedBox(width: NotionSpace.md),
+                    Expanded(child: Text(name, style: NotionType.heading)),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: NotionSpace.sm),
                 const Text(
-                  'Your network profile is visible to other people on this account.',
+                  'Your name and photo are visible to people you chat with where the network shows them.',
                 ),
                 NotionSizeReveal(
                   visible: snapshot.hasError,
@@ -210,90 +199,17 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
                   title: 'Change profile photo',
                   onTap: widget.controller.setAvatarAction,
                 ),
-                NotionListRow(
-                  leading: const Icon(Icons.share_outlined),
-                  title: 'Share account address',
-                  onTap: () {
-                    final id = client.userID;
-                    if (id != null) ChatLoomShare.share(id, context);
-                  },
-                ),
-                const NotionSettingsSection('Account management'),
-                FutureBuilder<Uri?>(
-                  key: ValueKey(client),
-                  future: _accountManage,
-                  initialData: cache.management?.uri,
-                  builder: (context, snapshot) {
-                    final known =
-                        snapshot.connectionState == ConnectionState.done ||
-                        cache.management != null;
-                    final uri = snapshot.data ?? cache.management?.uri;
-                    return NotionListRow(
-                      leading: const Icon(Icons.manage_accounts_outlined),
-                      title: 'Manage account',
-                      subtitle: snapshot.hasError
-                          ? 'Could not check account management. Retry.'
-                          : !known
-                          ? 'Checking account management availability…'
-                          : uri == null
-                          ? 'This server does not provide an account management page.'
-                          : 'Open the account management page',
-                      onTap: snapshot.hasError
-                          ? () => setState(
-                              () =>
-                                  _accountManage = _managementUrl(force: true),
-                            )
-                          : uri == null
-                          ? null
-                          : () => launchUrl(
-                              uri,
-                              mode: LaunchMode.inAppBrowserView,
-                            ),
-                    );
-                  },
-                ),
-                NotionListRow(
-                  leading: const Icon(Icons.person_add_outlined),
-                  title: 'Add account',
-                  onTap: () => _route('/rooms/settings/addaccount'),
-                ),
-                FutureBuilder<bool>(
-                  future: _passwordAvailable,
-                  initialData: cache.passwordChange,
-                  builder: (context, snapshot) => NotionListRow(
-                    leading: const Icon(Icons.password_outlined),
-                    title: 'Change password',
-                    subtitle: snapshot.data == false
-                        ? 'Password changes are not supported by this account.'
-                        : snapshot.hasError
-                        ? 'Availability could not be checked. Open to continue.'
-                        : null,
-                    onTap: snapshot.data == false
-                        ? null
-                        : () => _route('/rooms/settings/security/password'),
-                  ),
-                ),
-                const NotionSettingsSection('Account actions'),
+                const NotionSettingsSection('Session'),
                 NotionListRow(
                   leading: const Icon(Icons.logout_outlined),
                   title: 'Log out',
+                  subtitle: 'Sign out of this device',
                   onTap: widget.controller.logoutAction,
                 ),
-                NotionListRow(
-                  leading: const Icon(Icons.cloud_upload_outlined),
-                  title: 'Export session and wipe device',
-                  subtitle:
-                      'Export a local session backup and remove this session from the device. Keep the backup private.',
-                  onTap: widget.controller.dehydrateAction,
-                ),
-                NotionListRow(
-                  leading: Icon(
-                    Icons.delete_outline,
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-                  title: 'Delete account',
-                  subtitle: 'Permanently deactivate this account.',
-                  onTap: widget.controller.deleteAccountAction,
+                const SizedBox(height: NotionSpace.md),
+                Text(
+                  'Email, password and account deletion are managed in your Beeper account.',
+                  style: context.notion.typography.footnoteMuted,
                 ),
               ],
             ),
@@ -311,15 +227,14 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
             avatar: avatar,
             selectedPath: GoRouterState.of(context).uri.path,
             summaries: {
-              NotionSettingsCategory.account:
-                  'Account · Profile and account management',
+              NotionSettingsCategory.account: 'Profile and sign out',
               NotionSettingsCategory.security:
                   AppSettings.personalIncognito.value
                   ? 'Incognito on · App lock, devices and recovery'
                   : 'Incognito off · App lock, devices and recovery',
               NotionSettingsCategory.appearance:
-                  '$appearance · Text size and wallpaper',
-              NotionSettingsCategory.sync: SyncChanges.settingsSummary(
+                  '$appearance · Colours and wallpaper',
+              NotionSettingsCategory.advanced: SyncChanges.settingsSummary(
                 personal,
               ),
             },

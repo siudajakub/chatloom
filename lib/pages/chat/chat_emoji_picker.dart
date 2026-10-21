@@ -6,7 +6,9 @@
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/sticker_picker_dialog.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/error_reporter.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -76,16 +78,27 @@ class ChatEmojiPicker extends StatelessWidget {
                           controller.room,
                         );
                         if (!proceed) return;
-                        controller.room.sendEvent(
-                          {
-                            'body': sticker.body,
-                            'info': sticker.info ?? {},
-                            'url': sticker.url.toString(),
-                          },
-                          type: EventTypes.Sticker,
-                          threadRootEventId: controller.activeThreadId,
-                          threadLastEventId: controller.threadLastEventId,
+                        // The picker is closed by the time the server
+                        // answers: report on the app's navigator.
+                        const reporter = ErrorReporter.action(
+                          null,
+                          action: ErrorAction.send,
                         );
+                        controller.room
+                            .sendEvent(
+                              {
+                                'body': sticker.body,
+                                'info': sticker.info ?? {},
+                                'url': sticker.url.toString(),
+                              },
+                              type: EventTypes.Sticker,
+                              threadRootEventId: controller.activeThreadId,
+                              threadLastEventId: controller.threadLastEventId,
+                            )
+                            .then<void>(
+                              (_) {},
+                              onError: reporter.onErrorCallback,
+                            );
                         controller.hideEmojiPicker();
                       },
                     ),
