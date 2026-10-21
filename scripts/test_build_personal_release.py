@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-SPEC = importlib.util.spec_from_file_location("personal_release", Path(__file__).with_name("build-personal-release.py"))
+SPEC = importlib.util.spec_from_file_location("personal_release", Path(__file__).parent / "android/build.py")
 release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
 
