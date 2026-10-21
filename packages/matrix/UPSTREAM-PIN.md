@@ -34,3 +34,19 @@ cryptography are unchanged; decode errors still fail the same `sync()` future.
 Re-apply after regenerating `api.dart`. Regression: app
 `test/personal/sync_body_decoder_test.dart` (inline/isolate equivalence on the
 SDK sync fixture and a >256 KiB body through `MatrixApi.sync`).
+
+### 2026-10-20 — restartable sync long-poll
+
+`Client.restartSync({timeout})` drops a `/sync` request that is still waiting
+for its response (for example a long-poll on the socket of a network that went
+away after a Wi-Fi/mobile switch) and starts a new request at once. The dropped
+request's late response or error is discarded unprocessed and reports no sync
+status; a response already being processed is never interrupted (the call then
+joins it like `oneShotSync`). The loop's completion handler only clears or
+continues the loop it started, so a request dropped by `restartSync` or
+`abortSync` can no longer clobber `_currentSync` or spawn a second parallel
+loop, and a dropped request's failure no longer sets `_lastSyncFailed` or emits
+`SyncStatus.error`. Since tokens, processing order, database transactions,
+transport and cryptography are unchanged. Regression: app
+`test/personal/sync_network_restart_test.dart` (plus
+`test/personal/resource_optimization_test.dart`).

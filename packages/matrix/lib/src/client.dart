@@ -2395,32 +2395,56 @@ class Client extends MatrixApi {
     return _sync(timeout: timeout);
   }
 
+  /// Starts a sync at once even when a long-poll is already waiting for its
+  /// response, for example on a socket of a network that went away. The
+  /// waiting request is dropped: its late response or error is ignored and
+  /// never processed. Sync processing that already received its response is
+  /// never interrupted; the call then waits for it like [oneShotSync].
+  Future<void> restartSync({Duration? timeout}) {
+    if (_disposed || !isLogged()) return Future<void>.value();
+    if (_currentSync != null && _syncAwaitingResponse != null) {
+      _currentSyncId = -1;
+      _syncAwaitingResponse = null;
+      _currentSync = null;
+    }
+    return oneShotSync(timeout: timeout);
+  }
+
+  /// The `/sync` request of the current loop iteration while it has not
+  /// answered yet; null while its response is processed.
+  Future<SyncUpdate?>? _syncAwaitingResponse;
+
   /// Pass a timeout to set how long the server waits before sending an empty response.
   /// (Corresponds to the timeout param on the /sync request.)
   Future<void> _sync({Duration? timeout}) {
     _syncRetryTimer?.cancel();
     _syncRetryTimer = null;
-    final currentSync = _currentSync ??= _innerSync(timeout: timeout)
-        .whenComplete(() {
-          _currentSync = null;
-          if (_backgroundSync && isLogged() && !_disposed) {
-            if (_lastSyncFailed) {
-              final base = max(0, syncErrorTimeoutSec);
-              final seconds = min(
-                max(base, syncErrorMaxTimeoutSec),
-                base * (1 << min(_syncFailures++, 6)),
-              );
-              _syncRetryTimer = Timer(Duration(seconds: seconds), () {
-                _syncRetryTimer = null;
-                if (_backgroundSync && isLogged() && !_disposed && !_aborted) {
-                  unawaited(_sync());
-                }
-              });
-            } else {
+    final pending = _currentSync;
+    if (pending != null) return pending;
+    late final Future<void> currentSync;
+    currentSync = _currentSync = _innerSync(timeout: timeout).whenComplete(() {
+      // A request dropped by [restartSync] or [abortSync] neither clears
+      // nor continues the loop that replaced it.
+      if (!identical(_currentSync, currentSync)) return;
+      _currentSync = null;
+      if (_backgroundSync && isLogged() && !_disposed) {
+        if (_lastSyncFailed) {
+          final base = max(0, syncErrorTimeoutSec);
+          final seconds = min(
+            max(base, syncErrorMaxTimeoutSec),
+            base * (1 << min(_syncFailures++, 6)),
+          );
+          _syncRetryTimer = Timer(Duration(seconds: seconds), () {
+            _syncRetryTimer = null;
+            if (_backgroundSync && isLogged() && !_disposed && !_aborted) {
               unawaited(_sync());
             }
-          }
-        });
+          });
+        } else {
+          unawaited(_sync());
+        }
+      }
+    });
     return currentSync;
   }
 
@@ -2495,6 +2519,7 @@ class Client extends MatrixApi {
   /// (Corresponds to the timeout param on the /sync request.)
   Future<void> _innerSync({Duration? timeout}) async {
     _lastSyncFailed = false;
+    _syncAwaitingResponse = null;
     if (!isLogged() || _disposed || _aborted) return;
     try {
       if (_initLock) {
@@ -2529,6 +2554,7 @@ class Client extends MatrixApi {
             return null;
           });
       _currentSyncId = syncRequest.hashCode;
+      _syncAwaitingResponse = syncRequest;
       onSyncStatus.add(SyncStatusUpdate(SyncStatus.waitingForResponse));
 
       // The timeout for the response from the server. If we do not set a sync
@@ -2538,18 +2564,30 @@ class Client extends MatrixApi {
           ? null
           : timeout + const Duration(seconds: 10);
 
-      final syncResp = responseTimeout == null
-          ? await syncRequest
-          : await syncRequest.timeout(responseTimeout);
+      final SyncUpdate? response;
+      try {
+        response = responseTimeout == null
+            ? await syncRequest
+            : await syncRequest.timeout(responseTimeout);
+      } catch (_) {
+        // A request dropped by [restartSync] reports nothing.
+        if (_currentSyncId != syncRequest.hashCode) return;
+        rethrow;
+      } finally {
+        if (identical(_syncAwaitingResponse, syncRequest)) {
+          _syncAwaitingResponse = null;
+        }
+      }
 
-      onSyncStatus.add(SyncStatusUpdate(SyncStatus.processing));
-      if (syncResp == null) throw syncError ?? 'Unknown sync error';
       if (_currentSyncId != syncRequest.hashCode) {
         Logs().w(
           'Current sync request ID has changed. Dropping this sync loop!',
         );
         return;
       }
+      onSyncStatus.add(SyncStatusUpdate(SyncStatus.processing));
+      final syncResp = response;
+      if (syncResp == null) throw syncError ?? 'Unknown sync error';
 
       final database = this.database;
       await userDeviceKeysLoading;
@@ -4146,6 +4184,7 @@ class Client extends MatrixApi {
     _aborted = true;
     backgroundSync = false;
     _currentSyncId = -1;
+    _syncAwaitingResponse = null;
     try {
       await _currentTransaction;
     } catch (_) {
