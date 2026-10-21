@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: personal-macos-${{ github.ref }}
+  group: personal-macos-build-v2-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
