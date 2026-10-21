@@ -20,11 +20,6 @@
             }
         }
     },
-    "account": "アカウント",
-    "@account": {
-        "type": "String",
-        "placeholders": {}
-    },
     "activatedEndToEndEncryption": "🔐{username}がエンドツーエンド暗号化を有効にしました",
     "@activatedEndToEndEncryption": {
         "type": "String",
@@ -34,11 +29,6 @@
             }
         }
     },
-    "addEmail": "Eメールを追加",
-    "@addEmail": {
-        "type": "String",
-        "placeholders": {}
-    },
     "admin": "管理者",
     "@admin": {
         "type": "String",
@@ -46,11 +36,6 @@
     },
     "alias": "エイリアス",
     "@alias": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "all": "すべて",
-    "@all": {
         "type": "String",
         "placeholders": {}
     },
@@ -65,16 +50,6 @@
     },
     "anyoneCanJoin": "誰でも参加できる",
     "@anyoneCanJoin": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "appLock": "アプリのロック",
-    "@appLock": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "archive": "アーカイブ",
-    "@archive": {
         "type": "String",
         "placeholders": {}
     },
@@ -281,21 +256,6 @@
             }
         }
     },
-    "changePassword": "パスワードを変更",
-    "@changePassword": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changeTheHomeserver": "ホームサーバーの変更",
-    "@changeTheHomeserver": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changeTheme": "スタイルを変更する",
-    "@changeTheme": {
-        "type": "String",
-        "placeholders": {}
-    },
     "changeTheNameOfTheGroup": "グループの名前を変更する",
     "@changeTheNameOfTheGroup": {
         "type": "String",
@@ -306,23 +266,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "chat": "チャット",
-    "@chat": {
-        "type": "String",
-        "placeholders": {}
-    },
     "chatBackup": "チャットのバックアップ",
     "@chatBackup": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "chatDetails": "チャットの詳細",
-    "@chatDetails": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "chats": "チャット",
-    "@chats": {
         "type": "String",
         "placeholders": {}
     },
@@ -331,7 +276,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "clearArchive": "アーカイブを消去",
     "close": "閉じる",
     "@close": {
         "type": "String",
@@ -372,11 +316,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "copyToClipboard": "クリップボードにコピー",
-    "@copyToClipboard": {
-        "type": "String",
-        "placeholders": {}
-    },
     "couldNotDecryptMessage": "メッセージを解読できませんでした: {error}",
     "@couldNotDecryptMessage": {
         "type": "String",
@@ -394,11 +333,6 @@
                 "type": "int"
             }
         }
-    },
-    "create": "作成",
-    "@create": {
-        "type": "String",
-        "placeholders": {}
     },
     "createdTheChat": "💬 {username}がチャットを作成しました",
     "@createdTheChat": {
@@ -431,11 +365,6 @@
             }
         }
     },
-    "deactivateAccountWarning": "あなたのアカウントを無効化します。この操作は元に戻せません！よろしいですか？",
-    "@deactivateAccountWarning": {
-        "type": "String",
-        "placeholders": {}
-    },
     "defaultPermissionLevel": "デフォルトの権限レベル",
     "@defaultPermissionLevel": {
         "type": "String",
@@ -446,11 +375,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "deleteAccount": "アカウントの削除",
-    "@deleteAccount": {
-        "type": "String",
-        "placeholders": {}
-    },
     "deleteMessage": "メッセージの削除",
     "@deleteMessage": {
         "type": "String",
@@ -458,11 +382,6 @@
     },
     "devices": "デバイス",
     "@devices": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "directChats": "ダイレクトチャット",
-    "@directChats": {
         "type": "String",
         "placeholders": {}
     },
@@ -501,28 +420,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "emoteExists": "Emoteはすでに存在します！",
-    "@emoteExists": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteInvalid": "不正なEmoteショートコード！",
-    "@emoteInvalid": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteShortcode": "Emoteショートコード",
-    "@emoteShortcode": {
-        "type": "String",
-        "placeholders": {}
-    },
     "emptyChat": "空のチャット",
     "@emptyChat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "enableEmotesGlobally": "emoteをグローバルに有効にする",
-    "@enableEmotesGlobally": {
         "type": "String",
         "placeholders": {}
     },
@@ -565,11 +464,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "fontSize": "フォントサイズ",
-    "@fontSize": {
-        "type": "String",
-        "placeholders": {}
-    },
     "forward": "転送",
     "@forward": {
         "type": "String",
@@ -592,11 +486,6 @@
     },
     "groupIsPublic": "グループは公開されています",
     "@groupIsPublic": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "groups": "グループ",
-    "@groups": {
         "type": "String",
         "placeholders": {}
     },
@@ -630,11 +519,6 @@
                 "type": "String"
             }
         }
-    },
-    "help": "ヘルプ",
-    "@help": {
-        "type": "String",
-        "placeholders": {}
     },
     "hideUnknownEvents": "不明なイベントを非表示にする",
     "@hideUnknownEvents": {
@@ -781,15 +665,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "loadCountMoreParticipants": "あと{count}名参加者を読み込む",
-    "@loadCountMoreParticipants": {
-        "type": "String",
-        "placeholders": {
-            "count": {
-                "type": "int"
-            }
-        }
-    },
     "loadingPleaseWait": "読み込み中…お待ちください。",
     "@loadingPleaseWait": {
         "type": "String",
@@ -834,18 +709,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "muteChat": "チャットのミュート",
-    "@muteChat": {
-        "type": "String",
-        "placeholders": {}
-    },
     "newChat": "新規チャット",
     "@newChat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "newMessageInFluffyChat": "💬 ChatLoomに新しいメッセージがあります",
-    "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
     },
@@ -881,11 +746,6 @@
     },
     "noGoogleServicesWarning": "あなたのスマホにはGoogleサービスがないようですね。プライバシーを保護するための良い選択です！プッシュ通知を受け取るには https://microg.org/ または https://unifiedpush.org/ を使うことをお勧めします。",
     "@noGoogleServicesWarning": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "noPasswordRecoveryDescription": "パスワードを回復する方法をまだ追加していません。",
-    "@noPasswordRecoveryDescription": {
         "type": "String",
         "placeholders": {}
     },
@@ -928,11 +788,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "openAppToReadMessages": "アプリを開いてメッセージを確認してください",
-    "@openAppToReadMessages": {
-        "type": "String",
-        "placeholders": {}
-    },
     "openCamera": "カメラを開く",
     "@openCamera": {
         "type": "String",
@@ -960,11 +815,6 @@
     },
     "passwordHasBeenChanged": "パスワードが変更されました",
     "@passwordHasBeenChanged": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "passwordRecovery": "パスワードリカバリー",
-    "@passwordRecovery": {
         "type": "String",
         "placeholders": {}
     },
@@ -1000,16 +850,6 @@
     },
     "pleaseFollowInstructionsOnWeb": "ウェブサイトにあるやり方を見てから次をタップしてください。",
     "@pleaseFollowInstructionsOnWeb": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "privacy": "プライバシー",
-    "@privacy": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "publicRooms": "公開された部屋",
-    "@publicRooms": {
         "type": "String",
         "placeholders": {}
     },
@@ -1088,11 +928,6 @@
     },
     "search": "検索",
     "@search": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "security": "セキュリティ",
-    "@security": {
         "type": "String",
         "placeholders": {}
     },
@@ -1195,11 +1030,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "settings": "設定",
-    "@settings": {
-        "type": "String",
-        "placeholders": {}
-    },
     "share": "共有",
     "@share": {
         "type": "String",
@@ -1290,11 +1120,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "unknownDevice": "未知デバイス",
-    "@unknownDevice": {
-        "type": "String",
-        "placeholders": {}
-    },
     "unknownEncryptionAlgorithm": "未知の暗号化アルゴリズム",
     "@unknownEncryptionAlgorithm": {
         "type": "String",
@@ -1308,11 +1133,6 @@
                 "type": "String"
             }
         }
-    },
-    "unmuteChat": "チャットをミュート解除する",
-    "@unmuteChat": {
-        "type": "String",
-        "placeholders": {}
     },
     "unpin": "ピンを外す",
     "@unpin": {
@@ -1408,11 +1228,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "voiceMessage": "ボイスメッセージ",
-    "@voiceMessage": {
-        "type": "String",
-        "placeholders": {}
-    },
     "waitingPartnerAcceptRequest": "パートナーのリクエスト承諾待ちです…",
     "@waitingPartnerAcceptRequest": {
         "type": "String",
@@ -1438,11 +1253,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "whoCanPerformWhichAction": "誰がどの操作を実行できるか",
-    "@whoCanPerformWhichAction": {
-        "type": "String",
-        "placeholders": {}
-    },
     "whoIsAllowedToJoinThisGroup": "誰がこのチャットに入れますか",
     "@whoIsAllowedToJoinThisGroup": {
         "type": "String",
@@ -1450,16 +1260,6 @@
     },
     "whyDoYouWantToReportThis": "なぜこれを報告したいのですか？",
     "@whyDoYouWantToReportThis": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "withTheseAddressesRecoveryDescription": "これらのアドレスを使用すると、パスワードを回復することができます。",
-    "@withTheseAddressesRecoveryDescription": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "writeAMessage": "メッセージを入力してください…",
-    "@writeAMessage": {
         "type": "String",
         "placeholders": {}
     },
@@ -1488,7 +1288,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "addToSpace": "スペースに追加",
     "cantOpenUri": "URIが開けません {uri}",
     "@cantOpenUri": {
         "type": "String",
@@ -1497,12 +1296,6 @@
                 "type": "String"
             }
         }
-    },
-    "repeatPassword": "パスワードを繰り返そ",
-    "autoplayImages": "GIFを自動的に再生する",
-    "@autoplayImages": {
-        "type": "String",
-        "placeholder": {}
     },
     "sendOnEnter": "Enterで送信",
     "changeYourAvatar": "アバタるを変化しする",
@@ -1534,7 +1327,6 @@
         "type": "String",
         "description": "Usage hint for the command /discardsession"
     },
-    "confirmMatrixId": "アカウントを削除するには、Matrix IDを確認してください。",
     "commandHint_markasgroup": "グループとしてマーク",
     "commandHint_join": "指定した部屋に参加",
     "@commandHint_join": {
@@ -1569,7 +1361,6 @@
     },
     "oneClientLoggedOut": "クライアントの 1つがログアウトしました",
     "addAccount": "アカウントを追加",
-    "editBundlesForAccount": "このアカウントのバンドルを編集",
     "unverified": "未検証",
     "sender": "送信者",
     "unsupportedAndroidVersionLong": "この機能を利用するには、より新しいAndroidのバージョンが必要です。アップデートまたはLineage OSのサポートをご確認ください。",
@@ -1592,7 +1383,6 @@
             }
         }
     },
-    "users": "ユーザー",
     "youRejectedTheInvitation": "招待を拒否しました",
     "scanQrCode": "QRコードをスキャン",
     "obtainingLocation": "位置情報を取得しています…",
@@ -1600,9 +1390,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "addToBundle": "バンドルに追加",
-    "removeFromBundle": "このバンドルから削除",
-    "bundleName": "バンドル名",
     "noMatrixServer": "{server1} はMatrixのサーバーではありません。代わりに {server2} を使用しますか?",
     "@noMatrixServer": {
         "type": "String",
@@ -1631,19 +1418,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "spaceIsPublic": "スペースは公開されています",
-    "@spaceIsPublic": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "spaceName": "スペース名",
-    "@spaceName": {
-        "type": "String",
-        "placeholders": {}
-    },
     "messageInfo": "メッセージの情報",
     "openGallery": "ギャラリーを開く",
-    "removeFromSpace": "スペースから削除",
     "youAcceptedTheInvitation": "👍 招待を承諾しました",
     "youUnbannedUser": "{user} の禁止を解除しました",
     "@youUnbannedUser": {
@@ -1689,12 +1465,6 @@
         }
     },
     "storeSecurlyOnThisDevice": "このデバイスに安全に保管する",
-    "whyIsThisMessageEncrypted": "なぜこのメッセージは読めないのですか？",
-    "synchronizingPleaseWait": "同期中...お待ちください。",
-    "@synchronizingPleaseWait": {
-        "type": "String",
-        "placeholders": {}
-    },
     "emojis": "絵文字",
     "markAsRead": "既読にする",
     "confirmEventUnpin": "イベントの固定を完全に解除してもよろしいですか？",
@@ -1721,11 +1491,6 @@
                 "type": "String"
             }
         }
-    },
-    "createNewSpace": "新しいスペース",
-    "@createNewSpace": {
-        "type": "String",
-        "placeholders": {}
     },
     "reportUser": "ユーザーを報告",
     "errorObtainingLocation": "位置情報の取得中にエラーが発生しました: {error}",
@@ -1809,21 +1574,7 @@
         }
     },
     "doNotShowAgain": "今後表示しない",
-    "newSpace": "新規スペース",
     "reopenChat": "チャットを再開する",
-    "notAnImage": "画像ファイルではありません。",
-    "aboutHomeserver": "{homeserver} について",
-    "@aboutHomeserver": {
-        "type": "String",
-        "placeholders": {
-            "homeserver": {
-                "type": "String"
-            }
-        }
-    },
-    "noMoreChatsFound": "これ以上のチャットが見つかりません…",
-    "unread": "未読",
-    "space": "スペース",
     "changedTheChatDescription": "{username}がチャットの説明を変更した",
     "changedTheChatName": "{username}がチャットの名前を変更した",
     "commandHint_kick": "入力のユーザーをこの部屋からキックする",
@@ -1847,14 +1598,12 @@
         "placeholders": {}
     },
     "globalChatId": "グローバルチャットID",
-    "chatDescription": "チャットの説明",
     "chatDescriptionHasBeenChanged": "チャットの説明が変更された",
     "block": "ブロック",
     "blockedUsers": "ブロック済みのユーザー",
     "blockUsername": "ユーザー名を無視する",
     "noChatDescriptionYet": "チャットの説明はまだ作成されていません。",
     "tryAgain": "再試行",
-    "messagesStyle": "メッセージ:",
     "shareInviteLink": "招待リンクを共有",
     "openInMaps": "マップで開く",
     "@openInMaps": {
@@ -1891,20 +1640,6 @@
             }
         }
     },
-    "synchronizingPleaseWaitCounter": " 同期中…（{percentage}%）",
-    "@synchronizingPleaseWaitCounter": {
-        "type": "String",
-        "placeholders": {
-            "percentage": {
-                "type": "String"
-            }
-        }
-    },
-    "importEmojis": "絵文字をインポート",
-    "importNow": "今すぐインポート",
-    "importFromZipFile": ".zipファイルからインポート",
-    "exportEmotePack": "エモートパックを.zipでエクスポート",
-    "replace": "置き換え",
     "commandHint_roomupgrade": "このルームを特定のルームバージョンにアップグレード",
     "commandHint_cuddle": "笑顔を送る",
     "googlyEyesContent": "{senderName}がギョロ目を送りました",
@@ -1935,9 +1670,7 @@
         }
     },
     "appLockDescription": "未使用時にアプリをPINコードでロック",
-    "sendTypingNotifications": "入力通知を送信",
     "swipeRightToLeftToReply": "左にスワイプして返信",
-    "noChatsFoundHere": "ここにはまだチャットがありません。下のボタンを使ってみんなと新しいチャットを始めましょう。⤵️",
     "commandHint_unban": "このルームから禁止されたユーザーを解禁する",
     "@commandHint_unban": {
         "type": "String",
@@ -1946,14 +1679,10 @@
     "chatPermissions": "チャット権限",
     "checkList": "チェックリスト",
     "accessAndVisibility": "アクセスと範囲",
-    "accessAndVisibilityDescription": "誰がこのチャットに参加できて、どのように発見することができるか。",
-    "customEmojisAndStickers": "カスタム絵文字とステッカー",
-    "customEmojisAndStickersBody": "どのチャットでも利用可能なカスタム絵文字やステッカーを追加・共有します。",
     "hideRedactedMessages": "削除されたメッセージを隠す",
     "hideRedactedMessagesBody": "誰かがメッセージを削除した場合、このメッセージはそれ以降チャット内では見えなくなります。",
     "hideInvalidOrUnknownMessageFormats": "無効であるか不明なメッセージ形式を隠す",
     "blockListDescription": "迷惑なユーザーをブロックすることができます。あなたの個人的なブロックリストに記載されたユーザーは、あらゆるメッセージやルームへの招待を受け取ることができません。",
-    "invalidServerName": "無効なサーバー名",
     "redactMessageDescription": "メッセージはこの会話のすべての参加者から削除されます。これは取り消すことができません。",
     "commandHint_op": "ユーザーの権限レベルを付与する（デフォルト：50）",
     "@commandHint_op": {
@@ -1961,7 +1690,6 @@
         "description": "Usage hint for the command /op"
     },
     "optionalRedactReason": "（オプション）メッセージを削除する理由…",
-    "passwordRecoverySettings": "パスワードの復元設定",
     "setChatDescription": "チャットの説明を設定",
     "hasKnocked": "🚪 {user}がノックしました",
     "@hasKnocked": {
@@ -1996,8 +1724,6 @@
     "readUpToHere": "ここまで既読です",
     "jump": "移動",
     "openLinkInBrowser": "リンクをブラウザで開く",
-    "reportErrorDescription": "😭 おっと。問題が発生しました。必要があれば、このバグを開発者に報告することができます。",
-    "setColorTheme": "カラーテーマの設定：",
     "invite": "招待",
     "inviteGroupChat": "📨 グループチャットへ招待する",
     "invalidInput": "無効な入力です！",
@@ -2020,8 +1746,6 @@
     "learnMore": "詳しく知る",
     "yourGlobalUserIdIs": "あなたのグローバルユーザーID： ",
     "knocking": "ノックしています",
-    "searchChatsRooms": "#チャット，@ユーザーで検索…",
-    "nothingFound": "何も見つかりませんでした…",
     "groupName": "グループ名",
     "createGroupAndInviteUsers": "グループを作成してユーザーを招待する",
     "groupCanBeFoundViaSearch": "グループは検索で見つけることができます",
@@ -2029,10 +1753,6 @@
     "databaseMigrationTitle": "データベースは最適化されています",
     "databaseMigrationBody": "しばらくお待ちください。この操作は時間がかかります。",
     "searchForUsers": "@ユーザー で検索…",
-    "pleaseEnterYourCurrentPassword": "現在のパスワードを入力してください",
-    "newPassword": "新しいパスワード",
-    "pleaseChooseAStrongPassword": "強力なパスワードを選択してください",
-    "markAsUnread": "未読としてマーク",
     "userLevel": "{level} - ユーザー",
     "@userLevel": {
         "type": "String",
@@ -2073,23 +1793,14 @@
             }
         }
     },
-    "changelog": "変更履歴",
     "sendCanceled": "送信を取り消しました",
     "loginWithMatrixId": "Matrix-IDでログイン",
     "calculatingFileSize": "ファイルサイズを計算しています…",
-    "oneOfYourDevicesIsNotVerified": "いずれかのデバイスが認証されていません",
     "noticeChatBackupDeviceVerification": "注意：すべてのデバイスをチャットのバックアップに接続している場合、それらは自動的に認証されます。",
     "continueText": "続ける",
     "blur": "ぼかし：",
     "opacity": "透過度：",
-    "setWallpaper": "壁紙を設定する",
-    "manageAccount": "アカウント管理",
     "noContactInformationProvided": "サーバーから有効な連絡先情報が提供されていません",
-    "supportPage": "サポートページ",
-    "serverInformation": "サーバー情報：",
-    "name": "名前",
-    "version": "バージョン",
-    "website": "ウェブサイト",
     "compress": "圧縮",
     "boldText": "太字",
     "italicText": "斜体",
@@ -2105,7 +1816,6 @@
         }
     },
     "open": "開く",
-    "waitingForServer": "サーバーを待機中…",
     "newChatRequest": "📩 新しいチャットを要求",
     "contentNotificationSettings": "コンテンツ通知設定",
     "generalNotificationSettings": "全体通知設定",
@@ -2121,7 +1831,6 @@
     "notificationRuleMasterDescription": "全ルールを上書きして通知をすべて無効にします。",
     "notificationRuleIsUserMention": "ユーザーの言及",
     "notificationRuleIsUserMentionDescription": "ユーザーがメッセージ内で直接言及されたときに通知します。",
-    "join": "参加",
     "today": "今日",
     "yesterday": "昨日",
     "replyInThread": "スレッドで返信",
@@ -2152,29 +1861,18 @@
         "placeholders": {}
     },
     "wrongRecoveryKey": "申し訳ありません。これは正しい回復キーではないようです。",
-    "passwordsDoNotMatch": "パスワードが一致しません",
-    "joinSpace": "スペースに参加する",
     "gallery": "ギャラリー",
     "files": "ファイル",
     "stickers": "ステッカー",
     "doesNotSeemToBeAValidHomeserver": "互換性のあるホームサーバーではないようです。正しいURLですか？",
-    "contactServerAdmin": "サーバー管理者に連絡",
     "notificationRuleMessage": "メッセージ",
     "allDevices": "すべてのデバイス",
     "startPoll": "投票を開始する",
     "endPoll": "投票を終了する",
-    "thread": "スレッド",
     "backToMainChat": "メインチャットに戻る",
-    "saveChanges": "変更を保存",
     "theProcessWasCanceled": "処理はキャンセルされました。",
     "searchOrEnterHomeserverAddress": "ホームサーバーのアドレスを検索、または入力する",
-    "tagName": "タグ名",
-    "createNewTag": "新規タグ",
     "showThumbnailsInTimeline": "画像と動画のサムネイルを表示",
-    "addTag": "タグを追加",
-    "removeTag": "タグを削除",
-    "encryptedMessage": "暗号化されたメッセージ",
-    "unencryptedMessage": "暗号化されていないメッセージ",
     "resetAccount": "アカウントをリセット",
     "@resetAccount": {
         "type": "String",
@@ -2201,13 +1899,10 @@
         "placeholders": {}
     },
     "youAreReadyToStart": "準備完了です！",
-    "messageNotDecryptable": "メッセージを復号できません",
     "sending": "送信中",
-    "generatingThumbnail": "サムネイル生成中",
     "encrypting": "暗号化しています",
     "uploading": "アップロード中",
     "edited": "（編集済）",
-    "couldNotBeSent": "送信できませんでした",
     "resetRecoveryKey": "回復キーのリセット",
     "enableBiometrics": "生体認証を有効にする",
     "disableBiometrics": "生体認証を無効にする",
@@ -2230,16 +1925,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "accountsAndSettings": "アカウントと設定",
-    "@accountsAndSettings": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "compressingVideo": "動画を圧縮しています...",
-    "newSpaceDescription": "スペースを使えば、チャットを集約し、プライベートまたはパブリックなコミュニティを作成できます。",
     "report": "レポート",
     "signIn": "ログイン",
     "createNewAccount": "アカウントを作成",
-    "signUpGreeting": "ChatLoomは分散型です！アカウントを作成したいサーバーを選択して、さあ始めましょう！",
-    "sendReadReceipts": "既読通知を送信"
+    "signUpGreeting": "ChatLoomは分散型です！アカウントを作成したいサーバーを選択して、さあ始めましょう！"
 }

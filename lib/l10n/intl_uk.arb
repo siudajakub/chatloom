@@ -20,11 +20,6 @@
             }
         }
     },
-    "account": "Обліковий запис",
-    "@account": {
-        "type": "String",
-        "placeholders": {}
-    },
     "activatedEndToEndEncryption": "🔐 {username} активує наскрізне шифрування",
     "@activatedEndToEndEncryption": {
         "type": "String",
@@ -55,11 +50,6 @@
     },
     "anyoneCanJoin": "Будь-хто може приєднатись",
     "@anyoneCanJoin": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "archive": "Архів",
-    "@archive": {
         "type": "String",
         "placeholders": {}
     },
@@ -239,16 +229,6 @@
             }
         }
     },
-    "changeTheHomeserver": "Змінити домашній сервер",
-    "@changeTheHomeserver": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changeTheme": "Змінити стиль",
-    "@changeTheme": {
-        "type": "String",
-        "placeholders": {}
-    },
     "changeTheNameOfTheGroup": "Змінити назву групи",
     "@changeTheNameOfTheGroup": {
         "type": "String",
@@ -256,16 +236,6 @@
     },
     "channelCorruptedDecryptError": "Шифрування було пошкоджено",
     "@channelCorruptedDecryptError": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "chat": "Бесіда",
-    "@chat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "chatDetails": "Подробиці бесіди",
-    "@chatDetails": {
         "type": "String",
         "placeholders": {}
     },
@@ -321,11 +291,6 @@
                 "type": "int"
             }
         }
-    },
-    "create": "Створити",
-    "@create": {
-        "type": "String",
-        "placeholders": {}
     },
     "createdTheChat": "💬 {username} створює бесіду",
     "@createdTheChat": {
@@ -385,21 +350,6 @@
     },
     "editDisplayname": "Змінити показуване ім'я",
     "@editDisplayname": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteExists": "Емодзі вже існує!",
-    "@emoteExists": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteInvalid": "Неприпустимий короткий код емодзі!",
-    "@emoteInvalid": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteShortcode": "Короткий код для емодзі",
-    "@emoteShortcode": {
         "type": "String",
         "placeholders": {}
     },
@@ -487,11 +437,6 @@
                 "type": "String"
             }
         }
-    },
-    "help": "Довідка",
-    "@help": {
-        "type": "String",
-        "placeholders": {}
     },
     "incorrectPassphraseOrKey": "Неправильна парольна фраза або ключ відновлення",
     "@incorrectPassphraseOrKey": {
@@ -613,15 +558,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "loadCountMoreParticipants": "Завантажити ще {count} учасників",
-    "@loadCountMoreParticipants": {
-        "type": "String",
-        "placeholders": {
-            "count": {
-                "type": "int"
-            }
-        }
-    },
     "loadingPleaseWait": "Завантаження… Будь ласка, зачекайте.",
     "@loadingPleaseWait": {
         "type": "String",
@@ -653,16 +589,6 @@
     },
     "moderator": "Модератор",
     "@moderator": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "muteChat": "Вимкнути сповіщення",
-    "@muteChat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "newMessageInFluffyChat": "💬 Нове повідомлення у ChatLoom",
-    "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
     },
@@ -706,11 +632,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "openAppToReadMessages": "Відкрийте застосунок читання повідомлень",
-    "@openAppToReadMessages": {
-        "type": "String",
-        "placeholders": {}
-    },
     "openCamera": "Відкрити камеру",
     "@openCamera": {
         "type": "String",
@@ -733,11 +654,6 @@
     },
     "pleaseEnterYourUsername": "Введіть своє ім'я користувача",
     "@pleaseEnterYourUsername": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "publicRooms": "Загальнодоступні кімнати",
-    "@publicRooms": {
         "type": "String",
         "placeholders": {}
     },
@@ -859,11 +775,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "settings": "Налаштування",
-    "@settings": {
-        "type": "String",
-        "placeholders": {}
-    },
     "share": "Поділитися",
     "@share": {
         "type": "String",
@@ -935,11 +846,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "unknownDevice": "Невідомий пристрій",
-    "@unknownDevice": {
-        "type": "String",
-        "placeholders": {}
-    },
     "unknownEncryptionAlgorithm": "Невідомий алгоритм шифрування",
     "@unknownEncryptionAlgorithm": {
         "type": "String",
@@ -953,11 +859,6 @@
                 "type": "String"
             }
         }
-    },
-    "unmuteChat": "Увімкнути сповіщення",
-    "@unmuteChat": {
-        "type": "String",
-        "placeholders": {}
     },
     "userAndOthersAreTyping": "{username} та {count} інших пишуть…",
     "@userAndOthersAreTyping": {
@@ -1043,11 +944,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "voiceMessage": "Голосове повідомлення",
-    "@voiceMessage": {
-        "type": "String",
-        "placeholders": {}
-    },
     "waitingPartnerAcceptRequest": "Очікування прийняття запиту партнером…",
     "@waitingPartnerAcceptRequest": {
         "type": "String",
@@ -1065,11 +961,6 @@
     },
     "whoIsAllowedToJoinThisGroup": "Кому дозволено приєднуватися до цієї групи",
     "@whoIsAllowedToJoinThisGroup": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "writeAMessage": "Написати повідомлення…",
-    "@writeAMessage": {
         "type": "String",
         "placeholders": {}
     },
@@ -1108,33 +999,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "enableEmotesGlobally": "Увімкнути набір емодзі глобально",
-    "@enableEmotesGlobally": {
-        "type": "String",
-        "placeholders": {}
-    },
     "edit": "Редагувати",
     "@edit": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "directChats": "Особисті бесіди",
-    "@directChats": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "deleteAccount": "Видалити обліковий запис",
-    "@deleteAccount": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "deactivateAccountWarning": "Це деактивує ваш обліковий запис. Це неможливо скасувати! Ви впевнені?",
-    "@deactivateAccountWarning": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changePassword": "Змінити пароль",
-    "@changePassword": {
         "type": "String",
         "placeholders": {}
     },
@@ -1199,16 +1065,6 @@
         },
         "description": "State that {command} is not a valid /command."
     },
-    "copyToClipboard": "Копіювати до буфера обміну",
-    "@copyToClipboard": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "createNewSpace": "Новий простір",
-    "@createNewSpace": {
-        "type": "String",
-        "placeholders": {}
-    },
     "enableEncryption": "Увімкнути шифрування",
     "@enableEncryption": {
         "type": "String",
@@ -1235,11 +1091,6 @@
         "placeholders": {}
     },
     "scanQrCode": "Сканувати QR-код",
-    "noPasswordRecoveryDescription": "Ви ще не додали спосіб відновлення пароля.",
-    "@noPasswordRecoveryDescription": {
-        "type": "String",
-        "placeholders": {}
-    },
     "numUsersTyping": "{count} користувачів пишуть…",
     "@numUsersTyping": {
         "type": "String",
@@ -1284,7 +1135,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "addToSpace": "Додати простір",
     "roomVersion": "Версія кімнати",
     "@roomVersion": {
         "type": "String",
@@ -1304,11 +1154,6 @@
             }
         }
     },
-    "appLock": "Блокування застосунку",
-    "@appLock": {
-        "type": "String",
-        "placeholders": {}
-    },
     "commandInvalid": "Неприпустима команда",
     "@commandInvalid": {
         "type": "String"
@@ -1318,18 +1163,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "addEmail": "Додати е-пошту",
-    "@addEmail": {
-        "type": "String",
-        "placeholders": {}
-    },
     "ignore": "Нехтувати",
     "@ignore": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "fontSize": "Розмір шрифту",
-    "@fontSize": {
         "type": "String",
         "placeholders": {}
     },
@@ -1350,20 +1185,10 @@
             }
         }
     },
-    "all": "Усі",
-    "@all": {
-        "type": "String",
-        "placeholders": {}
-    },
     "commandHint_join": "Приєднатися до цієї кімнати",
     "@commandHint_join": {
         "type": "String",
         "description": "Usage hint for the command /join"
-    },
-    "chats": "Бесіди",
-    "@chats": {
-        "type": "String",
-        "placeholders": {}
     },
     "changeYourAvatar": "Змінити аватар",
     "@changeYourAvatar": {
@@ -1371,11 +1196,6 @@
         "placeholders": {}
     },
     "link": "Посилання",
-    "security": "Безпека",
-    "@security": {
-        "type": "String",
-        "placeholders": {}
-    },
     "errorObtainingLocation": "Помилка під час отримання розташування: {error}",
     "@errorObtainingLocation": {
         "type": "String",
@@ -1384,11 +1204,6 @@
                 "type": "String"
             }
         }
-    },
-    "synchronizingPleaseWait": "Синхронізація… Будь ласка, зачекайте.",
-    "@synchronizingPleaseWait": {
-        "type": "String",
-        "placeholders": {}
     },
     "noMatrixServer": "{server1} не є сервером matrix, використовувати {server2} натомість?",
     "@noMatrixServer": {
@@ -1421,11 +1236,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "autoplayImages": "Автоматично відтворювати анімовані наліпки та емодзі",
-    "@autoplayImages": {
-        "type": "String",
-        "placeholder": {}
-    },
     "pleaseChooseAPasscode": "Виберіть код доступу",
     "@pleaseChooseAPasscode": {
         "type": "String",
@@ -1438,11 +1248,6 @@
     },
     "sendMessages": "Надсилати повідомлення",
     "@sendMessages": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "whoCanPerformWhichAction": "Хто і яку дію може виконувати",
-    "@whoCanPerformWhichAction": {
         "type": "String",
         "placeholders": {}
     },
@@ -1461,11 +1266,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "groups": "Групи",
-    "@groups": {
-        "type": "String",
-        "placeholders": {}
-    },
     "noEncryptionForPublicRooms": "Активувати шифрування можна лише тоді, коли кімната більше не буде загальнодоступною.",
     "@noEncryptionForPublicRooms": {
         "type": "String",
@@ -1476,7 +1276,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "clearArchive": "Очистити архів",
     "commandHint_html": "Надіслати текст у форматі HTML",
     "@commandHint_html": {
         "type": "String",
@@ -1545,16 +1344,6 @@
     },
     "tooManyRequestsWarning": "Забагато запитів. Спробуйте пізніше!",
     "@tooManyRequestsWarning": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "withTheseAddressesRecoveryDescription": "За допомогою цих адрес ви можете відновити свій пароль.",
-    "@withTheseAddressesRecoveryDescription": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "privacy": "Приватність",
-    "@privacy": {
         "type": "String",
         "placeholders": {}
     },
@@ -1636,11 +1425,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "passwordRecovery": "Відновлення пароля",
-    "@passwordRecovery": {
-        "type": "String",
-        "placeholders": {}
-    },
     "pin": "Закріпити",
     "@pin": {
         "type": "String",
@@ -1651,11 +1435,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "spaceName": "Назва простору",
-    "@spaceName": {
-        "type": "String",
-        "placeholders": {}
-    },
     "warning": "Попередження!",
     "@warning": {
         "type": "String",
@@ -1663,11 +1442,6 @@
     },
     "yourPublicKey": "Ваш відкритий ключ",
     "@yourPublicKey": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "spaceIsPublic": "Простір загальнодоступний",
-    "@spaceIsPublic": {
         "type": "String",
         "placeholders": {}
     },
@@ -1688,16 +1462,10 @@
         "placeholders": {}
     },
     "oneClientLoggedOut": "На одному з ваших клієнтів виконано вихід із системи",
-    "bundleName": "Назва вузла",
-    "removeFromBundle": "Вилучити з цього вузла",
-    "editBundlesForAccount": "Змінити вузол для цього облікового запису",
-    "addToBundle": "Додати до вузлів",
-    "repeatPassword": "Повторіть пароль",
     "messageInfo": "Відомості про повідомлення",
     "time": "Час",
     "openGallery": "Відкрити галерею",
     "sender": "Відправник",
-    "removeFromSpace": "Вилучити з простору",
     "commandHint_discardsession": "Відкинути сеанс",
     "@commandHint_discardsession": {
         "type": "String",
@@ -1799,7 +1567,6 @@
     "storeInAndroidKeystore": "Зберегти в Android KeyStore",
     "storeInAppleKeyChain": "Зберегти в Apple KeyChain",
     "storeSecurlyOnThisDevice": "Зберегти безпечно на цей пристрій",
-    "users": "Користувачі",
     "countFiles": "{count} файлів",
     "@countFiles": {
         "placeholders": {
@@ -1813,21 +1580,9 @@
     "dehydrateWarning": "Цю дію не можна скасувати. Переконайтеся, що ви безпечно зберігаєте файл резервної копії.",
     "user": "Користувач",
     "custom": "Користувацький",
-    "supposedMxid": "Це має бути {mxid}",
-    "@supposedMxid": {
-        "type": "String",
-        "placeholders": {
-            "mxid": {
-                "type": "String"
-            }
-        }
-    },
-    "confirmMatrixId": "Підтвердьте свій Matrix ID, щоб видалити свій обліковий запис.",
     "commandHint_markasgroup": "Позначити групою",
     "commandHint_markasdm": "Позначити кімнатою особистого спілкування для надання Matrix ID",
-    "whyIsThisMessageEncrypted": "Чому це повідомлення нечитабельне?",
     "noKeyForThisMessage": "Це може статися, якщо повідомлення було надіслано до того, як ви ввійшли у свій обліковий запис на цьому пристрої.\n\nТакож можливо, що відправник заблокував ваш пристрій або щось пішло не так з під'єднанням до інтернету.\n\nЧи можете ви прочитати повідомлення на іншому сеансі? Тоді ви зможете перенести повідомлення з нього! Перейдіть до Налаштування > Пристрої та переконайтеся, що ваші пристрої перевірили один одного. Коли ви відкриєте кімнату наступного разу й обидва сеанси будуть на активні, ключі будуть передані автоматично.\n\nВи ж не хочете втрачати ключі після виходу або зміни пристроїв? Переконайтеся, що ви ввімкнули резервне копіювання бесід у налаштуваннях.",
-    "newSpace": "Новий простір",
     "doNotShowAgain": "Не показувати знову",
     "commandHint_cuddle": "Надіслати пригортайку",
     "googlyEyesContent": "{senderName} надсилає вам гугл-очі",
@@ -1868,7 +1623,6 @@
             }
         }
     },
-    "newSpaceDescription": "Простори дозволяють об'єднувати ваші бесіди та створювати приватні або загальнодоступні спільноти.",
     "encryptThisChat": "Зашифрувати цю бесіду",
     "disableEncryptionWarning": "З міркувань безпеки ви не можете вимкнути шифрування в бесіді, ув якій воно було ввімкнене раніше.",
     "sorryThatsNotPossible": "Вибачте... це неможливо",
@@ -1889,25 +1643,13 @@
     "readUpToHere": "Читати тут",
     "jump": "Перейти",
     "openLinkInBrowser": "Відкрити посилання у браузері",
-    "reportErrorDescription": "О, ні. Щось пішло не так. Якщо хочете, можете повідомити про помилку розробникам.",
     "report": "повідомити",
-    "notAnImage": "Не файл зображення.",
-    "importNow": "Імпортувати зараз",
-    "importEmojis": "Імпорт емодзі",
-    "importFromZipFile": "Імпорт з файлу .zip",
-    "replace": "Замінити",
-    "exportEmotePack": "Експортувати набір смайликів у форматі .zip",
-    "sendTypingNotifications": "Надсилати сповіщення про ввід тексту",
     "createGroup": "Створити групу",
-    "messagesStyle": "Повідомлення:",
     "shareInviteLink": "Надіслати запрошувальне посилання",
     "tryAgain": "Повторіть спробу",
-    "setColorTheme": "Налаштувати колірну тему:",
     "chatPermissions": "Дозволи бесіди",
-    "chatDescription": "Опис бесіди",
     "chatDescriptionHasBeenChanged": "Опис бесіди змінено",
     "noChatDescriptionYet": "Опис бесіди ще не створено.",
-    "invalidServerName": "Недійсна назва сервера",
     "optionalRedactReason": "(Необов'язково) Причина редагування цього повідомлення...",
     "redactedBy": "Відредаговано {username}",
     "@redactedBy": {
@@ -1987,20 +1729,11 @@
     "blockUsername": "Ігнорувати ім'я користувача",
     "groupName": "Назва групи",
     "databaseMigrationTitle": "Базу даних оптимізовано",
-    "searchChatsRooms": "Пошук для #chats, @users...",
     "databaseMigrationBody": "Зачекайте, будь ласка. Це може тривати деякий час.",
     "thisDevice": "Цей пристрій:",
-    "publicSpaces": "Загальнодоступний простір",
     "passwordIsWrong": "Введений пароль неправильний",
-    "pleaseEnterYourCurrentPassword": "Введіть поточний пароль",
-    "nothingFound": "Нічого не знайдено...",
-    "newPassword": "Новий пароль",
-    "passwordsDoNotMatch": "Паролі відрізняються",
     "select": "Вибрати",
-    "pleaseChooseAStrongPassword": "Виберіть надійний пароль",
-    "addChatOrSubSpace": "Додати бесіду або підпростір",
     "leaveEmptyToClearStatus": "Лишіть порожнім, щоб оновити статус.",
-    "joinSpace": "Приєднатися до простору",
     "searchForUsers": "Пошук @користувачів...",
     "sessionLostBody": "Ваш сеанс втрачено. Будь ласка, повідомте про цю помилку розробникам за адресою {url}. Текст помилки: {error}",
     "@sessionLostBody": {
@@ -2054,10 +1787,7 @@
             }
         }
     },
-    "sendReadReceiptsDescription": "Інші учасники бесіди бачитимуть, що ви прочитали повідомлення.",
     "formattedMessages": "Форматовані повідомлення",
-    "sendReadReceipts": "Надіслати підтвердження прочитання",
-    "sendTypingNotificationsDescription": "Інші учасники бесіди бачитимуть, коли ви набираєте нове повідомлення.",
     "formattedMessagesDescription": "Показувати розширений вміст повідомлень, наприклад, жирний текст, використовуючи markdown.",
     "verifyOtherUser": "🔐 Звірити іншого користувача",
     "verifyOtherUserDescription": "Якщо ви звіряєте іншого користувача, ви можете бути впевнені, що знаєте, кому ви насправді пишете. 💪\n\nКоли ви почнете звірення, ви та інший користувач побачите спливне вікно в застосунку. Там ви побачите набір смайликів або чисел, які вам потрібно буде порівняти між собою.\n\nНайкращий спосіб зробити це — зустрітися або розпочати відеовиклик. 👭",
@@ -2090,8 +1820,6 @@
             }
         }
     },
-    "incomingMessages": "Вхідні повідомлення",
-    "discover": "Огляд",
     "stickers": "Наліпки",
     "searchIn": "Пошук у бесіді \"{chat}\"...",
     "@searchIn": {
@@ -2106,19 +1834,14 @@
     "swipeRightToLeftToReply": "Посунути праворуч або ліворуч, щоб відповісти",
     "globalChatId": "Глобальний ID бесіди",
     "accessAndVisibility": "Доступ і видимість",
-    "accessAndVisibilityDescription": "Хто може приєднатися до цієї бесіди і як її можна знайти.",
-    "customEmojisAndStickers": "Власні емодзі та наліпки",
-    "customEmojisAndStickersBody": "Додавайте або діліться власними емодзі або наліпками, які можна використовувати в будь-якій бесіді.",
     "createNewAddress": "Створити нову адресу",
     "commandHint_unignore": "Не ігнорувати цей Matrix ID",
     "appLockDescription": "Блокувати додаток, коли не використовується PIN-код",
     "hideRedactedMessages": "Сховати змінені повідомлення",
     "hideRedactedMessagesBody": "Якщо хтось змінить повідомлення, його більше не буде видно в бесіді.",
     "hideInvalidOrUnknownMessageFormats": "Сховати недійсні або невідомі формати повідомлень",
-    "passwordRecoverySettings": "Налаштування відновлення пароля",
     "knock": "Постукатись",
     "knocking": "Стукаються",
-    "noDatabaseEncryption": "Шифрування бази даних не підтримується на цій платформі",
     "usersMustKnock": "Користувачі повинні постукатись",
     "noOneCanJoin": "Ніхто не може приєднатись",
     "chatCanBeDiscoveredViaSearchOnServer": "Бесіду можна знайти за допомогою пошуку на {server}",
@@ -2134,23 +1857,6 @@
     "searchMore": "Шукати ще...",
     "gallery": "Галерея",
     "files": "Файли",
-    "unreadChatsInApp": "{appname}: {unread} непрочитаних бесід",
-    "@unreadChatsInApp": {
-        "type": "String",
-        "placeholders": {
-            "appname": {
-                "type": "String"
-            },
-            "unread": {
-                "type": "String"
-            }
-        }
-    },
-    "thereAreCountUsersBlocked": "Наразі заблоковано {count} користувачів.",
-    "@thereAreCountUsersBlocked": {
-        "type": "String",
-        "count": {}
-    },
     "moderatorLevel": "{level} - Модератор",
     "@moderatorLevel": {
         "type": "String",
@@ -2184,13 +1890,6 @@
     "changeTheVisibilityOfChatHistory": "Змінити видимість історії чату",
     "changeTheCanonicalRoomAlias": "Змінити основну адресу загальнодоступного чату",
     "sendRoomNotifications": "Надсилати сповіщення @room",
-    "space": "Простір",
-    "goToSpace": "Перейти до простору: {space}",
-    "@goToSpace": {
-        "type": "String",
-        "space": {}
-    },
-    "markAsUnread": "Позначити непрочитаним",
     "changeTheDescriptionOfTheGroup": "Змінити опис чату",
     "updateInstalled": "🎉 Оновлення {version} встановлено!",
     "@updateInstalled": {
@@ -2201,39 +1900,16 @@
             }
         }
     },
-    "changelog": "Зміни",
     "chatPermissionsDescription": "Визначте, який рівень повноважень необхідний для певних дій у цьому чаті. Рівні повноважень 0, 50 і 100 зазвичай представляють користувачів, модераторів та адміністраторів, але можливі будь-які градації.",
-    "noMoreChatsFound": "Більше чатів не знайдено...",
-    "unread": "Непрочитані",
     "sendCanceled": "Надсилання скасовано",
-    "noChatsFoundHere": "Бесід ще немає. Розпочніть спілкування натиснувши кнопку нижче. ⤵️",
     "loginWithMatrixId": "Увійти за допомогою Matrix-ID",
     "doesNotSeemToBeAValidHomeserver": "Здається, це несумісний домашній сервер. Неправильна URL-адреса?",
     "calculatingFileSize": "Обчислення розміру файлу...",
-    "oneOfYourDevicesIsNotVerified": "Один із ваших пристроїв не верифікований",
     "noticeChatBackupDeviceVerification": "Примітка: Коли ви під'єднуєте всі свої пристрої до резервної копії бесіди, вони автоматично верифікуються.",
     "continueText": "Продовжити",
-    "manageAccount": "Керувати обліковим записом",
     "blur": "Розмиття:",
     "opacity": "Прозорість:",
-    "setWallpaper": "Встановити шпалери",
-    "aboutHomeserver": "Про {homeserver}",
-    "@aboutHomeserver": {
-        "type": "String",
-        "placeholders": {
-            "homeserver": {
-                "type": "String"
-            }
-        }
-    },
     "noContactInformationProvided": "Сервер не надає жодної дійсної контактної інформації",
-    "contactServerSecurity": "Зв’язатися з відділом безпеки сервера",
-    "supportPage": "Сторінка підтримки",
-    "serverInformation": "Інформація про сервер:",
-    "contactServerAdmin": "Зв’язатися з адміністратором сервера",
-    "name": "Ім'я",
-    "version": "Версія",
-    "website": "Вебсайт",
     "boldText": "Жирний текст",
     "italicText": "Курсивний текст",
     "strikeThrough": "Перекреслений текст",
@@ -2253,15 +1929,6 @@
     "compress": "Стиснути",
     "otherPartyNotLoggedIn": "Інша сторона наразі не увійшла в систему, тому не може отримувати повідомлення!",
     "previous": "Попередній",
-    "synchronizingPleaseWaitCounter": " Синхронізація… ({percentage}%)",
-    "@synchronizingPleaseWaitCounter": {
-        "type": "String",
-        "placeholders": {
-            "percentage": {
-                "type": "String"
-            }
-        }
-    },
     "newChatRequest": "📩 Новий запит на спілкування",
     "allDevices": "Усім пристроям",
     "crossVerifiedDevicesIfEnabled": "З перехресною верифікацією пристроїв, якщо ввімкнено",
@@ -2277,7 +1944,6 @@
     },
     "appWantsToUseForLoginDescription": "Цим ви дозволяєте застосунку та вебсайту ділитися інформацією про вас.",
     "open": "Відкрити",
-    "waitingForServer": "Очікування сервера...",
     "shareKeysWithDescription": "Яким пристроям довіряти, щоб вони могли читати ваші повідомлення в зашифрованих бесідах?",
     "verifiedDevicesOnly": "Лише верифіковані пристрої",
     "contentNotificationSettings": "Налаштування сповіщень про вміст",
@@ -2323,7 +1989,6 @@
     "recordAVideo": "Записати відео",
     "optionalMessage": "(Необов'язково) повідомлення...",
     "enterNewChat": "Створити новий чат",
-    "shareKeysWith": "Поділитися ключами з...",
     "notSupportedOnThisDevice": "Не підтримується на цьому пристрої",
     "notificationRuleMessage": "Повідомлення",
     "unknownPushRule": "Невідоме правило сповіщення '{rule}'",
@@ -2370,24 +2035,10 @@
     "checkList": "Контрольний список",
     "commandHint_logout": "Вийти на цьому пристрої",
     "commandHint_logoutall": "Вийти на всіх активних пристроях",
-    "displayNavigationRail": "Показати навігаційну карту на мобільному",
     "customReaction": "Власні реакції",
     "moreEvents": "Інші події",
     "declineInvitation": "Відхилити запрошення",
     "noMessagesYet": "Поки немає повідомлень",
-    "longPressToRecordVoiceMessage": "Затисніть, щоб записати голосове повідомлення.",
-    "pause": "Призупинити",
-    "resume": "Продовжити",
-    "removeFromSpaceDescription": "Бесіду буде видалено з простору, та вона залишиться у вашому списку бесід.",
-    "countChats": "{chats} бесід",
-    "@countChats": {
-        "type": "String",
-        "placeholders": {
-            "chats": {
-                "type": "int"
-            }
-        }
-    },
     "spaceMemberOf": "Учасник {spaces} просторів",
     "@spaceMemberOf": {
         "type": "String",
@@ -2416,16 +2067,7 @@
     "pollHasBeenEnded": "Опитування завершилось",
     "skipChatBackupWarning": "Ви впевнені? Без резервного копіювання бесід ви можете втратити доступ до повідомлень, якщо ви зміните пристрій.",
     "replyInThread": "Відповісти у вітці",
-    "saveChanges": "Зберегти зміни",
-    "createSticker": "Створити наліпку чи емодзі",
-    "useAsSticker": "Використати як наліпку",
-    "useAsEmoji": "Використати як емодзі",
-    "stickerPackNameAlreadyExists": "Набір наліпок з такою назвою вже є",
-    "newStickerPack": "Новий набір наліпок",
-    "stickerPackName": "Назва набору наліпок",
-    "attribution": "Атрибуція",
     "skipChatBackup": "Пропустити резервне копіювання бесід",
-    "thread": "Вітка",
     "backToMainChat": "Повернутись до основної бесіди",
     "answersWillBeVisibleWhenPollHasEnded": "Відповіді стануть публічними після завершення опитування",
     "countVotes": "{count, plural, =1{Один голос} other{{count} голосів}}",
@@ -2470,16 +2112,11 @@
     "logs": "Журнали",
     "advancedConfigs": "Розширені налаштування",
     "advancedConfigurations": "Розширені налаштування",
-    "identityServer": "Сервер профілів:",
-    "clientWellKnownInformation": "Дані клієнту із .well-known:",
-    "federationBaseUrl": "Основний URL федерації",
-    "baseUrl": "Основний URL",
     "signIn": "Увійти",
     "createNewAccount": "Створити новий обліковий запис",
     "signUpGreeting": "ChatLoom децентралізований! Виберіть сервер, на якому ви хочете створити свій обліковий запис, і почнімо!",
     "signInGreeting": "Ви вже маєте обліковий запис у Matrix? Ласкаво просимо! Виберіть свій домашній сервер і ввійдіть.",
     "theProcessWasCanceled": "Процес скасовано.",
-    "join": "Приєднатись",
     "searchOrEnterHomeserverAddress": "Знайдіть або введіть адресу домашнього сервера",
     "matrixId": "Matrix-ідентифікатор",
     "setPowerLevel": "Встановити рівень можливостей",
@@ -2490,28 +2127,14 @@
     "powerLevel": "Рівень можливостей",
     "setPowerLevelDescription": "Рівні можливостей визначають, що користувач може робити в цій кімнаті та, зазвичай, мають діапазон від 0 до 100.",
     "owner": "Власник",
-    "mute": "Мут",
-    "@mute": {
-        "description": "This should be a very short string because there is not much space in the button!"
-    },
     "createNewChat": "Створити новий чат",
     "reset": "Скинути",
-    "supportFluffyChat": "Підтримати ChatLoom",
-    "support": "Підтримка",
-    "setLowPriority": "Встановити низький пріоритет",
-    "unsetLowPriority": "Скинути низький пріоритет",
     "playSoundOnNotification": "Відтворити звук при сповіщенні",
-    "addTag": "Додати тег",
-    "removeTag": "Видалити тег",
-    "tagName": "Назва тегу",
-    "createNewTag": "Створити новий тег",
     "discardEdits": "У вас є незбережені зміни. Відхилити?",
     "@discardEdits": {
         "type": "String",
         "placeholders": {}
     },
-    "hideRoomsInSpaces": "Приховати чати, що належать просторам",
-    "possibleByYou": "Цей реліз став можливим лише завдяки вашій підтримці. ChatLoom залишається безкоштовним, з відкритим джерельним кодом й цілком підтримуваний спільнотою.",
     "showThumbnailsInTimeline": "Показувати мініатюри зображень та відео",
     "appSubtitle": "Безпечні чати [matrix]",
     "appDescription": "Спілкуйтеся зашифровано через децентралізовану мережу [matrix] простим та доступним кожному способом.",
@@ -2526,8 +2149,6 @@
             }
         }
     },
-    "encryptedMessage": "Зашифроване повідомлення",
-    "unencryptedMessage": "Незашифроване повідомлення",
     "publicKey": "Публічний ключ: {key}",
     "@publicKey": {
         "type": "String",
@@ -2540,14 +2161,6 @@
     "deviceIdentityKey": "Ключ пристрою",
     "showMore": "Показати ще",
     "showLess": "Показати менше",
-    "unexpectedErrorOccurded": "На жаль сталася неочікувана помилка: {msg}",
-    "@unexpectedErrorOccurded": {
-        "placeholders": {
-            "msg": {
-                "type": "String"
-            }
-        }
-    },
     "videoCallsBetaWarning": "Відеовиклики на ранньому етапі розробки. Поведінка може бути непередбачуваною. Будемо раді отримати від вас відгук.",
     "editImage": "Змінити зображення",
     "@editImage": {
@@ -2599,21 +2212,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "accountsAndSettings": "Облікові записи та налаштування",
-    "@accountsAndSettings": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "sendingFilesDoNotExit": "Надсилання {count} файлів... Не виходьте!",
-    "@sendingFilesDoNotExit": {
-        "type": "String",
-        "placeholders": {
-            "count": {
-                "type": "int"
-            }
-        }
-    },
-    "compressingVideo": "Стиснення відео...",
     "resetAccount": "Скинути обліковий запис",
     "@resetAccount": {
         "type": "String",

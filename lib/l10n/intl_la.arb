@@ -1,5 +1,4 @@
 {
-    "importFromZipFile": "A tabulario zip importare",
     "editImage": "Pictura exercere",
     "@editImage": {
         "type": "String",
@@ -45,27 +44,12 @@
         "type": "String",
         "placeholders": {}
     },
-    "repeatPassword": "Signum repetere",
-    "notAnImage": "Pictura non est.",
     "remove": "Removere",
     "@remove": {
         "type": "String",
         "placeholders": {}
     },
-    "importNow": "Nunc importare",
-    "importEmojis": "Emojis importare",
-    "exportEmotePack": "In tabulario zip exportare",
-    "replace": "Compensare",
     "about": "De",
-    "aboutHomeserver": "De {homeserver}",
-    "@aboutHomeserver": {
-        "type": "String",
-        "placeholders": {
-            "homeserver": {
-                "type": "String"
-            }
-        }
-    },
     "accept": "Accipere",
     "@accept": {
         "type": "String",
@@ -80,11 +64,6 @@
             }
         }
     },
-    "account": "Ratio",
-    "@account": {
-        "type": "String",
-        "placeholders": {}
-    },
     "activatedEndToEndEncryption": "🔐 {username} ab origine ad destinatum per notas scribere incepit",
     "@activatedEndToEndEncryption": {
         "type": "String",
@@ -94,12 +73,6 @@
             }
         }
     },
-    "addEmail": "Email addere",
-    "@addEmail": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "addToSpace": "Ad spatium addere",
     "admin": "Princeps",
     "@admin": {
         "type": "String",
@@ -107,11 +80,6 @@
     },
     "alias": "aliud nomen",
     "@alias": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "all": "Cuncti",
-    "@all": {
         "type": "String",
         "placeholders": {}
     },

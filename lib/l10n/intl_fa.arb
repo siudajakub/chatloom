@@ -1,6 +1,5 @@
 {
     "@@last_modified": "2021-08-14 12:41:10.061080",
-    "repeatPassword": "تکرار گذرواژه",
     "about": "درباره",
     "@about": {
         "type": "String",
@@ -20,27 +19,6 @@
             }
         }
     },
-    "account": "حساب",
-    "@account": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "addToSpace": "به فضا افزودن",
-    "appLock": "قفل برنامه",
-    "@appLock": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "all": "همه",
-    "@all": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "addEmail": "افزودن رایانامه",
-    "@addEmail": {
-        "type": "String",
-        "placeholders": {}
-    },
     "answeredTheCall": "{senderName} به تماس پاسخ داد",
     "@answeredTheCall": {
         "type": "String",
@@ -52,11 +30,6 @@
     },
     "anyoneCanJoin": "هرکسی می‌تواند بپیوندد",
     "@anyoneCanJoin": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "archive": "بایگانی",
-    "@archive": {
         "type": "String",
         "placeholders": {}
     },
@@ -84,15 +57,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "supposedMxid": "گمان میرود {mxid} باشد",
-    "@supposedMxid": {
-        "type": "String",
-        "placeholders": {
-            "mxid": {
-                "type": "String"
-            }
-        }
-    },
     "changedTheDisplaynameTo": "{username} نام نمایشی را به '{displayname}' تغییر داد",
     "@changedTheDisplaynameTo": {
         "type": "String",
@@ -105,7 +69,6 @@
             }
         }
     },
-    "confirmMatrixId": "برای پاک کردن حساب، لطفاً هویت ماتریکس خود را بپذیرید.",
     "changeDeviceName": "تغییر نام دستگاه",
     "@changeDeviceName": {
         "type": "String",
@@ -134,11 +97,6 @@
     "@areGuestsAllowedToJoin": {
         "type": "String",
         "placeholders": {}
-    },
-    "autoplayImages": "پخش خودکار شکلک‌ها و برچسب‌های متحرک",
-    "@autoplayImages": {
-        "type": "String",
-        "placeholder": {}
     },
     "sendOnEnter": "فرستادن با کلید Enter",
     "cancel": "رد کردن",
@@ -229,11 +187,6 @@
                 "type": "String"
             }
         }
-    },
-    "chats": "چت ها",
-    "@chats": {
-        "type": "String",
-        "placeholders": {}
     },
     "messages": "پیام‌ها",
     "@messages": {
@@ -333,11 +286,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "changeTheme": "تغییر پوسته",
-    "@changeTheme": {
-        "type": "String",
-        "placeholders": {}
-    },
     "changeTheNameOfTheGroup": "تغییر نام گروه",
     "@changeTheNameOfTheGroup": {
         "type": "String",
@@ -353,7 +301,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "clearArchive": "پاک کردن بایگانی",
     "commandHint_create": "ساختن یک چت گروهی خالی\nاز «--no-encryption» برای غیرفعال کردن رمزنگاری استفاده کنید",
     "@commandHint_create": {
         "type": "String",
@@ -379,11 +326,6 @@
             }
         }
     },
-    "chatDetails": "جزئیات چت",
-    "@chatDetails": {
-        "type": "String",
-        "placeholders": {}
-    },
     "commandHint_markasdm": "علامت‌گذاری به‌عنوان اتاق پیام مستقیم با شناسه ماتریکس",
     "commandHint_markasgroup": "علامت‌گذاری به‌عنوان گروه",
     "commandHint_clearcache": "پاک کردن حافظه نهان",
@@ -395,16 +337,6 @@
     "@commandHint_discardsession": {
         "type": "String",
         "description": "Usage hint for the command /discardsession"
-    },
-    "groups": "گروه‌ها",
-    "@groups": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "openAppToReadMessages": "برای خواندن پیام‌ها، برنامه را باز کنید",
-    "@openAppToReadMessages": {
-        "type": "String",
-        "placeholders": {}
     },
     "sendAMessage": "فرستادن پیام",
     "@sendAMessage": {
@@ -460,23 +392,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "chat": "چت",
-    "@chat": {
-        "type": "String",
-        "placeholders": {}
-    },
     "chatBackup": "پشتیبان چت",
     "@chatBackup": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changePassword": "تغییر گذرواژه",
-    "@changePassword": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changeTheHomeserver": "تغییر سرور خانگی",
-    "@changeTheHomeserver": {
         "type": "String",
         "placeholders": {}
     },
@@ -552,15 +469,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "loadCountMoreParticipants": "بارگیری {count} شرکت‌کننده دیگر",
-    "@loadCountMoreParticipants": {
-        "type": "String",
-        "placeholders": {
-            "count": {
-                "type": "int"
-            }
-        }
-    },
     "sentASticker": "😊 {username} یک برچسب فرستاد",
     "@sentASticker": {
         "type": "String",
@@ -602,11 +510,6 @@
     },
     "delete": "پاک کردن",
     "@delete": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "deleteAccount": "پاک کردن حساب",
-    "@deleteAccount": {
         "type": "String",
         "placeholders": {}
     },
@@ -655,11 +558,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "copyToClipboard": "رونوشت به بریده‌دان",
-    "@copyToClipboard": {
-        "type": "String",
-        "placeholders": {}
-    },
     "countParticipants": "{count} شرکت‌کننده",
     "@countParticipants": {
         "type": "String",
@@ -668,16 +566,6 @@
                 "type": "int"
             }
         }
-    },
-    "create": "ساختن",
-    "@create": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "createNewSpace": "فضای جدید",
-    "@createNewSpace": {
-        "type": "String",
-        "placeholders": {}
     },
     "devices": "دستگاه‌ها",
     "@devices": {
@@ -714,16 +602,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "emoteExists": "شکلک از پیش وجود دارد!",
-    "@emoteExists": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteInvalid": "کد کوتاه شکلک نامعتبر است!",
-    "@emoteInvalid": {
-        "type": "String",
-        "placeholders": {}
-    },
     "emptyChat": "چت خالی",
     "@emptyChat": {
         "type": "String",
@@ -748,16 +626,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "directChats": "چت های مستقیم",
-    "@directChats": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteShortcode": "کد کوتاه شکلک",
-    "@emoteShortcode": {
-        "type": "String",
-        "placeholders": {}
-    },
     "commandHint_me": "توصیف خود",
     "@commandHint_me": {
         "type": "String",
@@ -776,11 +644,6 @@
                 "type": "String"
             }
         }
-    },
-    "deactivateAccountWarning": "این کار حساب شما را غیرفعال می‌کند. این کنش برگشت‌ناپذیر است! آیا مطمئن هستید؟",
-    "@deactivateAccountWarning": {
-        "type": "String",
-        "placeholders": {}
     },
     "commandHint_invite": "دعوت از کاربر مشخص‌شده به این اتاق",
     "@commandHint_invite": {
@@ -875,11 +738,6 @@
             }
         }
     },
-    "enableEmotesGlobally": "فعال کردن بسته شکلک به‌صورت سراسری",
-    "@enableEmotesGlobally": {
-        "type": "String",
-        "placeholders": {}
-    },
     "enableEncryption": "فعال کردن رمزنگاری",
     "@enableEncryption": {
         "type": "String",
@@ -928,18 +786,8 @@
             }
         }
     },
-    "fontSize": "اندازه قلم",
-    "@fontSize": {
-        "type": "String",
-        "placeholders": {}
-    },
     "forward": "هدایت",
     "@forward": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "help": "کمک",
-    "@help": {
         "type": "String",
         "placeholders": {}
     },
@@ -988,7 +836,6 @@
     },
     "commandHint_cuddle": "فرستادن آغوش",
     "commandHint_hug": "فرستادن بغل",
-    "editBundlesForAccount": "ویرایش بسته‌های این حساب",
     "logout": "خروج",
     "@logout": {
         "type": "String",
@@ -999,18 +846,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "muteChat": "بی‌صدا کردن چت",
-    "@muteChat": {
-        "type": "String",
-        "placeholders": {}
-    },
     "newChat": "چت جدید",
     "@newChat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "newMessageInFluffyChat": "💬 پیام جدید در فلافی‌چت",
-    "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
     },
@@ -1021,11 +858,6 @@
     },
     "no": "خیر",
     "@no": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "noPasswordRecoveryDescription": "هنوز روشی برای بازیابی گذرواژه خود اضافه نکرده‌اید.",
-    "@noPasswordRecoveryDescription": {
         "type": "String",
         "placeholders": {}
     },
@@ -1054,11 +886,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "passwordRecovery": "بازیابی گذرواژه",
-    "@passwordRecovery": {
-        "type": "String",
-        "placeholders": {}
-    },
     "pin": "سنجاق کردن",
     "@pin": {
         "type": "String",
@@ -1079,11 +906,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "publicRooms": "اتاق‌های عمومی",
-    "@publicRooms": {
-        "type": "String",
-        "placeholders": {}
-    },
     "obtainingLocation": "در حال به‌دست آوردن مکان…",
     "@obtainingLocation": {
         "type": "String",
@@ -1094,7 +916,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "addToBundle": "افزودن به بسته",
     "passwordForgotten": "فراموشی گذرواژه",
     "@passwordForgotten": {
         "type": "String",
@@ -1223,11 +1044,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "privacy": "حریم خصوصی",
-    "@privacy": {
-        "type": "String",
-        "placeholders": {}
-    },
     "numUsersTyping": "{count} کاربر در حال نوشتن…",
     "@numUsersTyping": {
         "type": "String",
@@ -1330,8 +1146,6 @@
         }
     },
     "oneClientLoggedOut": "یکی از برنامه‌های شما از سیستم خارج شد",
-    "removeFromBundle": "برداشتن از بسته",
-    "bundleName": "نام بسته",
     "openInMaps": "باز کردن در نقشه",
     "@openInMaps": {
         "type": "String",
@@ -1423,11 +1237,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "security": "امنیت",
-    "@security": {
-        "type": "String",
-        "placeholders": {}
-    },
     "setAsCanonicalAlias": "تنظیم به‌عنوان نام مستعار اصلی",
     "@setAsCanonicalAlias": {
         "type": "String",
@@ -1500,7 +1309,6 @@
             }
         }
     },
-    "newSpaceDescription": "فضاها امکان یکپارچه‌سازی چت ها و ساخت جوامع خصوصی یا عمومی را فراهم می‌کنند.",
     "encryptThisChat": "رمزنگاری این چت",
     "sorryThatsNotPossible": "متأسفیم... این ممکن نیست",
     "fileIsTooBigForServer": "نمیتوان فرستاد! سرور تنها از پیوست های تا {max} پشتیبانی میکند.",
@@ -1520,18 +1328,11 @@
     "noKeyForThisMessage": "اگر پیام پیش از ورود به حساب در این دستگاه فرستاده شده باشد، این مشکل ممکن است رخ دهد.\n\nهمچنین ممکن است فرستنده دستگاه شما را مسدود کرده باشد یا مشکلی در اتصال اینترنت وجود داشته باشد.\n\nآیا می‌توانید پیام را در نشست دیگری بخوانید؟ در این صورت، می‌توانید آن را منتقل کنید! به تنظیمات > دستگاه‌ها بروید و مطمئن شوید دستگاه‌هایتان یکدیگر را بازبینی کرده‌اند. هنگام باز کردن دوباره اتاق و فعال بودن هر دو نشست، کلیدها به‌صورت خودکار منتقل می‌شوند.\n\nآیا نمی‌خواهید هنگام خروج یا تغییر دستگاه کلیدها را گم کنید؟ مطمئن شوید پشتیبان چت را در تنظیمات فعال کرده‌اید.",
     "disableEncryptionWarning": "به دلایل امنیتی نمی‌توانید رمزنگاری را در چتی که فعال شده غیرفعال کنید.",
     "storeSecurlyOnThisDevice": "ذخیره امن در این دستگاه",
-    "newSpace": "فضای جدید",
     "storeInAndroidKeystore": "ذخیره در Android KeyStore",
     "storeInAppleKeyChain": "ذخیره در Apple KeyChain",
     "user": "کاربر",
     "custom": "سفارشی",
-    "whyIsThisMessageEncrypted": "چرا این پیام خوانا نیست؟",
     "reopenChat": "باز کردن دوباره چت",
-    "unmuteChat": "فعال کردن صدای چت",
-    "@unmuteChat": {
-        "type": "String",
-        "placeholders": {}
-    },
     "share": "هم‌رسانی",
     "@share": {
         "type": "String",
@@ -1572,16 +1373,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "whoCanPerformWhichAction": "چه کسی می‌تواند چه کاری انجام دهد",
-    "@whoCanPerformWhichAction": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "writeAMessage": "نوشتن پیام…",
-    "@writeAMessage": {
-        "type": "String",
-        "placeholders": {}
-    },
     "youHaveBeenBannedFromThisChat": "شما از این چت محروم شده‌اید",
     "@youHaveBeenBannedFromThisChat": {
         "type": "String",
@@ -1589,16 +1380,6 @@
     },
     "setStatus": "تنظیم وضعیت",
     "@setStatus": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "settings": "تنظیمات",
-    "@settings": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "spaceName": "نام فضا",
-    "@spaceName": {
         "type": "String",
         "placeholders": {}
     },
@@ -1653,11 +1434,6 @@
     },
     "visibleForEveryone": "قابل‌دید برای همه",
     "@visibleForEveryone": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "voiceMessage": "پیام صوتی",
-    "@voiceMessage": {
         "type": "String",
         "placeholders": {}
     },
@@ -1740,16 +1516,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "spaceIsPublic": "فضا عمومی است",
-    "@spaceIsPublic": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "synchronizingPleaseWait": "در حال همگام‌سازی... لطفا صبر کنید.",
-    "@synchronizingPleaseWait": {
-        "type": "String",
-        "placeholders": {}
-    },
     "unknownEvent": "رویداد ناشناخته '{type}'",
     "@unknownEvent": {
         "type": "String",
@@ -1800,13 +1566,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "withTheseAddressesRecoveryDescription": "با این آدرس‌ها می‌توانید رمز خود را بازیابی کنید.",
-    "@withTheseAddressesRecoveryDescription": {
-        "type": "String",
-        "placeholders": {}
-    },
     "openGallery": "بازکردن گالری",
-    "removeFromSpace": "حذف از فضا",
     "confirmEventUnpin": "آیا از برداشتن سنجاق رویداد به صورت دائمی مطمئن هستید؟",
     "youKickedAndBanned": "🙅 شما {user} را بیرون و محروم کردید",
     "@youKickedAndBanned": {
@@ -1840,11 +1600,6 @@
     },
     "status": "وضعیت",
     "@status": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "unknownDevice": "دستگاه ناشناس",
-    "@unknownDevice": {
         "type": "String",
         "placeholders": {}
     },
@@ -1885,34 +1640,12 @@
             }
         }
     },
-    "users": "کاربرها",
     "jump": "پرش",
     "report": "گزارش",
     "openLinkInBrowser": "بازکردن پیوند در مرورگر",
-    "reportErrorDescription": "اوه نه. اشتباهی رخ داد. اگر تمایل دارید، می‌توانید این اشکال را با توسعه‌دهندگان گزارش دهید.",
-    "notAnImage": "یک فایل تصویری نیست.",
-    "importNow": "اکنون وارد کنید",
-    "importEmojis": "وارد کردن شکلک‌ها",
-    "importFromZipFile": "وارد کردن از پرونده زیپ",
-    "exportEmotePack": "صادر کردن بسته شکلک به‌صورت زیپ",
-    "replace": "جایگزین کردن",
-    "aboutHomeserver": "درباره {homeserver}",
-    "@aboutHomeserver": {
-        "type": "String",
-        "placeholders": {
-            "homeserver": {
-                "type": "String"
-            }
-        }
-    },
     "commandHint_roomupgrade": "ارتقای این اتاق به نگارش مشخص‌شده",
     "appLockDescription": "قفل کردن برنامه با رمز کوتاه هنگام عدم استفاده",
-    "sendTypingNotifications": "فرستادن آگاه‌سازهای نوشتن",
     "swipeRightToLeftToReply": "کشیدن از راست به چپ برای پاسخ",
-    "noMoreChatsFound": "چت دیگری پیدا نشد...",
-    "noChatsFoundHere": "اینجا هنوز چتی پیدا نشد. با استفاده از دکمه زیر چت جدیدی با کسی شروع کنید. ⤵️",
-    "unread": "خوانده‌نشده",
-    "space": "فضا",
     "checkList": "فهرست بررسی",
     "countInvited": "{count} دعوت‌شده",
     "@countInvited": {
@@ -1932,10 +1665,6 @@
     },
     "globalChatId": "شناسه سراسری چت",
     "accessAndVisibility": "دسترسی و قابلیت دید",
-    "accessAndVisibilityDescription": "چه کسی اجازه پیوستن به این چت را دارد و چت چگونه قابل پیدا شدن است.",
-    "customEmojisAndStickers": "شکلک‌ها و برچسب‌های سفارشی",
-    "customEmojisAndStickersBody": "افزودن یا اشتراک گذاری ایموجی ها یا استیکر های سفارشی که در هر چت قابل استفاده‌اند.",
-    "chatDescription": "توضیحات چت",
     "chatDescriptionHasBeenChanged": "توضیحات چت تغییر کرد",
     "hideRedactedMessages": "پنهان کردن پیام‌های ویرایش‌شده",
     "hideRedactedMessagesBody": "اگر کسی پیامی را ویرایش کند، دیگر نمیتوان آن پیام را در چت دید.",
@@ -1946,12 +1675,9 @@
     "blockUsername": "چشم‌پوشی از نام کاربری",
     "noChatDescriptionYet": "هنوز توضیحات چتی نوشته نشده است.",
     "tryAgain": "تلاش دوباره",
-    "invalidServerName": "نام سرور نامعتبر",
     "redactMessageDescription": "پیام برای همه شرکت‌کنندگان در این گفتگو ویرایش خواهد شد. این کار برگشت‌ناپذیر است.",
     "optionalRedactReason": "(اختیاری) دلیل ویرایش این پیام...",
-    "messagesStyle": "پیام‌ها:",
     "shareInviteLink": "هم‌رسانی پیوند دعوت",
-    "passwordRecoverySettings": "تنظیمات بازیابی گذرواژه",
     "redactedBy": "ویرایش‌شده به‌دست {username}",
     "@redactedBy": {
         "type": "String",
@@ -1983,15 +1709,6 @@
         }
     },
     "setChatDescription": "تنظیم توضیحات چت",
-    "synchronizingPleaseWaitCounter": " در حال همگام‌سازی... ({percentage}%)",
-    "@synchronizingPleaseWaitCounter": {
-        "type": "String",
-        "placeholders": {
-            "percentage": {
-                "type": "String"
-            }
-        }
-    },
     "hasKnocked": "🚪 {user} در زده است",
     "@hasKnocked": {
         "placeholders": {
@@ -2003,7 +1720,6 @@
     "usersMustKnock": "کاربران باید در بزنند",
     "noOneCanJoin": "هیچ‌کس نمیتواند بپیوندد",
     "knock": "در زدن",
-    "setColorTheme": "تنظیم پوسته رنگی:",
     "invite": "دعوت",
     "inviteGroupChat": "📨 دعوت به چت گروهی",
     "invalidInput": "ورودی نامعتبر!",
@@ -2046,8 +1762,6 @@
             }
         }
     },
-    "searchChatsRooms": "جستجو برای #چت ها، @کاربران...",
-    "nothingFound": "چیزی پیدا نشد...",
     "groupName": "نام گروه",
     "createGroupAndInviteUsers": "ساختن گروه و دعوت کاربران",
     "groupCanBeFoundViaSearch": "گروه با جستجو قابل یافتن است",
@@ -2058,16 +1772,9 @@
     "leaveEmptyToClearStatus": "برای پاک کردن وضعیت، خالی بگذارید.",
     "select": "انتخاب",
     "searchForUsers": "جستجو برای @کاربران...",
-    "pleaseEnterYourCurrentPassword": "لطفاً گذرواژه کنونی خود را وارد کنید",
-    "newPassword": "گذرواژه جدید",
-    "pleaseChooseAStrongPassword": "لطفاً یک گذرواژه قوی انتخاب کنید",
-    "passwordsDoNotMatch": "گذرواژه‌ها هم‌خوانی ندارند",
     "passwordIsWrong": "گذرواژه واردشده نادرست است",
     "publicChatAddresses": "آدرس های چت عمومی",
     "createNewAddress": "ساختن نشانی جدید",
-    "joinSpace": "پیوستن به فضا",
-    "publicSpaces": "فضاهای عمومی",
-    "addChatOrSubSpace": "افزودن چت یا زیرفضا",
     "thisDevice": "این دستگاه:",
     "searchIn": "جستجو در چت «{chat}»...",
     "@searchIn": {
@@ -2105,9 +1812,6 @@
             }
         }
     },
-    "sendReadReceipts": "فرستادن رسیدهای خواندن",
-    "sendTypingNotificationsDescription": "دیگر شرکت‌کنندگان در چت میتوانند ببینند که شما در حال تایپ پیام جدید هستید.",
-    "sendReadReceiptsDescription": "دیگر شرکت‌کنندگان در چت میتوانند ببینند که شما پیام را خوانده‌اید.",
     "formattedMessages": "پیام‌های قالب‌بندی‌شده",
     "formattedMessagesDescription": "نمایش محتوای پیام غنی مانند متن پررنگ با استفاده از مارک‌داون.",
     "verifyOtherUser": "🔐 بازبینی کاربر دیگر",
@@ -2168,35 +1872,9 @@
             }
         }
     },
-    "incomingMessages": "پیام‌های دریافتی",
     "stickers": "برچسب‌ها",
-    "discover": "کشف",
     "commandHint_ignore": "چشم‌پوشی از شناسه ماتریکس داده‌شده",
     "commandHint_unignore": "لغو چشم‌پوشی از شناسه ماتریکس داده‌شده",
-    "unreadChatsInApp": "{appname}: {unread} چت خوانده‌نشده",
-    "@unreadChatsInApp": {
-        "type": "String",
-        "placeholders": {
-            "appname": {
-                "type": "String"
-            },
-            "unread": {
-                "type": "String"
-            }
-        }
-    },
-    "noDatabaseEncryption": "رمزنگاری پایگاه داده در این سکو پشتیبانی نمیشود",
-    "thereAreCountUsersBlocked": "اکنون {count} کاربر مسدود شده‌اند.",
-    "@thereAreCountUsersBlocked": {
-        "type": "String",
-        "count": {}
-    },
-    "goToSpace": "رفتن به فضا: {space}",
-    "@goToSpace": {
-        "type": "String",
-        "space": {}
-    },
-    "markAsUnread": "علامت‌گذاری به‌عنوان خوانده‌نشده",
     "userLevel": "{level} - کاربر",
     "@userLevel": {
         "type": "String",
@@ -2241,26 +1919,15 @@
             }
         }
     },
-    "changelog": "فهرست تغییرات",
     "sendCanceled": "فرستادن رد شد",
     "loginWithMatrixId": "ورود با شناسه ماتریکس",
     "doesNotSeemToBeAValidHomeserver": "به نظر نمیرسد سرور خانگی سازگاری داشته باشد. نشانی اشتباه است؟",
     "calculatingFileSize": "در حال محاسبه اندازه پرونده...",
-    "oneOfYourDevicesIsNotVerified": "یکی از دستگاه‌های شما بازبینی نشده است",
     "noticeChatBackupDeviceVerification": "توجه: وقتی همه دستگاه‌های خود را به پشتیبان چت متصل کنید، به‌صورت خودکار بازبینی میشوند.",
     "continueText": "ادامه",
     "blur": "محو کردن:",
     "opacity": "شفافیت:",
-    "setWallpaper": "تنظیم کاغذدیواری",
-    "manageAccount": "مدیریت حساب",
     "noContactInformationProvided": "سرور هیچ اطلاعات تماس معتبری نمیدهد",
-    "contactServerAdmin": "تماس با مدیر سرور",
-    "contactServerSecurity": "تماس با امنیت سرور",
-    "supportPage": "صفحه پشتیبانی",
-    "serverInformation": "درباره سرور:",
-    "name": "نام",
-    "version": "نگارش",
-    "website": "وبگاه",
     "compress": "فشرده‌سازی",
     "boldText": "متن درشت",
     "italicText": "متن کج",
@@ -2282,7 +1949,6 @@
     },
     "appWantsToUseForLoginDescription": "شما بدین‌وسیله به برنامه و وبگاه اجازه میدهید اطلاعات شما را هم‌رسانی کنند.",
     "open": "باز کردن",
-    "waitingForServer": "در انتظار سرور...",
     "newChatRequest": "📩 درخواست چت جدید",
     "contentNotificationSettings": "تنظیمات آگاه‌ساز محتوا",
     "generalNotificationSettings": "تنظیمات آگاه‌ساز عمومی",
@@ -2352,7 +2018,6 @@
     },
     "deletePushRuleCanNotBeUndone": "اگر این تنظیم آگاه‌ساز را پاک کنید، این کار برگشت‌ناپذیر است.",
     "more": "بیشتر",
-    "shareKeysWith": "هم‌رسانی کلیدها با...",
     "shareKeysWithDescription": "کدام دستگاه‌ها باید مورد اعتماد باشند تا بتوانند پیام‌های شما را در چت های رمزنگاری‌شده بخوانند؟",
     "allDevices": "همه دستگاه‌ها",
     "crossVerifiedDevicesIfEnabled": "دستگاه‌های بازبینی‌شده متقابل اگر فعال باشد",
@@ -2368,7 +2033,6 @@
     "pleaseWaitUntilInvited": "لطفاً اکنون صبر کنید تا کسی از اتاق شما را دعوت کند.",
     "commandHint_logout": "خروج از دستگاه کنونی",
     "commandHint_logoutall": "خروج از همه دستگاه‌های فعال",
-    "displayNavigationRail": "نمایش نوار ناوبری در تلفن همراه",
     "customReaction": "واکنش سفارشی",
     "moreEvents": "رویدادهای بیشتر",
     "initAppError": "خطایی هنگام آغاز برنامه رخ داد",
@@ -2376,19 +2040,6 @@
     "changedTheChatName": "{username} نام چت را تغییر داد",
     "declineInvitation": "رد کردن دعوت",
     "noMessagesYet": "پیامی وجود ندارد",
-    "longPressToRecordVoiceMessage": "برای ضبط پیام صوتی، انگشت خود را نگه دارید.",
-    "pause": "توقف",
-    "resume": "ادامه",
-    "removeFromSpaceDescription": "این چت از این فضا حذف خواهد شد اما همچنان در لیست چت های شما نمایش داده میشود.",
-    "countChats": "{chats} چت",
-    "@countChats": {
-        "type": "String",
-        "placeholders": {
-            "chats": {
-                "type": "int"
-            }
-        }
-    },
     "spaceMemberOf": "عضو فضای {spaces}",
     "@spaceMemberOf": {
         "type": "String",
@@ -2426,16 +2077,7 @@
             }
         }
     },
-    "thread": "رشته",
     "backToMainChat": "بازگشت به چت اصلی",
-    "saveChanges": "ذخیره تغییرات",
-    "createSticker": "ساخت استیکر یا ایموجی",
-    "useAsSticker": "استفاده به عنوان استیکر",
-    "useAsEmoji": "استفاده به عنوان ایموجی",
-    "stickerPackNameAlreadyExists": "نام استیکرپک تکراری است",
-    "newStickerPack": "استیکر پک جدید",
-    "stickerPackName": "نام استیکر پک",
-    "attribution": "نسبت دادن",
     "skipChatBackup": "صرف نظر از پشتیبان گیری چت",
     "skipChatBackupWarning": "آیا مطمئنید؟ بدون فعال کردن پشتیبان گیری چت ممکن است در صورت تغییر دستگاه دسترسی خود به پیام هایتان را از دست بدهید.",
     "noMoreResultsFound": "نتایج دیگری یافت نشد",
@@ -2448,10 +2090,6 @@
             }
         }
     },
-    "federationBaseUrl": "پایه آدرس فدریشن",
-    "clientWellKnownInformation": "اطلاعات Client-Well-Known:",
-    "baseUrl": "پایه آدرس",
-    "identityServer": "سرور احراز هویت:",
     "versionWithNumber": "ورژن: {version}",
     "@versionWithNumber": {
         "type": "String",
@@ -2469,7 +2107,6 @@
     "signUpGreeting": "فلافی چت غیرمتمرکز است! یک سرور که میخواهید در آن حسابتان را بسازید را انتخاب کنید و شروع کنید!",
     "signInGreeting": "از قبل در ماتریکس حساب کاربری دارید؟ خوش برگشتید! سرور خانه خود را انتخاب و لاگین کنید.",
     "theProcessWasCanceled": "فرآیند لغو شد.",
-    "join": "عضویت",
     "searchOrEnterHomeserverAddress": "جستجو یا وارد کردن آدرس سرور خانه",
     "matrixId": "شناسه ماتریکس",
     "setPowerLevel": "انتخاب سطح قدرت",
@@ -2480,16 +2117,8 @@
     "powerLevel": "سطح قدرت",
     "setPowerLevelDescription": "سطح قدرت مشخص میکند که یک کاربر قادر به انجام چه کارهایی در این اتاق است. معمولا یک عدد بین ۰ تا ۱۰۰ می باشد.",
     "owner": "صاحب",
-    "mute": "ساکت",
-    "@mute": {
-        "description": "This should be a very short string because there is not much space in the button!"
-    },
     "createNewChat": "ساخت چت جدید",
     "reset": "ریست کردن",
-    "supportFluffyChat": "حمایت از فلافی چت",
-    "support": "پشتیبانی",
-    "setLowPriority": "تنظیم اولویت پایین",
-    "unsetLowPriority": "لغو تنظیم اولویت پایین",
     "countVotes": "{count} رای دیگر",
     "@countVotes": {
         "type": "int",

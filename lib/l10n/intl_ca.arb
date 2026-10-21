@@ -19,11 +19,6 @@
             }
         }
     },
-    "account": "Compte",
-    "@account": {
-        "type": "String",
-        "placeholders": {}
-    },
     "activatedEndToEndEncryption": "🔐 {username} ha activat el xifratge d’extrem a extrem",
     "@activatedEndToEndEncryption": {
         "type": "String",
@@ -54,16 +49,6 @@
     },
     "anyoneCanJoin": "Qualsevol pot unir-se",
     "@anyoneCanJoin": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "appLock": "Blocatge de l’aplicació",
-    "@appLock": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "archive": "Arxiu",
-    "@archive": {
         "type": "String",
         "placeholders": {}
     },
@@ -245,21 +230,6 @@
             }
         }
     },
-    "changePassword": "Canvia la contrasenya",
-    "@changePassword": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changeTheHomeserver": "Canvia el servidor",
-    "@changeTheHomeserver": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changeTheme": "Canvia l’estil",
-    "@changeTheme": {
-        "type": "String",
-        "placeholders": {}
-    },
     "changeTheNameOfTheGroup": "Canvia el nom del grup",
     "@changeTheNameOfTheGroup": {
         "type": "String",
@@ -267,21 +237,6 @@
     },
     "channelCorruptedDecryptError": "El xifratge s’ha corromput",
     "@channelCorruptedDecryptError": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "chat": "Xat",
-    "@chat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "chatDetails": "Detalls del xat",
-    "@chatDetails": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "chats": "Xats",
-    "@chats": {
         "type": "String",
         "placeholders": {}
     },
@@ -363,11 +318,6 @@
             }
         }
     },
-    "create": "Crea",
-    "@create": {
-        "type": "String",
-        "placeholders": {}
-    },
     "createdTheChat": "💬 {username} ha creat el xat",
     "@createdTheChat": {
         "type": "String",
@@ -399,18 +349,8 @@
             }
         }
     },
-    "deactivateAccountWarning": "Es desactivarà el vostre compte d’usuàriï. És irreversible! Voleu fer-ho igualment?",
-    "@deactivateAccountWarning": {
-        "type": "String",
-        "placeholders": {}
-    },
     "delete": "Suprimeix",
     "@delete": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "deleteAccount": "Suprimeix el compte",
-    "@deleteAccount": {
         "type": "String",
         "placeholders": {}
     },
@@ -421,11 +361,6 @@
     },
     "devices": "Dispositius",
     "@devices": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "directChats": "Xats directes",
-    "@directChats": {
         "type": "String",
         "placeholders": {}
     },
@@ -449,28 +384,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "emoteExists": "L'emoticona ja existeix!",
-    "@emoteExists": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteInvalid": "Codi d'emoticona invàlid!",
-    "@emoteInvalid": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "emoteShortcode": "Codi d'emoticona",
-    "@emoteShortcode": {
-        "type": "String",
-        "placeholders": {}
-    },
     "emptyChat": "Xat buit",
     "@emptyChat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "enableEmotesGlobally": "Activa el paquet d'emoticones global",
-    "@enableEmotesGlobally": {
         "type": "String",
         "placeholders": {}
     },
@@ -563,11 +478,6 @@
                 "type": "String"
             }
         }
-    },
-    "help": "Ajuda",
-    "@help": {
-        "type": "String",
-        "placeholders": {}
     },
     "hideUnknownEvents": "Amaga els esdeveniments desconeguts",
     "@hideUnknownEvents": {
@@ -709,15 +619,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "loadCountMoreParticipants": "Carrega {count} participants més",
-    "@loadCountMoreParticipants": {
-        "type": "String",
-        "placeholders": {
-            "count": {
-                "type": "int"
-            }
-        }
-    },
     "loadingPleaseWait": "S’està carregant… Espereu.",
     "@loadingPleaseWait": {
         "type": "String",
@@ -767,16 +668,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "muteChat": "Silencia el xat",
-    "@muteChat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "newMessageInFluffyChat": "💬 Missatge nou al ChatLoom",
-    "@newMessageInFluffyChat": {
-        "type": "String",
-        "placeholders": {}
-    },
     "newVerificationRequest": "Nova sol·licitud de verificació!",
     "@newVerificationRequest": {
         "type": "String",
@@ -799,11 +690,6 @@
     },
     "noGoogleServicesWarning": "Sembla que no teniu els Serveis de Google al telèfon. Això és una bona decisió respecte a la vostra privadesa! Per a rebre notificacions automàtiques del ChatLoom, us recomanem instaŀlar ntfy. Amb ntfy o qualsevol altre proveïdor de Unified Push, pots rebre notificacions de forma segura i lliure. Pots instaŀlar ntfy des de la PlayStore o des de F-Droid.",
     "@noGoogleServicesWarning": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "noPasswordRecoveryDescription": "Encara no heu afegit cap mètode per a poder recuperar la contrasenya.",
-    "@noPasswordRecoveryDescription": {
         "type": "String",
         "placeholders": {}
     },
@@ -846,11 +732,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "openAppToReadMessages": "Obre l'aplicació per llegir els missatges",
-    "@openAppToReadMessages": {
-        "type": "String",
-        "placeholders": {}
-    },
     "openCamera": "Obre la càmera",
     "@openCamera": {
         "type": "String",
@@ -881,11 +762,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "passwordRecovery": "Recuperació de contrassenya",
-    "@passwordRecovery": {
-        "type": "String",
-        "placeholders": {}
-    },
     "pin": "Fixa",
     "@pin": {
         "type": "String",
@@ -908,16 +784,6 @@
     },
     "pleaseEnterYourUsername": "Introdueix el teu nom d'usuàriï",
     "@pleaseEnterYourUsername": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "privacy": "Privadesa",
-    "@privacy": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "publicRooms": "Sales públiques",
-    "@publicRooms": {
         "type": "String",
         "placeholders": {}
     },
@@ -966,11 +832,6 @@
     },
     "roomHasBeenUpgraded": "La sala s'ha actualitzat",
     "@roomHasBeenUpgraded": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "security": "Seguretat",
-    "@security": {
         "type": "String",
         "placeholders": {}
     },
@@ -1067,11 +928,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "settings": "Paràmetres",
-    "@settings": {
-        "type": "String",
-        "placeholders": {}
-    },
     "share": "Comparteix",
     "@share": {
         "type": "String",
@@ -1157,11 +1013,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "unknownDevice": "Dispositiu desconegut",
-    "@unknownDevice": {
-        "type": "String",
-        "placeholders": {}
-    },
     "unknownEncryptionAlgorithm": "L’algorisme de xifratge és desconegut",
     "@unknownEncryptionAlgorithm": {
         "type": "String",
@@ -1175,11 +1026,6 @@
                 "type": "String"
             }
         }
-    },
-    "unmuteChat": "Deixa de silenciar el xat",
-    "@unmuteChat": {
-        "type": "String",
-        "placeholders": {}
     },
     "unpin": "Deixa de fixar",
     "@unpin": {
@@ -1270,11 +1116,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "voiceMessage": "Missatge de veu",
-    "@voiceMessage": {
-        "type": "String",
-        "placeholders": {}
-    },
     "waitingPartnerEmoji": "S’està esperant que l’altre accepti l’emoji…",
     "@waitingPartnerEmoji": {
         "type": "String",
@@ -1297,16 +1138,6 @@
     },
     "whoIsAllowedToJoinThisGroup": "Qui pot unir-se a aquest grup",
     "@whoIsAllowedToJoinThisGroup": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "withTheseAddressesRecoveryDescription": "Amb aquestes adreces, si ho necessiteu, podeu recuperar la vostra contrasenya.",
-    "@withTheseAddressesRecoveryDescription": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "writeAMessage": "Escriviu un missatge…",
-    "@writeAMessage": {
         "type": "String",
         "placeholders": {}
     },
@@ -1335,30 +1166,14 @@
         "type": "String",
         "placeholders": {}
     },
-    "all": "Tot",
-    "@all": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "addToSpace": "Afegeix a un espai",
     "areYouSureYouWantToLogout": "Segur que voleu finalitzar la sessió?",
     "@areYouSureYouWantToLogout": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "addEmail": "Afegeix una adreça electrònica",
-    "@addEmail": {
         "type": "String",
         "placeholders": {}
     },
     "commandInvalid": "L’ordre no és vàlida",
     "@commandInvalid": {
         "type": "String"
-    },
-    "fontSize": "Mida de la lletra",
-    "@fontSize": {
-        "type": "String",
-        "placeholders": {}
     },
     "next": "Següent",
     "@next": {
@@ -1372,12 +1187,6 @@
         "placeholders": {}
     },
     "sendOnEnter": "Envia en prémer Retorn",
-    "clearArchive": "Neteja l’arxiu",
-    "autoplayImages": "Reprodueix automàticament enganxines i emoticones animades",
-    "@autoplayImages": {
-        "type": "String",
-        "placeholder": {}
-    },
     "chatBackup": "Còpia de seguretat del xat",
     "@chatBackup": {
         "type": "String",
@@ -1385,11 +1194,6 @@
     },
     "blocked": "Blocat",
     "@blocked": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "spaceName": "Nom de l’espai",
-    "@spaceName": {
         "type": "String",
         "placeholders": {}
     },
@@ -1479,11 +1283,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "whoCanPerformWhichAction": "Qui pot efectuar quina acció",
-    "@whoCanPerformWhichAction": {
-        "type": "String",
-        "placeholders": {}
-    },
     "whyDoYouWantToReportThis": "Per què voleu denunciar això?",
     "@whyDoYouWantToReportThis": {
         "type": "String",
@@ -1515,16 +1314,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "copyToClipboard": "Copia al porta-retalls",
-    "@copyToClipboard": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "createNewSpace": "Espai nou",
-    "@createNewSpace": {
-        "type": "String",
-        "placeholders": {}
-    },
     "errorObtainingLocation": "S’ha produït un error en obtenir la ubicació: {error}",
     "@errorObtainingLocation": {
         "type": "String",
@@ -1534,18 +1323,8 @@
             }
         }
     },
-    "groups": "Grups",
-    "@groups": {
-        "type": "String",
-        "placeholders": {}
-    },
     "messages": "Missatges",
     "@messages": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "spaceIsPublic": "L’espai és públic",
-    "@spaceIsPublic": {
         "type": "String",
         "placeholders": {}
     },
@@ -1557,11 +1336,6 @@
     },
     "shareLocation": "Comparteix la ubicació",
     "@shareLocation": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "synchronizingPleaseWait": "S’està sincronitzant… Espereu.",
-    "@synchronizingPleaseWait": {
         "type": "String",
         "placeholders": {}
     },
@@ -1627,7 +1401,6 @@
         "type": "String",
         "description": "Usage hint for the command /discardsession"
     },
-    "repeatPassword": "Repetiu la contrasenya",
     "commandHint_myroomnick": "Estableix el teu àlies per a aquesta sala",
     "@commandHint_myroomnick": {
         "type": "String",
@@ -1661,7 +1434,6 @@
     },
     "jumpToLastReadMessage": "Salta a l'últim missatge llegit",
     "commandHint_cuddle": "Envia una carícia",
-    "reportErrorDescription": "😭 Oh no. Hi ha hagut algun error. Si vols, pots informar d'aquest bug a l'equip de desenvolupament.",
     "removeYourAvatar": "Esborra el teu avatar",
     "@removeYourAvatar": {
         "type": "String",
@@ -1669,16 +1441,6 @@
     },
     "unsupportedAndroidVersion": "Aquesta versió d'Android és incompatible",
     "oneClientLoggedOut": "Una de les teves aplicacions ha tancat la sessió",
-    "setColorTheme": "Tria el color del tema:",
-    "supposedMxid": "Això hauria de ser {mxid}",
-    "@supposedMxid": {
-        "type": "String",
-        "placeholders": {
-            "mxid": {
-                "type": "String"
-            }
-        }
-    },
     "user": "Usuàrïi",
     "youAcceptedTheInvitation": "👍 Has acceptat la invitació",
     "noMatrixServer": "{server1} no és un servidor de matrix, vols fer servir {server2} ?",
@@ -1714,9 +1476,6 @@
     },
     "unbanUserDescription": "L'usuàrïi ja pot tornar a entrar al xat.",
     "youRejectedTheInvitation": "Has rebutjat la invitació",
-    "messagesStyle": "Missatges:",
-    "newSpaceDescription": "Els espais et permeten consolidar els teus xats i construir comunitats públiques o privades.",
-    "chatDescription": "Descripció del xat",
     "editRoomAliases": "Canvia els àlies de la sala",
     "@editRoomAliases": {
         "type": "String",
@@ -1724,7 +1483,6 @@
     },
     "encryptThisChat": "Xifra aquest xat",
     "reopenChat": "Reobre el xat",
-    "addToBundle": "Afegeix al pquet",
     "countFiles": "{count} arxius",
     "@countFiles": {
         "placeholders": {
@@ -1743,15 +1501,11 @@
         "placeholders": {}
     },
     "hydrate": "Restaura un arxiu de recuperació",
-    "invalidServerName": "El nom del servidor és invàlid",
     "chatPermissions": "Permisos del xat",
     "sender": "Remitent",
     "storeInAndroidKeystore": "Desa en la Android KeyStore",
     "makeAdminDescription": "Un cop hagis fet admin aquesta persona ja no podràs desfer-ho, ja que llavors tindrà els mateixos permisos que tu.",
-    "editBundlesForAccount": "Edita paquets per aquest compte",
-    "whyIsThisMessageEncrypted": "Per què no es pot llegir aquest missatge?",
     "setChatDescription": "Posa una descripció de xat",
-    "importFromZipFile": "Importa des d'un arxiu zip",
     "dehydrateWarning": "Aquesta acció és irreversible. Assegura't que deses l'arxiu de recuperació en un lloc segur.",
     "noOtherDevicesFound": "No s'han trobat més dispositius",
     "redactedBy": "Estripat per {username}",
@@ -1773,7 +1527,6 @@
     "optionalRedactReason": "(Opcional) El motiu per estripar el missatge...",
     "dehydrate": "Exporta la sessió i neteja el dispositiu",
     "archiveRoomDescription": "Aquest xat serà arxivat. Els altres contactes del grup ho veuran com si haguessis abandonat el xat.",
-    "exportEmotePack": "Exporta com un pack Emote en .zip",
     "openInMaps": "Obre als mapes",
     "@openInMaps": {
         "type": "String",
@@ -1864,14 +1617,12 @@
             }
         }
     },
-    "sendTypingNotifications": "Envia notificacions d'escriptura",
     "inviteGroupChat": "📨 Invitació de grup",
     "commandHint_unban": "Aixeca el veto a aquesti usuàriï per aquesta sala",
     "@commandHint_unban": {
         "type": "String",
         "description": "Usage hint for the command /unban"
     },
-    "importEmojis": "Importa emojis",
     "wasDirectChatDisplayName": "Xat buit ( era {oldDisplayName})",
     "@wasDirectChatDisplayName": {
         "type": "String",
@@ -1882,15 +1633,9 @@
         }
     },
     "noChatDescriptionYet": "No s'ha afegit una descripció de xat.",
-    "removeFromBundle": "Esborra del paquet",
-    "confirmMatrixId": "Confirma la teva ID de Matrix per poder esborrar el compte.",
     "learnMore": "Llegeix-ne més",
-    "notAnImage": "No és un arxiu d'image.",
-    "users": "Usuàrïis",
     "openGallery": "Obre la galeria",
     "chatDescriptionHasBeenChanged": "Ha canviat la descripció del xat",
-    "bundleName": "Nom del paquet",
-    "removeFromSpace": "Esborra de l'espai",
     "roomUpgradeDescription": "El xat serà recreat amb una versió de sala nova. Totis lis participants seran notificadis que han de canviar al nou xat. Pots llegir més sobre les versions de sala a https://spec.matrix.org/latest/rooms/",
     "pleaseEnterANumber": "Introdueix un número major que 0",
     "youKicked": "👞 Has expulsat a {user}",
@@ -1934,7 +1679,6 @@
     "youJoinedTheChat": "T'has afegit al xat",
     "markAsRead": "Marca com a llegit",
     "commandHint_hug": "Envia una abraçada",
-    "replace": "Reemplaça",
     "oopsPushError": "Ep! Sembla que s'ha produït un error en configurar les notificacions.",
     "@oopsPushError": {
         "type": "String",
@@ -1948,7 +1692,6 @@
             }
         }
     },
-    "newSpace": "Espai nou",
     "emojis": "Emojis",
     "pleaseEnterYourPin": "Introdueix el teu pin",
     "@pleaseEnterYourPin": {
@@ -1961,7 +1704,6 @@
     "custom": "Personalitzat",
     "noBackupWarning": "Compte! Si no actives la còpia de seguretat dels xats, perdràs accés als teus missatges xifrats. És molt recomanable activar-ho abans de tancar la sessió.",
     "kickUserDescription": "Li usuàrïi ha estat expulsadi però no vetadi. Als xats públics, pot tornar-hi a entrar en qualsevol moment.",
-    "importNow": "Importa-ho ara",
     "pinMessage": "Fixa a la sala",
     "invite": "Convida",
     "unsupportedAndroidVersionLong": "Aquesta funcionalitat només funciona amb versions d'Android més noves.",
@@ -1970,16 +1712,12 @@
     "blockUsername": "Ignora aquesti usuàrïi",
     "blockedUsers": "Usuàrïis blocadis",
     "blockListDescription": "Pots bloquejar usuàrïis que et molestin. No rebràs missatges seus ni invitacions de part seva a cap sala.",
-    "pleaseChooseAStrongPassword": "Tria una contrasenya forta",
     "groupName": "Nom del grup",
     "createGroupAndInviteUsers": "Crea un grup i convida-hi usuàrïis",
     "wrongRecoveryKey": "Malauradament, aquesta clau de recuperació no és la correcta.",
-    "sendReadReceiptsDescription": "Lis altris participants d'un xat poden veure quan has llegit un missatge.",
     "yourGlobalUserIdIs": "La teva ID global és: ",
     "commandHint_sendraw": "Envia un json pelat",
     "databaseMigrationTitle": "La base de dades ha estat optimitzada",
-    "pleaseEnterYourCurrentPassword": "Fica la teva contrasenya actual",
-    "newPassword": "Contrasenya nova",
     "restoreSessionBody": "L'aplicació provarà de restaurar la teva sessió des de la còpia de seguretat. Si us plau, comunica aquest error a l'equi pde desenvolupament a {url}. El missatge d'error és {error}",
     "@restoreSessionBody": {
         "type": "String",
@@ -2009,10 +1747,6 @@
     "leaveEmptyToClearStatus": "Per esborrar el teu estat, deixa-ho en blanc.",
     "select": "Tria",
     "searchForUsers": "Cerca @usuariïs...",
-    "addChatOrSubSpace": "Afegeix un xat o un subespai",
-    "sendReadReceipts": "Envia informes de tecleig",
-    "sendTypingNotificationsDescription": "Lis altris participants d'un xat poden veure quan estàs teclejant un missatge nou.",
-    "incomingMessages": "Missatge d'entrada",
     "acceptedKeyVerification": "{sender} ha acceptat la verificació de claus",
     "@acceptedKeyVerification": {
         "type": "String",
@@ -2049,14 +1783,9 @@
             }
         }
     },
-    "nothingFound": "No s'ha trobat res...",
-    "searchChatsRooms": "Cerca #sales, @usuariïs...",
     "groupCanBeFoundViaSearch": "El grup es pot trobar per la cerca general",
     "databaseMigrationBody": "Espereu un moment, si us plau.",
-    "passwordsDoNotMatch": "Les contrasenyes no coincideixen",
     "passwordIsWrong": "La contrasenya introduïda és incorrecta",
-    "joinSpace": "Fica't a l'espai",
-    "publicSpaces": "Espais públics",
     "thisDevice": "Aquest dispositiu:",
     "sessionLostBody": "S'ha perdut la teva sessió. Si us plau, comunica aquest error a l'equip de desenvolupament a {url}. El missatge d'error és: {error}",
     "@sessionLostBody": {
@@ -2091,18 +1820,11 @@
         }
     },
     "stickers": "Enganxines",
-    "discover": "Descobreix",
     "commandHint_ignore": "Ignora el compte de matrix especificat",
     "commandHint_unignore": "Deixa d'ignorar el compt de matrix especificat",
     "sendCanceled": "S'ha canceŀlat l'enviament",
-    "noChatsFoundHere": "Encara no hi ha xats. Obre una conversa amb algú picant al botó de sota. ⤵️",
     "knock": "Pica",
     "knocking": "S'està picant",
-    "goToSpace": "Ves a l'espai {space}",
-    "@goToSpace": {
-        "type": "String",
-        "space": {}
-    },
     "adminLevel": "{level} - Admin",
     "@adminLevel": {
         "type": "String",
@@ -2115,7 +1837,6 @@
     "changeGeneralChatSettings": "Canvia les opcions generals de xat",
     "sendRoomNotifications": "Envia notificacions @room",
     "changeTheDescriptionOfTheGroup": "Canvia la descripció del xat",
-    "changelog": "Registre de canvis",
     "userLevel": "{level} - Usuàriï",
     "@userLevel": {
         "type": "String",
@@ -2138,17 +1859,12 @@
     "changeTheChatPermissions": "Canvia els permisos del xat",
     "changeTheVisibilityOfChatHistory": "Canvia la visibilitat de l'historial de conversa",
     "changeTheCanonicalRoomAlias": "Canvia l'adreça principal del xat",
-    "accessAndVisibilityDescription": "Qui pot entrar a aquesta conversa i com pot ser descoberta.",
-    "customEmojisAndStickers": "Emojis i stickers propis",
     "accessAndVisibility": "Accés i visibilitat",
     "hideRedactedMessages": "Amaga els missatges estripats",
     "hideInvalidOrUnknownMessageFormats": "Amaga els missatges que tinguin un format desconegut",
-    "passwordRecoverySettings": "Recuperació de contrasenya",
     "gallery": "Galeria",
-    "noDatabaseEncryption": "No es pot xifrar la base de dades en aquesta plataforma",
     "usersMustKnock": "Lis membres han de picar a la porta",
     "noOneCanJoin": "Ningú s'hi pot ficar",
-    "customEmojisAndStickersBody": "Afegeix o comparteix emojis o stickers. Els podràs fer servir en qualsevol conversa.",
     "hideRedactedMessagesBody": "Si algú estripa un missatge, ja no apareixerà a l'historial de la conversa.",
     "searchIn": "Cerca al xat \"{chat}\"...",
     "@searchIn": {
@@ -2159,7 +1875,6 @@
             }
         }
     },
-    "markAsUnread": "Marca com a no llegit",
     "chatPermissionsDescription": "Defineix quin nivell de permisos cal per cada acció en aquest xat. Els nivells 0, 50 i 100 normalment representen usuàriïs, mods i admins, però es pot canviar.",
     "updateInstalled": "🎉 S'ha actualitzat a la versió {version}!",
     "@updateInstalled": {
@@ -2177,28 +1892,8 @@
     "searchMore": "Cerca més...",
     "files": "Arxius",
     "publicChatAddresses": "Adreces públiques del xat",
-    "unreadChatsInApp": "{appname}: {unread} converses pendents",
-    "@unreadChatsInApp": {
-        "type": "String",
-        "placeholders": {
-            "appname": {
-                "type": "String"
-            },
-            "unread": {
-                "type": "String"
-            }
-        }
-    },
-    "thereAreCountUsersBlocked": "Ara mateix hi ha {count} usuàriïs bloquejadis.",
-    "@thereAreCountUsersBlocked": {
-        "type": "String",
-        "count": {}
-    },
     "loginWithMatrixId": "Entra amb l'id de Matrix",
     "doesNotSeemToBeAValidHomeserver": "No sembla un servidor compatible. Pot ser que la URL estigui malament?",
-    "noMoreChatsFound": "No hi ha més xats...",
-    "space": "Espai",
-    "unread": "Sense llegir",
     "chatCanBeDiscoveredViaSearchOnServer": "El xat es pot descobrir amb la cerca de {server}",
     "@chatCanBeDiscoveredViaSearchOnServer": {
         "type": "String",
@@ -2214,7 +1909,6 @@
     "strikeThrough": "Text ratllat",
     "addLink": "Afegeix un enllaç",
     "noContactInformationProvided": "El servidor no ofereix cap informació de contacte vàlida",
-    "setWallpaper": "Tria imatge de fons",
     "sendImages": "Envia {count} imatge",
     "@sendImages": {
         "type": "String",
@@ -2224,30 +1918,12 @@
             }
         }
     },
-    "oneOfYourDevicesIsNotVerified": "Un dels teus dispositius no està verificat",
     "blur": "Difumina:",
     "opacity": "Opacitat:",
-    "manageAccount": "Gestiona el compte",
-    "contactServerAdmin": "Contacta l'admin del servidor",
-    "contactServerSecurity": "Contacta l'equip de seguretat del servidor",
-    "version": "Versió",
-    "website": "Lloc web",
     "compress": "Comprimeix",
     "pleaseFillOut": "Emplena",
     "invalidUrl": "URL invàlida",
     "unableToJoinChat": "No s'ha pogut entrar al xat. Pot ser que l'altri participant hagi tancat la conversa.",
-    "aboutHomeserver": "Quant a {homeserver}",
-    "@aboutHomeserver": {
-        "type": "String",
-        "placeholders": {
-            "homeserver": {
-                "type": "String"
-            }
-        }
-    },
-    "supportPage": "Pàgina de suport",
-    "serverInformation": "Informació del servidor:",
-    "name": "Nom",
     "boldText": "Text en negreta",
     "italicText": "Text en cursiva",
     "contentNotificationSettings": "Opcions de notificació de continguts",
@@ -2313,15 +1989,6 @@
     "allDevices": "Tots els dispositius",
     "crossVerifiedDevices": "Els dispositius verificats mútuament",
     "verifiedDevicesOnly": "Només els dispositius verificats",
-    "synchronizingPleaseWaitCounter": " S'està sincronitzant... ({percentage}%)",
-    "@synchronizingPleaseWaitCounter": {
-        "type": "String",
-        "placeholders": {
-            "percentage": {
-                "type": "String"
-            }
-        }
-    },
     "appWantsToUseForLogin": "Fes servir '{server}' per iniciar sessió",
     "@appWantsToUseForLogin": {
         "type": "String",
@@ -2333,8 +2000,6 @@
     },
     "appWantsToUseForLoginDescription": "Consenteixes que l'app i la web comparteixen informació sobre tu.",
     "open": "Obre",
-    "waitingForServer": "S'està esperant el servidor...",
-    "shareKeysWith": "Comparteix les claus amb...",
     "crossVerifiedDevicesIfEnabled": "Els dispositius verificats mútuament, si està activat",
     "commandHint_roomupgrade": "Actualitza aquesta sala a la versió indicada",
     "takeAPhoto": "Fes una foto",
@@ -2371,24 +2036,10 @@
     "pleaseWaitUntilInvited": "Ara espera fins que algú de la sala t'hi deixi entrar.",
     "commandHint_logout": "Tanca la sessió per aquest dispositiu",
     "commandHint_logoutall": "Tanca totes les sessions actives",
-    "displayNavigationRail": "Mostra la barra de navegació al mòbil",
     "customReaction": "Reacció personalitzada",
     "moreEvents": "Altres esdeveniments",
     "declineInvitation": "Rebutja la invitació",
     "noMessagesYet": "No hi ha cap missatge",
-    "longPressToRecordVoiceMessage": "Deixa picat per gravar un missatge de veu.",
-    "pause": "Pausa",
-    "resume": "Continua",
-    "removeFromSpaceDescription": "S'esborrarà de l'espai el xat, però encara apareixerà a la llista de xats.",
-    "countChats": "{chats} xats",
-    "@countChats": {
-        "type": "String",
-        "placeholders": {
-            "chats": {
-                "type": "int"
-            }
-        }
-    },
     "spaceMemberOf": "Membre dels espais {spaces}",
     "@spaceMemberOf": {
         "type": "String",
@@ -2435,16 +2086,7 @@
             }
         }
     },
-    "thread": "Fil",
     "backToMainChat": "Torna al xat principal",
-    "saveChanges": "Desa els canvis",
-    "createSticker": "Crea un sticker o un emoji",
-    "useAsSticker": "Agafa com a sticker",
-    "useAsEmoji": "Agafa com a emoji",
-    "stickerPackNameAlreadyExists": "Ja existeix aquest nom per un pack de stickers",
-    "newStickerPack": "Nou pack de stickers",
-    "stickerPackName": "Nom del pack de stickers",
-    "attribution": "Atribució",
     "skipChatBackup": "Omet la còpia de seguretat del xat",
     "skipChatBackupWarning": "N'estàs seguri? Si no actives la còpia de seguretat pots perdre accés als teus missatges si canvies de dispositiu.",
     "noMoreResultsFound": "No s'han trobat més resultats",
@@ -2457,10 +2099,6 @@
             }
         }
     },
-    "federationBaseUrl": "URL base de federació",
-    "clientWellKnownInformation": "Informació coneguda del client:",
-    "baseUrl": "URL base",
-    "identityServer": "Servidor d'identitats:",
     "versionWithNumber": "Versió: {version}",
     "@versionWithNumber": {
         "type": "String",
@@ -2478,7 +2116,6 @@
     "signUpGreeting": "El ChatLoom és descentralitzat! Tria un servidor on vulguis crear-t'hi un compte, i som-hi!",
     "signInGreeting": "Si ja tens un compte a Matrix, benvingudi! Tria el teu servidor i inicia-hi sessió.",
     "theProcessWasCanceled": "S'ha canceŀlat el procés.",
-    "join": "Entra",
     "searchOrEnterHomeserverAddress": "Cerca o introdueix l'adreça del teu servidor",
     "matrixId": "ID de Matrix",
     "setPowerLevel": "Concedeix permisos",
@@ -2489,15 +2126,7 @@
     "powerLevel": "Nivell de permisos",
     "setPowerLevelDescription": "Els nivells de permisos defineixen què pot fer uni membre d'aquesta sala, i es defineix per un número entre 0 i 100.",
     "owner": "Propietàriï",
-    "mute": "Silencia",
-    "@mute": {
-        "description": "This should be a very short string because there is not much space in the button!"
-    },
     "createNewChat": "Crea un nou xat",
     "reset": "Reseteja",
-    "supportFluffyChat": "Dona suport a ChatLoom",
-    "support": "Aporta",
-    "setLowPriority": "Estableix una prioritat baixa",
-    "unsetLowPriority": "Restableix la prioritat",
     "playSoundOnNotification": "Notificacions sonores"
 }

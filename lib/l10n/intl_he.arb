@@ -19,11 +19,6 @@
             }
         }
     },
-    "account": "חשבון",
-    "@account": {
-        "type": "String",
-        "placeholders": {}
-    },
     "activatedEndToEndEncryption": "{username} הפעיל הצפנה מקצה לקצה",
     "@activatedEndToEndEncryption": {
         "type": "String",
@@ -57,11 +52,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "archive": "ארכיון",
-    "@archive": {
-        "type": "String",
-        "placeholders": {}
-    },
     "areGuestsAllowedToJoin": "האם משתמשים אורחים מורשים להצטרף",
     "@areGuestsAllowedToJoin": {
         "type": "String",
@@ -86,28 +76,8 @@
             }
         }
     },
-    "changePassword": "שנה סיסמא",
-    "@changePassword": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "appLock": "נעילת אפליקציה",
-    "@appLock": {
-        "type": "String",
-        "placeholders": {}
-    },
     "cancel": "ביטול",
     "@cancel": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "addEmail": "הוסף מייל",
-    "@addEmail": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "all": "הכל",
-    "@all": {
         "type": "String",
         "placeholders": {}
     },
@@ -159,21 +129,10 @@
             }
         }
     },
-    "repeatPassword": "כתוב שוב את הסיסמה",
     "areYouSureYouWantToLogout": "האם אתה בטוח שברצונך לצאת?",
     "@areYouSureYouWantToLogout": {
         "type": "String",
         "placeholders": {}
-    },
-    "chat": "צ׳אט",
-    "@chat": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "autoplayImages": "הפעל אוטומטית מדבקות ואנימציות מונפשים",
-    "@autoplayImages": {
-        "type": "String",
-        "placeholder": {}
     },
     "banFromChat": "צאט חסום",
     "@banFromChat": {
@@ -306,16 +265,6 @@
             }
         }
     },
-    "changeTheHomeserver": "שנה את שרת הבית",
-    "@changeTheHomeserver": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "changeTheme": "שנה את הסגנון שלך",
-    "@changeTheme": {
-        "type": "String",
-        "placeholders": {}
-    },
     "changeTheNameOfTheGroup": "שנה את שם הקבוצה",
     "@changeTheNameOfTheGroup": {
         "type": "String",
@@ -391,22 +340,11 @@
         "type": "String",
         "description": "Usage hint for the command /me"
     },
-    "chatDetails": "פרטי צ'אט",
-    "@chatDetails": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "chats": "צ'אטים",
-    "@chats": {
-        "type": "String",
-        "placeholders": {}
-    },
     "chooseAStrongPassword": "בחר סיסמה חזקה",
     "@chooseAStrongPassword": {
         "type": "String",
         "placeholders": {}
     },
-    "clearArchive": "נקה ארכיון",
     "close": "סגור",
     "@close": {
         "type": "String",
@@ -422,7 +360,6 @@
         "type": "String",
         "description": "Usage hint for the command /myroomnick"
     },
-    "addToSpace": "הוסף לחלל",
     "commandHint_unban": "בטל את החסימה של המשתמש הנתון מהחדר הזה",
     "@commandHint_unban": {
         "type": "String",
@@ -436,11 +373,6 @@
                 "type": "int"
             }
         }
-    },
-    "create": "צור",
-    "@create": {
-        "type": "String",
-        "placeholders": {}
     },
     "createdTheChat": "{username} יצר את הצ'אט",
     "@createdTheChat": {
@@ -478,11 +410,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "deleteAccount": "מחק חשבון",
-    "@deleteAccount": {
-        "type": "String",
-        "placeholders": {}
-    },
     "deleteMessage": "מחק הודעה",
     "@deleteMessage": {
         "type": "String",
@@ -490,11 +417,6 @@
     },
     "devices": "התקנים",
     "@devices": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "directChats": "צ'אטים ישירים",
-    "@directChats": {
         "type": "String",
         "placeholders": {}
     },
@@ -518,11 +440,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "emoteExists": "אימוט כבר קיים!",
-    "@emoteExists": {
-        "type": "String",
-        "placeholders": {}
-    },
     "emptyChat": "צ'אט ריק",
     "@emptyChat": {
         "type": "String",
@@ -535,11 +452,6 @@
     },
     "enterAnEmailAddress": "הזן כתובת דואר אלקטרוני",
     "@enterAnEmailAddress": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "fontSize": "גודל גופן",
-    "@fontSize": {
         "type": "String",
         "placeholders": {}
     },
@@ -733,11 +645,6 @@
         "type": "String",
         "description": "Usage hint for the command /react"
     },
-    "createNewSpace": "חלל חדש",
-    "@createNewSpace": {
-        "type": "String",
-        "placeholders": {}
-    },
     "enableEncryption": "אפשר הצפנה",
     "@enableEncryption": {
         "type": "String",
@@ -751,11 +658,6 @@
                 "type": "String"
             }
         }
-    },
-    "deactivateAccountWarning": "פעולה זו תשבית את חשבון המשתמש שלך. אי אפשר לבטל את זה! האם אתה בטוח?",
-    "@deactivateAccountWarning": {
-        "type": "String",
-        "placeholders": {}
     },
     "group": "קבוצה",
     "@group": {
@@ -785,11 +687,6 @@
                 "type": "String"
             }
         }
-    },
-    "groups": "קבוצות",
-    "@groups": {
-        "type": "String",
-        "placeholders": {}
     },
     "enableEncryptionWarning": "לא תוכל לבטל את ההצפנה יותר. האם אתה בטוח?",
     "@enableEncryptionWarning": {
@@ -831,15 +728,6 @@
     "@hideUnknownEvents": {
         "type": "String",
         "placeholders": {}
-    },
-    "loadCountMoreParticipants": "טען {count} משתתפים נוספים",
-    "@loadCountMoreParticipants": {
-        "type": "String",
-        "placeholders": {
-            "count": {
-                "type": "int"
-            }
-        }
     },
     "ignore": "התעלם",
     "@ignore": {
@@ -910,11 +798,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "copyToClipboard": "העתק ללוח",
-    "@copyToClipboard": {
-        "type": "String",
-        "placeholders": {}
-    },
     "couldNotDecryptMessage": "לא ניתן לפענח הודעה: {error}",
     "@couldNotDecryptMessage": {
         "type": "String",
@@ -923,11 +806,6 @@
                 "type": "String"
             }
         }
-    },
-    "help": "עזרה",
-    "@help": {
-        "type": "String",
-        "placeholders": {}
     },
     "locationPermissionDeniedNotice": "הרשאת המיקום נדחתה. אנא אפשר את היכולת לשתף את מיקומך.",
     "@locationPermissionDeniedNotice": {
@@ -1013,14 +891,8 @@
         "type": "String",
         "placeholders": {}
     },
-    "openAppToReadMessages": "פתח את האפליקציה לקריאת הודעות",
-    "@openAppToReadMessages": {
-        "type": "String",
-        "placeholders": {}
-    },
     "oneClientLoggedOut": "אחד מהמכשירים שלך התנתק",
     "addAccount": "הוסף חשבון",
-    "editBundlesForAccount": "ערוך חבילות עבור חשבון זה",
     "participant": "משתתף",
     "@participant": {
         "type": "String",
@@ -1036,7 +908,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "addToBundle": "הוסף לחבילה",
     "passphraseOrKey": "ביטוי סיסמה או מפתח שחזור",
     "@passphraseOrKey": {
         "type": "String",
@@ -1049,11 +920,6 @@
     },
     "passwordHasBeenChanged": "הסיסמה שונתה",
     "@passwordHasBeenChanged": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "passwordRecovery": "שחזור סיסמה",
-    "@passwordRecovery": {
         "type": "String",
         "placeholders": {}
     },
@@ -1082,11 +948,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "הודעה חדשה ב-ChatLoom",
-    "@newMessageInFluffyChat": {
-        "type": "String",
-        "placeholders": {}
-    },
     "noGoogleServicesWarning": "נראה שאין לך שירותי גוגל בטלפון שלך. זו החלטה טובה לפרטיות שלך! כדי לקבל התרעות ב- ChatLoom אנו ממליצים להשתמש https://microg.org/ או https://unifiedpush.org/.",
     "@noGoogleServicesWarning": {
         "type": "String",
@@ -1104,13 +965,6 @@
             }
         }
     },
-    "noPasswordRecoveryDescription": "עדיין לא הוספת דרך לשחזר את הסיסמה שלך.",
-    "@noPasswordRecoveryDescription": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "bundleName": "שם החבילה",
-    "removeFromBundle": "הסר מחבילה זו",
     "openInMaps": "פתיחה במפות",
     "@openInMaps": {
         "type": "String",
@@ -1119,11 +973,6 @@
     "link": "קישור",
     "logout": "יציאה",
     "@logout": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "muteChat": "השתקת הצ'אט",
-    "@muteChat": {
         "type": "String",
         "placeholders": {}
     },
@@ -1162,7 +1011,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "notAnImage": "הקובץ אינו תמונה.",
     "@hugContent": {
         "type": "String",
         "placeholders": {
@@ -1172,14 +1020,6 @@
         }
     },
     "@theyMatch": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@unknownDevice": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@emoteShortcode": {
         "type": "String",
         "placeholders": {}
     },
@@ -1203,14 +1043,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "@synchronizingPleaseWaitCounter": {
-        "type": "String",
-        "placeholders": {
-            "percentage": {
-                "type": "String"
-            }
-        }
-    },
     "@verifySuccess": {
         "type": "String",
         "placeholders": {}
@@ -1230,18 +1062,6 @@
     "@warning": {
         "type": "String",
         "placeholders": {}
-    },
-    "@supposedMxid": {
-        "type": "String",
-        "placeholders": {
-            "mxid": {
-                "type": "String"
-            }
-        }
-    },
-    "@goToSpace": {
-        "type": "String",
-        "space": {}
     },
     "@roomVersion": {
         "type": "String",
@@ -1301,10 +1121,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "@writeAMessage": {
-        "type": "String",
-        "placeholders": {}
-    },
     "@youKickedAndBanned": {
         "placeholders": {
             "user": {
@@ -1355,31 +1171,15 @@
         "type": "String",
         "placeholders": {}
     },
-    "@publicRooms": {
-        "type": "String",
-        "placeholders": {}
-    },
     "@sendMessages": {
         "type": "String",
         "placeholders": {}
-    },
-    "@countChats": {
-        "type": "String",
-        "placeholders": {
-            "chats": {
-                "type": "int"
-            }
-        }
     },
     "@unpin": {
         "type": "String",
         "placeholders": {}
     },
     "@reportMessage": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@spaceIsPublic": {
         "type": "String",
         "placeholders": {}
     },
@@ -1418,10 +1218,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "@voiceMessage": {
-        "type": "String",
-        "placeholders": {}
-    },
     "@weSentYouAnEmail": {
         "type": "String",
         "placeholders": {}
@@ -1435,10 +1231,6 @@
         }
     },
     "@noEmotesFound": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@synchronizingPleaseWait": {
         "type": "String",
         "placeholders": {}
     },
@@ -1466,10 +1258,6 @@
             }
         }
     },
-    "@spaceName": {
-        "type": "String",
-        "placeholders": {}
-    },
     "@sentVoiceMessage": {
         "type": "String",
         "placeholders": {
@@ -1494,10 +1282,6 @@
         }
     },
     "@submit": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@unmuteChat": {
         "type": "String",
         "placeholders": {}
     },
@@ -1553,14 +1337,6 @@
         "type": "String",
         "placeholders": {}
     },
-    "@aboutHomeserver": {
-        "type": "String",
-        "placeholders": {
-            "homeserver": {
-                "type": "String"
-            }
-        }
-    },
     "@send": {
         "type": "String",
         "placeholders": {}
@@ -1568,9 +1344,6 @@
     "@visibleForAllParticipants": {
         "type": "String",
         "placeholders": {}
-    },
-    "@mute": {
-        "description": "This should be a very short string because there is not much space in the button!"
     },
     "@sendAsText": {
         "type": "String"
@@ -1584,10 +1357,6 @@
         "placeholders": {}
     },
     "@emoteSettings": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@withTheseAddressesRecoveryDescription": {
         "type": "String",
         "placeholders": {}
     },
@@ -1614,10 +1383,6 @@
         "placeholders": {}
     },
     "@roomHasBeenUpgraded": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@enableEmotesGlobally": {
         "type": "String",
         "placeholders": {}
     },
@@ -1733,10 +1498,6 @@
             }
         }
     },
-    "@thereAreCountUsersBlocked": {
-        "type": "String",
-        "count": {}
-    },
     "@hasKnocked": {
         "placeholders": {
             "user": {
@@ -1767,10 +1528,6 @@
                 "type": "String"
             }
         }
-    },
-    "@whoCanPerformWhichAction": {
-        "type": "String",
-        "placeholders": {}
     },
     "@you": {
         "type": "String",
@@ -1853,19 +1610,11 @@
             }
         }
     },
-    "@emoteInvalid": {
-        "type": "String",
-        "placeholders": {}
-    },
     "@systemTheme": {
         "type": "String",
         "placeholders": {}
     },
     "@visibilityOfTheChatHistory": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@settings": {
         "type": "String",
         "placeholders": {}
     },
@@ -1886,10 +1635,6 @@
         }
     },
     "@statusExampleMessage": {
-        "type": "String",
-        "placeholders": {}
-    },
-    "@security": {
         "type": "String",
         "placeholders": {}
     },
@@ -1947,17 +1692,6 @@
             }
         }
     },
-    "@unreadChatsInApp": {
-        "type": "String",
-        "placeholders": {
-            "appname": {
-                "type": "String"
-            },
-            "unread": {
-                "type": "String"
-            }
-        }
-    },
     "@countVotes": {
         "type": "int",
         "placeholders": {
@@ -1977,10 +1711,6 @@
                 "type": "int"
             }
         }
-    },
-    "@privacy": {
-        "type": "String",
-        "placeholders": {}
     },
     "@sendImage": {
         "type": "String",
