@@ -110,7 +110,6 @@ class _Fixture {
                 timeline: timeline,
                 onMention: () {},
                 scrollController: scroll,
-                colors: const [Colors.grey, Colors.grey],
                 enterThread: null,
                 menuActions:
                     actions ??

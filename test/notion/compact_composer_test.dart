@@ -640,34 +640,4 @@ void main() {
     expect(find.byType(ConversationSourceChip).hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
-
-  testWidgets('composer notice explains an unavailable action', (tester) async {
-    const message = 'Fictional reason. Fictional hint.';
-    await tester.pumpWidget(
-      trayShell(
-        input: const TextField(),
-        actions: [
-          ComposerAction(
-            icon: Icons.attach_file_outlined,
-            label: 'Attach media or a file',
-            onPressed: () {},
-          ),
-          ComposerAction(
-            icon: Icons.videocam_outlined,
-            label: 'Round video',
-            onPressed: () => showComposerNotice(
-              tester.element(find.byType(CompactComposer)),
-              message,
-            ),
-          ),
-        ],
-      ),
-    );
-    await tester.tap(find.byTooltip('More message actions'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Round video'));
-    await tester.pump();
-    expect(find.text(message), findsOneWidget);
-    expect(find.byType(SnackBar), findsOneWidget);
-  });
 }

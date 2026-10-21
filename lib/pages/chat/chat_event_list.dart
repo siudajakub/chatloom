@@ -5,7 +5,6 @@
 
 import 'dart:async';
 
-import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
@@ -122,8 +121,6 @@ class _ChatEventListState extends State<ChatEventList> {
     }
     final theme = Theme.of(context);
 
-    final colors = [theme.secondaryBubbleColor, theme.bubbleColor];
-
     final horizontalPadding = ChatLoomThemes.isColumnMode(context) ? 8.0 : 0.0;
 
     // Map row key --> index so ListView's findChildIndexCallback is O(1). The
@@ -151,106 +148,53 @@ class _ChatEventListState extends State<ChatEventList> {
           setState(() => _textSelectionActive = active);
         }
       },
-      child: _TimelineTextScale(
-        // The first screenful of a freshly opened chat staggers in once.
-        child: ConversationEntranceScope(
-          child: ListView.custom(
-            // The composer's height is a spacer under the newest row
-            // ([_ComposerSpacer]), not padding: when the reply preview or
-            // the field grows, only the spacer rebuilds, never the rows.
-            padding: EdgeInsets.only(
-              // Clears the glass header drawn over the timeline.
-              top: 8 + MediaQuery.paddingOf(context).top,
-              bottom: 8,
-              left: horizontalPadding,
-              right: horizontalPadding,
-            ),
-            reverse: true,
-            scrollCacheExtent: _wideCache
-                ? const ScrollCacheExtent.viewport(1.0)
-                : const ScrollCacheExtent.pixels(250),
-            controller: controller.scrollController,
-            keyboardDismissBehavior: PlatformInfos.isIOS
-                ? ScrollViewKeyboardDismissBehavior.onDrag
-                : ScrollViewKeyboardDismissBehavior.manual,
-            childrenDelegate: SliverChildBuilderDelegate(
-              (BuildContext context, int i) {
-                // Footer to display typing indicator and read receipts:
-                if (i == 0) {
-                  final spacer = _ComposerSpacer(
-                    inset: controller.composerInset,
-                    fallback: defaultInset,
-                  );
-                  if (controller.canLoadFuture) {
-                    return Column(
-                      mainAxisSize: .min,
-                      children: [
-                        Center(
-                          child: TextButton.icon(
-                            onPressed: controller.isLoadingFuture
-                                ? null
-                                : controller.requestFuture,
-                            icon: NotionMorphSwitcher(
-                              rotate: false,
-                              child: controller.isLoadingFuture
-                                  ? const NotionDelayedSpinner(
-                                      key: ValueKey('loading'),
-                                      size: NotionSize.iconSm,
-                                    )
-                                  : const Icon(
-                                      Icons.arrow_downward_outlined,
-                                      key: ValueKey('idle'),
-                                    ),
-                            ),
-                            label: Text(
-                              controller.historyError ??
-                                  L10n.of(context).loadMore,
-                            ),
-                          ),
-                        ),
-                        spacer,
-                      ],
-                    );
-                  }
+      // The first screenful of a freshly opened chat staggers in once.
+      child: ConversationEntranceScope(
+        child: ListView.custom(
+          // The composer's height is a spacer under the newest row
+          // ([_ComposerSpacer]), not padding: when the reply preview or
+          // the field grows, only the spacer rebuilds, never the rows.
+          padding: EdgeInsets.only(
+            // Clears the glass header drawn over the timeline.
+            top: 8 + MediaQuery.paddingOf(context).top,
+            bottom: 8,
+            left: horizontalPadding,
+            right: horizontalPadding,
+          ),
+          reverse: true,
+          scrollCacheExtent: _wideCache
+              ? const ScrollCacheExtent.viewport(1.0)
+              : const ScrollCacheExtent.pixels(250),
+          controller: controller.scrollController,
+          keyboardDismissBehavior: PlatformInfos.isIOS
+              ? ScrollViewKeyboardDismissBehavior.onDrag
+              : ScrollViewKeyboardDismissBehavior.manual,
+          childrenDelegate: SliverChildBuilderDelegate(
+            (BuildContext context, int i) {
+              // Footer to display typing indicator and read receipts:
+              if (i == 0) {
+                final spacer = _ComposerSpacer(
+                  inset: controller.composerInset,
+                  fallback: defaultInset,
+                );
+                if (controller.canLoadFuture) {
                   return Column(
                     mainAxisSize: .min,
                     children: [
-                      if (events.isNotEmpty) SeenByRow(event: events.first),
-                      TypingIndicators(controller),
-                      EncryptionInfo(room: controller.room),
-                      spacer,
-                    ],
-                  );
-                }
-
-                // Request history button or progress indicator:
-                if (i == events.length + 1) {
-                  if (!controller.canLoadHistory) {
-                    return const SizedBox.shrink();
-                  }
-                  return Builder(
-                    builder: (context) {
-                      if (controller.autoLoadHistory) {
-                        WidgetsBinding.instance.addPostFrameCallback(
-                          controller.requestHistory,
-                        );
-                      }
-                      return Center(
+                      Center(
                         child: TextButton.icon(
-                          onPressed:
-                              controller.historyLoading ||
-                                  controller.isLoadingHistory
+                          onPressed: controller.isLoadingFuture
                               ? null
-                              : controller.requestHistory,
+                              : controller.requestFuture,
                           icon: NotionMorphSwitcher(
                             rotate: false,
-                            child: controller.isLoadingHistory
+                            child: controller.isLoadingFuture
                                 ? const NotionDelayedSpinner(
                                     key: ValueKey('loading'),
                                     size: NotionSize.iconSm,
                                   )
                                 : const Icon(
-                                    Icons.arrow_upward_outlined,
+                                    Icons.arrow_downward_outlined,
                                     key: ValueKey('idle'),
                                   ),
                           ),
@@ -259,113 +203,162 @@ class _ChatEventListState extends State<ChatEventList> {
                                 L10n.of(context).loadMore,
                           ),
                         ),
-                      );
-                    },
+                      ),
+                      spacer,
+                    ],
                   );
                 }
-                i--;
+                return Column(
+                  mainAxisSize: .min,
+                  children: [
+                    if (events.isNotEmpty) SeenByRow(event: events.first),
+                    TypingIndicators(controller),
+                    EncryptionInfo(room: controller.room),
+                    spacer,
+                  ],
+                );
+              }
 
-                // The message at this index:
-                _prefetch?.noteBuilt(i);
-                final event = events[i];
-                final animateIn =
-                    (event.transactionId ?? event.eventId) ==
-                    controller.animateInEventId;
-
-                final nextEvent = i + 1 < events.length ? events[i + 1] : null;
-                final previousEvent = i > 0 ? events[i - 1] : null;
-
-                // Collapsed state event
-                final canExpand =
-                    event.isCollapsedState &&
-                    nextEvent?.isCollapsedState == true &&
-                    previousEvent?.isCollapsedState != true;
-                final isCollapsed =
-                    event.isCollapsedState &&
-                    previousEvent?.isCollapsedState == true &&
-                    !controller.expandedEventIds.contains(event.eventId);
-
-                final displayDate =
-                    event.type == EventTypes.RoomCreate ||
-                    nextEvent == null ||
-                    !event.originServerTs.sameDay(nextEvent.originServerTs);
-
-                return AutoScrollTag(
-                  key: ValueKey(event.transactionId ?? event.eventId),
-                  index: i,
-                  controller: controller.scrollController,
-                  child: ConversationMessageEntrance(
-                    identity: event.transactionId ?? event.eventId,
-                    animate: animateIn,
-                    outgoing: event.senderId == event.room.client.userID,
-                    child: Column(
-                      mainAxisSize: .min,
-                      children: [
-                        if (!isCollapsed && displayDate)
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                NotionTokens.inset,
-                                8,
-                                NotionTokens.inset,
-                                8,
-                              ),
-                              child: Text(
-                                event.originServerTs.localizedDate(context),
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: theme.colorScheme.onSurfaceVariant,
+              // Request history button or progress indicator:
+              if (i == events.length + 1) {
+                if (!controller.canLoadHistory) {
+                  return const SizedBox.shrink();
+                }
+                return Builder(
+                  builder: (context) {
+                    if (controller.autoLoadHistory) {
+                      WidgetsBinding.instance.addPostFrameCallback(
+                        controller.requestHistory,
+                      );
+                    }
+                    return Center(
+                      child: TextButton.icon(
+                        onPressed:
+                            controller.historyLoading ||
+                                controller.isLoadingHistory
+                            ? null
+                            : controller.requestHistory,
+                        icon: NotionMorphSwitcher(
+                          rotate: false,
+                          child: controller.isLoadingHistory
+                              ? const NotionDelayedSpinner(
+                                  key: ValueKey('loading'),
+                                  size: NotionSize.iconSm,
+                                )
+                              : const Icon(
+                                  Icons.arrow_upward_outlined,
+                                  key: ValueKey('idle'),
                                 ),
+                        ),
+                        label: Text(
+                          controller.historyError ?? L10n.of(context).loadMore,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              }
+              i--;
+
+              // The message at this index:
+              _prefetch?.noteBuilt(i);
+              final event = events[i];
+              final animateIn =
+                  (event.transactionId ?? event.eventId) ==
+                  controller.animateInEventId;
+
+              final nextEvent = i + 1 < events.length ? events[i + 1] : null;
+              final previousEvent = i > 0 ? events[i - 1] : null;
+
+              // Collapsed state event
+              final canExpand =
+                  event.isCollapsedState &&
+                  nextEvent?.isCollapsedState == true &&
+                  previousEvent?.isCollapsedState != true;
+              final isCollapsed =
+                  event.isCollapsedState &&
+                  previousEvent?.isCollapsedState == true &&
+                  !controller.expandedEventIds.contains(event.eventId);
+
+              final displayDate =
+                  event.type == EventTypes.RoomCreate ||
+                  nextEvent == null ||
+                  !event.originServerTs.sameDay(nextEvent.originServerTs);
+
+              return AutoScrollTag(
+                key: ValueKey(event.transactionId ?? event.eventId),
+                index: i,
+                controller: controller.scrollController,
+                child: ConversationMessageEntrance(
+                  identity: event.transactionId ?? event.eventId,
+                  animate: animateIn,
+                  outgoing: event.senderId == event.room.client.userID,
+                  child: Column(
+                    mainAxisSize: .min,
+                    children: [
+                      if (!isCollapsed && displayDate)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(
+                              NotionTokens.inset,
+                              8,
+                              NotionTokens.inset,
+                              8,
+                            ),
+                            child: Text(
+                              event.originServerTs.localizedDate(context),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: theme.colorScheme.onSurfaceVariant,
                               ),
                             ),
                           ),
-                        Message(
-                          event,
-                          bigEmojis: controller.bigEmojis,
-                          onSwipe: () => controller.replyAction(replyTo: event),
-                          onInfoTab: controller.showEventInfo,
-                          onMention: () => controller.mentionSender(event),
-                          highlightMarker:
-                              controller.scrollToEventIdMarker == event.eventId,
-                          scrollToEventId: controller.scrollToEventId,
-                          readMarkerEventId: controller.readMarkerEventId,
-                          textSelectionActive: _textSelectionActive,
-                          menuActions: (event) =>
-                              controller.messageActions(context, event),
-                          timeline: controller.timelineFor(event)!,
-                          sourceLabel: controller.sourceLabelFor(event),
-                          seriesBoundary: controller.seriesBoundary,
-                          strictCapabilities: controller.strictCapabilities,
-                          displayReadMarker:
-                              i > 0 &&
-                              controller.readMarkerEventId == event.eventId,
-                          nextEvent: nextEvent,
-                          previousEvent: previousEvent,
-                          wallpaperMode: hasWallpaper,
-                          scrollController: controller.scrollController,
-                          colors: colors,
-                          isCollapsed: isCollapsed,
-                          roomPalette: roomPalette,
-                          enterThread: controller.threadOpener,
-                          onExpand: canExpand
-                              ? () => controller.expandEventsFrom(
-                                  event,
-                                  !controller.expandedEventIds.contains(
-                                    event.eventId,
-                                  ),
-                                )
-                              : null,
                         ),
-                      ],
-                    ),
+                      Message(
+                        event,
+                        bigEmojis: controller.bigEmojis,
+                        onSwipe: () => controller.replyAction(replyTo: event),
+                        onInfoTab: controller.showEventInfo,
+                        onMention: () => controller.mentionSender(event),
+                        highlightMarker:
+                            controller.scrollToEventIdMarker == event.eventId,
+                        scrollToEventId: controller.scrollToEventId,
+                        readMarkerEventId: controller.readMarkerEventId,
+                        textSelectionActive: _textSelectionActive,
+                        menuActions: (event) =>
+                            controller.messageActions(context, event),
+                        timeline: controller.timelineFor(event)!,
+                        sourceLabel: controller.sourceLabelFor(event),
+                        seriesBoundary: controller.seriesBoundary,
+                        strictCapabilities: controller.strictCapabilities,
+                        displayReadMarker:
+                            i > 0 &&
+                            controller.readMarkerEventId == event.eventId,
+                        nextEvent: nextEvent,
+                        previousEvent: previousEvent,
+                        wallpaperMode: hasWallpaper,
+                        scrollController: controller.scrollController,
+                        isCollapsed: isCollapsed,
+                        roomPalette: roomPalette,
+                        enterThread: controller.threadOpener,
+                        onExpand: canExpand
+                            ? () => controller.expandEventsFrom(
+                                event,
+                                !controller.expandedEventIds.contains(
+                                  event.eventId,
+                                ),
+                              )
+                            : null,
+                      ),
+                    ],
                   ),
-                );
-              },
-              childCount: events.length + 2,
-              findChildIndexCallback: (key) =>
-                  controller.findChildIndexCallback(key, thisEventsKeyMap),
-            ),
+                ),
+              );
+            },
+            childCount: events.length + 2,
+            findChildIndexCallback: (key) =>
+                controller.findChildIndexCallback(key, thisEventsKeyMap),
           ),
         ),
       ),
@@ -435,29 +428,6 @@ class ConversationTimelineSkeleton extends StatelessWidget {
       ),
     ),
   );
-}
-
-/// Applies the user's font-size factor below the timeline. Kept out of
-/// [_ChatEventListState.build] so the list does not depend on the whole
-/// [MediaQuery]: keyboard insets change on every frame of the keyboard
-/// animation and would otherwise rebuild every visible message per frame.
-class _TimelineTextScale extends StatelessWidget {
-  final Widget child;
-
-  const _TimelineTextScale({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    final data = MediaQuery.of(context);
-    return MediaQuery(
-      data: data.copyWith(
-        textScaler: TextScaler.linear(
-          data.textScaler.scale(AppSettings.fontSizeFactor.value),
-        ),
-      ),
-      child: child,
-    );
-  }
 }
 
 /// Room under the newest message for the composer drawn over the list. It

@@ -5,6 +5,7 @@
 
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/pages/chat/events/file_send_status_indicator.dart';
+import 'package:chatloom/pages/chat/events/outgoing_upload_progress.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
@@ -39,9 +40,7 @@ class MessageDownloadContent extends StatelessWidget {
     final fileDescription = event.fileDescription;
     // The SDK keeps the last upload phase on a failed file; the bubble's
     // failure line explains it instead of a spinner that never stops.
-    final fileSendingStatus = event.status.isSending
-        ? event.fileSendingStatus
-        : null;
+    final uploading = isOutgoingUpload(event);
     return Column(
       mainAxisSize: .min,
       crossAxisAlignment: .start,
@@ -68,9 +67,12 @@ class MessageDownloadContent extends StatelessWidget {
                 mainAxisSize: .min,
                 spacing: 16,
                 children: [
-                  if (fileSendingStatus != null)
+                  if (uploading)
                     FileSendStatusIndicator(
-                      fileSendingStatus: fileSendingStatus,
+                      fileSendingStatus:
+                          event.fileSendingStatus ??
+                          FileSendingStatus.uploading,
+                      progress: uploadProgressOf(event),
                     )
                   else
                     Icon(

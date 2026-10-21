@@ -29,6 +29,7 @@ import 'package:personal_core/personal_core.dart' show ChatTheme;
 import 'message_content.dart';
 import 'message_delivery_status.dart';
 import 'message_reactions.dart';
+import 'outgoing_upload_progress.dart';
 import 'reply_content.dart';
 import 'round_video_view.dart';
 import 'state_message.dart';
@@ -54,7 +55,6 @@ class Message extends StatelessWidget {
   final bool highlightMarker;
   final bool wallpaperMode;
   final ScrollController scrollController;
-  final List<Color> colors;
   final void Function()? onExpand;
   final bool isCollapsed;
   final Set<String> bigEmojis;
@@ -91,7 +91,6 @@ class Message extends StatelessWidget {
     this.wallpaperMode = false,
     required this.onMention,
     required this.scrollController,
-    required this.colors,
     this.onExpand,
     required this.enterThread,
     this.isCollapsed = false,
@@ -182,7 +181,7 @@ class Message extends StatelessWidget {
     final bubbleColors = ConversationBubbleColors.of(context);
     final textColor = custom is int
         ? NotionContrast.on(Color(custom))
-        : bubbleColors.text;
+        : (own ? bubbleColors.outgoingText : bubbleColors.text);
     final radius = ConversationBubble.radiusFor(
       outgoing: own,
       position: position,
@@ -244,14 +243,13 @@ class Message extends StatelessWidget {
                   color: theme.colorScheme.error,
                   semanticLabel: delivery.label,
                 ),
+              // Telegram's clock; the circle itself shows the upload.
               if (delivery.kind == MessageDeliveryKind.sending)
                 const NotionDelayedReveal(
-                  child: SizedBox.square(
-                    dimension: 10,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1,
-                      color: roundVideoOnScrim,
-                    ),
+                  child: Icon(
+                    Icons.schedule,
+                    size: 11,
+                    color: roundVideoOnScrim,
                   ),
                 ),
             ],
@@ -263,7 +261,8 @@ class Message extends StatelessWidget {
     final sending = delivery.kind == MessageDeliveryKind.sending;
     final timeVisible = last || edited;
     final hasStatus = timeVisible || sending;
-    final fileStatus = display.fileSendingStatus;
+    // Photos, videos, voice and files fill a ring with their upload.
+    final upload = sending && isOutgoingUpload(event);
     final status = Wrap(
       spacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -284,22 +283,20 @@ class Message extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               spacing: 4,
               children: [
-                Text(switch (fileStatus) {
-                  null => L10n.of(context).sending,
-                  FileSendingStatus.generatingThumbnail => L10n.of(
-                    context,
-                  ).generatingThumbnail,
-                  FileSendingStatus.encrypting => L10n.of(context).encrypting,
-                  FileSendingStatus.uploading => L10n.of(context).uploading,
-                }, style: TextStyle(fontSize: 11, color: statusColor)),
-                // Telegram's clock for text; files keep their progress.
-                if (fileStatus == null)
-                  Icon(Icons.schedule, size: 11, color: statusColor)
+                Text(
+                  L10n.of(context).sending,
+                  style: TextStyle(fontSize: 11, color: statusColor),
+                ),
+                // Telegram's clock for text; an upload fills its ring.
+                if (upload)
+                  OutgoingUploadIndicator(
+                    progress: uploadProgressOf(event),
+                    size: 11,
+                    strokeWidth: 1.5,
+                    color: statusColor,
+                  )
                 else
-                  const SizedBox.square(
-                    dimension: 11,
-                    child: CircularProgressIndicator(strokeWidth: 1),
-                  ),
+                  Icon(Icons.schedule, size: 11, color: statusColor),
               ],
             ),
           ),
@@ -308,7 +305,9 @@ class Message extends StatelessWidget {
     final messageContent = MessageContent(
       display,
       textColor: textColor,
-      linkColor: custom is int ? textColor : theme.colorScheme.primary,
+      // Links in a coloured own bubble take its text colour (underlined),
+      // like Messenger; elsewhere the accent.
+      linkColor: custom is int || own ? textColor : theme.colorScheme.primary,
       onInfoTab: onInfoTab,
       borderRadius: radius,
       timeline: timeline,
@@ -795,8 +794,7 @@ class _ReplyPreviewState extends State<_ReplyPreview> {
   String _caption(L10n l10n, Event? original) {
     final event = widget.event;
     final me = event.room.client.userID;
-    final originalName = original?.senderFromMemoryOrFallback
-        .calcDisplayname();
+    final originalName = original?.senderFromMemoryOrFallback.calcDisplayname();
     if (widget.own) {
       if (original == null) return l10n.replyCaptionYouRepliedUnknown;
       if (original.senderId == me) return l10n.replyCaptionYouRepliedSelf;

@@ -23,12 +23,6 @@ ConversationGroupingItem conversationGroupingItem(
   );
 }
 
-const _plainMessageTypes = {
-  MessageTypes.Text,
-  MessageTypes.Notice,
-  MessageTypes.Emote,
-};
-
 // Undecryptable messages (still m.room.encrypted) group with the sender's
 // other messages; a redacted one is a boundary like any redaction.
 const _groupedEventTypes = {
@@ -37,12 +31,3 @@ const _groupedEventTypes = {
   EventTypes.Encrypted,
   PollEventContent.startType,
 };
-
-// Compiled once: this runs for every visible row on every timeline build.
-final _interactiveLinkPattern = RegExp(r'(https?://|matrix:|www\.)');
-
-bool conversationHasInteractiveContent(Event event) =>
-    !_plainMessageTypes.contains(event.messageType) ||
-    event.isRichMessage ||
-    _interactiveLinkPattern.hasMatch(event.body) ||
-    event.inReplyToEventId(includingFallback: false) != null;

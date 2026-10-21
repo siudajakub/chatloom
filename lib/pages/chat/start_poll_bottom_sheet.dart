@@ -5,7 +5,7 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
-import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/personal/media/send_error_text.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -32,34 +32,34 @@ class _StartPollBottomSheetState extends State<StartPollBottomSheet> {
 
   String? _txid;
 
+  /// The sheet closes at once: the poll's bubble shows "Sending" and, if it
+  /// fails, "Not sent · Tap to retry" (same transaction on retry).
   Future<void> _createPoll() async {
     final proceed = await showTrustUserInRoomDialog(context, widget.room);
     if (!proceed || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    var id = 0;
+    _txid ??= widget.room.client.generateUniqueTransactionId();
+    final sending = widget.room.startPoll(
+      question: _bodyController.text.trim(),
+      answers: _answers
+          .map(
+            (answerController) => PollAnswer(
+              id: (++id).toString(),
+              mText: answerController.text.trim(),
+            ),
+          )
+          .toList(),
+      kind: _pollKind,
+      maxSelections: _allowMultipleAnswers ? _answers.length : 1,
+      txid: _txid,
+    );
+    Navigator.of(context).pop();
     try {
-      var id = 0;
-      _txid ??= widget.room.client.generateUniqueTransactionId();
-      await widget.room.startPoll(
-        question: _bodyController.text.trim(),
-        answers: _answers
-            .map(
-              (answerController) => PollAnswer(
-                id: (++id).toString(),
-                mText: answerController.text.trim(),
-              ),
-            )
-            .toList(),
-        kind: _pollKind,
-        maxSelections: _allowMultipleAnswers ? _answers.length : 1,
-        txid: _txid,
-      );
-      if (!mounted) return;
-      Navigator.of(context).pop();
+      await sending;
     } catch (e, s) {
       Logs().w('Unable to create poll', e, s);
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+      messenger.showSnackBar(SnackBar(content: Text(sendErrorText(e))));
     }
   }
 

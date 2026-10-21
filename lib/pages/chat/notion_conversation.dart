@@ -6,153 +6,6 @@ import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// The same authored grid is used for incoming and outgoing source events.
-/// Sender/media widgets and their state remain owned by the existing client.
-class NotionAuthoredMessageRow extends StatelessWidget {
-  final Widget avatar;
-  final String author;
-  final String time;
-  final Widget body;
-  final Widget? actions;
-  final String? source;
-  const NotionAuthoredMessageRow({
-    super.key,
-    required this.avatar,
-    required this.author,
-    required this.time,
-    required this.body,
-    this.actions,
-    this.source,
-  });
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(
-      horizontal: NotionTokens.inset,
-      vertical: 10,
-    ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox.square(dimension: 36, child: avatar),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              NotionAuthorHeading(author: author, time: time, actions: actions),
-              const SizedBox(height: 4),
-              DefaultTextStyle.merge(style: NotionTokens.body, child: body),
-              if (source != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    source!,
-                    style: NotionTokens.caption.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class NotionAuthorHeading extends StatelessWidget {
-  final String author;
-  final String time;
-  final Widget? leading;
-  final Widget? actions;
-  const NotionAuthorHeading({
-    super.key,
-    required this.author,
-    required this.time,
-    this.leading,
-    this.actions,
-  });
-  @override
-  Widget build(BuildContext context) => Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Expanded(
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 2,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            ?leading,
-            Text(
-              author,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                height: 1.35,
-              ),
-            ),
-            Text(
-              time,
-              style: NotionTokens.caption.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-      ),
-      ?actions,
-    ],
-  );
-}
-
-/// Quiet surface only: production callers supply their real editors, source
-/// selector, recorder, attachment picker and durable send action.
-class NotionComposer extends StatelessWidget {
-  final Widget input;
-  final List<Widget> actions;
-  final Widget source;
-  final Widget sendAction;
-  const NotionComposer({
-    super.key,
-    required this.input,
-    required this.actions,
-    required this.source,
-    required this.sendAction,
-  });
-  @override
-  Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(NotionTokens.radius),
-      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-      color: Theme.of(context).colorScheme.surface,
-    ),
-    padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: input,
-        ),
-        const SizedBox(height: 2),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(child: Wrap(spacing: 0, runSpacing: 0, children: actions)),
-            const SizedBox(width: 4),
-            sendAction,
-          ],
-        ),
-        Padding(padding: const EdgeInsets.fromLTRB(4, 0, 4, 2), child: source),
-      ],
-    ),
-  );
-}
-
 class NotionSendButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool busy;
@@ -173,6 +26,10 @@ class NotionSendButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final send = busy ? null : onPressed;
     const arrow = Icon(Icons.arrow_upward, key: ValueKey('send'), size: 24);
+    // The accent fill (Messenger's blue send), white arrow.
+    final palette = context.notion.palette;
+    final fill = palette.accentFill;
+    final onFill = palette.onAccentFill;
     // Springs when it turns enabled (first character typed) or back.
     return NotionPop(
       playOnMount: false,
@@ -192,13 +49,13 @@ class NotionSendButton extends StatelessWidget {
                 },
           style: IconButton.styleFrom(
             minimumSize: const Size.square(48),
-            backgroundColor: Theme.of(context).colorScheme.onSurface,
-            foregroundColor: Theme.of(context).colorScheme.surface,
+            backgroundColor: fill,
+            foregroundColor: onFill,
             // Busy keeps the enabled colour: no grey flash on every send.
             disabledBackgroundColor: busy && onPressed != null
-                ? Theme.of(context).colorScheme.onSurface
-                : Theme.of(context).colorScheme.onSurface.withAlpha(90),
-            disabledForegroundColor: Theme.of(context).colorScheme.surface,
+                ? fill
+                : fill.withAlpha(90),
+            disabledForegroundColor: onFill,
             shape: const CircleBorder(),
           ),
           icon: busy
@@ -209,7 +66,7 @@ class NotionSendButton extends StatelessWidget {
                     dimension: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Theme.of(context).colorScheme.surface,
+                      color: onFill,
                     ),
                   ),
                 )

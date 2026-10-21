@@ -121,7 +121,6 @@ void main() {
             timeline: t,
             onMention: () {},
             scrollController: scroll,
-            colors: const [Colors.grey, Colors.grey],
             enterThread: null,
           ),
         ),
@@ -399,49 +398,53 @@ void main() {
     expect(find.byType(MergedChatPage), findsOneWidget);
   });
   for (final brightness in Brightness.values) {
-    testWidgets('${brightness.name} reply quote has readable text on its fill', (
-      tester,
-    ) async {
-      final client = ConversationClient();
-      final room = ConversationRoom(client, '!quote-contrast:example.invalid');
-      final event = room.message(r'$quote-contrast', 'Fictional quote body');
-      late Color fill;
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: NotionTheme.build(brightness),
-          localizationsDelegates: L10n.localizationsDelegates,
-          supportedLocales: L10n.supportedLocales,
-          home: Scaffold(
-            body: Builder(
-              builder: (context) {
-                final bubble = ConversationBubbleColors.of(context);
-                final colors = ConversationReplyQuote.colorsFor(
-                  side: bubble.outgoing,
-                  page: context.notion.colors.background,
-                  muted: bubble.metadata,
-                );
-                fill = colors.fill;
-                return ReplyContent(
-                  event,
-                  fill: colors.fill,
-                  textColor: colors.text,
-                  outgoing: true,
-                );
-              },
+    testWidgets(
+      '${brightness.name} reply quote has readable text on its fill',
+      (tester) async {
+        final client = ConversationClient();
+        final room = ConversationRoom(
+          client,
+          '!quote-contrast:example.invalid',
+        );
+        final event = room.message(r'$quote-contrast', 'Fictional quote body');
+        late Color fill;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: NotionTheme.build(brightness),
+            localizationsDelegates: L10n.localizationsDelegates,
+            supportedLocales: L10n.supportedLocales,
+            home: Scaffold(
+              body: Builder(
+                builder: (context) {
+                  final bubble = ConversationBubbleColors.of(context);
+                  final colors = ConversationReplyQuote.colorsFor(
+                    side: bubble.outgoing,
+                    page: context.notion.colors.background,
+                    muted: bubble.metadata,
+                  );
+                  fill = colors.fill;
+                  return ReplyContent(
+                    event,
+                    fill: colors.fill,
+                    textColor: colors.text,
+                    outgoing: true,
+                  );
+                },
+              ),
             ),
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final color = tester
-          .widget<Text>(find.text('Fictional quote body'))
-          .style!
-          .color!;
-      expect(
-        NotionContrast.ratio(color, fill),
-        greaterThanOrEqualTo(NotionContrast.minimum),
-      );
-    });
+        );
+        await tester.pumpAndSettle();
+        final color = tester
+            .widget<Text>(find.text('Fictional quote body'))
+            .style!
+            .color!;
+        expect(
+          NotionContrast.ratio(color, fill),
+          greaterThanOrEqualTo(NotionContrast.minimum),
+        );
+      },
+    );
   }
   testWidgets(
     'merged private palette preserves direction and readable source content',

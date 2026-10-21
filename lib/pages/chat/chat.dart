@@ -18,6 +18,7 @@ import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
 import 'package:chatloom/pages/chat/start_poll_bottom_sheet.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/pages/chat/utils/web_file_to_x_file.dart';
@@ -25,7 +26,7 @@ import 'package:chatloom/pages/chat/voice_message_sender.dart';
 import 'package:chatloom/pages/chat_details/chat_details.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
-import 'package:chatloom/personal/media/immediate_media_outbox.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_availability.dart';
@@ -34,6 +35,7 @@ import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
+import 'package:chatloom/personal/send_warmup.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/utils/error_reporter.dart';
@@ -434,7 +436,21 @@ class ChatController extends State<ChatPageWithRoom>
 
     final mostRecentEvent = timeline.events.filterByVisibleInGui().firstOrNull;
 
-    await timeline.requestFuture(historyCount: _loadHistoryCount);
+    try {
+      await timeline.requestFuture(historyCount: _loadHistoryCount);
+    } catch (error, stack) {
+      // The SDK leaves its flag set after a failure, which would keep the
+      // "load newer" button spinning forever.
+      timeline.isRequestingFuture = false;
+      if (!mounted) return;
+      setState(() {});
+      await ErrorReporter.action(
+        context,
+        action: ErrorAction.load,
+        onRetry: requestFuture,
+      ).onErrorCallback(error, stack);
+      return;
+    }
 
     if (mostRecentEvent != null) {
       setReadMarker(eventId: mostRecentEvent.eventId);
@@ -524,8 +540,21 @@ class ChatController extends State<ChatPageWithRoom>
     }
     for (final item in shareItems) {
       if (item is FileShareItem) continue;
-      if (item is TextShareItem) frozen.room.sendTextEvent(item.value);
-      if (item is ContentShareItem) frozen.room.sendEvent(item.value.copy());
+      // The bubble shows the send; a refusal the SDK rethrows is explained.
+      if (item is TextShareItem) {
+        unawaited(
+          frozen.room
+              .sendTextEvent(item.value)
+              .then<void>((_) {}, onError: _reportSendFailure),
+        );
+      }
+      if (item is ContentShareItem) {
+        unawaited(
+          frozen.room
+              .sendEvent(item.value.copy())
+              .then<void>((_) {}, onError: _reportSendFailure),
+        );
+      }
     }
     final files = shareItems
         .whereType<FileShareItem>()
@@ -613,6 +642,8 @@ class ChatController extends State<ChatPageWithRoom>
       if (!mounted) return;
       _shareItems();
       _checkMatrixRtcCallSupport();
+      // The first send must not wait for the member list (trust check).
+      warmUpSendPath(room);
       if (widget.action == 'call') {
         Matrix.of(context).activeCallRoomId.value = room.id;
       }
@@ -1916,22 +1947,11 @@ class ChatController extends State<ChatPageWithRoom>
                 activeThreadId == frozenThread,
           );
       if (!mounted || result == null) return;
-      if (result.state == ImmediateMediaState.matrixAccepted &&
-          identical(replyEvent, frozenReply))
+      // The round's bubble is in the chat (with the reply) and shows its own
+      // delivery: sending, sent, or "Not sent · Tap to retry". No notice.
+      if (identical(replyEvent, frozenReply)) {
         setState(() => replyEvent = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(switch (result.state) {
-            ImmediateMediaState.matrixAccepted =>
-              'Matrix accepted the round video. Telegram delivery awaits confirmation.',
-            ImmediateMediaState.unknown =>
-              'The send result is unknown. The recording and the same attempt remain queued.',
-            ImmediateMediaState.staged =>
-              'Recording saved locally. Send it from the original conversation.',
-            _ => 'Recording awaits saving or retry in the round video queue.',
-          }),
-        ),
-      );
+      }
     } catch (error) {
       if (mounted)
         ScaffoldMessenger.of(
@@ -1990,15 +2010,29 @@ class ChatController extends State<ChatPageWithRoom>
       return;
     }
     if (event.status.isError) {
-      event.sendAgain();
+      // Files go through the outgoing media queue (upload shown again).
+      unawaited(
+        MessageDeliveryActions.sendAgain(event).catchError((Object _) {}),
+      );
     }
     final allEditEvents = event
         .aggregatedEvents(timeline!, RelationshipTypes.edit)
         .where((e) => e.status.isError);
     for (final e in allEditEvents) {
-      e.sendAgain();
+      unawaited(e.sendAgain().then<void>((_) {}, onError: _reportSendFailure));
     }
     setState(() {});
+  }
+
+  /// A send the user started failed outside the bubble's own status (the
+  /// SDK rethrows only a refusal): explain it instead of failing silently.
+  void _reportSendFailure(Object error, StackTrace stack) {
+    unawaited(
+      ErrorReporter.action(
+        mounted ? context : null,
+        action: ErrorAction.send,
+      ).onErrorCallback(error, stack),
+    );
   }
 
   @override

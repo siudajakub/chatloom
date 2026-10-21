@@ -13,7 +13,7 @@ import 'package:chatloom/pages/chat/voice_record_button.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/round_video/round_availability.dart'
     show RoundAvailability;
-import 'package:chatloom/personal/round_video/round_outbox_panel.dart';
+import 'package:chatloom/personal/round_video/round_outbox_sync.dart';
 import 'package:chatloom/personal/round_video/round_record_button.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
@@ -320,7 +320,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
       children: [
         if (PlatformInfos.supportsRoundCapture &&
             PersonalClient.networkOf(controller.room) == 'telegram')
-          RoundOutboxPanel(room: controller.room),
+          RoundOutboxSync(room: controller.room),
         RecordingViewModel(
           builder: (context, recordingViewModel) {
             // A held recording keeps the composer (and this pointer) mounted.

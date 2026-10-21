@@ -437,14 +437,6 @@ class _InlineSource extends StatelessWidget {
   );
 }
 
-/// Explains an unavailable composer action (for example why a round video
-/// cannot be recorded) in the app's floating snackbar.
-void showComposerNotice(BuildContext context, String message) {
-  ScaffoldMessenger.maybeOf(context)
-    ?..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(message)));
-}
-
 /// Explains why the source needs attention without adding text to the chip.
 enum ConversationSourceHint { none, choose, unavailable }
 

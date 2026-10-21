@@ -114,7 +114,6 @@ Widget _message(Event event, Timeline timeline) => Scaffold(
       timeline: timeline,
       onMention: () {},
       scrollController: ScrollController(),
-      colors: const [Colors.grey, Colors.grey],
       enterThread: null,
     ),
   ),

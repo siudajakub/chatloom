@@ -8,8 +8,9 @@ import 'package:material_ui/material_ui.dart';
 import 'conversation_grouping.dart';
 import 'conversation_motion.dart';
 
-/// Conversation-specific roles. Themes may override these for a personal
-/// accent without making an incoming message depend on that accent for identity.
+/// Conversation-specific roles. The theme fills the outgoing side from the
+/// user's accent and intensity (`NotionPalette`); incoming messages never
+/// depend on that accent for identity.
 @immutable
 class ConversationBubbleColors
     extends ThemeExtension<ConversationBubbleColors> {
@@ -17,13 +18,23 @@ class ConversationBubbleColors
   final Color outgoing;
   final Color text;
   final Color metadata;
+  final Color? _outgoingText;
+
+  /// Vivid own bubbles: a gradient instead of the solid [outgoing] fill.
+  /// [outgoing] stays the solid stand-in for quotes and placeholders.
+  final List<Color>? outgoingGradient;
 
   const ConversationBubbleColors({
     required this.incoming,
     required this.outgoing,
     required this.text,
     required this.metadata,
-  });
+    Color? outgoingText,
+    this.outgoingGradient,
+  }) : _outgoingText = outgoingText;
+
+  /// Text in own bubbles (white on a coloured fill); [text] by default.
+  Color get outgoingText => _outgoingText ?? text;
 
   static const dark = ConversationBubbleColors(
     incoming: Color(0xFF2B2B2B),
@@ -38,6 +49,17 @@ class ConversationBubbleColors
         outgoing: scheme.surfaceContainerHighest,
         text: scheme.onSurface,
         metadata: scheme.onSurfaceVariant,
+      );
+
+  /// This side with its own bubble taken from [palette].
+  ConversationBubbleColors withPalette(NotionPalette palette) =>
+      ConversationBubbleColors(
+        incoming: incoming,
+        outgoing: palette.bubble,
+        text: text,
+        metadata: metadata,
+        outgoingText: palette.onBubble,
+        outgoingGradient: palette.bubbleGradient,
       );
 
   /// Registered by `NotionTheme`; the fallback keeps isolated fixtures working.
@@ -55,11 +77,14 @@ class ConversationBubbleColors
     Color? outgoing,
     Color? text,
     Color? metadata,
+    Color? outgoingText,
   }) => ConversationBubbleColors(
     incoming: incoming ?? this.incoming,
     outgoing: outgoing ?? this.outgoing,
     text: text ?? this.text,
     metadata: metadata ?? this.metadata,
+    outgoingText: outgoingText ?? _outgoingText,
+    outgoingGradient: outgoingGradient,
   );
 
   @override
@@ -68,11 +93,17 @@ class ConversationBubbleColors
     double t,
   ) {
     if (other == null) return this;
+    final a = outgoingGradient;
+    final b = other.outgoingGradient;
     return ConversationBubbleColors(
       incoming: Color.lerp(incoming, other.incoming, t)!,
       outgoing: Color.lerp(outgoing, other.outgoing, t)!,
       text: Color.lerp(text, other.text, t)!,
       metadata: Color.lerp(metadata, other.metadata, t)!,
+      outgoingText: Color.lerp(outgoingText, other.outgoingText, t),
+      outgoingGradient: a != null && b != null && a.length == b.length
+          ? [for (var i = 0; i < a.length; i++) Color.lerp(a[i], b[i], t)!]
+          : (t < .5 ? a : b),
     );
   }
 }
@@ -179,6 +210,11 @@ class ConversationBubble extends StatelessWidget {
             ? math.max(maxWidthFraction, .88)
             : maxWidthFraction;
         const avatarSlot = NotionBubble.avatarSlot;
+        // Own bubbles take the accent fill (a gradient in Vivid) and its
+        // text colour; a private chat palette overrides both.
+        final ownFill = outgoing && backgroundColor == null;
+        final gradient = ownFill ? colors.outgoingGradient : null;
+        final ink = ownFill ? colors.outgoingText : colors.text;
         final maxWidth = math.max(
           0.0,
           math.min(width * fraction, width - (outgoing ? 0 : avatarSlot)),
@@ -199,9 +235,17 @@ class ConversationBubble extends StatelessWidget {
                   value: selected ? 1 : 0,
                   builder: (context, t, child) => Container(
                     decoration: BoxDecoration(
-                      color:
-                          backgroundColor ??
-                          (outgoing ? colors.outgoing : colors.incoming),
+                      color: gradient != null
+                          ? null
+                          : backgroundColor ??
+                                (outgoing ? colors.outgoing : colors.incoming),
+                      gradient: gradient == null
+                          ? null
+                          : LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: gradient,
+                            ),
                       borderRadius: radius,
                     ),
                     foregroundDecoration: t <= 0
@@ -209,7 +253,7 @@ class ConversationBubble extends StatelessWidget {
                         : BoxDecoration(
                             borderRadius: radius,
                             border: Border.all(
-                              color: colors.text.withAlpha(
+                              color: ink.withAlpha(
                                 (140 * t.clamp(0.0, 1.0)).round(),
                               ),
                               width: 2,
@@ -223,7 +267,7 @@ class ConversationBubble extends StatelessWidget {
                     // shrink-wraps the text instead of keeping the ragged
                     // gap at line ends (Telegram, Messenger, WhatsApp).
                     child: DefaultTextStyle.merge(
-                      style: TextStyle(color: colors.text),
+                      style: TextStyle(color: ink),
                       textWidthBasis: TextWidthBasis.longestLine,
                       child: body,
                     ),

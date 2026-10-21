@@ -609,11 +609,6 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               onTap: () => context.push('/rooms/${room.id}/invite'),
             ),
         ],
-        NotionListRow(
-          leading: const Icon(Icons.emoji_emotions_outlined),
-          title: 'Stickers & emotes',
-          onTap: () => context.push('/rooms/${room.id}/details/emotes'),
-        ),
         if (room.topic.isNotEmpty ||
             room.canChangeStateEvent(EventTypes.RoomTopic))
           NotionListRow(

@@ -463,7 +463,6 @@ void main() {
                             timeline: timeline,
                             onMention: () {},
                             scrollController: scroll,
-                            colors: const [Colors.grey, Colors.grey],
                             enterThread: null,
                           ),
                       ],
@@ -569,7 +568,9 @@ void main() {
         await tester.pumpAndSettle();
       }
       if (c.state == 'select') {
-        await tester.longPress(find.text('Exactly. I’ll send you the location.'));
+        await tester.longPress(
+          find.text('Exactly. I’ll send you the location.'),
+        );
         await tester.pumpAndSettle();
         // The long-press overlay: quick reactions above the lifted bubble.
         expect(find.byKey(const ValueKey('reaction-❤️')), findsOneWidget);
