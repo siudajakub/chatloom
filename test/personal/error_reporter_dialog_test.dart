@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
+
+MatrixException _unknown() => MatrixException(
+  http.Response('{"errcode":"M_UNKNOWN","error":"M_UNKNOWN"}', 500),
+);
 
 void main() {
   setUp(ErrorReporter.debugReset);
@@ -110,5 +117,66 @@ void main() {
     unawaited(ErrorReporter(home).onErrorCallback(StateError('two')));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);
+  });
+
+  testWidgets('an uncaught Matrix error is logged, never a modal', (
+    tester,
+  ) async {
+    final context = await host(tester);
+    unawaited(ErrorReporter(context).reportUnhandled(_unknown()));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+
+    // The zone/framework entry point keeps the shell, too.
+    ErrorReporter.onFlutterError(_unknown());
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Fixture ready'), findsOneWidget);
+    expect(find.textContaining('Could not start the app'), findsNothing);
+  });
+
+  testWidgets('a failed action explains itself without the errcode', (
+    tester,
+  ) async {
+    final context = await host(tester);
+    unawaited(ErrorReporter(context).onErrorCallback(_unknown()));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.text('Something went wrong. Try again.'), findsOneWidget);
+    expect(find.textContaining('M_UNKNOWN'), findsNothing);
+    expect(find.textContaining('matrix_m_unknown'), findsNothing);
+    expect(find.text('Copy safe report'), findsOneWidget);
+    // No retry callback: no retry button.
+    expect(find.text('Try again'), findsNothing);
+  });
+
+  testWidgets('a retryable action offers Try again once', (tester) async {
+    final context = await host(tester);
+    var retries = 0;
+    unawaited(
+      ErrorReporter.action(
+        context,
+        action: ErrorAction.send,
+        onRetry: () => retries++,
+      ).onErrorCallback(_unknown()),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Couldn’t send. Try again.'), findsOneWidget);
+    await tester.tap(find.text('Try again'));
+    await tester.pumpAndSettle();
+    expect(retries, 1);
+    expect(find.byType(AlertDialog), findsNothing);
+  });
+
+  testWidgets('a final failure offers no retry', (tester) async {
+    final context = await host(tester);
+    unawaited(
+      ErrorReporter.action(context, onRetry: () {}).onErrorCallback(
+        MatrixException(http.Response('{"errcode":"M_FORBIDDEN"}', 403)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('You don’t have permission to do that.'), findsOneWidget);
+    expect(find.text('Try again'), findsNothing);
   });
 }

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:http/http.dart' as http;
+import 'package:matrix/matrix.dart' show MatrixException;
 
 import 'network_failure_stub.dart'
     if (dart.library.io) 'network_failure_native.dart'
@@ -68,6 +69,14 @@ class PersonalDiagnostic {
       };
       return PersonalDiagnostic(
         states[error.message] ?? 'invalid_state',
+        phase,
+      );
+    }
+    if (error is MatrixException) {
+      // The spec's errcode vocabulary only (unknown codes map to M_UNKNOWN),
+      // never the server's message.
+      return PersonalDiagnostic(
+        'matrix_${error.error.name.toLowerCase()}',
         phase,
       );
     }

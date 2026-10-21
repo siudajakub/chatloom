@@ -67,12 +67,8 @@ class PublicRoomDialog extends StatelessWidget {
     if (result.error != null) return;
     if (!context.mounted) return;
     Navigator.of(context).pop<bool>(true);
-    // don't open the room if the joined room is a space
-    if (chunk?.roomType != 'm.space' &&
-        !client.getRoomById(result.result!)!.isSpace) {
+    if (client.getRoomById(roomId)?.isSpace != true) {
       context.go('/rooms/$roomId');
-    } else {
-      context.go('/rooms?spaceId=$roomId');
     }
     return;
   }
@@ -290,21 +286,20 @@ class PublicRoomDialog extends StatelessWidget {
                       ),
                     ],
                   ),
-                  AdaptiveDialogInkWell(
-                    onTap: () => _joinRoom(context),
-                    child: Text(
-                      chunk?.joinRule == 'knock' &&
-                              Matrix.of(
-                                    context,
-                                  ).client.getRoomById(chunk!.roomId) ==
-                                  null
-                          ? L10n.of(context).knock
-                          : chunk?.roomType == 'm.space'
-                          ? L10n.of(context).joinSpace
-                          : L10n.of(context).joinRoom,
-                      style: TextStyle(color: theme.colorScheme.secondary),
+                  if (chunk?.roomType != 'm.space')
+                    AdaptiveDialogInkWell(
+                      onTap: () => _joinRoom(context),
+                      child: Text(
+                        chunk?.joinRule == 'knock' &&
+                                Matrix.of(
+                                      context,
+                                    ).client.getRoomById(chunk!.roomId) ==
+                                    null
+                            ? L10n.of(context).knock
+                            : L10n.of(context).joinRoom,
+                        style: TextStyle(color: theme.colorScheme.secondary),
+                      ),
                     ),
-                  ),
                 ],
               ),
             );
