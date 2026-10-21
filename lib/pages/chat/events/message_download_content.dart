@@ -37,7 +37,11 @@ class MessageDownloadContent extends StatelessWidget {
               'UNKNOWN');
     final sizeString = event.sizeString ?? 'Size unavailable';
     final fileDescription = event.fileDescription;
-    final fileSendingStatus = event.fileSendingStatus;
+    // The SDK keeps the last upload phase on a failed file; the bubble's
+    // failure line explains it instead of a spinner that never stops.
+    final fileSendingStatus = event.status.isSending
+        ? event.fileSendingStatus
+        : null;
     return Column(
       mainAxisSize: .min,
       crossAxisAlignment: .start,
@@ -49,7 +53,10 @@ class MessageDownloadContent extends StatelessWidget {
             borderRadius: BorderRadius.circular(NotionTokens.radius),
             onTap: () => event.saveFile(context),
             child: Container(
-              width: 400,
+              // Hugs the file name, up to the media width.
+              constraints: const BoxConstraints(
+                maxWidth: NotionBubble.mediaMaxWidth,
+              ),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(NotionTokens.radius),
                 border: Border.all(
@@ -107,6 +114,7 @@ class MessageDownloadContent extends StatelessWidget {
             ),
             child: Linkify(
               text: fileDescription,
+              textWidthBasis: TextWidthBasis.longestLine,
               textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
               style: TextStyle(
                 color: textColor,

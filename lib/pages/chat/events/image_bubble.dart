@@ -3,8 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:math';
+
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
 import 'package:chatloom/utils/url_launcher.dart';
@@ -71,9 +74,14 @@ class ImageBubble extends StatelessWidget {
             constraints.maxWidth.isFinite && this.width > constraints.maxWidth
             ? constraints.maxWidth
             : this.width;
-        final height = this.width > 0
+        final scaled = this.width > 0
             ? this.height * width / this.width
             : this.height;
+        // Tall media is cropped (cover) rather than taller than the screen.
+        final height = min(
+          scaled,
+          ConversationMedia.maxHeightOf(context, constraints),
+        );
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: .min,
@@ -98,6 +106,8 @@ class ImageBubble extends StatelessWidget {
                   children: [
                     Hero(
                       tag: event.eventId,
+                      // Straight flight, as the viewer route uses.
+                      createRectTween: NotionMediaHero.rectTween,
                       child: AppSettings.showThumbnailsInTimeline.value
                           ? MxcImage(
                               cacheKey: event.transactionId ?? event.eventId,
@@ -133,12 +143,10 @@ class ImageBubble extends StatelessWidget {
               SizedBox(
                 width: width,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
+                  padding: NotionBubble.padding.copyWith(top: 0),
                   child: Linkify(
                     text: fileDescription,
+                    textWidthBasis: TextWidthBasis.longestLine,
                     textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
                     style: TextStyle(
                       color: textColor,

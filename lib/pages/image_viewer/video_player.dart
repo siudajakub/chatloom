@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -25,7 +26,16 @@ import '../../widgets/mxc_image.dart';
 class EventVideoPlayer extends StatefulWidget {
   final Event event;
 
-  const EventVideoPlayer(this.event, {super.key});
+  /// Hero tag of the thumbnail this video flies from (default: event id).
+  final Object? heroTag;
+  final BorderRadius sourceRadius;
+
+  const EventVideoPlayer(
+    this.event, {
+    this.heroTag,
+    this.sourceRadius = NotionRadius.mdAll,
+    super.key,
+  });
 
   @override
   EventVideoPlayerState createState() => EventVideoPlayerState();
@@ -206,50 +216,60 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     final infoMap = widget.event.content.tryGetMap<String, Object?>('info');
     final videoWidth = infoMap?.tryGet<int>('w') ?? 400;
     final videoHeight = infoMap?.tryGet<int>('h') ?? 300;
-    final height = MediaQuery.sizeOf(context).height - 52;
-    final width = videoWidth * (height / videoHeight);
+    // Contained in the stage (below the 52 px top bar), never wider than
+    // the screen; the hero lands on exactly this rectangle.
+    final stage = MediaQuery.sizeOf(context);
+    final fitted =
+        notionFitMedia(
+          videoWidth,
+          videoHeight,
+          Size(stage.width, stage.height - 52),
+        ) ??
+        Size(stage.width, stage.height - 52);
+    final width = fitted.width;
+    final height = fitted.height;
 
     final chewieController = _chewieController;
-    return chewieController != null
-        ? Center(
-            child: SizedBox(
-              width: width,
-              height: height,
-              child: Chewie(controller: chewieController),
+    // One hero for the thumbnail and the playing video, so closing flies
+    // back into the bubble from either state.
+    final media = NotionMediaHero(
+      tag: widget.heroTag ?? widget.event.eventId,
+      sourceRadius: widget.sourceRadius,
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: chewieController != null
+            ? Chewie(controller: chewieController)
+            : hasThumbnail
+            ? MxcImage(
+                event: widget.event,
+                isThumbnail: true,
+                width: width,
+                height: height,
+                fit: BoxFit.cover,
+                placeholder: (context) => BlurHash(
+                  blurhash: blurHash,
+                  width: width,
+                  height: height,
+                  fit: BoxFit.cover,
+                ),
+              )
+            : BlurHash(blurhash: blurHash, width: width, height: height),
+      ),
+    );
+    return Stack(
+      children: [
+        Center(child: media),
+        if (chewieController == null)
+          Center(
+            // A cached video starts before a spinner would be noticed.
+            child: NotionDelayedReveal(
+              child: CircularProgressIndicator.adaptive(
+                value: _downloadProgress,
+              ),
             ),
-          )
-        : Stack(
-            children: [
-              Center(
-                child: Hero(
-                  tag: widget.event.eventId,
-                  child: hasThumbnail
-                      ? MxcImage(
-                          event: widget.event,
-                          isThumbnail: true,
-                          width: width,
-                          height: height,
-                          fit: BoxFit.cover,
-                          placeholder: (context) => BlurHash(
-                            blurhash: blurHash,
-                            width: width,
-                            height: height,
-                            fit: BoxFit.cover,
-                          ),
-                        )
-                      : BlurHash(
-                          blurhash: blurHash,
-                          width: width,
-                          height: height,
-                        ),
-                ),
-              ),
-              Center(
-                child: CircularProgressIndicator.adaptive(
-                  value: _downloadProgress,
-                ),
-              ),
-            ],
-          );
+          ),
+      ],
+    );
   }
 }

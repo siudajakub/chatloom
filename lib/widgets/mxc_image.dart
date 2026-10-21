@@ -15,6 +15,7 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/bounded_byte_cache.dart';
 import 'package:chatloom/utils/client_download_content_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
+import 'package:chatloom/widgets/cover_resize_image.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:http/http.dart' as http;
 import 'package:lottie/lottie.dart';
@@ -40,6 +41,13 @@ class MxcImage extends StatefulWidget {
   final Client? client;
   final BorderRadius borderRadius;
 
+  /// Decode a full-size image ([isThumbnail] false) only as large as needed
+  /// to cover [width] × [height] (see [CoverResizeImage]).
+  final bool decodeToCover;
+
+  /// Paint opacity applied while drawing the image (no compositing layer).
+  final double opacity;
+
   static void clearCache(String cacheName) =>
       _MxcImageState._imageDataCache.removeWhere((key) => key.$2 == cacheName);
 
@@ -62,6 +70,8 @@ class MxcImage extends StatefulWidget {
     this.borderRadius = BorderRadius
         .zero, // design-lint: allow unclipped by default; callers pass a radius
     this.cacheName,
+    this.decodeToCover = false,
+    this.opacity = 1,
     super.key,
   });
 
@@ -330,6 +340,22 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
 
     ImageProvider imageProvider(Uint8List bytes) {
       final original = MemoryImage(bytes);
+      if (widget.decodeToCover && !widget.isThumbnail) {
+        final dpr = MediaQuery.devicePixelRatioOf(context);
+        final width = widget.width, height = widget.height;
+        if (width != null &&
+            height != null &&
+            width.isFinite &&
+            height.isFinite &&
+            width > 0 &&
+            height > 0) {
+          return CoverResizeImage(
+            original,
+            width: max(1, (width * dpr).ceil()),
+            height: max(1, (height * dpr).ceil()),
+          );
+        }
+      }
       final width = decodeSize(widget.width);
       final height = decodeSize(widget.height);
       if (width == null && height == null) return original;
@@ -423,6 +449,9 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
                   width: widget.width,
                   height: widget.height,
                   fit: widget.fit,
+                  opacity: widget.opacity < 1
+                      ? AlwaysStoppedAnimation(widget.opacity.clamp(0.0, 1.0))
+                      : null,
                   filterQuality: widget.isThumbnail
                       ? FilterQuality.low
                       : FilterQuality.medium,

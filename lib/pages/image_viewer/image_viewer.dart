@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/pages/image_viewer/image_viewer_view.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -16,27 +17,49 @@ import 'package:personal_core/personal_core.dart';
 
 import '../../utils/matrix_sdk_extensions/event_extension.dart';
 
-/// Opens [event] full screen: the viewer fades in while it scales up from
-/// the dialog start scale, and leaves the same way (or follows a downward
-/// swipe, see [ImageViewerController]).
+/// Opens [event] full screen, Telegram style: the photo flies out of its
+/// thumbnail (a hero with [heroTag], by default the event id that timeline
+/// bubbles use) while the backdrop fades in, and flies back on close or
+/// after a downward swipe (see [ImageViewerController]). [sourceRadius] is
+/// the corner radius of that thumbnail.
 Future<void> showImageViewer(
   BuildContext context,
   Event event, {
   Timeline? timeline,
-}) => showNotionCustomDialog<void>(
-  context: context,
-  builder: (_) => ImageViewer(event, timeline: timeline, outerContext: context),
-);
+  Object? heroTag,
+  BorderRadius sourceRadius = NotionRadius.mdAll,
+}) {
+  final navigator = Navigator.of(context, rootNavigator: true);
+  return navigator.push<void>(
+    NotionMediaRoute<void>(
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+      builder: (_) => ImageViewer(
+        event,
+        timeline: timeline,
+        outerContext: context,
+        heroTag: heroTag,
+        sourceRadius: sourceRadius,
+      ),
+    ),
+  );
+}
 
 class ImageViewer extends StatefulWidget {
   final Event event;
   final Timeline? timeline;
   final BuildContext outerContext;
 
+  /// Hero tag of the thumbnail [event] was opened from (other pages use
+  /// their event id).
+  final Object? heroTag;
+  final BorderRadius sourceRadius;
+
   const ImageViewer(
     this.event, {
     required this.outerContext,
     this.timeline,
+    this.heroTag,
+    this.sourceRadius = NotionRadius.mdAll,
     super.key,
   });
 
@@ -45,59 +68,91 @@ class ImageViewer extends StatefulWidget {
 }
 
 class ImageViewerController extends State<ImageViewer>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final FocusNode focusNode = FocusNode();
 
-  /// Vertical offset of the media while it is swiped away (or springs
-  /// back). The backdrop fades and the media shrinks with it.
-  final ValueNotifier<double> dismissOffset = ValueNotifier(0);
-  late final AnimationController _settle = AnimationController.unbounded(
-    vsync: this,
-  )..addListener(() => dismissOffset.value = _settle.value);
+  /// The media follows a vertical swipe and closes past a threshold, or
+  /// springs back; backdrop and chrome fade with it.
+  late final NotionDismissDrag dismiss = NotionDismissDrag(vsync: this);
+
+  /// Double tap zooms into the tapped point and back.
+  late final NotionDoubleTapZoom zoom = NotionDoubleTapZoom(vsync: this);
+
   final Map<String, TransformationController> _transforms = {};
-  bool _dismissDrag = false;
+  Offset _doubleTapAt = Offset.zero;
+
+  /// Top bar and arrows; a tap on the media toggles them.
+  final ValueNotifier<bool> chromeVisible = ValueNotifier(true);
 
   /// Swipe distance (logical px) or speed (px/s) that closes the viewer.
-  static const double dismissDistance = 120;
-  static const double dismissVelocity = 900;
+  static const double dismissDistance = NotionDismissDrag.defaultDistance;
+  static const double dismissVelocity = NotionDismissDrag.defaultVelocity;
+
+  /// Vertical offset of the media while it is swiped away.
+  ValueNotifier<double> get dismissOffset => dismiss.offset;
+
+  /// Hero tag of [event]'s media.
+  Object heroTagFor(Event event) =>
+      event.eventId == widget.event.eventId && widget.heroTag != null
+      ? widget.heroTag!
+      : event.eventId;
 
   /// Zoom state of one page; a zoomed image pans instead of dismissing.
   TransformationController transformFor(Event event) =>
       _transforms.putIfAbsent(event.eventId, TransformationController.new);
 
+  void toggleChrome() => chromeVisible.value = !chromeVisible.value;
+
+  void onDoubleTapDown(TapDownDetails details) =>
+      _doubleTapAt = details.localPosition;
+
+  void onDoubleTap(Event event) => zoom.toggle(
+    transformFor(event),
+    _doubleTapAt,
+    reduced: NotionMotion.reduced(context),
+  );
+
   void onInteractionStart(ScaleStartDetails details) {
-    final zoomed =
-        transformFor(currentEventOrInitial).value.getMaxScaleOnAxis() > 1.01;
-    _dismissDrag = details.pointerCount == 1 && !zoomed;
-    if (_dismissDrag) _settle.stop();
+    zoom.stop();
+    final zoomed = NotionDoubleTapZoom.isZoomed(
+      transformFor(currentEventOrInitial),
+    );
+    if (details.pointerCount == 1 && !zoomed) dismiss.start();
   }
 
   void onInteractionUpdate(ScaleUpdateDetails details) {
-    if (!_dismissDrag) return;
+    if (!dismiss.dragging) return;
     if (details.pointerCount > 1) {
       // A pinch takes over: put the media back.
-      _dismissDrag = false;
-      _springBack(0);
+      dismiss.springBack(reduced: NotionMotion.reduced(context));
       return;
     }
-    dismissOffset.value += details.focalPointDelta.dy;
+    dismiss.update(details.focalPointDelta.dy);
   }
 
-  void _springBack(double velocity) {
-    if (NotionMotion.reduced(context)) {
-      _settle.value = 0;
-      return;
+  /// Vertical swipes on pages without a zoomable image (videos, rounds).
+  void onVerticalDragStart(DragStartDetails _) => dismiss.start();
+
+  void onVerticalDragUpdate(DragUpdateDetails details) =>
+      dismiss.update(details.delta.dy);
+
+  void onVerticalDragEnd(DragEndDetails details) =>
+      _endDismiss(details.velocity.pixelsPerSecond.dy);
+
+  void _endDismiss(double velocity) {
+    if (dismiss.end(velocity, reduced: NotionMotion.reduced(context))) {
+      Navigator.of(context, rootNavigator: false).pop();
     }
-    _settle
-      ..value = dismissOffset.value
-      ..animateWith(
-        NotionMotion.springTo(
-          NotionMotion.snappy,
-          dismissOffset.value,
-          0,
-          velocity: velocity,
-        ),
-      );
+  }
+
+  /// A page swiped away forgets its zoom, like Telegram.
+  void onPageChanged(int index) {
+    final current = allEvents[index].eventId;
+    zoom.stop();
+    for (final entry in _transforms.entries) {
+      if (entry.key != current) entry.value.value = Matrix4.identity();
+    }
+    RoundPlaybackCoordinator.shared.stopAll(suspend: false);
   }
 
   Event get currentEventOrInitial =>
@@ -196,15 +251,8 @@ class ImageViewerController extends State<ImageViewer>
   /// Go back if user swiped it away
   void onInteractionEnds(ScaleEndDetails endDetails) {
     final velocity = endDetails.velocity.pixelsPerSecond.dy;
-    if (_dismissDrag) {
-      _dismissDrag = false;
-      if (dismissOffset.value.abs() > dismissDistance ||
-          (velocity.abs() > dismissVelocity &&
-              velocity.sign == dismissOffset.value.sign)) {
-        Navigator.of(context, rootNavigator: false).pop();
-      } else {
-        _springBack(velocity);
-      }
+    if (dismiss.dragging) {
+      _endDismiss(velocity);
       return;
     }
     if (PlatformInfos.usesTouchscreen == false) {
@@ -216,8 +264,9 @@ class ImageViewerController extends State<ImageViewer>
 
   @override
   void dispose() {
-    _settle.dispose();
-    dismissOffset.dispose();
+    dismiss.dispose();
+    zoom.dispose();
+    chromeVisible.dispose();
     for (final transform in _transforms.values) {
       transform.dispose();
     }
