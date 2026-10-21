@@ -190,8 +190,20 @@ def validate_apk(apk, apksigner, aapt, root, environment=None):
         if ("AndroidManifest.xml" not in names or "classes.dex" not in names
                 or abis != ["arm64-v8a"] or native_abis != ["arm64-v8a"]):
             raise ReleaseError("APK is missing Android inputs or its Flutter ABI is not arm64-v8a")
+    # Without the Google services resources FCM never issues a token: the APK
+    # works but push notifications silently never register (2026-10-21).
+    resources = run([aapt, "dump", "resources", apk], root, capture=True, environment=environment)
+    if not firebase_configured(resources):
+        raise ReleaseError("APK has no Firebase configuration (google_app_id); push would not work")
     return {"certificate_sha256": certificate, "package": package,
-            "flutter_lib_abis": abis, "native_lib_abis": native_abis}
+            "flutter_lib_abis": abis, "native_lib_abis": native_abis,
+            "firebase_configured": True}
+
+
+def firebase_configured(resources_dump):
+    """Whether `aapt2 dump resources` lists the google-services string resources."""
+    return all(re.search(rf"\bstring/{name}\b", resources_dump)
+               for name in ("google_app_id", "gcm_defaultSenderId"))
 
 
 @contextmanager

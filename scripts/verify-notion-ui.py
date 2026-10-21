@@ -108,7 +108,8 @@ def prepare(flutter):
                     'predictive_back_test.dart',
                     'composer_send_test.dart',
                     'conversation_bubble_layout_test.dart',
-                    'conversation_message_menu_test.dart'}
+                    'conversation_message_menu_test.dart',
+                    'composer_record_buttons_test.dart'}
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion').glob('*_test.dart')) if not path.name.endswith(('_controller_test.dart', '_adapter_test.dart')) and path.name not in full_graph_only]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'assets/notion').rglob('*')) if path.is_file()]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion/goldens').rglob('*.png'))]

@@ -16,6 +16,10 @@ release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
 
 
+FIREBASE_RESOURCES = ('    resource 0x7f110060 string/gcm_defaultSenderId\n'
+                      '    resource 0x7f110063 string/google_app_id\n')
+
+
 class ReleaseSafetyTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -139,12 +143,30 @@ class ReleaseSafetyTest(unittest.TestCase):
         with patch.object(release, 'run', side_effect=[
             'V2 Signer: certificate SHA-256 digest: ' + release.EXPECTED_CERTIFICATE,
             "package: name='pl.personal.chat' versionCode='3568' versionName='2.10.0'",
+            FIREBASE_RESOURCES,
         ]) as runner:
             release.validate_apk(apk, '/fixture/apksigner', '/fixture/aapt2', self.root,
                                  environment=environment)
-        self.assertEqual(len(runner.call_args_list), 2)
+        self.assertEqual(len(runner.call_args_list), 3)
         for call in runner.call_args_list:
             self.assertIs(call.kwargs['environment'], environment)
+
+    def test_apk_without_firebase_configuration_is_rejected(self):
+        apk = self.root / 'no-firebase.apk'
+        with zipfile.ZipFile(apk, 'w') as archive:
+            for name in ('AndroidManifest.xml', 'classes.dex', 'lib/arm64-v8a/libflutter.so'):
+                archive.writestr(name, b'synthetic')
+        signed = ['Signer #1 certificate SHA-256 digest: ' + release.EXPECTED_CERTIFICATE,
+                  "package: name='pl.personal.chat' versionCode='3568' versionName='2.10.0'"]
+        without = '    resource 0x7f110001 string/abc_action_bar_up_description\n'
+        with patch.object(release, 'run', side_effect=[*signed, without]), \
+                self.assertRaises(release.ReleaseError) as raised:
+            release.validate_apk(apk, 'apksigner', 'aapt2', self.root)
+        self.assertIn('Firebase', str(raised.exception))
+        with patch.object(release, 'run', side_effect=[*signed, FIREBASE_RESOURCES]):
+            result = release.validate_apk(apk, 'apksigner', 'aapt2', self.root)
+        self.assertTrue(result['firebase_configured'])
+        self.assertFalse(release.firebase_configured('string/google_app_id_extra'))
 
     def test_certificate_requires_exact_personal_signer(self):
         valid = f"Signer #1 certificate SHA-256 digest: {release.EXPECTED_CERTIFICATE}\n"
