@@ -1,0 +1,15 @@
+{
+  "inbox.png": {
+    "source_capture": "inbox-390.png",
+    "sha256": "91b422887860357bbc1d3aba278fa536750a036f30cb759950a57ac2380fad7a"
+  },
+  "conversation.png": {
+    "source_capture": "conversation-390.png",
+    "sha256": "195d5dca3e3e5f7d336e404945757896493aee79075615954c4026dc6619de93"
+  },
+  "settings.png": {
+    "source_capture": "settings-390.png",
+    "sha256": "27c57fd55c550e2a3d1826440082d3d857b2cfe6377b90bba063b8f3a3502e13"
+  },
+  "source_manifest_sha256": "f7f8e3cf980289ea79de5ae9c514a326e72dbdb31f54c0d979c56cbd5f6a35b9"
+}

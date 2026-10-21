@@ -1,6 +1,6 @@
 # ChatLoom
 
-ChatLoom (dawniej „Personal Chat”) to prywatna marka tego klienta. Logo i ikony generuje `scripts/render-chatloom-logo.py`.
+ChatLoom to prywatny klient Beepera dla Androida i macOS. Opis produktu, aktualne screeny i język wizualny: [README.md](README.md). Logo i ikony generuje `scripts/render-chatloom-logo.py`.
 
 ## Android i macOS na jednej gałęzi
 
@@ -26,7 +26,7 @@ Prywatny fork FluffyChat v2.10.0 dla Androida i macOS, z zachowanym transportem 
 
 ## Uruchomienie
 
-Flutter 3.47.4 / Dart3.13.3. `flutter pub get`, następnie build Android/macOS zgodnie z upstream. Własne application/bundle ID: `pl.personal.chat`. SDK vendored w `packages/matrix`, pin i poprawki w `UPSTREAM-PIN.md`; nie aktualizować do `main` bez ponowienia bramek E2EE/storage/read/send.
+Flutter 3.47.4 / Dart3.13.3. `flutter pub get`, następnie build według instrukcji [Androida](android/README.personal.md) lub [macOS](macos/README.personal.md). Własne application/bundle ID: `pl.personal.chat`. SDK vendored w `packages/matrix`, pin i poprawki w `UPSTREAM-PIN.md`; nie aktualizować do `main` bez ponowienia bramek E2EE/storage/read/send.
 
 Android release ma własny podpis, bez upstream dummykeystore. Lokalny klucz i hasło są poza Git w `~/.local/share/personal-chat/signing/`, uprawnienia700/600; lokalny `android/key.properties` jest ignorowany. Zrób niezależny prywatny backup klucza przed regularnym użyciem; utrata klucza uniemożliwi upgrade tej instalacji. APKdebug i release są podpisane różnymi kluczami. Nie usuwać instalacji z danymi w celu obejścia signaturemismatch.
 
