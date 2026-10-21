@@ -13,15 +13,17 @@ import 'package:chatloom/ui/notion/notion.dart';
 
 ## Why it looks like this
 
-ChatLoom is a quiet, text-first messenger. The look follows Notion's dark
-mode: warm near-black page, flat grey surfaces, one neutral text colour, no
-elevation, no gradients. Since 19 October 2026 every surface speaks the
+ChatLoom is a text-first messenger. The look follows Notion's dark mode:
+warm near-black page, flat grey surfaces, one neutral text colour, no
+elevation. Colour comes from one place, the user's accent and colour
+intensity (see Colour system): Messenger-blue own bubbles, badges, toggles
+and links by default, calmer or louder on request. Since 19 October 2026 every surface speaks the
 language of the floating inbox dock (see Glass and Radius): translucent glass
 with a hairline on chrome and overlays, pills for controls, generous rounded
 corners everywhere. Nothing is square. Hierarchy comes from type weight and
-muted secondary text, not from colour or shadow. The user's accent
-preference changes only `colors.accent`; incoming messages and identity never
-depend on it. Light mode uses the same roles with a paper palette, so any
+muted secondary text, not from colour or shadow. The accent and intensity
+change only the palette roles (`colors.accent`, `context.notion.palette`);
+incoming messages, status colours and identity never depend on them. Light mode uses the same roles with a paper palette, so any
 code that reads roles works in both.
 
 ## Tokens
@@ -40,13 +42,50 @@ All tokens live in `lib/ui/notion/notion_tokens.dart`.
 | `textSecondary` | `#AAAAA5` | subtitles, labels, metadata |
 | `textTertiary` | `#7F7F7B` | placeholders, disabled |
 | `cover` | `#33312B` | page cover band |
-| `accent` / `onAccent` | = text | user accent (seed), focus |
+| `accent` / `onAccent` | from the palette | accent as a foreground on the page (links, active icons, typing line, cursor, sliders); = text for Graphite. Filled controls use `palette.accentFill` |
 | `danger` `success` `warning` `info` | red/green/amber/blue | status only, never decoration |
 | `scrim` | 60% black | modal barrier |
 | `NotionMediaColors.scrim` / `stageScrim` / `onScrim` | 45% / 72% black, white | over video frames only (round pills and glyphs, media stage barrier); fixed in both themes |
 
 Message bubbles use the `ConversationBubbleColors` extension
-(`ConversationBubbleColors.of(context)`); it is registered by `NotionTheme`.
+(`ConversationBubbleColors.of(context)`); it is registered by `NotionTheme`,
+which takes the own side from the palette (`outgoing`, `outgoingText`,
+`outgoingGradient`).
+
+### Colour system: `context.notion.palette` (`notion_appearance.dart`)
+
+The user picks an accent preset (`NotionAccent`: blue, the default and
+Messenger's, violet, pink, red, orange, green, teal, graphite) and an
+intensity (`NotionIntensity`) in Settings → Appearance. `ThemeController`
+stores them (`AppSettings.appearanceAccent` / `appearanceIntensity`) and
+rebuilds the theme in the same frame; `NotionTheme.build(brightness,
+appearance)` resolves a `NotionPalette` once per theme, so widgets only read
+roles (no contrast work per build or per scroll frame).
+
+| Intensity | Own bubble | Accent | Letter avatars | Network marks |
+|---|---|---|---|---|
+| `muted` | grey with a 16 % hint of the hue, grey text | desaturated | grey | monochrome |
+| `balanced` (default) | solid accent, a little deeper, white text | the hue | tinted per name | monochrome |
+| `vivid` (Messenger) | accent gradient (hue → `gradientEnd`), white text | the hue, saturated | saturated per name, white initials | brand colours |
+
+`graphite` + `muted` is exactly the original grey Notion look.
+
+| Role | Use for |
+|---|---|
+| `accent` / `onAccent` | foreground accent (also `colors.accent`, `colorScheme.primary`) |
+| `accentFill` / `onAccentFill` | filled accent controls: unread badges, send button, switch tracks, checkboxes, primary buttons, FAB, `badgeTheme` |
+| `accentTint` | soft opaque accent background: selected tabs, chips, segments, list tiles, navigation indicators |
+| `bubble`, `bubbleGradient`, `onBubble` | own bubble fill (gradient in Vivid; `bubble` is the solid stand-in for quotes) and its text; links in own bubbles take `onBubble`, underlined |
+| `avatar(name)` | `NotionInitialAvatar` background/initials, stable per name (8 hues) |
+| `network(key)` | brand colour of a network mark in Vivid, null otherwise (`NotionNetworkGlyph`) |
+
+Contrast is computed, not hand-picked: `NotionPalette.fillFor` moves a hue's
+lightness until white text reaches 4.5:1, `inkOn` until the hue reads on the
+page; network marks need 3:1 (graphics). `test/notion/appearance_test.dart`
+checks every preset × intensity × brightness. Gradients exist only on Vivid
+own bubbles (static per bubble, never scroll-driven); every other surface
+stays flat. Status colours (`danger`, `success`, ...) never follow the
+accent.
 
 ### Message bubbles: `NotionBubble.*` (const)
 
@@ -166,6 +205,7 @@ in new code; read `context.notion` instead.
 | `NotionSheet` + `showNotionSheet(...)` | bottom sheets and pickers (glass panel, `sheetTop` corners) |
 | `NotionEmptyState(icon:, title:, message:, action:)` | empty lists, soft errors |
 | `NotionCallout(icon:, title:, message:, actionLabel:, onAction:, onDismiss:, tone:)` | inline fixable status (inbox encryption/sync notice, connection retry); `tone` colours only the icon |
+| `NotionStatusPill(label:, tone:)` | read-only status in a row or header (network Connected / Needs attention / Disconnected); `tone` colours only the dot, changes fade through |
 | `ConversationBubble(quote:)`, `ConversationReplyQuote`, `ConversationReplyCaption`, `ConversationMetaChip` | message bubbles and Messenger-style replies (`lib/pages/chat/conversation_bubble.dart`, see Message bubbles) |
 | `NotionTextField(label:, hint:, helper:, error:, ...)` | text input with the label above |
 | `NotionCompactChatHeader`, `NotionInitialAvatar` | chat header, letter avatar |
@@ -352,6 +392,7 @@ default.
 | `NotionRowHighlight(trigger:, child:)` | one-shot `selected` flash of a row that moved or changed (inbox reorder is not animated) | `NotionRowHighlight(trigger: room.lastEventId, child: row)` |
 | `NotionSkeleton(enabled:, child:)`, `.sliver`, `NotionSkeletonRow()`, `NotionSkeleton.keep/ignore/unite` | loading state with the final layout; cross-fades to content | `NotionSkeleton(enabled: loading, child: Column(children: [for (var i = 0; i < 8; i++) const NotionSkeletonRow()]))` |
 | `NotionDelayedSpinner()`, `NotionDelayedReveal(child:)` | loaders that only show after `loaderGrace` | `if (busy) const NotionDelayedSpinner()` |
+| `NotionShimmerLines(color:, lines:)` | text that is on its way inside a bubble (transcripts); one `CustomPaint` behind a `RepaintBoundary`, bubble foreground colour, static under reduced motion | `NotionShimmerLines(color: bubbleText, lines: 2)` |
 | `NotionTypingDots(size:)`, `NotionPulse(child:, color:)` | loops: typing, live call/recording | `NotionPulse(color: colors.danger, child: callButton)` |
 | `showNotionCustomDialog(context:, builder:)`, `NotionDialogRoute`, `NotionDialogTransition` | any dialog: barrier fade, scale .94 → 1 on `smoothCurve`, faster exit | `showNotionCustomDialog(context: context, builder: (_) => NotionDialog(...))` |
 | `showNotionPopover(context:, builder:, alignment:)`, `NotionPopoverRoute` | anchored panels/menus: the `NotionGlassPanel` in `builder` grows out of `alignment` (the anchor) with its blur on, content fades in; collapses back in `quick`; instant under reduced motion. Content without a glass panel appears without motion | `showNotionPopover(context: context, alignment: Alignment.bottomRight, builder: panel)` |
@@ -469,7 +510,9 @@ Do:
   file.
 
 Don't:
-- Add shadows, gradients, coloured surfaces or elevation.
+- Add shadows, elevation, or gradients and coloured surfaces outside the
+  palette roles (the Vivid bubble gradient and `accentFill`/`accentTint` are
+  the only coloured fills).
 - Blur anything that scrolls (rows, bubbles, cards, chips, grid tiles) or
   animate a blur; blur only fixed chrome and overlays that keep one glass
   state while they move (see Glass).

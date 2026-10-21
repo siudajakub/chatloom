@@ -28,7 +28,7 @@ Rendered on 21 October 2026 from production presentation widgets with fictional 
 - **Privacy:** new installations start in Incognito. Matrix encryption and recovery remain in place; native storage uses SQLCipher and fails closed when unavailable.
 - **Shared desktop and mobile app:** Android and macOS use the same Flutter screens and domain logic on `main`, with native platform code in separate directories.
 
-Transcription requires the configured worker; automatic incoming voice/round transcription also requires both user policy and the operator switch, with duration and budget limits. Disappearing messages are excluded. ChatLoom does not automatically reply.
+Transcription requires the configured worker; automatic voice/round transcription also requires both user policy and the operator switch, with duration and budget limits. Automatic transcription of your own messages has a separate user setting. Disappearing messages are excluded. ChatLoom does not automatically reply.
 
 ## Design language
 
@@ -36,12 +36,12 @@ ChatLoom is text-first: warm charcoal backgrounds, neutral surfaces and clear ty
 
 | Element | Language |
 |---|---|
-| Palette | Warm near-black `#191919`, grey surfaces, off-white text; semantic colors for status |
+| Palette | Warm near-black `#191919`, grey surfaces, off-white text; Messenger-blue own bubbles and a configurable accent |
 | Typography | Bundled Roboto, restrained weights, large page titles and muted metadata |
 | Shapes | Rounded message groups, circular avatars, pill controls and a floating dock |
 | Glass | Translucent tint and fine borders on fixed bars and overlays; solid scrolling content |
 | Motion | Brief press and transition feedback, reduced-motion support, no animated blur |
-| Themes | Dark by default; light mode, accent, text size and private conversation appearance |
+| Themes | Dark by default; light mode, 8 accents × 3 colour intensities, system text scaling and private conversation appearance |
 
 The implementation is documented in [DESIGN.md](DESIGN.md). Its internal `Notion*` tokens and primitives define the shared ChatLoom design system.
 
