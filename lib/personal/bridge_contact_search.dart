@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:chatloom/personal/bridge_contact_search_provisioning.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:flutter/foundation.dart';
@@ -537,9 +538,13 @@ class BridgeDirectory extends ChangeNotifier {
             ? BridgeRemoteStatus.notLoggedIn
             : BridgeRemoteStatus.ready;
       } on BridgeProvisioningException catch (e) {
+        logBackgroundError('bridge_probe', e);
         state
           ..status = BridgeRemoteStatus.unavailable
-          ..reason = e.reason;
+          // Shown under the network: words, not `HTTP 404 M_UNRECOGNIZED`.
+          ..reason = e.unreachable || e.unsupported
+              ? 'ChatLoom can’t reach this bridge'
+              : humanErrorText(e);
       } catch (_) {
         state
           ..status = BridgeRemoteStatus.unavailable
@@ -582,7 +587,7 @@ class BridgeDirectory extends ChangeNotifier {
             ),
           );
         } on BridgeProvisioningException catch (e) {
-          error = e.unsupported ? null : e.reason;
+          error = e.unsupported ? null : humanErrorText(e);
           if (e.unsupported) {
             state.capabilities = BridgeProvisioningCapabilities(
               createDm: state.capabilities.createDm,
@@ -635,7 +640,7 @@ class BridgeDirectory extends ChangeNotifier {
           for (final hit in hits) BridgeRemoteContact(hit, loginId),
         ];
       } on BridgeProvisioningException catch (e) {
-        state.actionError = e.message ?? e.reason;
+        state.actionError = humanErrorText(e);
       } catch (_) {
         state.actionError = 'unexpected answer';
       }
@@ -672,7 +677,7 @@ class BridgeDirectory extends ChangeNotifier {
             ? null
             : BridgeRemoteContact(contact, loginId);
       } on BridgeProvisioningException catch (e) {
-        state.actionError = e.message ?? e.reason;
+        state.actionError = humanErrorText(e);
       } catch (_) {
         state.actionError = 'unexpected answer';
       }

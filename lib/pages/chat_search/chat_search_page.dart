@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/pages/chat_search/chat_search_view.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -47,7 +49,23 @@ class ChatSearchController extends State<ChatSearchPage>
     });
   }
 
+  /// Searches the current tab; a failed request is explained with "Try
+  /// again" instead of leaving the page loading forever.
   Future<void> startSearch() async {
+    try {
+      await _search();
+    } catch (error, stack) {
+      if (!mounted) return;
+      setState(() => isLoading = false);
+      await ErrorReporter.action(
+        context,
+        action: ErrorAction.load,
+        onRetry: startSearch,
+      ).onErrorCallback(error, stack);
+    }
+  }
+
+  Future<void> _search() async {
     switch (tabController.index) {
       case 0:
         final searchQuery = searchController.text.trim();

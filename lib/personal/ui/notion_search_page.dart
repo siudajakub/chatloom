@@ -45,8 +45,6 @@ class NotionSearchPage extends StatefulWidget {
     required this.onOpenMessage,
     required this.onSearchHistory,
     this.onSelectView,
-    this.spaces = const [],
-    this.onSelectSpace,
     this.closeOnOpen,
     this.initialQuery = '',
   });
@@ -65,8 +63,6 @@ class NotionSearchPage extends StatefulWidget {
 
   /// Shows an inbox view (Unread, Archive, …) and closes the search.
   final ValueChanged<InboxFilter>? onSelectView;
-  final List<Room> spaces;
-  final ValueChanged<String>? onSelectSpace;
 
   /// Close the search before opening a result. By default only in the
   /// two-column layout, where the chat opens beside the inbox; on phones the
@@ -260,7 +256,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     open(room);
   }
 
-  /// Inbox views and spaces replace the search.
+  /// Inbox views replace the search.
   void Function(T) _closing<T>(void Function(T) select) => (value) {
     Navigator.of(context).pop();
     select(value);
@@ -389,10 +385,6 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
                       onSelectView: widget.onSelectView == null
                           ? null
                           : _closing(widget.onSelectView!),
-                      spaces: widget.spaces,
-                      onSelectSpace: widget.onSelectSpace == null
-                          ? null
-                          : _closing(widget.onSelectSpace!),
                       onRetry: _retry,
                     )
                   : NotionEntranceScope(
@@ -774,7 +766,7 @@ class _Item {
   final WidgetBuilder build;
 }
 
-/// Before typing: inbox views to jump to, spaces, and what each connected
+/// Before typing: inbox views to jump to and what each connected
 /// network can do.
 class _EmptySearch extends StatelessWidget {
   const _EmptySearch({
@@ -783,16 +775,12 @@ class _EmptySearch extends StatelessWidget {
     required this.directory,
     required this.onRetry,
     this.onSelectView,
-    this.spaces = const [],
-    this.onSelectSpace,
   });
 
   final List<BridgeEndpoint> bridges;
   final BridgeDirectory directory;
   final VoidCallback onRetry;
   final ValueChanged<InboxFilter>? onSelectView;
-  final List<Room> spaces;
-  final ValueChanged<String>? onSelectSpace;
 
   static const _views = <(InboxFilter, IconData)>[
     (InboxFilter.unread, Icons.mark_chat_unread_outlined),
@@ -806,7 +794,7 @@ class _EmptySearch extends StatelessWidget {
 
   String _status(BridgeRemoteState state) => switch (state.status) {
     BridgeRemoteStatus.ready when state.contactsError != null =>
-      'Start chats; contacts unavailable (${state.contactsError})',
+      'Start chats; contacts unavailable',
     BridgeRemoteStatus.ready when state.capabilities.createDm =>
       'Find people and start chats',
     BridgeRemoteStatus.ready => 'Find people',
@@ -822,7 +810,6 @@ class _EmptySearch extends StatelessWidget {
   Widget build(BuildContext context) {
     final padding = MediaQuery.paddingOf(context);
     final selectView = onSelectView;
-    final selectSpace = onSelectSpace;
     final unavailable = bridges.any(
       (b) => directory.stateOf(b).status == BridgeRemoteStatus.unavailable,
     );
@@ -852,27 +839,6 @@ class _EmptySearch extends StatelessWidget {
                   icon: icon,
                   label: inboxViewLabel(view),
                   onPressed: () => selectView(view),
-                ),
-            ],
-          ),
-        ],
-        if (selectSpace != null && spaces.isNotEmpty) ...[
-          const NotionSectionHeader(
-            title: 'Spaces',
-            padding: EdgeInsets.only(
-              top: NotionSpace.xl,
-              bottom: NotionSpace.xs,
-            ),
-          ),
-          Wrap(
-            spacing: NotionSpace.xs,
-            runSpacing: NotionSpace.xs,
-            children: [
-              for (final space in spaces)
-                NotionGlassPill(
-                  icon: Icons.workspaces_outlined,
-                  label: space.getLocalizedDisplayname(),
-                  onPressed: () => selectSpace(space.id),
                 ),
             ],
           ),

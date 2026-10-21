@@ -103,12 +103,21 @@ class BridgeWhoami {
     required this.networkName,
     required this.networkId,
     required this.logins,
+    this.commandPrefix = '',
+    this.managementRoom,
   });
 
   final String bridgeBot;
   final String networkName;
   final String networkId;
   final List<BridgeLogin> logins;
+
+  /// The bridge's `command_prefix` (`!wa`); empty when not reported.
+  final String commandPrefix;
+
+  /// The user's management room with the bridge bot, where commands need
+  /// no prefix (`management_room`, omitted until one exists).
+  final String? managementRoom;
 
   List<BridgeLogin> get usableLogins =>
       logins.where((login) => login.usable).toList(growable: false);
@@ -123,10 +132,18 @@ class BridgeWhoami {
     if (bot is! String || network is! Map) return null;
     final name = network['displayname'];
     final id = network['network_id'];
+    final prefix = json['command_prefix'];
+    final management = json['management_room'];
     return BridgeWhoami(
       bridgeBot: bot,
       networkName: name is String ? name : '',
       networkId: id is String ? id : '',
+      commandPrefix: prefix is String && !prefix.contains(RegExp(r'\s'))
+          ? prefix
+          : '',
+      managementRoom: management is String && management.startsWith('!')
+          ? management
+          : null,
       logins: [
         if (logins is List)
           for (final login in logins) ?BridgeLogin.fromJson(login),

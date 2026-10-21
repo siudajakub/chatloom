@@ -530,7 +530,10 @@ void main() {
           directory.stateOf(_telegram).status,
           BridgeRemoteStatus.unavailable,
         );
-        expect(directory.stateOf(_telegram).reason, 'HTTP 404 M_UNRECOGNIZED');
+        expect(
+          directory.stateOf(_telegram).reason,
+          'ChatLoom can’t reach this bridge',
+        );
         expect(
           directory.stateOf(_whatsapp).status,
           BridgeRemoteStatus.notLoggedIn,

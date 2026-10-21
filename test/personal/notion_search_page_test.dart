@@ -322,7 +322,9 @@ void main() {
       expect(find.text('Your networks'), findsOneWidget);
       expect(find.text('Find people and start chats'), findsOneWidget);
       expect(
-        find.text('People from your chats only (HTTP 404 M_UNRECOGNIZED)'),
+        find.text(
+          'People from your chats only (ChatLoom can’t reach this bridge)',
+        ),
         findsOneWidget,
       );
 
