@@ -108,7 +108,6 @@ void main() {
     expect(hidden.title, '⏰ Reminder');
     expect(hidden.body, 'Reminder about this chat');
     expect(reminderPublicTitle, 'Reminder');
-    expect(reminderPublicBody, 'Unlock to view');
   });
 
   test('anchor ids are validated', () {

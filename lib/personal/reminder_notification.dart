@@ -31,10 +31,8 @@ const reminderTitlePrefix = '⏰ Reminder';
 const reminderFallbackBody = 'Reminder about this chat';
 const reminderUnavailableBody = 'Open to see the message';
 
-/// Intended lock-screen text; see `message_notification.dart` for why the
-/// platform placeholder is used instead.
+/// Content-free ticker title; Android provides the lock-screen placeholder.
 const reminderPublicTitle = 'Reminder';
-const reminderPublicBody = 'Unlock to view';
 
 class ReminderNotificationText {
   final String title;
