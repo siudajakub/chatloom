@@ -35,7 +35,7 @@ import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
-import 'package:chatloom/personal/media/immediate_media_outbox.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/person_group_identity.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -52,6 +52,7 @@ import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
+import 'package:chatloom/personal/send_warmup.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
@@ -60,6 +61,7 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart'
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
+import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -287,6 +289,11 @@ class _MergedChatPageState extends State<_MergedChatView>
     WidgetsBinding.instance.addObserver(this);
     _pendingEvent = widget.initialEventId;
     _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // The first send must not wait for the member list (trust check).
+      final room = mounted ? _targetRoom : null;
+      if (room != null) warmUpSendPath(room);
+    });
   }
 
   @override
@@ -1345,14 +1352,28 @@ class _MergedChatPageState extends State<_MergedChatView>
       }
       return;
     }
-    if (event.status.isError) event.sendAgain();
+    if (event.status.isError) {
+      // Files go through the outgoing media queue (upload shown again).
+      unawaited(
+        MessageDeliveryActions.sendAgain(event).catchError((Object _) {}),
+      );
+    }
     final timeline = timelineFor(event);
     if (timeline != null) {
       for (final edit
           in event
               .aggregatedEvents(timeline, RelationshipTypes.edit)
               .where((e) => e.status.isError)) {
-        edit.sendAgain();
+        // The SDK rethrows only a refusal; explain it.
+        unawaited(
+          edit.sendAgain().then<void>(
+            (_) {},
+            onError: (Object error, StackTrace stack) => ErrorReporter.action(
+              mounted ? context : null,
+              action: ErrorAction.send,
+            ).onErrorCallback(error, stack),
+          ),
+        );
       }
     }
     setState(() => _listRevision++);
@@ -2193,25 +2214,16 @@ class _MergedChatPageState extends State<_MergedChatView>
                 mounted &&
                 target.conversation == frozen.conversation &&
                 identical(Matrix.of(context).client, personal.client),
+            onAccepted: (eventId) {
+              if (mounted) _rememberAccepted(frozen, eventId, DateTime.now());
+            },
           );
       if (!mounted || result == null) return;
-      if (result.state == ImmediateMediaState.matrixAccepted) {
-        if (result.eventId != null) {
-          _rememberAccepted(frozen, result.eventId!, DateTime.now());
-        }
-        if (identical(replyEvent, sourceReply)) {
-          setState(() => replyEvent = null);
-        }
-        // The row itself shows delivery; no notice on success.
-        return;
+      // The round's bubble is in the chat and shows its own delivery
+      // (sending, sent, or "Not sent · Tap to retry"); no notice.
+      if (identical(replyEvent, sourceReply)) {
+        setState(() => replyEvent = null);
       }
-      _notify(switch (result.state) {
-        ImmediateMediaState.unknown =>
-          'The send result is unknown. The recording and the same attempt remain queued.',
-        ImmediateMediaState.staged =>
-          'Recording saved locally. Send it from the original conversation.',
-        _ => 'Recording awaits saving or retry in the round video queue.',
-      });
     } catch (error) {
       _notify(roundFailureMessage(error));
     }

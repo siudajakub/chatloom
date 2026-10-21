@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
@@ -265,10 +267,8 @@ class _MergedMediaDialog extends StatefulWidget {
 class _MergedMediaDialogState extends State<_MergedMediaDialog> {
   late final caption = TextEditingController(text: widget.initialCaption);
   late final files = [...widget.files];
-  bool sending = false, uncertain = false;
+  bool sending = false;
   int accepted = 0;
-  DateTime? acceptedAt;
-  String? acceptedEventId;
   String? problem;
   String? attemptedCaption;
   @override
@@ -278,9 +278,8 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
   }
 
   Future<void> _send() async {
-    if (sending || uncertain || files.isEmpty) return;
+    if (sending || files.isEmpty) return;
     final text = attemptedCaption ?? caption.text.trim();
-    var transportStarted = false;
     setState(() {
       sending = true;
       problem = null;
@@ -381,50 +380,40 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
           );
         }
         // No routing is resolved here: the selected Room and original reply
-        // were captured before opening the picker, and stay immutable.
-        transportStarted = true;
+        // were captured before opening the picker, and stay immutable. The
+        // bubble appears at once; the upload and its result stay in it.
         attemptedCaption ??= text;
-        final id = await widget.room.sendFileEvent(
+        final ticket = await OutgoingMedia.send(
+          widget.room,
           file.file,
           txid: file.transactionId,
           inReplyTo: reply,
           extraContent: text.isEmpty ? null : {'body': text},
         );
-        if (id == null || !id.startsWith(r'$')) {
-          throw StateError('Acceptance unknown');
-        }
         accepted++;
-        transportStarted = false;
-        acceptedAt = DateTime.now();
-        acceptedEventId = id;
-        widget.onAccepted?.call(id, acceptedAt!);
+        final onAccepted = widget.onAccepted;
+        if (onAccepted != null) {
+          unawaited(
+            ticket.accepted.then(
+              (id) => onAccepted(id, DateTime.now()),
+              onError: (Object _) {},
+            ),
+          );
+        }
       }
       if (mounted) {
         Navigator.pop(
           context,
-          MergedMediaResult(
-            accepted: true,
-            caption: text,
-            acceptedAt: acceptedAt,
-            acceptedEventId: acceptedEventId,
-          ),
+          MergedMediaResult(accepted: true, caption: text),
         );
       }
     } on PersonalCapabilityUnavailable catch (error) {
       if (mounted) setState(() => problem = error.reason);
-    } on MatrixException catch (_) {
-      if (mounted)
-        setState(
-          () => problem =
-              'The server rejected the attachment. Your selection and caption are kept.',
-        );
     } catch (_) {
-      uncertain = transportStarted;
       if (mounted) {
         setState(
-          () => problem = uncertain
-              ? 'Sending was not confirmed. $accepted of ${files.length} attachments were accepted. Check the source before retrying.'
-              : 'The attachments could not be prepared. Your selection and caption are kept. Try again.',
+          () => problem =
+              'The attachments could not be prepared. Your selection and caption are kept. Try again.',
         );
       }
     } finally {
@@ -464,7 +453,7 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
                 const Text('Replying to a message in this network'),
               if (accepted > 0)
                 Text(
-                  '$accepted of ${files.length} attachments were accepted and will be skipped on retry.',
+                  '$accepted of ${files.length} attachments are already in the chat. Send again for the rest.',
                 ),
               const SizedBox(height: 16),
               for (final file in files)
@@ -503,7 +492,7 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
                   subtitle: Text(
                     '${(file.file.size / 1024 / 1024).toStringAsFixed(1)} MB',
                   ),
-                  trailing: accepted == 0 && !uncertain
+                  trailing: accepted == 0
                       ? IconButton(
                           tooltip: 'Remove ${file.file.name}',
                           onPressed: sending
@@ -516,7 +505,7 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
               const SizedBox(height: 16),
               TextField(
                 controller: caption,
-                enabled: !sending && !uncertain && attemptedCaption == null,
+                enabled: !sending && attemptedCaption == null,
                 minLines: 1,
                 maxLines: 4,
                 decoration: InputDecoration(
@@ -536,10 +525,12 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
                     ),
                   ),
                 ),
+              // Only a slow step ever shows this; the dialog closes once
+              // the bubbles are in the chat.
               if (sending)
                 const Padding(
-                  padding: const EdgeInsets.only(top: NotionSpace.sm),
-                  child: LinearProgressIndicator(),
+                  padding: EdgeInsets.only(top: NotionSpace.sm),
+                  child: NotionDelayedReveal(child: LinearProgressIndicator()),
                 ),
             ],
           ),
@@ -551,16 +542,12 @@ class _MergedMediaDialogState extends State<_MergedMediaDialog> {
               ? null
               : () => Navigator.pop(
                   context,
-                  MergedMediaResult(
-                    accepted: false,
-                    acceptedAt: acceptedAt,
-                    acceptedEventId: acceptedEventId,
-                  ),
+                  const MergedMediaResult(accepted: false),
                 ),
-          child: Text(uncertain ? 'Close without retrying' : 'Cancel'),
+          child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: sending || uncertain || files.isEmpty ? null : _send,
+          onPressed: sending || files.isEmpty ? null : _send,
           child: Text(
             sending
                 ? 'Sending…'
