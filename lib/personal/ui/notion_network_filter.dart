@@ -5,23 +5,6 @@ import 'package:personal_core/personal_core.dart';
 bool notionMatchesNetwork(Iterable<String> sources, String? selected) =>
     selected == null || sources.contains(selected);
 
-/// The network filter is deliberately applied after visibility/archive rules.
-List<InboxRecord> notionFilterRecords(
-  Iterable<InboxRecord> records, {
-  String? network,
-  InboxFilter filter = InboxFilter.inbox,
-  String query = '',
-  Set<String> hiddenLabelKeys = const {},
-}) =>
-    projectInbox(
-          records,
-          filter: filter,
-          query: query,
-          hiddenLabelKeys: hiddenLabelKeys,
-        )
-        .where((record) => notionMatchesNetwork(record.networks, network))
-        .toList(growable: false);
-
 /// Selections belong to an account, including when switching back to it.
 class NotionAccountNetworkSelection {
   final Map<String, String> _selections = {};

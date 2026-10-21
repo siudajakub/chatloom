@@ -3,7 +3,6 @@
 import 'package:chatloom/pages/chat_list/chat_list.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/pages/chat_list/inbox_health_status.dart';
-import 'package:chatloom/pages/chat_list/space_view.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
@@ -21,23 +20,11 @@ class ChatListViewBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final client = Matrix.of(context).client;
-    final activeSpace = controller.activeSpaceId;
-    if (activeSpace != null)
-      return Scaffold(
-        body: SpaceView(
-          key: ValueKey(activeSpace),
-          spaceId: activeSpace,
-          onBack: controller.clearActiveSpace,
-          onChatTab: controller.onChatTap,
-          activeChat: controller.activeChat,
-        ),
-      );
     final inbox = controller.inbox;
     return ListenableBuilder(
       listenable: inbox,
       builder: (context, _) {
         final projection = inbox.projection;
-        final delegated = inbox.delegated;
         final rooms = controller.filterRooms();
         final pins =
             (controller.personalFilter == InboxFilter.inbox ? rooms : <Room>[])
@@ -52,11 +39,8 @@ class ChatListViewBody extends StatelessWidget {
                       size: 28,
                     ),
                     onTap: () => controller.onChatTap(room),
-                    onLongPress: () => controller.chatContextAction(
-                      room,
-                      context,
-                      delegated[room.id],
-                    ),
+                    onLongPress: () =>
+                        controller.chatContextAction(room, context),
                     order: projection.metadataFor(room).pinOrder!,
                     isGroup: !room.isDirectChatForDisplay,
                   ),
@@ -76,14 +60,10 @@ class ChatListViewBody extends StatelessWidget {
               projection: projection,
               flash: controller.rowFlash(entity),
               flashOnMount: controller.takeFreshFlash(entity),
-              space: delegated[room.id],
               key: ValueKey(chatListItemKey(room.id)),
               onTap: () => controller.onChatTap(room),
-              onLongPress: (posContext) => controller.chatContextAction(
-                room,
-                posContext,
-                delegated[room.id],
-              ),
+              onLongPress: (posContext) =>
+                  controller.chatContextAction(room, posContext),
               activeChat:
                   controller.activeChat == room.id ||
                   (controller.activeGroup != null &&

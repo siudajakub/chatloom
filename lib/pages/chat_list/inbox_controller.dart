@@ -15,8 +15,10 @@ import 'package:matrix/matrix.dart';
 ///   (whole index for new/left rooms, merged persons, spaces or new bridges).
 /// * Personal store changes rebuild the index (private metadata may affect
 ///   every record).
-/// * Changes are coalesced: [debounce] after the last change, at most
-///   [maxWait] after the first one.
+/// * A change to a quiet inbox (no refresh within [debounce]) is published
+///   at once, so a single new message shows without delay. Changes right
+///   after a refresh are coalesced: [debounce] after the last change, at
+///   most [maxWait] after the first one.
 /// * Sync status only notifies on error/recovered and first-sync transitions.
 /// * While [active] is false (the inbox route is covered by a chat), changes
 ///   are only recorded; one refresh runs when the inbox is shown again.
@@ -56,9 +58,12 @@ class InboxController extends ChangeNotifier {
   final _changed = <String>{};
   bool _all = false, _touched = false, _detached = false;
   Timer? _timer;
+  // Runs for [debounce] after each refresh: changes inside it are coalesced.
+  Timer? _cooldown;
+  // A refresh is already due at once (leading edge of a quiet inbox).
+  bool _leading = false;
   DateTime? _firstPending;
   InboxIndex? _index;
-  Map<String, Room> _delegated = const {};
   List<String> _networks = const [];
   bool _failed = false, _loading = true;
 
@@ -73,10 +78,14 @@ class InboxController extends ChangeNotifier {
   set active(bool value) {
     if (_active == value) return;
     _active = value;
-    if (value && _pending) _schedule(Duration.zero);
+    if (value && _pending) {
+      _leading = true;
+      _schedule(Duration.zero);
+    }
     if (!value) {
       _timer?.cancel();
       _timer = null;
+      _leading = false;
     }
   }
 
@@ -99,12 +108,6 @@ class InboxController extends ChangeNotifier {
   }
 
   InboxProjection get projection => index.projection;
-
-  /// Room id → space that lists it as a child.
-  Map<String, Room> get delegated {
-    index;
-    return _delegated;
-  }
 
   /// Networks of non-technical chats, sorted by label.
   List<String> get networks {
@@ -156,7 +159,14 @@ class InboxController extends ChangeNotifier {
     _changed.addAll(rooms);
     _all |= all;
     _touched |= touch;
-    if (!_pending || !_active) return;
+    if (!_pending || !_active || _leading) return;
+    if (_timer == null && _cooldown == null) {
+      // Quiet inbox: publish this change in the next event-loop turn (which
+      // still merges updates of the same sync) instead of after [debounce].
+      _leading = true;
+      _schedule(Duration.zero);
+      return;
+    }
     final now = DateTime.now();
     final first = _firstPending ??= now;
     final latest = first.add(maxWait);
@@ -174,17 +184,17 @@ class InboxController extends ChangeNotifier {
     _timer?.cancel();
     _timer = null;
     _firstPending = null;
+    _leading = false;
     if (_detached || !_pending) return;
+    _cooldown?.cancel();
+    _cooldown = Timer(debounce, () => _cooldown = null);
     final changed = _changed.toList();
     final all = _all;
     _changed.clear();
     _all = _touched = false;
     final index = _index;
     if (index != null && !all && changed.isNotEmpty) {
-      final spaces = changed.any(
-        (id) => client.getRoomById(id)?.isSpace == true,
-      );
-      if (!spaces && index.updateRooms(changed, client.rooms)) {
+      if (index.updateRooms(changed, client.rooms)) {
         debugIncrementalUpdates++;
         _networks = _computeNetworks(index);
       } else {
@@ -201,13 +211,6 @@ class InboxController extends ChangeNotifier {
     debugFullBuilds++;
     final index = InboxProjection.snapshot(personal).buildIndex(client.rooms);
     _index = index;
-    final delegated = <String, Room>{};
-    for (final space in client.rooms.where((room) => room.isSpace)) {
-      for (final child in space.spaceChildren) {
-        if (child.roomId != null) delegated[child.roomId!] = space;
-      }
-    }
-    _delegated = delegated;
     _networks = _computeNetworks(index);
   }
 
@@ -229,6 +232,8 @@ class InboxController extends ChangeNotifier {
     _detached = true;
     _timer?.cancel();
     _timer = null;
+    _cooldown?.cancel();
+    _cooldown = null;
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }

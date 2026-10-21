@@ -6,7 +6,6 @@
 import 'dart:async';
 
 import 'package:chatloom/config/app_config.dart';
-import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart'
@@ -17,6 +16,7 @@ import 'package:chatloom/personal/bridge_contact_search.dart'
     show BridgeDirectory;
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/person_route.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -37,7 +37,6 @@ import 'package:chatloom/utils/owned_async_wait.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/show_scaffold_dialog.dart';
 import 'package:chatloom/utils/show_update_snackbar.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
@@ -55,29 +54,11 @@ import 'package:personal_core/personal_core.dart'
     show ChatPlacement, PersonGroup;
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
-import '../../../utils/account_bundles.dart';
 import '../../config/setting_keys.dart';
 import '../../utils/url_launcher.dart';
 import '../../widgets/matrix.dart';
 
-enum ActiveFilter { allChats, unread, groups, messages, tag }
-
-extension LocalizedActiveFilter on ActiveFilter {
-  String toLocalizedString(BuildContext context) {
-    switch (this) {
-      case ActiveFilter.allChats:
-        return L10n.of(context).all;
-      case ActiveFilter.messages:
-        return L10n.of(context).messages;
-      case ActiveFilter.unread:
-        return L10n.of(context).unread;
-      case ActiveFilter.groups:
-        return L10n.of(context).groups;
-      case ActiveFilter.tag:
-        throw 'Tags should not directly be displayed!';
-    }
-  }
-}
+enum ActiveFilter { allChats, unread, groups, messages }
 
 /// The long-press menu of an inbox row, in order: Pin/Unpin, Merge… (or
 /// Unmerge on a merged person), Notifications, Ignore/Restore. Disabled
@@ -137,16 +118,8 @@ class ChatList extends StatefulWidget {
   /// Person group whose merged chat (or one of its source chats) is open in
   /// the side column; its inbox row is shown as selected.
   final String? activeGroup;
-  final String? activeSpace;
-  final bool displayNavigationRail;
 
-  const ChatList({
-    super.key,
-    required this.activeChat,
-    this.activeGroup,
-    this.activeSpace,
-    this.displayNavigationRail = false,
-  });
+  const ChatList({super.key, required this.activeChat, this.activeGroup});
 
   @override
   ChatListController createState() => ChatListController();
@@ -165,28 +138,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   StreamSubscription? _callEventSubscription;
 
   late ActiveFilter activeFilter;
-  String? activeTag;
-
-  String? _activeSpaceId;
-
-  String? get activeSpaceId => _activeSpaceId;
-
-  Future<void> setActiveSpace(String spaceId) async {
-    await Matrix.of(context).client.getRoomById(spaceId)!.postLoad();
-    if (!mounted) return;
-    if (!ChatLoomThemes.isColumnMode(context) &&
-        !AppSettings.displayNavigationRail.value) {
-      await AppSettings.displayNavigationRail.setItem(true);
-    }
-
-    setState(() {
-      _activeSpaceId = spaceId;
-    });
-  }
-
-  void clearActiveSpace() => setState(() {
-    _activeSpaceId = null;
-  });
 
   void _onCallEvent(CallEvent? event) {
     switch (event) {
@@ -238,14 +189,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       return;
     }
 
-    if (room.membership == Membership.leave) {
-      context.go('/rooms/archive/${room.id}');
-      return;
-    }
-
     if (room.isSpace) {
-      setActiveSpace(room.id);
-      return;
+      return; // Spaces are not part of the ChatLoom UI.
     }
 
     context.go('/rooms/${room.id}');
@@ -261,8 +206,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         return (room) => !room.isSpace && !room.isDirectChatForDisplay;
       case ActiveFilter.unread:
         return (room) => room.isUnreadOrInvited;
-      case ActiveFilter.tag:
-        return (room) => room.tags.keys.contains(activeTag);
     }
   }
 
@@ -279,7 +222,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     personalFilter = filter;
     personalLabel = label;
     activeFilter = ActiveFilter.allChats;
-    activeTag = null;
   });
   final networkSelections = NotionAccountNetworkSelection();
   String get inboxAccountKey =>
@@ -355,26 +297,22 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   Object? _selectionKey;
   List<Room> _selection = const [];
 
-  /// Visible rooms for the current view, search, network and space settings.
+  /// Visible rooms for the current view, search, network settings.
   /// Selection runs over cached records and is memoised until the inbox or
   /// one of the inputs changes.
   List<Room> filterRooms() {
     final inbox = this.inbox;
     final network = selectedNetwork;
-    final hideInSpaces = AppSettings.hideRoomsInSpaces.value;
     final key = (
       inbox,
       inbox.generation,
       personalFilter,
       personalLabel,
       activeFilter,
-      activeTag,
       network,
-      hideInSpaces,
     );
     if (key == _selectionKey) return _selection;
     final index = inbox.index;
-    final delegated = inbox.delegated;
     final roomFilter = getRoomFilterByActiveFilter(activeFilter);
     _selection = inbox.projection
         .select(index, filter: personalFilter)
@@ -388,18 +326,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
                 network,
               ),
         )
-        .where((room) => !hideInSpaces || delegated[room.id] == null)
         .toList(growable: false);
     _selectionKey = key;
     return _selection;
-  }
-
-  void openNavrail() {
-    setState(() {
-      AppSettings.displayNavigationRail.setItem(
-        !AppSettings.displayNavigationRail.value,
-      );
-    });
   }
 
   /// Opens the full-screen search: chats, people on the connected networks
@@ -428,8 +357,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
                 ),
               ),
               onSelectView: (view) => setPersonalFilter(view, null),
-              spaces: spaces,
-              onSelectSpace: setActiveSpace,
             ),
           ),
         )
@@ -455,31 +382,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   }
 
   final ScrollController scrollController = ScrollController();
-  final ValueNotifier<bool> scrolledToTop = ValueNotifier(true);
-
-  final StreamController<Client> _clientStream = StreamController.broadcast();
-
-  Stream<Client> get clientStream => _clientStream.stream;
-
-  void addAccountAction() => context.go('/rooms/settings/account');
-
-  void _onScroll() {
-    final newScrolledToTop = scrollController.position.pixels <= 0;
-    if (newScrolledToTop != scrolledToTop.value) {
-      scrolledToTop.value = newScrolledToTop;
-    }
-  }
-
-  Future<void> editSpace(BuildContext context, String spaceId) async {
-    await Matrix.of(context).client.getRoomById(spaceId)!.postLoad();
-    if (!context.mounted) return;
-    context.push('/rooms/$spaceId/details');
-  }
-
-  // Needs to match GroupsSpacesEntry for 'separate group' checking.
-  List<Room> get spaces =>
-      Matrix.of(context).client.rooms.where((r) => r.isSpace).toList();
-
   String? get activeChat => widget.activeChat;
   String? get activeGroup => widget.activeGroup;
 
@@ -576,9 +478,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   void initState() {
     if (PlatformInfos.isMacOS) MacDesktopCommands.bindSearch(this, openSearch);
     _initReceiveSharingIntent();
-    _activeSpaceId = widget.activeSpace;
 
-    scrollController.addListener(_onScroll);
     waitForInitialSync();
     if (PlatformInfos.isMobile) {
       _callEventSubscription = FlutterCallkitIncoming.onEvent.listen(
@@ -596,7 +496,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       if (mounted) {
         Matrix.of(context).backgroundPush?.setupPush(context);
         UpdateNotifier.showUpdateDialog(context);
-        UpdateNotifier.showUpdateAvailableBanner(context);
       }
 
       // Workaround for system UI overlay style not applied on app start
@@ -608,11 +507,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     // Tags are not shown in the inbox; a saved tag filter falls back to all
     // chats. Room tags themselves are never changed here.
     activeFilter =
-        ActiveFilter.values
-            .where((filter) => filter != ActiveFilter.tag)
-            .singleWhereOrNull(
-              (filter) => AppSettings.chatFilter.value == filter.name,
-            ) ??
+        ActiveFilter.values.singleWhereOrNull(
+          (filter) => AppSettings.chatFilter.value == filter.name,
+        ) ??
         ActiveFilter.allChats;
 
     _processPushHelperCrashReport();
@@ -629,10 +526,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     _intentDataStreamSubscription?.cancel();
     _intentFileStreamSubscription?.cancel();
     _callEventSubscription?.cancel();
-    scrollController.removeListener(_onScroll);
     scrollController.dispose();
-    scrolledToTop.dispose();
-    _clientStream.close();
     _inbox?.dispose();
     _inbox = null;
     super.dispose();
@@ -644,20 +538,18 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     if (report == null) return;
     store.remove(AppConfig.pushHelperCrashReportKey);
     if (report.length < 2) return;
-    ErrorReporter(
-      context,
-      'Push Helper has been crashed',
-    ).onErrorCallback(report.first, StackTrace.fromString(report.last));
+    // A past background crash is not something to answer at launch.
+    logBackgroundError(
+      'push_helper_crash',
+      report.first,
+      StackTrace.fromString(report.last),
+    );
   }
 
   /// Long-press menu of an inbox row: Pin, Merge… (Unmerge on a merged
   /// person), Notifications and Ignore/Restore. Leave, block, tags, spaces
   /// and low priority are intentionally not offered here.
-  Future<void> chatContextAction(
-    Room room,
-    BuildContext posContext, [
-    Room? space,
-  ]) async {
+  Future<void> chatContextAction(Room room, BuildContext posContext) async {
     final owner = personal;
     final account = inboxAccountKey;
     final box = posContext.findRenderObject() as RenderBox?;
@@ -945,27 +837,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     }
   }
 
-  void setActiveFilter(ActiveFilter filter, String? tag) {
-    if (filter == ActiveFilter.tag && tag == null) {
-      throw ('Must set a tag when setting filter to tags!');
-    }
-    setState(() {
-      activeTag = tag;
-      activeFilter = filter;
-      if (filter == ActiveFilter.groups) {
-        personalFilter = InboxFilter.groups;
-        personalLabel = null;
-      }
-      if (filter == ActiveFilter.messages) {
-        personalFilter = InboxFilter.inbox;
-        personalLabel = null;
-      }
-    });
-    AppSettings.chatFilter.setItem(
-      filter == ActiveFilter.tag ? tag! : filter.name,
-    );
-  }
-
   void setActiveClient(Client client) {
     _cancelFirstSyncWait();
     context.go('/rooms');
@@ -973,99 +844,12 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       activeFilter = ActiveFilter.allChats;
       personalFilter = InboxFilter.inbox;
       personalLabel = null;
-      _activeSpaceId = null;
       Matrix.of(context).setActiveClient(client);
     });
-    _clientStream.add(client);
     _loadAccountInbox(client);
     waitForInitialSync();
-  }
-
-  void setActiveBundle(String bundle) {
-    _cancelFirstSyncWait();
-    context.go('/rooms');
-    setState(() {
-      _activeSpaceId = null;
-      personalFilter = InboxFilter.inbox;
-      personalLabel = null;
-      Matrix.of(context).activeBundle = bundle;
-      if (!Matrix.of(
-        context,
-      ).currentBundle!.any((client) => client == Matrix.of(context).client)) {
-        Matrix.of(
-          context,
-        ).setActiveClient(Matrix.of(context).currentBundle!.first);
-      }
-    });
-    final client = Matrix.of(context).client;
-    _loadAccountInbox(client);
-    waitForInitialSync();
-  }
-
-  Future<void> editBundlesForAccount(
-    String? userId,
-    String? activeBundle,
-  ) async {
-    final l10n = L10n.of(context);
-    final client = Matrix.of(
-      context,
-    ).widget.clients[Matrix.of(context).getClientIndexByMatrixId(userId!)];
-    final action = await showModalActionPopup<EditBundleAction>(
-      context: context,
-      title: L10n.of(context).editBundlesForAccount,
-      cancelLabel: L10n.of(context).cancel,
-      actions: [
-        AdaptiveModalAction(
-          value: EditBundleAction.addToBundle,
-          label: L10n.of(context).addToBundle,
-        ),
-        if (activeBundle != client.userID)
-          AdaptiveModalAction(
-            value: EditBundleAction.removeFromBundle,
-            label: L10n.of(context).removeFromBundle,
-          ),
-      ],
-    );
-    if (action == null) return;
-    switch (action) {
-      case EditBundleAction.addToBundle:
-        if (!mounted) return;
-        final bundle = await showTextInputDialog(
-          context: context,
-          title: l10n.bundleName,
-          hintText: l10n.bundleName,
-        );
-        if (bundle == null || bundle.isEmpty || bundle.isEmpty) return;
-        if (!mounted) return;
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => client.setAccountBundle(bundle),
-        );
-        break;
-      case EditBundleAction.removeFromBundle:
-        if (!mounted) return;
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => client.removeFromAccountBundle(activeBundle!),
-        );
-    }
-  }
-
-  String? get secureActiveBundle {
-    if (Matrix.of(context).activeBundle == null ||
-        !Matrix.of(
-          context,
-        ).accountBundles.keys.contains(Matrix.of(context).activeBundle)) {
-      return Matrix.of(context).accountBundles.keys.first;
-    }
-    return Matrix.of(context).activeBundle;
   }
 
   @override
   Widget build(BuildContext context) => ChatListView(this);
 }
-
-enum EditBundleAction { addToBundle, removeFromBundle }
-
-/// Long-press actions of an inbox row ([ChatListController.chatContextAction]).
-typedef ChatContextAction = ChatMenuAction;

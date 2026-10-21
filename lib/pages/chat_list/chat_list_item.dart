@@ -73,7 +73,6 @@ Widget personalConversationAvatar(
 class ChatListItem extends StatefulWidget {
   final Room room;
   final InboxProjection? projection;
-  final Room? space;
   final bool activeChat;
   final void Function(BuildContext context)? onLongPress;
   final void Function()? onForget;
@@ -94,7 +93,6 @@ class ChatListItem extends StatefulWidget {
     this.onLongPress,
     this.onForget,
     this.filter,
-    this.space,
     super.key,
   });
 
@@ -240,8 +238,7 @@ class _ChatListItemState extends State<ChatListItem> {
       notificationLabel: notificationLabel,
       selected: widget.activeChat,
       draft: draft != null || conflict,
-      redacted:
-          lastEvent?.redacted == true && draft == null && !showsTyping,
+      redacted: lastEvent?.redacted == true && draft == null && !showsTyping,
       typing: showsTyping,
       pinned: metadata.isPinned,
       previewLeading: room.hasActiveMatrixRtcCall

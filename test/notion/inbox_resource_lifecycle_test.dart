@@ -253,12 +253,34 @@ void main() {
       final builds = inbox.debugFullBuilds;
       final classified = ConversationClassifier.debugComputations;
       first.message(r'$3', 'First is newest', minute: 30);
-      for (var i = 0; i < 4; i++) {
-        sync(client, [first.id]);
-        await tester.pump(const Duration(milliseconds: 100));
+      // Let start-up notifications (private client loading) settle first.
+      for (var i = 0, last = -1; i < 20 && last != inbox.generation; i++) {
+        last = inbox.generation;
+        await tester.pump(const Duration(milliseconds: 300));
       }
+      // A quiet inbox shows the first change without the debounce delay
+      // (next event-loop turn); the rest of the burst is coalesced into one
+      // more update.
+      final updates = inbox.debugIncrementalUpdates;
+      sync(client, [first.id]);
+      await tester.pump(Duration.zero);
+      await tester.pump();
+      expect(inbox.debugIncrementalUpdates, updates + 1, reason: 'at once');
+      expect(
+        tester
+            .widgetList<NotionInboxRow>(find.byType(NotionInboxRow))
+            .first
+            .preview,
+        contains('First is newest'),
+      );
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        sync(client, [first.id]);
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(inbox.debugIncrementalUpdates, updates + 1, reason: 'coalescing');
       await tester.pump(const Duration(milliseconds: 300));
-      expect(inbox.debugIncrementalUpdates, 1, reason: 'burst coalesced');
+      expect(inbox.debugIncrementalUpdates, updates + 2, reason: 'coalesced');
       expect(inbox.debugFullBuilds, builds);
       expect(ConversationClassifier.debugComputations, classified);
       final previews = tester

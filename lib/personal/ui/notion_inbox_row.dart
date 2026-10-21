@@ -72,8 +72,9 @@ class NotionInboxRow extends StatelessWidget {
     final hasUnread = unreadCount > 0 || unread;
     // Unread: bold name, brighter preview, accent badge; muted chats keep a
     // grey badge so they do not compete with chats that notify.
-    final badgeColor = muted ? colors.selected : colors.accent;
-    final badgeText = muted ? colors.textSecondary : colors.onAccent;
+    final palette = context.notion.palette;
+    final badgeColor = muted ? colors.selected : palette.accentFill;
+    final badgeText = muted ? colors.textSecondary : palette.onAccentFill;
     final announcement = [
       name,
       preview,
