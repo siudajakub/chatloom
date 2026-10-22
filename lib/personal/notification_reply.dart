@@ -21,6 +21,11 @@
 /// Success removes the chat's notification (Telegram); any other outcome
 /// replaces it with a "not sent" notice that opens the chat. The typed text
 /// is never logged or put into a notification.
+///
+/// A merged person has one notification for all its networks; the reply goes
+/// where the person's composer would send it ([notificationReplyRoom]). The
+/// whole reply is bounded ([sendNotificationReply] `limit`): a reply from a
+/// closed app must finish before the app may open the same storage.
 library;
 
 import 'dart:async';
@@ -29,14 +34,16 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/message_notification.dart';
+import 'package:chatloom/personal/notification_threads.dart';
 import 'package:chatloom/personal/personal_client.dart';
-import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/utils/push_work_policy.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:matrix/matrix.dart';
-import 'package:personal_core/personal_core.dart' show SendTarget;
+import 'package:personal_core/personal_core.dart'
+    show MergedEvent, MergedSendRouter, PersonGroup, SendTarget, SourceEventRef;
 
 /// What happened to a reply typed into a notification.
 enum NotificationReplyOutcome {
@@ -98,6 +105,61 @@ Future<void> Function(Client client)? debugNotificationReplySync;
 @visibleForTesting
 bool? debugNotificationReplySummary;
 
+/// Upper bound of a reply handled by the running app (Android's sending state
+/// must end even when the network hangs).
+const notificationReplyLimit = Duration(seconds: 90);
+
+/// Time kept for the send itself: the catch-up sync never eats into it.
+const _sendReserve = Duration(seconds: 6);
+
+/// The room a reply typed into the notification of [room] is sent to.
+///
+/// A single chat: the chat itself. A merged person: the person composer's
+/// router ([MergedSendRouter.resolve]) with the notified incoming message as
+/// the most recent event, which today is the network the person last wrote
+/// on. This is the single place where a person-level send preference (a
+/// fixed default network, merge-person lane FT-03) applies to notification
+/// replies. A target that is gone or not writable falls back to [room].
+Room notificationReplyRoom(
+  PersonalClient personal,
+  Room room, {
+  String? eventId,
+  DateTime? now,
+}) {
+  PersonGroup? group;
+  try {
+    group = InboxProjection(personal).groupFor(room);
+  } catch (_) {
+    group = null;
+  }
+  if (group == null) return room;
+  try {
+    final at = now ?? DateTime.now();
+    final routed = MergedSendRouter.resolve(
+      group: group,
+      now: at,
+      recentEvent: MergedEvent<Object?>(
+        source: SourceEventRef(
+          conversation: personal.ref(room),
+          eventId: eventId ?? '',
+        ),
+        timestamp: at,
+        isOutgoing: false,
+        value: null,
+      ),
+    );
+    final target = personal.client.getRoomById(routed.conversation.roomId);
+    if (target == null ||
+        target.membership != Membership.join ||
+        !target.canSendDefaultMessages) {
+      return room;
+    }
+    return target;
+  } catch (_) {
+    return room;
+  }
+}
+
 /// Same rule as the composer's `showTrustUserInRoomDialog`: an encrypted chat
 /// with a member whose cross-signing identity is neither verified nor trusted
 /// on first use asks before sending. The shade cannot ask, so it does not send.
@@ -125,21 +187,24 @@ Future<void> _syncIfIdle(Client client) async {
   if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
     return;
   }
-  try {
-    await client
-        .oneShotSync(timeout: Duration.zero)
-        .timeout(const Duration(seconds: 8));
-  } catch (_) {}
+  await client.oneShotSync(timeout: Duration.zero);
 }
 
 /// Sends [input] typed into the notification of [roomId] and updates that
-/// notification. Never throws.
+/// notification ([notificationId], the id the user replied on; otherwise the
+/// conversation's thread id). [eventId] is the notified message. Everything,
+/// including the send, ends within [limit]: a send cut off by it is reported
+/// as not confirmed (the outbox keeps the attempt). Never throws.
 Future<NotificationReplyOutcome> sendNotificationReply({
   required Client client,
   required String roomId,
   required String? input,
   required FlutterLocalNotificationsPlugin plugin,
+  int? notificationId,
+  String? eventId,
+  Duration limit = notificationReplyLimit,
 }) async {
+  final budget = PushWorkBudget(limit: limit);
   final text = input ?? '';
   var outcome = NotificationReplyOutcome.unavailable;
   // Unknown lock state shows no chat name on the notice.
@@ -150,15 +215,22 @@ Future<NotificationReplyOutcome> sendNotificationReply({
     if (text.trim().isEmpty) {
       outcome = NotificationReplyOutcome.empty;
     } else {
-      locked = await personalAppLockConfigured();
-      await client.roomsLoading;
-      await client.accountDataLoading;
+      locked = await budget.wait(personalAppLockConfigured);
+      await budget.wait(() async => await client.roomsLoading);
+      await budget.wait(() async => await client.accountDataLoading);
       room = client.getRoomById(roomId);
       if (room != null) {
         personal = (debugNotificationReplyPersonalOf ?? PersonalClient.of)(
           client,
         );
-        outcome = await _reply(personal, room, text, locked: locked);
+        outcome = await _reply(
+          personal,
+          room,
+          text,
+          locked: locked,
+          eventId: eventId,
+          budget: budget,
+        );
       }
     }
   } catch (_) {
@@ -175,9 +247,16 @@ Future<NotificationReplyOutcome> sendNotificationReply({
       title = null;
     }
   }
+  final thread = room == null || personal == null
+      ? NotificationThread(clientName: client.clientName, roomId: roomId)
+      : notificationThreadOf(
+          client.clientName,
+          room,
+          InboxProjection(personal),
+        );
   await showNotificationReplyResult(
     plugin: plugin,
-    id: messageNotificationId(client.clientName, roomId),
+    id: notificationId ?? thread.id,
     clientName: client.clientName,
     roomId: roomId,
     outcome: outcome,
@@ -188,28 +267,44 @@ Future<NotificationReplyOutcome> sendNotificationReply({
 
 Future<NotificationReplyOutcome> _reply(
   PersonalClient personal,
-  Room room,
+  Room notified,
   String text, {
   required bool locked,
+  required PushWorkBudget budget,
+  String? eventId,
 }) async {
   // Fail closed: without the encrypted local store there is neither a draft
   // nor a durable outbox record (throws → unavailable).
-  await personal.loadLocal();
+  await budget.wait(personal.loadLocal);
+  final room = notificationReplyRoom(personal, notified, eventId: eventId);
   final draft = _ReplyDraft.of(personal, room);
   final previous = draft.read();
   final kept = previous.text.trim().isEmpty ? text : '${previous.text}\n$text';
-  await draft.write(kept);
+  await budget.wait(() => draft.write(kept));
   // From here on the text is in the draft: no outcome loses it.
+  var sending = false;
   try {
     if (locked) return NotificationReplyOutcome.locked;
     if (!room.canSendDefaultMessages) return NotificationReplyOutcome.notSent;
-    if (await (debugNotificationReplyNeedsReview ?? replyNeedsTrustReview)(
-      room,
+    if (await budget.wait(
+      () => (debugNotificationReplyNeedsReview ?? replyNeedsTrustReview)(room),
     )) {
       return NotificationReplyOutcome.needsReview;
     }
-    await (debugNotificationReplySync ?? _syncIfIdle)(room.client);
-    final result = await personal.sendImmediate(room, text);
+    // The catch-up is optional: skipped or cut short when the send needs
+    // the time. A failure still sends to known devices.
+    final syncTime = budget.remaining - _sendReserve;
+    if (syncTime > Duration.zero) {
+      try {
+        await (debugNotificationReplySync ?? _syncIfIdle)(room.client).timeout(
+          syncTime < const Duration(seconds: 8)
+              ? syncTime
+              : const Duration(seconds: 8),
+        );
+      } catch (_) {}
+    }
+    sending = true;
+    final result = await budget.wait(() => personal.sendImmediate(room, text));
     switch (result.state) {
       case ImmediateSendState.accepted:
         // Composer order: restore the draft, then retire the attempt. If the
@@ -228,6 +323,11 @@ Future<NotificationReplyOutcome> _reply(
       case ImmediateSendState.failed:
         return NotificationReplyOutcome.notSent;
     }
+  } on TimeoutException {
+    // Cut off while sending: the attempt may have reached the server.
+    return sending
+        ? NotificationReplyOutcome.notConfirmed
+        : NotificationReplyOutcome.notSent;
   } catch (_) {
     return NotificationReplyOutcome.notSent;
   }

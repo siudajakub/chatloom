@@ -10,13 +10,17 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/message_notification.dart';
 import 'package:chatloom/personal/notification_reply.dart';
+import 'package:chatloom/personal/notification_threads.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/read_targets.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/push_helper.dart';
+import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -56,6 +60,19 @@ extension NotificationResponseJson on NotificationResponse {
   }
 }
 
+/// How long the app waits at start for a notification action of a closed app
+/// to release storage ([waitForPushIsolateDone]).
+const pushIsolateWait = Duration(seconds: 30);
+
+/// Upper bound of a notification action handled without the running app,
+/// from the action's start until its temporary client is closed. Below
+/// [pushIsolateWait], so the app never opens the database while the action
+/// still holds it (code-client CC-10).
+const notificationActionBudget = Duration(seconds: 22);
+
+/// Part of [notificationActionBudget] kept for closing the temporary client.
+const notificationActionCloseReserve = Duration(seconds: 4);
+
 /// Waits (bounded) for a background notification action to release storage.
 ///
 /// Never throws: startup awaits this before `runApp`, so a slow or crashed
@@ -64,7 +81,7 @@ extension NotificationResponseJson on NotificationResponse {
 /// removes its own port), and startup continues. Returns whether the action
 /// finished in time.
 Future<bool> waitForPushIsolateDone({
-  Duration timeout = const Duration(seconds: 30),
+  Duration timeout = pushIsolateWait,
   Duration poll = const Duration(milliseconds: 100),
 }) async {
   final clock = Stopwatch()..start();
@@ -233,39 +250,85 @@ Future<void> notificationTapBackground(
     Logs().w('[Push] background_action_busy');
     return;
   }
+  // The plugin's receiver returns at once; the short foreground service keeps
+  // the process alive while the action runs, with an accurate text. Best
+  // effort: the bound below holds without it.
+  final clock = Stopwatch()..start();
+  final lease = action == ChatLoomNotificationActions.reply
+      ? ForegroundServiceTasks.notificationReply
+      : ForegroundServiceTasks.notificationAction;
+  unawaited(ForegroundServices.startService(lease));
+  final work = notificationActionBudget - notificationActionCloseReserve;
   Client? client;
+  var acting = false;
   try {
-    if (!_vodInitialized) {
-      await vod.init();
-      _vodInitialized = true;
+    await () async {
+      if (!_vodInitialized) {
+        await vod.init();
+        _vodInitialized = true;
+      }
+      final store = await AppSettings.init();
+      final names = store.getStringList(ClientManager.clientNamespace) ?? [];
+      // Notification payloads always carry the account that showed them.
+      final clientName = selectNotificationClient(
+        names,
+        payload.clientName,
+        (name) => name,
+      );
+      if (clientName == null) return;
+      final created = client = await ClientManager.createClient(
+        clientName,
+        store,
+      );
+      created.backgroundSync = false;
+      await created.init(
+        waitForFirstSync: false,
+        waitUntilLoadCompletedLoaded: true,
+        preserveSessionOnInitFailure: true,
+      );
+      unawaited(created.firstSyncReceived?.catchError((Object _) {}));
+      if (!created.isLogged()) return;
+      acting = true;
+      await notificationTap(
+        notificationResponse,
+        clients: [created],
+        // The reply reports its own outcome before the outer bound.
+        actionLimit: work - clock.elapsed - const Duration(seconds: 2),
+      );
+    }().timeout(work - clock.elapsed);
+  } on TimeoutException {
+    Logs().w('[Push] background_action_timeout');
+    final id = notificationResponse.id;
+    if (action == ChatLoomNotificationActions.reply && id != null) {
+      await showNotificationReplyResult(
+        plugin: FlutterLocalNotificationsPlugin(),
+        id: id,
+        outcome: acting
+            ? NotificationReplyOutcome.notConfirmed
+            : NotificationReplyOutcome.unavailable,
+        clientName: payload.clientName,
+        roomId: payload.roomId,
+      );
     }
-    final store = await AppSettings.init();
-    final names = store.getStringList(ClientManager.clientNamespace) ?? [];
-    // Notification payloads always carry the account that showed them.
-    final clientName = selectNotificationClient(
-      names,
-      payload.clientName,
-      (name) => name,
-    );
-    if (clientName == null) return;
-    client = await ClientManager.createClient(clientName, store);
-    client.backgroundSync = false;
-    await client.init(
-      waitForFirstSync: false,
-      waitUntilLoadCompletedLoaded: true,
-      preserveSessionOnInitFailure: true,
-    );
-    unawaited(client.firstSyncReceived?.catchError((Object _) {}));
-    if (!client.isLogged()) return;
-    await notificationTap(notificationResponse, clients: [client]);
   } catch (error) {
     Logs().w('[Push] background_action_failed', error.runtimeType.toString());
   } finally {
     try {
       // A reply opened the encrypted private store of this temporary client.
-      if (client != null) PersonalClient.of(client).dispose();
-      await client?.dispose();
+      // Closing also ends any request still running after the bound.
+      final opened = client;
+      if (opened != null) PersonalClient.of(opened).dispose();
+      await opened?.dispose().timeout(notificationActionCloseReserve);
+    } catch (_) {
+      Logs().w('[Push] background_action_close_failed');
     } finally {
+      // Before releasing the port: an app start waiting for it may take the
+      // same native service for its push and must keep it.
+      try {
+        await ForegroundServices.stopService(
+          lease,
+        ).timeout(const Duration(seconds: 2));
+      } catch (_) {}
       if (IsolateNameServer.lookupPortByName(AppConfig.pushIsolatePortName) ==
           pushIsolateReceivePort.sendPort) {
         IsolateNameServer.removePortNameMapping(AppConfig.pushIsolatePortName);
@@ -276,11 +339,14 @@ Future<void> notificationTapBackground(
   return;
 }
 
+/// [actionLimit] bounds a reply (a closed app's action budget); the running
+/// app uses [notificationReplyLimit].
 Future<void> notificationTap(
   NotificationResponse notificationResponse, {
   GoRouter? router,
   required List<Client> clients,
   L10n? l10n,
+  Duration? actionLimit,
 }) async {
   Logs().d(
     'Notification action handler started',
@@ -303,15 +369,30 @@ Future<void> notificationTap(
     return;
   }
   // Opening a chat from its notification clears it (Android's auto-cancel
-  // does on tap; explicit for every platform and the summary below).
+  // does on tap; explicit for every platform and the summary below). A
+  // merged person opens all its networks: its shared notification and any
+  // per-network one posted before the merge go together.
   if (notificationResponse.notificationResponseType ==
           NotificationResponseType.selectedNotification &&
       !payload.reminder) {
+    final thread = await loadNotificationThread(client, payload.roomId!);
+    final ids = {
+      ?notificationResponse.id,
+      ...thread.cancelIds,
+      // A merge that changed or broke since the notification was posted.
+      ...notificationIdsForRooms(
+        client.clientName,
+        thread.roomIds,
+        personal: PersonalClient.of(client),
+      ),
+    };
     try {
-      await FlutterLocalNotificationsPlugin().cancel(
-        id: messageNotificationId(client.clientName, payload.roomId!),
-      );
+      final plugin = FlutterLocalNotificationsPlugin();
+      for (final id in ids) {
+        await plugin.cancel(id: id);
+      }
     } catch (_) {}
+    NotificationThreads.forget(ids);
   }
 
   try {
@@ -361,6 +442,12 @@ Future<void> notificationTap(
           actionType == ChatLoomNotificationActions.mute) {
         return;
       }
+      // Posted before incognito was turned on, the notification still offers
+      // Mark as read: now it only dismisses, never a receipt (CC-29).
+      if (actionType == ChatLoomNotificationActions.markAsRead &&
+          AppSettings.personalIncognito.value) {
+        return;
+      }
       final roomId = payload.roomId;
       if (roomId == null) {
         throw Exception('Selected notification with action but no payload');
@@ -372,6 +459,9 @@ Future<void> notificationTap(
           roomId: roomId,
           input: notificationResponse.input,
           plugin: FlutterLocalNotificationsPlugin(),
+          notificationId: notificationResponse.id,
+          eventId: payload.eventId,
+          limit: actionLimit ?? notificationReplyLimit,
         );
         return;
       }
@@ -384,10 +474,7 @@ Future<void> notificationTap(
       }
       switch (actionType) {
         case ChatLoomNotificationActions.markAsRead:
-          final readEvent = payload.eventId ?? room.lastEvent?.eventId;
-          if (readEvent != null) {
-            await PersonalPrivacy.markRead(room, readEvent, manual: true);
-          }
+          await markNotificationRead(client, room, payload.eventId);
         case ChatLoomNotificationActions.reply:
           // Handled above, never straight to the room.
           return;
@@ -410,6 +497,64 @@ Future<void> notificationTap(
     case NotificationResponseType.notificationDismissed:
       return;
   }
+}
+
+/// "Mark as read" on a message notification: the notified message, and for
+/// a merged person (one notification for all networks) every other network
+/// up to that message's time. Never a local echo, never past what the
+/// notification showed, never back behind a newer read position. The
+/// receipt follows the receipt setting (manual action).
+@visibleForTesting
+Future<void> markNotificationRead(
+  Client client,
+  Room room,
+  String? eventId, {
+  PersonalClient Function(Client client)? personalOf,
+}) async {
+  final targets = <(Room, String)>[];
+  DateTime? cutoff;
+  if (eventId != null && eventId.startsWith(r'$')) {
+    targets.add((room, eventId));
+    final preview = room.lastEvent;
+    if (preview?.eventId == eventId) cutoff = preview!.originServerTs;
+    try {
+      cutoff ??= (await client.database
+              .getEventById(eventId, room)
+              .timeout(const Duration(seconds: 2)))
+          ?.originServerTs;
+    } catch (_) {}
+  } else {
+    targets.addAll(conversationReadTargets([room]));
+  }
+  if (cutoff != null) {
+    final thread = await loadNotificationThread(
+      client,
+      room.id,
+      personalOf: personalOf,
+    );
+    for (final id in thread.roomIds.difference({room.id})) {
+      final other = client.getRoomById(id);
+      if (other == null) continue;
+      var loaded = const <Event>[];
+      try {
+        loaded = await client.database
+            .getEventList(other, limit: 30)
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {}
+      final target = conversationReadTarget(
+        other,
+        loaded: loaded,
+        notAfter: cutoff,
+      );
+      if (target == null) continue;
+      var seen = true;
+      try {
+        seen = await personalNotificationSeen(target);
+      } catch (_) {}
+      if (!seen) targets.add((other, target.eventId));
+    }
+  }
+  await markConversationRead(targets);
 }
 
 /// Where tapping a notification leads. Reminders open their message. A room
