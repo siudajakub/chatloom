@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:matrix/matrix.dart';
@@ -42,7 +43,9 @@ extension IsStateExtension on Event {
       // if we enabled to hide all redacted events, don't show those
       (!AppSettings.hideRedactedEvents.value || !redacted) &&
       // if we enabled to hide all unknown events, don't show those
-      (!AppSettings.hideUnknownEvents.value || isEventTypeKnown);
+      (!AppSettings.hideUnknownEvents.value || isEventTypeKnown) &&
+      // a message the user just deleted disappears at once
+      !MessageDeletions.hides(this);
 
   bool get isState =>
       !const {EventTypes.Message, EventTypes.Sticker}.contains(type);
