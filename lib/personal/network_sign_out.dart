@@ -2,7 +2,6 @@
 import 'dart:async';
 
 import 'package:chatloom/personal/bridge_contact_search.dart';
-import 'package:chatloom/personal/bridge_contact_search_provisioning.dart';
 import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/capabilities.dart';
@@ -133,14 +132,14 @@ class NetworkSignOut {
   static BridgeWhoamiReader _provisioningWhoami(Client client) =>
       (network) async {
         final directory = BridgeDirectory.of(client);
-        final api = directory.api;
-        if (api == null) return null;
+        if (directory.api == null) return null;
         final bridge = discoverBridges(
           client.rooms,
         ).where((bridge) => bridge.network == network).firstOrNull;
         if (bridge == null) return null;
         if (!(directory.reaches?.call(bridge) ?? true)) return null;
-        return api.whoami(bridge);
+        // Through the directory, so search sees the same logins.
+        return directory.refreshLogins(bridge);
       };
 
   static Future<void> _sendText(Room room, String body) async {
