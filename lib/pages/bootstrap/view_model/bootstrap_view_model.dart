@@ -5,10 +5,10 @@
 
 import 'dart:async';
 
+import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/encryption/recovery_unlock.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
-import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
-import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
@@ -17,6 +17,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
+import 'bootstrap_crypto.dart';
 import 'bootstrap_state.dart';
 
 class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
@@ -30,13 +31,47 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
       TextEditingController();
   final ScrollController devicesScrollController = ScrollController();
 
-  BootstrapViewModel({required this.client, required this.reset})
-    : super(BootstrapViewModelState()..reset = reset) {
+  final BootstrapCrypto crypto;
+
+  /// Pause between checks while waiting for another device's secrets.
+  final Duration secretsPollInterval;
+
+  bool _disposed = false;
+
+  /// The last setup attempt skipped the passphrase ("Try again" repeats it).
+  bool _setupSkippedPassphrase = false;
+
+  BootstrapViewModel({
+    required this.client,
+    required this.reset,
+    this.crypto = const BootstrapCrypto(),
+    @visibleForTesting this.secretsPollInterval = const Duration(seconds: 1),
+  }) : super(BootstrapViewModelState()..reset = reset) {
+    newPassphraseController.addListener(_checkCanCreatePassphrase);
+    repeatPassphraseController.addListener(_checkCanCreatePassphrase);
+    enterPassphraseOrRecovController.addListener(
+      _passphraseOrRecoveryKeyEntered,
+    );
     _init();
+  }
+
+  /// The first state check failed (offline, server): "Try again" instead of
+  /// an endless spinner.
+  Future<void> retryLoad() {
+    value.loadFailed = false;
+    notifyListeners();
+    return _init();
+  }
+
+  @override
+  void notifyListeners() {
+    // The page can close while the SDK is still answering.
+    if (!_disposed) super.notifyListeners();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _cancelKeyVerification();
     enterPassphraseOrRecovController.dispose();
     newPassphraseController.dispose();
@@ -62,40 +97,41 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
 
   Future<void> retryKeyVerification() async {
     value.noSecretsreceived = false;
-    value.keyVerification = await client.userDeviceKeys[client.userID!]!
-        .startVerification();
+    value.keyVerification = await crypto.startVerification(client);
     value.keyVerification?.onUpdate = _onKeyVerificationUpdate;
     notifyListeners();
   }
 
   Future<void> _init() async {
-    final state = value.cryptoIdentityState = await client
-        .getCryptoIdentityState();
-    newPassphraseController.addListener(_checkCanCreatePassphrase);
-    repeatPassphraseController.addListener(_checkCanCreatePassphrase);
-    enterPassphraseOrRecovController.addListener(
-      _passphraseOrRecoveryKeyEntered,
-    );
+    final CryptoIdentityState state;
+    try {
+      state = await crypto.state(client);
+    } catch (e, s) {
+      logBackgroundError('bootstrap_state', e, s);
+      value.loadFailed = true;
+      notifyListeners();
+      return;
+    }
+    if (_disposed) return;
+    value.cryptoIdentityState = state;
     if (state.initialized) {
       if (state.connected) return notifyListeners();
 
-      await client.updateUserDeviceKeys();
-
-      final devices = value.connectedDevices =
-          client.userDeviceKeys[client.userID!]?.deviceKeys.values
-              .where(
-                (device) => device.hasValidSignatureChain(
-                  verifiedByTheirMasterKey: true,
-                ),
-              )
-              .toList() ??
-          [];
+      List<DeviceKeys> devices;
+      try {
+        devices = await crypto.verifiedDevices(client);
+      } catch (e, s) {
+        // The recovery key still works without the device list.
+        logBackgroundError('bootstrap_devices', e, s);
+        devices = const [];
+      }
+      value.connectedDevices = devices;
+      if (_disposed) return;
       if (devices.isNotEmpty) {
         // Started on its own: if the request cannot be sent, the recovery
         // key below still works and "Try again" sends it later.
         try {
-          value.keyVerification = await client.userDeviceKeys[client.userID!]!
-              .startVerification();
+          value.keyVerification = await crypto.startVerification(client);
           value.keyVerification?.onUpdate = _onKeyVerificationUpdate;
         } catch (e, s) {
           logBackgroundError('bootstrap_verification', e, s);
@@ -103,8 +139,8 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
       }
       if (supportsSecureStorage) {
         try {
-          final keyFromSecureStorage = await personalSecureStorage.read(
-            key: _secureStorageKey,
+          final keyFromSecureStorage = await crypto.readStoredKey(
+            _secureStorageKey,
           );
           if (keyFromSecureStorage != null) {
             enterPassphraseOrRecovController.text = keyFromSecureStorage;
@@ -129,63 +165,64 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
 
   Future<void> _onKeyVerificationUpdate() async {
     if (value.keyVerification?.state == KeyVerificationState.done) {
-      value.waitingForSecrets = true;
-      value.noSecretsreceived = false;
-      notifyListeners();
-      value.cryptoIdentityState = await client.getCryptoIdentityState();
-      var tries = 0;
-      const max = 10;
-      while (value.cryptoIdentityState?.connected != true) {
-        Logs().d('Waiting for secrets... [$tries/$max]');
-        if (tries >= max) return;
-        await Future.delayed(const Duration(seconds: 1));
-        value.cryptoIdentityState = await client.getCryptoIdentityState();
-        tries++;
-      }
-
-      if (value.cryptoIdentityState?.connected != true) {
-        value.waitingForSecrets = false;
-        value.noSecretsreceived = true;
-      }
+      await awaitSecretsAfterVerification();
+      return;
     }
     notifyListeners();
   }
 
-  Future<void> setOrSkipPassphrase(
-    String? passphrase,
-    BuildContext context,
-  ) async {
+  /// The other device verified this one: wait for it to send the secrets.
+  /// When none arrive in time the page shows "No keys transmitted" with
+  /// "Try again" instead of waiting forever.
+  @visibleForTesting
+  Future<void> awaitSecretsAfterVerification() async {
+    value.waitingForSecrets = true;
+    value.noSecretsreceived = false;
+    notifyListeners();
+    final connected = await waitForRecoverySecrets(
+      interval: secretsPollInterval,
+      cancelled: () => _disposed,
+      connected: () async {
+        try {
+          value.cryptoIdentityState = await crypto.state(client);
+        } catch (e, s) {
+          logBackgroundError('bootstrap_secrets', e, s);
+        }
+        return value.cryptoIdentityState?.connected == true;
+      },
+    );
+    value.waitingForSecrets = false;
+    value.noSecretsreceived = !connected;
+    notifyListeners();
+  }
+
+  Future<void> setOrSkipPassphrase(String? passphrase) async {
+    _setupSkippedPassphrase = passphrase == null;
     value.isLoading = true;
+    value.setupError = null;
     notifyListeners();
     try {
-      final state = await client.getCryptoIdentityState();
-      if (state.connected) {
-        Logs().i('Download the key backup...');
-        await client.encryption!.keyManager.loadAllKeys();
-      }
-
-      Logs().i('Init crypto identity...');
-      value.recoveryKey = await client.initCryptoIdentity(
+      final state = await crypto.state(client);
+      value.recoveryKey = await crypto.setUp(
+        client,
         passphrase: passphrase,
+        connected: state.connected,
       );
-
-      if (state.connected) {
-        Logs().i('Mark all megolm sessions as needing upload...');
-        await client.database.markInboundGroupSessionsAsNeedingUpload();
-      }
-    } catch (e, s) {
-      if (!context.mounted) return;
-      ErrorReporter(
-        context,
-        'Unable to init crypto identity',
-      ).onErrorCallback(e, s);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+    } catch (e) {
+      // One inline error with "Try again" on the page (no dialog, no
+      // snackbar); only a fixed diagnostic code is logged.
+      final code = PersonalDiagnostic.from(e, PersonalFailurePhase.action).code;
+      Logs().w('recovery_setup_failed $code');
+      value.setupError = e;
       value.isLoading = false;
     }
     notifyListeners();
   }
+
+  /// Repeats the failed setup with the same choice (passphrase or skip).
+  Future<void> retrySetup() => setOrSkipPassphrase(
+    _setupSkippedPassphrase ? null : newPassphraseController.text,
+  );
 
   void _cancelKeyVerification() {
     final keyVerification = value.keyVerification;
@@ -209,38 +246,85 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
   bool get supportsSecureStorage =>
       PlatformInfos.isMobile || PlatformInfos.isDesktop;
 
-  Future<void> unlock(BuildContext context) async {
+  Future<void> unlock() async {
     final key = enterPassphraseOrRecovController.text.trim();
     if (key.isEmpty) return;
 
     _cancelKeyVerification();
 
     value.unlockWithError = null;
+    value.unlockFailure = null;
+    value.storedKeyKept = false;
+    value.storedKeyRemoved = false;
     value.isLoading = true;
     notifyListeners();
     try {
-      await client.restoreCryptoIdentity(key);
-      value.isLoading = false;
-      value.cryptoIdentityState = await client.getCryptoIdentityState();
-      notifyListeners();
-      return;
-    } catch (e, s) {
-      if (e is! InvalidPassphraseException) {
-        const errorMessage = 'Unexpected error on unlock passphrase';
-        if (context.mounted) {
-          ErrorReporter(context, errorMessage).onErrorCallback(e, s);
-        } else {
-          Logs().wtf(errorMessage, e, s);
-        }
-      }
-      value.isLoading = false;
-      value.unlockWithError = e;
-      notifyListeners();
-      if (supportsSecureStorage) {
-        await personalSecureStorage.delete(key: _secureStorageKey);
-      }
+      await crypto.restore(client, key);
+    } catch (e) {
+      await _unlockFailed(e, key);
       return;
     }
+    final before = value.cryptoIdentityState;
+    try {
+      value.cryptoIdentityState = await crypto.state(client);
+    } catch (e, s) {
+      // Restored: the secrets are on this device even if the re-check
+      // cannot reach the server.
+      logBackgroundError('bootstrap_state', e, s);
+      value.cryptoIdentityState = (
+        connected: true,
+        crossSigningEnabled: before?.crossSigningEnabled ?? true,
+        initialized: true,
+        keyBackupEnabled: before?.keyBackupEnabled ?? true,
+      );
+    }
+    value.isLoading = false;
+    notifyListeners();
+  }
+
+  Future<void> _unlockFailed(Object e, String key) async {
+    final failure = classifyRecoveryUnlockError(e);
+    final code = PersonalDiagnostic.from(e, PersonalFailurePhase.action).code;
+    Logs().w('recovery_unlock_failed ${failure.name} $code');
+    // The saved key goes only when it was the key tried and the SDK
+    // definitively rejected it. Offline, timeouts and server errors keep
+    // it (it may be the only copy), and so does a different typed key.
+    var storedKeyKept = false;
+    var storedKeyRemoved = false;
+    if (supportsSecureStorage) {
+      try {
+        final stored = await crypto.readStoredKey(_secureStorageKey);
+        if (shouldForgetStoredRecoveryKey(
+          error: e,
+          attempted: key,
+          stored: stored,
+        )) {
+          await crypto.deleteStoredKey(_secureStorageKey);
+          storedKeyRemoved = true;
+        } else {
+          storedKeyKept = stored != null;
+        }
+      } catch (_) {
+        Logs().w('recovery_key_storage_unavailable');
+      }
+    }
+    value.isLoading = false;
+    value.unlockWithError = e;
+    value.unlockFailure = failure;
+    value.storedKeyKept = storedKeyKept;
+    value.storedKeyRemoved = storedKeyRemoved;
+    notifyListeners();
+  }
+
+  /// The sentence under the field for the last failed unlock.
+  String? get unlockErrorText {
+    final failure = value.unlockFailure;
+    if (failure == null) return null;
+    return recoveryUnlockErrorText(
+      failure,
+      storedKeyKept: value.storedKeyKept,
+      storedKeyRemoved: value.storedKeyRemoved,
+    );
   }
 
   void goToRoomsPageAfterSuccess(BuildContext context) {
@@ -294,7 +378,7 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
         ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
       }
     }
-    if (context.mounted) await unlock(context);
+    if (context.mounted) await unlock();
   }
 
   Future<void> toggleRecoveryKeyDownloaded(
@@ -302,8 +386,7 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
     BuildContext context,
   ) async {
     final path = await FilePicker.saveFile(
-      fileName:
-          'ChatLoom-Recovery-Key-${DateTime.now().toIso8601String()}.txt',
+      fileName: 'ChatLoom-Recovery-Key-${DateTime.now().toIso8601String()}.txt',
       bytes: Uint8List.fromList(value.recoveryKey!.codeUnits),
     );
     if (path == null) return;
@@ -313,12 +396,9 @@ class BootstrapViewModel extends ValueNotifier<BootstrapViewModelState> {
 
   Future<void> toggleRecoveryKeyStoredInSecureStorage(bool? stored) async {
     if (stored == true) {
-      await personalSecureStorage.write(
-        key: _secureStorageKey,
-        value: value.recoveryKey,
-      );
+      await crypto.writeStoredKey(_secureStorageKey, value.recoveryKey);
     } else {
-      await personalSecureStorage.delete(key: _secureStorageKey);
+      await crypto.deleteStoredKey(_secureStorageKey);
     }
     value.recoveryKeyStoredInSecureStorage = stored == true;
     notifyListeners();

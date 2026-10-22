@@ -33,15 +33,19 @@ class BootstrapPage extends StatelessWidget {
           );
         }
 
+        // One vocabulary: "recovery key" for the key, "key backup" for the
+        // server backup.
         final title = cryptoIdentityState == null
-            ? L10n.of(context).loadingPleaseWait
+            ? viewModel.value.loadFailed
+                  ? 'Recovery key'
+                  : L10n.of(context).loadingPleaseWait
+            : viewModel.value.recoveryKey != null
+            ? 'Save your recovery key'
             : cryptoIdentityState.initialized && !viewModel.value.reset
-            ? L10n.of(context).restoreCryptoIdentity
+            ? 'Enter your recovery key'
             : viewModel.value.reset
-            ? viewModel.value.recoveryKey != null
-                  ? L10n.of(context).youAreReadyToStart
-                  : L10n.of(context).resetCryptoIdentity
-            : L10n.of(context).setUpCryptoIdentity;
+            ? 'Reset recovery key'
+            : 'Set up a recovery key';
 
         return LoginScaffold(
           appBar: AppBar(
@@ -53,8 +57,11 @@ class BootstrapPage extends StatelessWidget {
                       if (!reset) {
                         final consent = await showOkCancelAlertDialog(
                           context: context,
-                          title: L10n.of(context).skipChatBackup,
-                          message: L10n.of(context).skipChatBackupWarning,
+                          title: 'Skip the recovery key?',
+                          message:
+                              'Without a recovery key you can lose access to '
+                              'your encrypted messages when you change '
+                              'devices. You can set it up later in Settings.',
                           okLabel: L10n.of(context).skip,
                           isDestructive: true,
                         );
@@ -87,10 +94,23 @@ class BootstrapPage extends StatelessWidget {
           // fades through to the next.
           body: NotionFadeThrough(
             child: cryptoIdentityState == null
-                ? const Center(
-                    key: ValueKey('loading'),
-                    child: NotionDelayedSpinner(size: NotionSize.touchTarget),
-                  )
+                ? viewModel.value.loadFailed
+                      ? NotionEmptyState(
+                          key: const ValueKey('load-failed'),
+                          icon: Icons.cloud_off_outlined,
+                          title: 'Couldn’t check your recovery key',
+                          message: 'Check your connection and try again.',
+                          action: NotionButton(
+                            label: L10n.of(context).tryAgain,
+                            onPressed: viewModel.retryLoad,
+                          ),
+                        )
+                      : const Center(
+                          key: ValueKey('loading'),
+                          child: NotionDelayedSpinner(
+                            size: NotionSize.touchTarget,
+                          ),
+                        )
                 : !cryptoIdentityState.initialized || viewModel.value.reset
                 ? viewModel.value.recoveryKey == null
                       ? NewPassphraseView(

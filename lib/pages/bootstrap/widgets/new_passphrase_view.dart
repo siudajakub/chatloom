@@ -5,6 +5,7 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/bootstrap/view_model/bootstrap_view_model.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -22,12 +23,17 @@ class NewPassphraseView extends StatelessWidget {
         viewModel.value.newPassphraseSpecialCharacters &&
         viewModel.value.newPassphraseUpperAndLowerCase &&
         viewModel.value.newPassphraseLongEnough;
+    final setupError = viewModel.value.setupError;
 
     return NotionEntranceScope(
       child: ListView(
         padding: const EdgeInsets.all(16.0),
         children: NotionEntrance.stagger([
-          Text(L10n.of(context).newPassphraseDescription, textAlign: .center),
+          const Text(
+            'Choose a passphrase for your recovery key, or skip and keep '
+            'only the recovery key.',
+            textAlign: .center,
+          ),
           const SizedBox(height: 16),
           TextField(
             obscureText: viewModel.value.obscureText,
@@ -55,6 +61,22 @@ class NewPassphraseView extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // One inline error with "Try again" (no dialog, no snackbar).
+          NotionSizeReveal(
+            visible: setupError != null,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: NotionSpace.md),
+              child: NotionCallout(
+                icon: Icons.error_outline,
+                tone: NotionCalloutTone.danger,
+                title: 'Couldn’t create your recovery key',
+                message: setupError == null ? null : humanErrorText(setupError),
+                actionLabel: L10n.of(context).tryAgain,
+                actionBusy: viewModel.value.isLoading,
+                onAction: viewModel.retrySetup,
+              ),
+            ),
+          ),
           NotionButton.primary(
             expand: true,
             busy: viewModel.value.isLoading,
@@ -62,7 +84,6 @@ class NewPassphraseView extends StatelessWidget {
             onPressed: canCreatePassphrase
                 ? () => viewModel.setOrSkipPassphrase(
                     viewModel.newPassphraseController.text,
-                    context,
                   )
                 : null,
           ),
@@ -70,11 +91,11 @@ class NewPassphraseView extends StatelessWidget {
           TextButton(
             onPressed: viewModel.value.isLoading
                 ? null
-                : () => viewModel.setOrSkipPassphrase(null, context),
+                : () => viewModel.setOrSkipPassphrase(null),
             style: TextButton.styleFrom(
               foregroundColor: theme.colorScheme.error,
             ),
-            child: Text(L10n.of(context).skip),
+            child: const Text('Skip the passphrase'),
           ),
           const SizedBox(height: 16),
           _PassphraseCheckListTile(

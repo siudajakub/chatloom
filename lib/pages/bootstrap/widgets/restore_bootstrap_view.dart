@@ -7,10 +7,10 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/bootstrap/view_model/bootstrap_view_model.dart';
 import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
+import 'package:chatloom/personal/encryption/recovery_unlock.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/utils/error_reporter.dart';
-import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/device_extension.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/layouts/login_scaffold.dart';
@@ -151,8 +151,9 @@ class RestoreBootstrapView extends StatelessWidget {
               ],
             ),
           ] else ...[
-            Text(
-              L10n.of(context).restoreBootstrapEmptyDevicesDescription,
+            const Text(
+              'Enter your recovery key (or its passphrase) to verify this '
+              'device and unlock your message history.',
               textAlign: .center,
             ),
             const SizedBox(height: 32),
@@ -165,9 +166,9 @@ class RestoreBootstrapView extends StatelessWidget {
               controller: viewModel.enterPassphraseOrRecovController,
               minLines: 1,
               maxLines: viewModel.value.obscureText ? 1 : 4,
-              onSubmitted: (_) => viewModel.unlock(context),
+              onSubmitted: (_) => viewModel.unlock(),
               decoration: InputDecoration(
-                hintText: L10n.of(context).passphraseOrKey,
+                hintText: 'Recovery key or passphrase',
                 prefixIcon: IconButton(
                   icon: Icon(
                     viewModel.value.obscureText
@@ -176,9 +177,7 @@ class RestoreBootstrapView extends StatelessWidget {
                   ),
                   onPressed: viewModel.toggleObscureText,
                 ),
-                errorText: viewModel.value.unlockWithError?.toLocalizedString(
-                  context,
-                ),
+                errorText: viewModel.unlockErrorText,
                 errorMaxLines: 4,
                 suffixIcon: NotionMorphSwitcher(
                   rotate: false,
@@ -201,12 +200,18 @@ class RestoreBootstrapView extends StatelessWidget {
                           ),
                           onPressed:
                               viewModel.value.passphraseOrRecoveryKeyEntered
-                              ? () => viewModel.unlock(context)
+                              ? viewModel.unlock
                               : () => viewModel.openRecoveryKeyFile(context),
                           child: Text(
-                            viewModel.value.passphraseOrRecoveryKeyEntered
-                                ? L10n.of(context).unlock
-                                : L10n.of(context).openFile,
+                            !viewModel.value.passphraseOrRecoveryKeyEntered
+                                ? L10n.of(context).openFile
+                                // Offline or a server error: the key was
+                                // not checked, so the same key is retried.
+                                : viewModel.value.unlockFailure != null &&
+                                      viewModel.value.unlockFailure !=
+                                          RecoveryUnlockFailure.wrongKey
+                                ? L10n.of(context).tryAgain
+                                : L10n.of(context).unlock,
                           ),
                         ),
                 ),
@@ -214,14 +219,20 @@ class RestoreBootstrapView extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // The last resort, guarded: a new recovery key replaces the
+          // lost one (the bootstrap reset flow, unchanged).
           TextButton(
             onPressed: () async {
               final consent = await showOkCancelAlertDialog(
                 context: context,
-                title: L10n.of(context).warning,
-                message: L10n.of(context).resetAccountWarning,
+                title: 'Reset your recovery key?',
+                message:
+                    'Only do this if you lost your recovery key and have no '
+                    'other signed-in device to verify with. Messages that '
+                    'only the old key can unlock stay unreadable, and your '
+                    'other devices need to be verified again.',
                 isDestructive: true,
-                okLabel: L10n.of(context).resetAccount,
+                okLabel: 'Reset recovery key',
               );
               if (consent != OkCancelResult.ok) return;
               if (!context.mounted) return;
@@ -230,7 +241,7 @@ class RestoreBootstrapView extends StatelessWidget {
             style: TextButton.styleFrom(
               foregroundColor: theme.colorScheme.error,
             ),
-            child: Text(L10n.of(context).resetAccount),
+            child: const Text('Lost your recovery key?'),
           ),
         ]),
       ),
