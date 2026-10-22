@@ -563,7 +563,7 @@ void main() {
     await tester.pumpWidget(_host(_details()));
     await _save(tester, 'chat-details-390');
     await tester.scrollUntilVisible(
-      find.text('Incognito mode'),
+      find.text('Incognito'),
       180,
       scrollable: find
           .byWidgetPredicate(
@@ -573,7 +573,7 @@ void main() {
           )
           .first,
     );
-    await tester.ensureVisible(find.text('Incognito mode'));
+    await tester.ensureVisible(find.text('Incognito'));
     await _save(tester, 'chat-details-390-privacy', scrollToTop: false);
     await tester.pumpWidget(_host(_settings()));
     await _save(tester, 'settings-390');

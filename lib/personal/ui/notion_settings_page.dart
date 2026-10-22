@@ -7,8 +7,8 @@ final notionSettingsRevision = ValueNotifier<int>(0);
 /// One navigation catalogue for both the mobile index and desktop sidebar.
 ///
 /// Order is the order on screen: the account row, the everyday settings,
-/// the ChatLoom tools, then Advanced (private sync, push setup, diagnostics
-/// and app information) last.
+/// the ChatLoom tools, then Advanced (private sync, app information and
+/// developer options) last.
 enum NotionSettingsCategory {
   account('Account', Icons.person_outline, 'account', 'Profile and sign out'),
   appearance(
@@ -21,7 +21,7 @@ enum NotionSettingsCategory {
     'Notifications',
     Icons.notifications_none_outlined,
     'notifications',
-    'Previews, push setup and diagnostics',
+    'Previews, sound and troubleshooting',
   ),
   security(
     'Privacy & security',
@@ -30,10 +30,10 @@ enum NotionSettingsCategory {
     'Incognito, app lock, devices and recovery',
   ),
   chats(
-    'Chats & media',
+    'Chats',
     Icons.forum_outlined,
     'chat',
-    'Messages, gestures, voice and merged chats',
+    'Gestures, messages, voice and merged chats',
   ),
   networks(
     'Networks',
@@ -69,7 +69,7 @@ enum NotionSettingsCategory {
     'Advanced',
     Icons.tune,
     'advanced',
-    'Private sync, push setup, diagnostics and app info',
+    'Private sync, app information and developer options',
   );
 
   final String title, path, summary;
@@ -84,7 +84,7 @@ enum NotionSettingsCategory {
     return switch (leaf) {
       'devices' || 'recovery' => security,
       'people' => chats,
-      'sync' => advanced,
+      'sync' || 'developer' => advanced,
       'push' => notifications,
       _ =>
         values.where((category) => category.path == leaf).firstOrNull ??

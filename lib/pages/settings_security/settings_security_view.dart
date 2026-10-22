@@ -4,14 +4,12 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/ui/notion_privacy_preferences.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/beautify_string_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:matrix/matrix.dart';
 import 'settings_security.dart';
 
 class SettingsSecurityView extends StatelessWidget {
@@ -20,8 +18,6 @@ class SettingsSecurityView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final client = Matrix.of(context).client;
-    final publicMasterKey =
-        client.userDeviceKeys[client.userID]?.masterKey?.publicKey;
     return NotionSettingsScaffold(
       title: 'Privacy & security',
       child: Column(
@@ -90,45 +86,9 @@ class SettingsSecurityView extends StatelessWidget {
             subtitle: 'Review or set up encrypted key backup',
             onTap: () => context.push('/rooms/settings/recovery'),
           ),
-          const NotionSettingsSection('Key sharing'),
-          Text(L10n.of(context).shareKeysWithDescription),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<ShareKeysWith>(
-            key: ValueKey(client),
-            initialValue: client.shareKeysWith,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Share keys with'),
-            items: ShareKeysWith.values
-                .map(
-                  (share) => DropdownMenuItem(
-                    value: share,
-                    child: Text(share.localized(L10n.of(context))),
-                  ),
-                )
-                .toList(),
-            onChanged: controller.changeShareKeysWith,
-          ),
-          const NotionSettingsSection('Identity keys'),
-          if (publicMasterKey != null)
-            ListTile(
-              title: Text(L10n.of(context).yourPublicKey),
-              subtitle: SelectableText(publicMasterKey.beautified),
-            ),
-          ListTile(
-            title: Text(L10n.of(context).deviceIdentityKey),
-            subtitle: SelectableText(client.fingerprintKey.beautified),
-          ),
+          // Key sharing and identity keys: Settings › Advanced › Developer.
         ],
       ),
     );
   }
-}
-
-extension on ShareKeysWith {
-  String localized(L10n l10n) => switch (this) {
-    ShareKeysWith.all => l10n.allDevices,
-    ShareKeysWith.crossVerifiedIfEnabled => l10n.crossVerifiedDevicesIfEnabled,
-    ShareKeysWith.crossVerified => l10n.crossVerifiedDevices,
-    ShareKeysWith.directlyVerifiedOnly => l10n.verifiedDevicesOnly,
-  };
 }

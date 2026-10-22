@@ -162,7 +162,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
       ..._syncState({key, for (final source in sources) 'org:${source.id}'}),
       if (group != null)
         const Text(
-          'Visibility applies to this person across all merged sources.',
+          'Visibility applies to this person in all merged chats.',
         ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
@@ -201,6 +201,25 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
                 key,
                 metadata
                     .setPlacement(preferenceEnum(ChatPlacement.values, value))
+                    .toJson()
+                    .cast<String, dynamic>(),
+              )
+            : null,
+      ),
+      // Moved from "Colours & avatar" (CS-06): it decides where the chat
+      // appears, like "Show chat in".
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Low priority'),
+        subtitle: const Text(
+          'Outside the inbox. Mentions and thread replies may still notify.',
+        ),
+        value: metadata.lowPriority,
+        onChanged: enabled && !ignored
+            ? (value) => _save(
+                key,
+                metadata
+                    .setLowPriority(value)
                     .toJson()
                     .cast<String, dynamic>(),
               )
@@ -294,7 +313,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
                 padding: const EdgeInsets.all(20),
                 children: NotionEntrance.stagger([
                   const Text(
-                    'Private settings for ChatLoom. Other Beeper and Matrix clients are unchanged.',
+                    'Private settings for ChatLoom. Your other Beeper apps are unchanged.',
                   ),
                   if (kIsWeb)
                     const Padding(
@@ -311,7 +330,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 16),
                       child: Text(
-                        'Connect private sync in Settings → Sync & transcriptions to save these preferences.',
+                        'Connect private sync in Settings › Advanced › Private sync to save these preferences.',
                       ),
                     ),
                   NotionSizeReveal(

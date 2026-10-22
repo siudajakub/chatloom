@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:chatloom/config/routes.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_settings_adapter.dart';
 import 'package:chatloom/personal/ui/notion_settings_page.dart';
@@ -293,15 +294,16 @@ void main() {
     'people': 'Merge conversations',
     'sync': 'Private sync not connected',
     'transcriptions': 'Transcription service',
-    'bookmarks': 'Bookmark a message to find it here later.',
+    'bookmarks': 'No bookmarks',
     'reminders': 'No reminders',
     'scheduled': 'No scheduled messages',
     'push': 'Set up notifications automatically',
-    'notifications': 'Push setup & registration',
+    'notifications': 'Push setup',
+    'developer': 'App configuration',
     'notifications/registration': 'Could not load registered devices',
     'notifications/rules': 'Rules are not available yet',
     'recovery': 'Key backup',
-    'advanced': 'App information',
+    'advanced': 'About ChatLoom',
   }.entries) {
     testWidgets(
       'actual route ${entry.key} works offline and returns to index',
@@ -318,17 +320,9 @@ void main() {
             ListTile,
             'Set up notifications automatically',
           );
-          expect(find.text('Advanced notification settings'), findsOneWidget);
+          // Manual gateway setup moved to Advanced › Developer (CS-02).
+          expect(find.text('Advanced notification settings'), findsNothing);
           expect(find.text('Configure a gateway manually'), findsNothing);
-          await tester.tap(find.text('Advanced notification settings'));
-          await tester.pumpAndSettle();
-          expect(find.text('Configure a gateway manually'), findsOneWidget);
-          expect(
-            find.text('Copy private push registration (secrets)'),
-            findsOneWidget,
-          );
-          await tester.tap(find.text('Advanced notification settings'));
-          await tester.pumpAndSettle();
           final texts = tester.widgetList<RichText>(
             find.descendant(
               of: find.descendant(of: row, matching: find.byType(Text)),
@@ -339,6 +333,11 @@ void main() {
           for (final text in texts) {
             expect(text.text.style?.fontFamily, 'Roboto');
           }
+        }
+        if (entry.key == 'developer') {
+          expect(find.text('Configure a gateway manually'), findsOneWidget);
+          expect(find.text('Copy push registration (secrets)'), findsOneWidget);
+          expect(find.text('Share keys with'), findsWidgets);
         }
         expect(tester.takeException(), isNull);
         await _capture(tester, 'route-${entry.key.replaceAll('/', '-')}-390');
@@ -444,8 +443,24 @@ void main() {
   ) async {
     await _mount(tester, path: '/rooms/settings/push', width: 320, scale: 2);
     expect(find.text('Set up notifications automatically'), findsOneWidget);
-    expect(find.text('Advanced notification settings'), findsOneWidget);
+    // Manual gateway setup lives in Advanced › Developer (CS-02).
+    expect(find.text('Advanced notification settings'), findsNothing);
     expect(find.text('Configure a gateway manually'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('developer options reveal the developer tools row', (
+    tester,
+  ) async {
+    await DeveloperOptions.setEnabled(false);
+    addTearDown(() => DeveloperOptions.setEnabled(false));
+    await _mount(tester, path: '/rooms/settings/advanced');
+    expect(find.text('Developer options'), findsOneWidget);
+    expect(find.text('Developer tools'), findsNothing);
+    await tester.tap(find.text('Developer options'));
+    await tester.pumpAndSettle();
+    expect(DeveloperOptions.enabled, isTrue);
+    expect(find.text('Developer tools'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -507,12 +522,12 @@ void main() {
       tester.view.physicalSize = const Size(1365, 900);
       await tester.pumpAndSettle();
       expect(router.state.uri.path, '/rooms/settings/sync');
-      expect(find.text('Background services'), findsOneWidget);
+      expect(find.text('Background service'), findsOneWidget);
       expect(find.text('Settings'), findsOneWidget);
       tester.view.physicalSize = const Size(390, 900);
       await tester.pumpAndSettle();
       expect(router.state.uri.path, '/rooms/settings/sync');
-      expect(find.text('Background services'), findsOneWidget);
+      expect(find.text('Background service'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

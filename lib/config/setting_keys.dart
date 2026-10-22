@@ -79,6 +79,11 @@ enum AppSettings<T> {
   /// Inbox encryption notice dismissed until its issues change: an account
   /// hash and issue signatures (see `E2eeNoticeDismissal`), no ids.
   personalE2eeNoticeDismissed<String>('pl.personal.e2ee_notice.dismissed', ''),
+
+  /// Settings › Advanced › Developer options: shows logs, the app
+  /// configuration, manual push setup, key details and "Message info".
+  /// Read only through `DeveloperOptions` (lib/personal/developer_options.dart).
+  personalDeveloperOptions<bool>('pl.personal.developer_options', false),
   sendTypingNotifications<bool>('chat.fluffy.send_typing_notifications', true),
   sendPublicReadReceipts<bool>('chat.fluffy.send_public_read_receipts', true),
   swipeRightToLeftToReply<bool>('chat.fluffy.swipeRightToLeftToReply', true),
@@ -140,9 +145,26 @@ enum AppSettings<T> {
     return _defaultValue;
   }
 
-  static Future<void> reset({bool loadWebConfigFile = true}) async {
-    await AppSettings._store!.clear();
-    await init(loadWebConfigFile: loadWebConfigFile);
+  /// Keys that record this device's push registration, not a preference:
+  /// [resetPreferences] keeps them so the registration stays consistent.
+  static const deviceStateSettings = {
+    unifiedPushRegistered,
+    unifiedPushEndpoint,
+    pushNotificationsGatewayUrl,
+    pushNotificationsPusherFormat,
+  };
+
+  /// Restores every app preference to its default. It never clears the
+  /// whole store: the account registry, push registration and other
+  /// non-setting entries are kept.
+  static Future<void> resetPreferences() async {
+    final store = AppSettings.store;
+    for (final setting in values) {
+      if (deviceStateSettings.contains(setting)) continue;
+      await store.remove(setting.key);
+    }
+    // The platform default that [init] writes on first start.
+    await store.setBool(AppSettings.sendOnEnter.key, !PlatformInfos.isMobile);
   }
 
   static Future<SharedPreferences> init({bool loadWebConfigFile = true}) async {

@@ -6,6 +6,7 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
 import 'package:chatloom/personal/ui/sync_changes_section.dart';
+import 'package:chatloom/personal/ui/worker_status_row.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:material_ui/material_ui.dart';
@@ -159,10 +160,10 @@ class TranscriptionSettingsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        NotionListRow(
-          leading: const Icon(Icons.cloud_outlined),
+        WorkerStatusRow(
+          personal: personal,
           title: 'Transcription service',
-          subtitle: personal.workerReadinessDescription,
+          transcription: true,
         ),
         const NotionSectionHeader(title: 'Automatic transcription'),
         NotionSettingsToggle(
@@ -171,7 +172,7 @@ class TranscriptionSettingsSection extends StatelessWidget {
           subtitle:
               'Voice messages, round videos and videos are transcribed on the server as soon as they arrive or you send them; only their audio is sent to OpenAI. Disappearing messages are never sent; muted and ignored chats are skipped.'
               '${policy.kindEnabled(AutoTranscriptionKind.reel) ? '' : ' Instagram reels only when you tap Transcribe.'}'
-              '${policy.auto && !personal.autoTranscriptionAvailable ? ' Currently off on the worker: tap Transcribe on a message instead.' : ''}',
+              '${policy.auto && !personal.autoTranscriptionAvailable ? ' Currently off on the background service: tap Transcribe on a message instead.' : ''}',
           value: policy.auto,
           onChanged: editable
               ? (value) => _save(policy.withAuto(value, DateTime.now()))

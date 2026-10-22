@@ -24,56 +24,18 @@ class SettingsChatView extends StatelessWidget {
     final theme = Theme.of(context);
 
     return NotionSettingsScaffold(
-      title: 'Chats & media',
+      title: 'Chats',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          NotionListRow(
-            key: const Key('settings_voice_video_row'),
-            leading: const Icon(Icons.mic_none_outlined),
-            title: 'Voice messages & round videos',
-            subtitle: 'Recording quality, noise reduction, auto-download',
-            onTap: () => context.push('/rooms/settings/chat/media'),
-          ),
-          NotionListRow(
-            key: const Key('settings_stickers_row'),
-            leading: const Icon(Icons.sticky_note_2_outlined),
-            title: 'Stickers',
-            subtitle: 'Sticker packs, favourites, import from Telegram',
-            onTap: () => context.push('/rooms/settings/chat/stickers'),
-          ),
-          NotionListRow(
-            leading: const Icon(Icons.people_outline),
-            title: 'People & merged conversations',
-            subtitle: 'Keep one timeline across a person’s networks',
-            onTap: () => context.push('/rooms/settings/people'),
-          ),
-          const NotionSettingsSection('Messages'),
+          // Everyday gestures first (Telegram "Chat Settings", Signal "Chats").
           SettingsSwitchListTile.adaptive(
-            title: L10n.of(context).formattedMessages,
-            subtitle: L10n.of(context).formattedMessagesDescription,
-            setting: AppSettings.renderHtml,
-          ),
-          SettingsSwitchListTile.adaptive(
-            title: L10n.of(context).showThumbnailsInTimeline,
-            setting: AppSettings.showThumbnailsInTimeline,
-          ),
-          SettingsSwitchListTile.adaptive(
-            title: L10n.of(context).hideRedactedMessages,
-            subtitle: L10n.of(context).hideRedactedMessagesBody,
-            setting: AppSettings.hideRedactedEvents,
-          ),
-          SettingsSwitchListTile.adaptive(
-            title: L10n.of(context).hideInvalidOrUnknownMessageFormats,
-            setting: AppSettings.hideUnknownEvents,
-          ),
-          const NotionSettingsSection('Gestures & typing'),
-          SettingsSwitchListTile.adaptive(
-            title: L10n.of(context).sendOnEnter,
+            title: 'Send with Enter',
+            subtitle: 'Shift+Enter adds a new line',
             setting: AppSettings.sendOnEnter,
           ),
           SettingsSwitchListTile.adaptive(
-            title: L10n.of(context).swipeRightToLeftToReply,
+            title: 'Swipe to reply',
             setting: AppSettings.swipeRightToLeftToReply,
           ),
           SettingsSwitchListTile.adaptive(
@@ -152,6 +114,39 @@ class SettingsChatView extends StatelessWidget {
                 }
               },
             ),
+          const NotionSettingsSection('Messages'),
+          SettingsSwitchListTile.adaptive(
+            title: 'Show photo and video previews',
+            setting: AppSettings.showThumbnailsInTimeline,
+          ),
+          SettingsSwitchListTile.adaptive(
+            title: 'Hide deleted messages',
+            subtitle: 'Leave no placeholder where a message was deleted',
+            setting: AppSettings.hideRedactedEvents,
+          ),
+          // Formatted messages and unknown message types are in
+          // Settings › Advanced › Developer (CS-22).
+          const NotionSettingsSection('Media & people'),
+          NotionListRow(
+            key: const Key('settings_voice_video_row'),
+            leading: const Icon(Icons.mic_none_outlined),
+            title: 'Voice messages & round videos',
+            subtitle: 'Recording quality, noise reduction, auto-download',
+            onTap: () => context.push('/rooms/settings/chat/media'),
+          ),
+          NotionListRow(
+            key: const Key('settings_stickers_row'),
+            leading: const Icon(Icons.sticky_note_2_outlined),
+            title: 'Stickers & GIFs',
+            subtitle: 'Sticker packs, favourites, import from Telegram',
+            onTap: () => context.push('/rooms/settings/chat/stickers'),
+          ),
+          NotionListRow(
+            leading: const Icon(Icons.people_outline),
+            title: 'Merged conversations',
+            subtitle: 'One timeline for a person across networks',
+            onTap: () => context.push('/rooms/settings/people'),
+          ),
         ],
       ),
     );

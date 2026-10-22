@@ -8,11 +8,13 @@ import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:material_ui/material_ui.dart';
 
 class SettingsSwitchListTile extends StatefulWidget {
-  final AppSettings<bool?> setting;
+  /// Non-nullable, so an unwritten setting reads its enum default
+  /// (CC-09: `AppSettings<bool?>` resolved to the raw nullable read and
+  /// showed default-on toggles as off).
+  final AppSettings<bool> setting;
   final String title;
   final String? subtitle;
   final Function(bool)? onChanged;
-  final bool? defaultValue;
 
   const SettingsSwitchListTile.adaptive({
     super.key,
@@ -20,7 +22,6 @@ class SettingsSwitchListTile extends StatefulWidget {
     required this.title,
     this.subtitle,
     this.onChanged,
-    this.defaultValue,
   });
 
   @override
@@ -34,7 +35,7 @@ class SettingsSwitchListTileState extends State<SettingsSwitchListTile> {
   Widget build(BuildContext context) {
     final subtitle = widget.subtitle;
     return NotionSettingsToggle(
-      value: widget.setting.value ?? widget.defaultValue ?? false,
+      value: widget.setting.value,
       title: widget.title,
       subtitle: subtitle,
       onChanged: _pending

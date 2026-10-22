@@ -119,7 +119,7 @@ void main() {
       'Appearance',
       'Notifications',
       'Privacy & security',
-      'Chats & media',
+      'Chats',
       'Networks',
       'Transcription',
       'Tools',

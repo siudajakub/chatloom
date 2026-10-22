@@ -12,7 +12,6 @@ import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:matrix/matrix.dart';
 
 import 'settings_security_view.dart';
 
@@ -137,13 +136,6 @@ class SettingsSecurityController extends State<SettingsSecurity> {
       await AppLock.of(context).changePincode(newLock);
       setState(() {});
     }
-  }
-
-  Future<void> changeShareKeysWith(ShareKeysWith? shareKeysWith) async {
-    if (shareKeysWith == null) return;
-    AppSettings.shareKeysWith.setItem(shareKeysWith.name);
-    Matrix.of(context).client.shareKeysWith = shareKeysWith;
-    setState(() {});
   }
 
   @override
