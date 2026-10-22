@@ -62,13 +62,17 @@ class _Client extends ConversationClient {
 class _Room extends ConversationRoom {
   _Room(super.client, super.id, {super.network});
   final receipts = <String?>[];
+  final publicReceipts = <bool?>[];
 
   @override
   Future<void> setReadMarker(
     String? eventId, {
     String? mRead,
     bool? public,
-  }) async => receipts.add(eventId);
+  }) async {
+    receipts.add(eventId);
+    publicReceipts.add(public);
+  }
 }
 
 void main() {
@@ -176,17 +180,39 @@ void main() {
       },
     );
 
-    test('after incognito was turned on, an old notification\'s Mark as '
-        'read only dismisses: no receipt', () async {
+    test('under incognito (also on a notification posted before it was '
+        'turned on) Mark as read is private: read marker and private '
+        'receipt only, even with public receipts on (CS-32, CC-29)', () async {
       await AppSettings.personalIncognito.setItem(true);
+      await AppSettings.sendPublicReadReceipts.setItem(true);
       telegram.lastEvent = telegram.message(r'$notified', 'Fictional');
       await notificationTap(
         markAsRead(telegram, r'$notified'),
         clients: [client],
       );
-      expect(telegram.receipts, isEmpty);
-      expect(whatsapp.receipts, isEmpty);
+      expect(telegram.receipts, [r'$notified']);
+      expect(telegram.publicReceipts, [false]);
     });
+
+    test(
+      'without incognito Mark as read follows the receipt setting',
+      () async {
+        await AppSettings.sendPublicReadReceipts.setItem(true);
+        telegram.lastEvent = telegram.message(r'$notified', 'Fictional');
+        await notificationTap(
+          markAsRead(telegram, r'$notified'),
+          clients: [client],
+        );
+        expect(telegram.publicReceipts, [true]);
+        telegram.publicReceipts.clear();
+        await AppSettings.sendPublicReadReceipts.setItem(false);
+        await notificationTap(
+          markAsRead(telegram, r'$notified'),
+          clients: [client],
+        );
+        expect(telegram.publicReceipts, [false]);
+      },
+    );
   });
 
   group('Reply on a merged person', () {

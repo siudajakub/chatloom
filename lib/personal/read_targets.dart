@@ -53,13 +53,36 @@ List<(Room, String)> conversationReadTargets(
       (room, event.eventId),
 ];
 
+/// Whether any source has a newest message from someone else that the
+/// account's public read receipt does not point at yet. A newest own message
+/// implies everything before it was read, so nothing is left to mark.
+bool conversationNeedsPublicRead(
+  Iterable<Room> rooms, {
+  Iterable<Event> Function(Room room)? loaded,
+}) {
+  for (final room in rooms) {
+    final target = conversationReadTarget(
+      room,
+      loaded: loaded?.call(room) ?? const [],
+    );
+    if (target == null || target.senderId == room.client.userID) continue;
+    if (room.receiptState.global.ownPublic?.eventId != target.eventId) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Sends one manual read marker per target, all sources in parallel, and
 /// returns how many failed. [publicReceipt] makes the receipt public even
 /// when public receipts are off (the incognito read button's explicit
-/// choice); otherwise the receipt follows the user's receipt setting.
+/// choice); [privateReceipt] keeps it private even when they are on (the
+/// incognito notification action, CS-32); otherwise the receipt follows the
+/// user's receipt setting.
 Future<int> markConversationRead(
   List<(Room, String)> targets, {
   bool publicReceipt = false,
+  bool privateReceipt = false,
 }) async {
   var failed = 0;
   await Future.wait(
@@ -74,6 +97,7 @@ Future<int> markConversationRead(
           eventId,
           manual: true,
           publicReceipt: publicReceipt,
+          privateReceipt: privateReceipt,
         );
       } catch (_) {
         failed++;

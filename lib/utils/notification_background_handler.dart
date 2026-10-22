@@ -441,12 +441,6 @@ Future<void> notificationTap(
           actionType == ChatLoomNotificationActions.mute) {
         return;
       }
-      // Posted before incognito was turned on, the notification still offers
-      // Mark as read: now it only dismisses, never a receipt (CC-29).
-      if (actionType == ChatLoomNotificationActions.markAsRead &&
-          AppSettings.personalIncognito.value) {
-        return;
-      }
       final roomId = payload.roomId;
       if (roomId == null) {
         throw Exception('Selected notification with action but no payload');
@@ -473,7 +467,15 @@ Future<void> notificationTap(
       }
       switch (actionType) {
         case ChatLoomNotificationActions.markAsRead:
-          await markNotificationRead(client, room, payload.eventId);
+          // Incognito (read at action time, so a notification posted before
+          // it was turned on follows it too, CC-29): a private read that
+          // clears the unread state without telling the sender (CS-32).
+          await markNotificationRead(
+            client,
+            room,
+            payload.eventId,
+            privateReceipt: AppSettings.personalIncognito.value,
+          );
         case ChatLoomNotificationActions.reply:
           // Handled above, never straight to the room.
           return;
@@ -500,13 +502,15 @@ Future<void> notificationTap(
 /// a merged person (one notification for all networks) every other network
 /// up to that message's time. Never a local echo, never past what the
 /// notification showed, never back behind a newer read position. The
-/// receipt follows the receipt setting (manual action).
+/// receipt follows the receipt setting (manual action); [privateReceipt]
+/// (incognito) keeps it private regardless.
 @visibleForTesting
 Future<void> markNotificationRead(
   Client client,
   Room room,
   String? eventId, {
   PersonalClient Function(Client client)? personalOf,
+  bool privateReceipt = false,
 }) async {
   final targets = <(Room, String)>[];
   DateTime? cutoff;
@@ -551,7 +555,7 @@ Future<void> markNotificationRead(
       if (!seen) targets.add((other, target.eventId));
     }
   }
-  await markConversationRead(targets);
+  await markConversationRead(targets, privateReceipt: privateReceipt);
 }
 
 /// Where tapping a notification leads. Reminders open their message. A room

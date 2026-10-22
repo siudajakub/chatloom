@@ -295,7 +295,8 @@ void main() {
   );
 
   test('message preview: sender title, decrypted text, private visibility, '
-      'Messages channel, inline Reply and incognito Dismiss action', () async {
+      'Messages channel, inline Reply and a private Mark as read under '
+      'incognito', () async {
     final f = fixture();
     f.client.fetch = () async => f.event();
     await f.push();
@@ -306,7 +307,8 @@ void main() {
     expect(android.channelId, 'fluffychat_push');
     expect(android.channelName, 'Messages');
     expect(android.visibility, NotificationVisibility.private);
-    expect(android.actions!.map((a) => a.id), ['reply', 'dismiss']);
+    // Incognito reads privately (CS-32): same action as without it.
+    expect(android.actions!.map((a) => a.id), ['reply', 'markAsRead']);
     final reply = android.actions!.first;
     expect(reply.title, 'Reply');
     expect(reply.inputs.single.label, 'Message');
@@ -314,7 +316,7 @@ void main() {
     expect(reply.showsUserInterface, isFalse);
     // Android's sending state stays until the outcome replaces it.
     expect(reply.cancelNotification, isFalse);
-    expect(android.actions!.last.title, 'Dismiss');
+    expect(android.actions!.last.title, 'Mark as read');
   });
 
   test('no inline Reply where the account cannot write or on the '
@@ -337,18 +339,17 @@ void main() {
     f.client.fetch = () async => f.event();
     await f.push();
     expect(f.plugin.shown.last.details!.android!.actions!.map((a) => a.id), [
-      'dismiss',
+      'markAsRead',
     ]);
     final g = fixture();
     g.client.fetch = () async => g.event();
     await g.push(test: true);
     expect(g.plugin.shown.last.details!.android!.actions!.map((a) => a.id), [
-      'dismiss',
+      'markAsRead',
     ]);
   });
 
-  test('previews off keep the generic text; read receipts only without '
-      'incognito', () async {
+  test('previews off keep the generic text and only Mark as read', () async {
     final f = fixture();
     await AppSettings.personalNotificationPreviews.setItem(false);
     await AppSettings.personalIncognito.setItem(false);
@@ -374,7 +375,7 @@ void main() {
     expect(android.styleInformation, isNull);
     expect(android.visibility, NotificationVisibility.private);
     // The app lock requires opening (and unlocking) the app to reply.
-    expect(android.actions!.map((a) => a.id), ['dismiss']);
+    expect(android.actions!.map((a) => a.id), ['markAsRead']);
     expect(await _lastOutcome(), PushOutcome.shown);
   });
 

@@ -50,6 +50,11 @@ abstract final class PersonalPrivacy {
     // Only an explicit manual action can override the automatic receipt
     // preference. It still uses the exact room/event transport grant.
     bool publicReceipt = false,
+    // A private read (incognito notification "Mark as read", CS-32): the
+    // read marker and an `m.read.private` receipt only, whatever the public
+    // receipt setting says. Bridges act on `m.read` alone, so the network
+    // never learns about it; the homeserver clears the unread count.
+    bool privateReceipt = false,
   }) async {
     if (!policy.allowRead(manual: manual, acceptedReply: acceptedReply)) return;
     if (!eventId.startsWith(r'$')) return;
@@ -63,8 +68,9 @@ abstract final class PersonalPrivacy {
         eventId,
         mRead: eventId,
         public:
-            (manual && publicReceipt) ||
-            AppSettings.sendPublicReadReceipts.value,
+            !privateReceipt &&
+            ((manual && publicReceipt) ||
+                AppSettings.sendPublicReadReceipts.value),
       ),
     );
   }

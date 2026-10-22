@@ -543,18 +543,14 @@ List<AndroidNotificationAction> _messageActions({required bool reply}) => [
       // replaces or removes it.
       cancelNotification: false,
     ),
-  AppSettings.personalIncognito.value
-      // Incognito never sends a read receipt from a notification.
-      ? AndroidNotificationAction(
-          ChatLoomNotificationActions.dismiss.name,
-          'Dismiss',
-          cancelNotification: true,
-        )
-      : AndroidNotificationAction(
-          ChatLoomNotificationActions.markAsRead.name,
-          'Mark as read',
-          cancelNotification: true,
-        ),
+  // Under incognito the action reads privately (no public receipt; see
+  // `notificationTap`), so it is "Mark as read" in both modes (CS-32).
+  // `dismiss` stays parseable for notifications posted by older builds.
+  AndroidNotificationAction(
+    ChatLoomNotificationActions.markAsRead.name,
+    'Mark as read',
+    cancelNotification: true,
+  ),
 ];
 
 AndroidNotificationDetails _messageDetails({
