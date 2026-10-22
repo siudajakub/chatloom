@@ -20,6 +20,7 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/member_actions_popup_menu_button.dart';
 import 'package:material_ui/material_ui.dart';
@@ -496,6 +497,13 @@ class Message extends StatelessWidget {
                     strict: strictCapabilities,
                   ),
                   onLongPress: (press) => _openMenu(context, press),
+                  // Mac: react · reply · more beside the hovered bubble.
+                  hoverActions: PlatformInfos.isDesktop,
+                  hoverReact: () => ConversationMessageActions.canReactAtAll(
+                    event,
+                    strict: strictCapabilities,
+                  ),
+                  outgoing: own,
                   pressAlignment: own
                       ? Alignment.centerRight
                       : Alignment.centerLeft,
@@ -537,7 +545,9 @@ class Message extends StatelessWidget {
         strict: strictCapabilities,
       ),
       onMoreReactions: () => _customReaction(context),
-      actions: menuActions?.call(event) ?? const [],
+      actions: press.reactionsOnly
+          ? const []
+          : menuActions?.call(event) ?? const [],
       caption: event.originServerTs.localizedDetailedTime(context),
     );
   }

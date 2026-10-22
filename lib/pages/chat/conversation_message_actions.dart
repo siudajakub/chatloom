@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
@@ -6,6 +8,7 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart' show RoundVideoDescriptor;
 
 enum ConversationReactionState { idle, pending, awaitingEcho, unknown, failed }
 
@@ -130,6 +133,27 @@ class ConversationReactionCoordinator extends ChangeNotifier {
     }
   }
 
+  /// The SDK gave up on an add (its echo is an error): the intent failed
+  /// and may be tried again; it no longer blocks the message's reactions.
+  void markFailed(Object key) {
+    final current = _states[key];
+    if (current == null ||
+        current == ConversationReactionState.pending ||
+        current == ConversationReactionState.failed) {
+      return;
+    }
+    _states[key] = ConversationReactionState.failed;
+    notifyListeners();
+  }
+
+  /// Forgets a failed intent (a retry starts from scratch).
+  void forget(Object key) {
+    if (_states[key] == ConversationReactionState.failed &&
+        _states.remove(key) != null) {
+      notifyListeners();
+    }
+  }
+
   void reconcileRemoval(Object key, {required bool present}) {
     if (!present &&
         state(key) != ConversationReactionState.pending &&
@@ -180,6 +204,8 @@ abstract final class ConversationMessageActions {
       .where(
         (e) =>
             !e.redacted &&
+            // An echo the SDK gave up on was never given.
+            !e.status.isError &&
             e.senderId == event.room.client.userID &&
             e.content
                     .tryGetMap<String, Object?>('m.relates_to')
@@ -194,7 +220,9 @@ abstract final class ConversationMessageActions {
       timeline,
       RelationshipTypes.reaction,
     ))
-      if (!e.redacted && e.senderId == event.room.client.userID)
+      if (!e.redacted &&
+          !e.status.isError &&
+          e.senderId == event.room.client.userID)
         ?e.content
             .tryGetMap<String, Object?>('m.relates_to')
             ?.tryGet<String>('key'),
@@ -244,12 +272,62 @@ abstract final class ConversationMessageActions {
           _removalEvidence[manager]?.remove(tracked);
         }
       } else {
-        manager.reconcile(
-          tracked,
-          present: own.any((e) => e.status == EventStatus.synced),
-        );
+        final synced = own.any((e) => e.status == EventStatus.synced);
+        manager.reconcile(tracked, present: synced);
+        if (!synced && own.isEmpty) {
+          final errors = _errorEchoes(event, timeline, tracked.emoji);
+          if (errors.isNotEmpty) {
+            // Offline too long or refused by the server: the heart is not
+            // given. Drop the dead echo, keep a visible, retriable failure.
+            manager.markFailed(tracked);
+            for (final echo in errors) {
+              unawaited(echo.cancelSend().catchError((Object _) {}));
+            }
+          }
+        }
       }
     }
+  }
+
+  static List<Event> _errorEchoes(
+    Event event,
+    Timeline timeline,
+    String emoji,
+  ) => event
+      .aggregatedEvents(timeline, RelationshipTypes.reaction)
+      .where(
+        (e) =>
+            e.status.isError &&
+            e.senderId == event.room.client.userID &&
+            e.content
+                    .tryGetMap<String, Object?>('m.relates_to')
+                    ?.tryGet<String>('key') ==
+                emoji,
+      )
+      .toList();
+
+  /// Sends a failed reaction again (the feedback line's Retry).
+  static Future<bool> retryFailed(
+    BuildContext context,
+    Event event,
+    Timeline timeline, {
+    bool strict = false,
+  }) async {
+    final manager = coordinator(event);
+    final failed = manager
+        .keysFor(scope(event))
+        .where(
+          (k) =>
+              !k.removal &&
+              manager.state(k) == ConversationReactionState.failed,
+        )
+        .toList();
+    var added = false;
+    for (final key in failed) {
+      manager.forget(key);
+      added |= await react(context, event, timeline, key.emoji, strict: strict);
+    }
+    return added;
   }
 
   /// Whether [event] can be replied to (swipe, menu): sent, readable, the
@@ -274,6 +352,80 @@ abstract final class ConversationMessageActions {
         ? capability.allowed
         : capability.status != CapabilityStatus.unavailable;
   }
+
+  /// Whether [event]'s network accepts [feature] on it now (age and edit
+  /// limits included). [strict] sources (merged chats) need it verified with
+  /// the Matrix checks of [RoomCapabilities.forFeature]; ordinary chats hide
+  /// only what the bridge explicitly refuses and leave Matrix ownership and
+  /// power to the caller (several accounts may share a chat).
+  static bool networkAllows(
+    BridgeFeature feature,
+    Event event, {
+    Timeline? timeline,
+    bool strict = false,
+  }) {
+    final room = event.room;
+    final editCount = feature == BridgeFeature.edit && timeline != null
+        ? event
+              .aggregatedEvents(timeline, RelationshipTypes.edit)
+              .where((e) => e.senderId == event.senderId)
+              .length
+        : null;
+    if (strict) {
+      return RoomCapabilities.forFeature(
+        feature,
+        room,
+        event: event,
+        editCount: editCount,
+      ).allowed;
+    }
+    return RoomCapabilities.declared(room)
+            .evidence(
+              feature,
+              messageAge: DateTime.now().difference(event.originServerTs),
+              editCount: editCount,
+            )
+            .result
+            .status !=
+        CapabilityStatus.unavailable;
+  }
+
+  static const _editableTypes = {
+    MessageTypes.Text,
+    MessageTypes.Emote,
+    MessageTypes.Notice,
+  };
+
+  /// Whether the menu offers Edit for [event] (ownership is the caller's):
+  /// a sent text message the network still lets the user edit (Telegram
+  /// and Messenger hide Edit once the network's window has passed).
+  static bool canEditContent(
+    Event event,
+    Timeline? timeline, {
+    bool strict = false,
+  }) =>
+      event.status.isSent &&
+      !event.redacted &&
+      RoundVideoDescriptor.fromContent(event.content) == null &&
+      _editableTypes.contains(event.messageType) &&
+      networkAllows(
+        BridgeFeature.edit,
+        event,
+        timeline: timeline,
+        strict: strict,
+      );
+
+  /// Whether the network takes a "delete for everyone" of [event] now (the
+  /// Matrix redaction permission is the caller's).
+  static bool canDeleteForEveryone(Event event, {bool strict = false}) =>
+      networkAllows(BridgeFeature.delete, event, strict: strict);
+
+  /// Whether the room's network has threads (or does not say it has none).
+  static bool canThread(Room room) =>
+      RoomCapabilities.declared(
+        room,
+      ).evidence(BridgeFeature.thread).result.status !=
+      CapabilityStatus.unavailable;
 
   /// The reaction capability of [event] in general (not one emoji): the bar
   /// and double tap are offered only when this holds.
@@ -620,7 +772,7 @@ class _ConversationReactionFeedbackState
               states.contains(ConversationReactionState.awaitingEcho)
         ? 'Reaction pending source confirmation'
         : states.contains(ConversationReactionState.failed)
-        ? 'Reaction rejected · use menu to retry'
+        ? 'Reaction not sent · Tap to retry'
         : null;
   }
 
@@ -640,16 +792,40 @@ class _ConversationReactionFeedbackState
   Widget build(BuildContext context) {
     _reconciler.didBuild(context, widget.event, widget.timeline);
     final text = _text;
-    return text == null
-        ? const SizedBox.shrink()
-        : Semantics(
-            liveRegion: true,
-            child: Text(
-              text,
-              style: NotionType.micro.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          );
+    if (text == null) return const SizedBox.shrink();
+    final failed = _manager!
+        .statesFor(ConversationMessageActions.scope(widget.event))
+        .contains(ConversationReactionState.failed);
+    final colors = context.notion.colors;
+    final label = Text(
+      text,
+      style: NotionType.micro.copyWith(
+        color: failed ? colors.danger : colors.textSecondary,
+        fontWeight: failed ? FontWeight.w600 : null,
+      ),
+    );
+    if (!failed) return Semantics(liveRegion: true, child: label);
+    return Semantics(
+      liveRegion: true,
+      button: true,
+      child: InkWell(
+        key: const ValueKey('reaction-retry'),
+        borderRadius: NotionRadius.pillAll,
+        onTap: () => unawaited(
+          ConversationMessageActions.retryFailed(
+            context,
+            widget.event,
+            widget.timeline,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: NotionSpace.xs,
+            vertical: NotionSpace.xxs,
+          ),
+          child: label,
+        ),
+      ),
+    );
   }
 }

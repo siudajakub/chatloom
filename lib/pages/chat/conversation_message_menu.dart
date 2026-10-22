@@ -316,7 +316,11 @@ class _MessageMenuState extends State<_MessageMenu>
         slop: NotionSpace.xl,
       );
     }
-    if (slot != _hovered) setState(() => _hovered = slot);
+    if (slot != _hovered) {
+      // A tick per emoji the finger slides onto (Signal), none on leaving.
+      if (slot != null) NotionHaptics.selection();
+      setState(() => _hovered = slot);
+    }
   }
 
   void _chooseSlot(int slot) {

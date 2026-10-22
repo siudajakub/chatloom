@@ -14,9 +14,11 @@ import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/pending_media_store.dart';
 import 'package:chatloom/personal/media/send_error_text.dart';
 import 'package:chatloom/personal/media/upload_progress.dart';
+import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
+import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -1370,7 +1372,7 @@ class TelegramRoundService extends ChangeNotifier
       return;
     }
     final origin = TelegramRoomBinding.of(event.room)!;
-    final rooms = client.rooms.where((room) {
+    bool accepts(Room room) {
       final binding = TelegramRoomBinding.of(room);
       return binding?.identity.accountId == origin.identity.accountId &&
           binding
@@ -1379,52 +1381,38 @@ class TelegramRoundService extends ChangeNotifier
                   .operation('native_forward')
                   .allowed ==
               true;
-    }).toList();
-    final selected = await showModalBottomSheet<Room>(
+    }
+
+    // The forward sheet of every other message, narrowed to the chats of
+    // this Telegram login that take native forwards; one chat per round.
+    // Matrix acceptance is "forwarded"; the bridge's own failure comes back
+    // as a bridge notice.
+    await showNotionSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(title: Text('Forward in Telegram')),
-            for (final room in rooms)
-              ListTile(
-                title: Text(room.getLocalizedDisplayname()),
-                onTap: () => Navigator.pop(context, room),
-              ),
-            if (rooms.isEmpty)
-              const ListTile(
-                title: Text('No destination conversations available.'),
-              ),
-          ],
-        ),
+      title: 'Forward in Telegram',
+      builder: (sheet) => ForwardSheet(
+        personal: PersonalClient.of(client),
+        multiple: false,
+        accepts: accepts,
+        emptyMessage: 'No Telegram chat here takes forwarded round videos.',
+        send: (sheet, room) async {
+          if (generation != PersonalPrivacy.surfaceGeneration ||
+              !identical(Matrix.of(sheet).client, client)) {
+            return 'Not sent.';
+          }
+          try {
+            final result = await forward(event, room);
+            return result == null
+                ? 'Couldn’t confirm the forward. Try again; it is never sent twice.'
+                : null;
+          } on ImmediateMediaRejected {
+            return 'Telegram does not allow forwarding this round video there.';
+          } catch (error) {
+            return 'Couldn’t forward. ${sendErrorText(error)}';
+          }
+        },
       ),
     );
-    if (selected == null ||
-        !context.mounted ||
-        generation != PersonalPrivacy.surfaceGeneration ||
-        !identical(Matrix.of(context).client, client))
-      return;
-    // Telegram: a short confirmation naming the chat, an error only when
-    // it really failed. Matrix acceptance is "forwarded"; the bridge's own
-    // failure would come back as a bridge notice.
-    final destination = selected.getLocalizedDisplayname();
-    String message;
-    try {
-      final result = await forward(event, selected);
-      message = result == null
-          ? 'Couldn\'t confirm the forward to $destination. Try again; it is never sent twice.'
-          : 'Forwarded to $destination';
-    } on ImmediateMediaRejected {
-      message = 'Telegram does not allow forwarding this round video there.';
-    } catch (error) {
-      message = 'Couldn\'t forward to $destination. ${sendErrorText(error)}';
-    }
-    if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    }
   }
 
   void _receive(Event event) {

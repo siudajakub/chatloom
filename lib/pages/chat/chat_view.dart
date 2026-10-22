@@ -120,7 +120,7 @@ class ChatView extends StatelessWidget {
               if (activeThreadId != null) {
                 appbarBottomHeight += ChatAppBarListTile.fixedHeight;
               }
-              if (controller.room.pinnedEventIds.isNotEmpty &&
+              if (controller.pinnedEventIds.isNotEmpty &&
                   activeThreadId == null) {
                 appbarBottomHeight += ChatAppBarListTile.fixedHeight;
               }

@@ -6,6 +6,8 @@ import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
+import 'package:chatloom/personal/message_bookmarks.dart';
+import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/utils/file_description.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:material_ui/material_ui.dart';
@@ -44,7 +46,7 @@ List<ConversationMessageAction> chatMessageActions(
   final sent = event.status.isSent;
   final room = controller.room;
   final own = event.senderId == room.client.userID;
-  final pinned = room.pinnedEventIds.contains(event.eventId);
+  final pinned = controller.pinnedEventIds.contains(event.eventId);
   return [
     if (failed) ...[
       ConversationMessageAction(
@@ -77,7 +79,8 @@ List<ConversationMessageAction> chatMessageActions(
     if (sent &&
         !event.redacted &&
         controller.activeThreadId == null &&
-        room.canSendDefaultMessages)
+        room.canSendDefaultMessages &&
+        ConversationMessageActions.canThread(room))
       ConversationMessageAction(
         icon: Icons.message_outlined,
         label: l10n.replyInThread,
@@ -118,6 +121,18 @@ List<ConversationMessageAction> chatMessageActions(
         label: pinned ? l10n.unpin : l10n.pinMessage,
         onSelected: () => controller.pinEvent(event),
       ),
+    if (MessageBookmarks.canBookmark(event))
+      () {
+        final personal = PersonalClient.of(room.client);
+        final saved = MessageBookmarks.isBookmarked(personal, event);
+        return ConversationMessageAction(
+          icon: saved ? Icons.bookmark : Icons.bookmark_outline,
+          label: saved ? 'Remove bookmark' : 'Bookmark',
+          onSelected: () => unawaited(
+            MessageBookmarks.toggle(controller.context, personal, event),
+          ),
+        );
+      }(),
     if (controller.canSaveEvent(display))
       ConversationMessageAction(
         icon: Icons.download_outlined,
@@ -135,7 +150,13 @@ List<ConversationMessageAction> chatMessageActions(
         label: l10n.reportMessage,
         onSelected: () => controller.reportEventAction(event),
       ),
-    if (!failed && controller.canRedactEvent(event))
+    // A sending own message is deleted as soon as it goes through.
+    if (!failed &&
+        (controller.canRedactEvent(event) ||
+            (own &&
+                event.status.isSending &&
+                !controller.isArchived &&
+                ConversationMessageActions.canDeleteForEveryone(event))))
       ConversationMessageAction(
         icon: Icons.delete_outlined,
         label: l10n.delete,

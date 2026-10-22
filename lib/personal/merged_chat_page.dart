@@ -22,6 +22,7 @@ import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/conversation_source_picker.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
+import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/pages/chat/reply_display.dart';
 import 'package:chatloom/pages/chat/send_file_dialog.dart';
@@ -33,10 +34,13 @@ import 'package:chatloom/pages/chat/undecryptable_fix_sheet.dart';
 import 'package:chatloom/pages/chat/voice_message_sender.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/message_bookmarks.dart';
+import 'package:chatloom/personal/network_rejections.dart';
 import 'package:chatloom/personal/person_group_identity.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -54,6 +58,7 @@ import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/personal/send_warmup.dart';
+import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
@@ -66,9 +71,6 @@ import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/platform_infos.dart';
-import 'package:chatloom/utils/show_scaffold_dialog.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
-import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
@@ -289,6 +291,12 @@ class _MergedChatPageState extends State<_MergedChatView>
     inputFocus.addListener(_inputFocusChanged);
     WidgetsBinding.instance.addObserver(this);
     _pendingEvent = widget.initialEventId;
+    // A network refusing a reaction, edit or deletion is said here.
+    _rejections = NetworkRejectionWatcher(
+      personal.client,
+      rooms: () => conversationRoomIds,
+      notify: _notify,
+    );
     _load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // The first send must not wait for the member list (trust check);
@@ -377,7 +385,9 @@ class _MergedChatPageState extends State<_MergedChatView>
 
   static bool _isRow(Event e) =>
       _rowTypes.contains(e.type) &&
-      e.relationshipType != RelationshipTypes.edit;
+      e.relationshipType != RelationshipTypes.edit &&
+      // A message the user just deleted disappears at once.
+      !MessageDeletions.hides(e);
 
   static String _rowKey(Event e) => '${e.room.id}\u0000${e.eventId}';
 
@@ -1200,40 +1210,26 @@ class _MergedChatPageState extends State<_MergedChatView>
     unawaited(_draft());
   }
 
-  int _editCount(Event event) {
-    final timeline = timelineFor(event);
-    return timeline == null
-        ? 0
-        : event.aggregatedEvents(timeline, RelationshipTypes.edit).length;
-  }
-
   bool _canEdit(Event event) =>
       event.senderId == personal.client.userID &&
-      event.status.isSent &&
-      !event.redacted &&
-      RoundVideoDescriptor.fromContent(event.content) == null &&
-      {
-        MessageTypes.Text,
-        MessageTypes.Emote,
-        MessageTypes.Notice,
-      }.contains(event.messageType) &&
-      RoomCapabilities.forFeature(
-        BridgeFeature.edit,
-        event.room,
-        event: event,
-        editCount: _editCount(event),
-      ).allowed;
+      ConversationMessageActions.canEditContent(
+        event,
+        timelineFor(event),
+        strict: true,
+      );
 
+  /// Own messages the source network can delete for everyone; a sending
+  /// one is deleted as soon as it goes through (never a ghost delivery).
   bool _canRedact(Event event) =>
       !event.redacted &&
       event.senderId == personal.client.userID &&
-      (!event.status.isSent ||
-          (event.canRedact &&
-              RoomCapabilities.forFeature(
-                BridgeFeature.delete,
-                event.room,
-                event: event,
-              ).allowed));
+      (event.status.isSending ||
+          (event.status.isSent &&
+              event.canRedact &&
+              ConversationMessageActions.canDeleteForEveryone(
+                event,
+                strict: true,
+              )));
 
   /// Sent media only: an unsent file is still on this device.
   bool _canSave(Event event) =>
@@ -1288,38 +1284,17 @@ class _MergedChatPageState extends State<_MergedChatView>
 
   void _copy(Event event) {
     Clipboard.setData(ClipboardData(text: _display(event).body));
-    _notify(L10n.of(context).copiedToClipboard);
+    unawaited(showCopiedNotice(context, L10n.of(context).copiedToClipboard));
   }
 
-  Future<void> _redact(Event event) async {
-    final l10n = L10n.of(context);
-    final reasonInput = event.status.isSent
-        ? await showTextInputDialog(
-            context: context,
-            title: l10n.redactMessage,
-            message: l10n.redactMessageDescription,
-            isDestructive: true,
-            hintText: l10n.optionalRedactReason,
-            maxLength: 255,
-            maxLines: 3,
-            minLines: 1,
-            okLabel: l10n.remove,
-            cancelLabel: l10n.cancel,
-          )
-        : '';
-    if (reasonInput == null || !_stillHere() || !mounted) return;
-    final reason = reasonInput.isEmpty ? null : reasonInput;
-    await showFutureLoadingDialog(
-      context: context,
-      future: () async {
-        if (event.status.isSent) {
-          await event.redactEvent(reason: reason);
-        } else {
-          await event.cancelSend();
-        }
-      },
-    );
-  }
+  Future<void> _redact(Event event) => MessageDeletions.delete(
+    context,
+    event,
+    timeline: timelineFor(event),
+    refresh: () {
+      if (mounted) setState(_recomputeMerged);
+    },
+  );
 
   /// Removes a message that failed to send.
   Future<void> deleteErrorEventAction(Event event) async {
@@ -1344,11 +1319,9 @@ class _MergedChatPageState extends State<_MergedChatView>
       ).showForwardPicker(context, forward);
       return;
     }
-    await showScaffoldDialog(
-      context: context,
-      builder: (context) => ShareScaffoldDialog(
-        items: [ContentShareItem(forward.content.copy())],
-      ),
+    await showForwardSheet(
+      context,
+      items: [ContentShareItem(forward.content.copy())],
     );
   }
 
@@ -1395,18 +1368,8 @@ class _MergedChatPageState extends State<_MergedChatView>
     setState(() => _listRevision++);
   }
 
-  Future<void> _bookmark(Event event) async {
-    try {
-      await personal.put('bookmark:${personal.transcriptId(event)}', {
-        'source': personal.source(event).toJson(),
-        'network': PersonalClient.networkOf(event.room),
-        'createdAt': DateTime.now().toUtc().toIso8601String(),
-      });
-      _notify('Bookmarked.');
-    } catch (_) {
-      _notify('The bookmark was not saved.');
-    }
-  }
+  Future<void> _bookmark(Event event) =>
+      MessageBookmarks.toggle(context, personal, event);
 
   void _openSource(Event event) => context.go(
     personSourceChatLocation(group.id, event.room.id, eventId: event.eventId),
@@ -1489,10 +1452,14 @@ class _MergedChatPageState extends State<_MergedChatView>
           label: 'Open in source chat',
           onSelected: () => _openSource(event),
         ),
-      if (sent && !event.redacted)
+      if (MessageBookmarks.canBookmark(event))
         ConversationMessageAction(
-          icon: Icons.bookmark_outline,
-          label: 'Bookmark',
+          icon: MessageBookmarks.isBookmarked(personal, event)
+              ? Icons.bookmark
+              : Icons.bookmark_outline,
+          label: MessageBookmarks.isBookmarked(personal, event)
+              ? 'Remove bookmark'
+              : 'Bookmark',
           onSelected: () => _bookmark(event),
         ),
       if (_canSave(display))
@@ -2463,8 +2430,11 @@ class _MergedChatPageState extends State<_MergedChatView>
     );
   }
 
+  NetworkRejectionWatcher? _rejections;
+
   @override
   void dispose() {
+    _rejections?.dispose();
     _generation++;
     if (_savedDraftText != sendController.text && editEvent == null) {
       try {

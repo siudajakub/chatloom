@@ -5,7 +5,7 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'conversation_motion.dart';
@@ -58,6 +58,7 @@ class ConversationMessagePress {
     required this.visualRect,
     this.snapshot,
     this.pointer,
+    this.reactionsOnly = false,
   });
 
   /// Global touch point.
@@ -74,6 +75,10 @@ class ConversationMessagePress {
 
   /// The finger, while it is still down.
   final ConversationMenuPointer? pointer;
+
+  /// Opened from the hover toolbar's react button: the menu shows only the
+  /// reaction bar (Messenger desktop's reaction popover), no action card.
+  final bool reactionsOnly;
 }
 
 /// Chrome that opens on a single tap while leaving double taps to the message.
@@ -123,6 +128,9 @@ class ConversationMessageGestures extends StatefulWidget {
     this.likeEmoji = '👍',
     this.replyLabel = 'Reply',
     this.menuLabel = 'Message actions',
+    this.hoverActions = false,
+    this.hoverReact,
+    this.outgoing = false,
   });
 
   final Widget child;
@@ -146,6 +154,20 @@ class ConversationMessageGestures extends StatefulWidget {
   final String likeEmoji;
   final String replyLabel;
   final String menuLabel;
+
+  /// A mouse or trackpad hovering the surface shows a small toolbar beside
+  /// it (Messenger desktop): react (when [hoverReact]), reply (when
+  /// [onReply]) and more (the menu, when [onLongPress]). Pass true only on
+  /// pointer platforms; touches never show it.
+  final bool hoverActions;
+
+  /// Whether the hover toolbar offers react (the menu with only the bar).
+  /// Asked only when the toolbar shows, never per build.
+  final bool Function()? hoverReact;
+
+  /// Own message (drawn on the trailing side): the toolbar sits on the
+  /// bubble's leading side, otherwise on its trailing side.
+  final bool outgoing;
 
   /// Scale a held bubble sinks to before the menu opens.
   static const double pressScale = NotionMotion.pressButton;
@@ -192,6 +214,9 @@ class _ConversationMessageGesturesState
   Offset _burstAt = Offset.zero;
   ConversationMenuPointer? _menuPointer;
 
+  // Hover toolbar (pointer platforms only), created on the first hover.
+  _HoverToolbarState? _hover;
+
   bool get _touchEnabled => widget.enabled;
   double get _direction {
     final rtl = Directionality.of(context) == TextDirection.rtl;
@@ -230,6 +255,7 @@ class _ConversationMessageGesturesState
       _endBurst();
       _menuPointer?.cancel();
       _menuPointer = null;
+      _hover?.clear();
     } else if (!_touchEnabled ||
         (oldWidget.onReply != widget.onReply && widget.onReply == null) ||
         oldWidget.swipeRightToLeft != widget.swipeRightToLeft) {
@@ -407,7 +433,11 @@ class _ConversationMessageGesturesState
 
   void _semanticsMenu() => _openMenu(null, null);
 
-  void _openMenu(Offset? position, ConversationMenuPointer? pointer) {
+  void _openMenu(
+    Offset? position,
+    ConversationMenuPointer? pointer, {
+    bool reactionsOnly = false,
+  }) {
     final onLongPress = widget.onLongPress;
     final own = context.findRenderObject();
     if (onLongPress == null || own is! RenderBox || !own.hasSize) return;
@@ -441,6 +471,93 @@ class _ConversationMessageGesturesState
         visualRect: visual,
         snapshot: snapshot,
         pointer: pointer,
+        reactionsOnly: reactionsOnly,
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ hover
+
+  bool get _hoverEnabled =>
+      widget.hoverActions &&
+      widget.enabled &&
+      (widget.onLongPress != null || widget.onReply != null);
+
+  void _hoverChanged(bool surface, PointerEvent event) {
+    if (event.kind == PointerDeviceKind.touch) return;
+    if (!_hoverEnabled && surface) return;
+    final hover = _hover ??= _HoverToolbarState();
+    hover.set(surface: surface);
+  }
+
+  List<NotionHoverAction> _hoverItems() {
+    void run(VoidCallback action) {
+      _hover?.clear();
+      action();
+    }
+
+    return [
+      if (widget.onLongPress != null && (widget.hoverReact?.call() ?? false))
+        NotionHoverAction(
+          icon: Icons.add_reaction_outlined,
+          label: 'React',
+          onPressed: () =>
+              run(() => _openMenu(null, null, reactionsOnly: true)),
+        ),
+      if (widget.onReply != null)
+        NotionHoverAction(
+          icon: Icons.reply_rounded,
+          label: widget.replyLabel,
+          onPressed: () => run(widget.onReply!),
+        ),
+      if (widget.onLongPress != null)
+        NotionHoverAction(
+          icon: Icons.more_horiz_rounded,
+          label: widget.menuLabel,
+          onPressed: () => run(() => _openMenu(null, null)),
+        ),
+    ];
+  }
+
+  Widget _withHover(Widget surface) {
+    if (!widget.hoverActions) return surface;
+    final hover = _hover ??= _HoverToolbarState();
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    // Own bubbles sit at the trailing edge: the toolbar goes inside the row
+    // (their leading side), and vice versa.
+    final toolbarOnLeft = widget.outgoing != rtl;
+    return OverlayPortal(
+      controller: hover.portal,
+      overlayChildBuilder: (context) => Align(
+        alignment: AlignmentDirectional.topStart,
+        child: CompositedTransformFollower(
+          link: hover.link,
+          showWhenUnlinked: false,
+          targetAnchor: toolbarOnLeft
+              ? Alignment.centerLeft
+              : Alignment.centerRight,
+          followerAnchor: toolbarOnLeft
+              ? Alignment.centerRight
+              : Alignment.centerLeft,
+          child: MouseRegion(
+            onEnter: (_) => hover.set(bar: true),
+            onExit: (_) => hover.set(bar: false),
+            // The padding touches the bubble, so the pointer moves from
+            // the bubble onto the toolbar without leaving both.
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
+              child: NotionHoverToolbar(actions: _hoverItems()),
+            ),
+          ),
+        ),
+      ),
+      child: CompositedTransformTarget(
+        link: hover.link,
+        child: MouseRegion(
+          onEnter: (event) => _hoverChanged(true, event),
+          onExit: (event) => _hover?.set(surface: false),
+          child: surface,
+        ),
       ),
     );
   }
@@ -479,7 +596,7 @@ class _ConversationMessageGesturesState
     }
     if (_armed && !wasArmed && !_hapticSent) {
       _hapticSent = true;
-      HapticFeedback.selectionClick();
+      NotionHaptics.selection();
     }
     setState(() => _offset = _resisted(_rawDistance) * _direction);
   }
@@ -611,6 +728,7 @@ class _ConversationMessageGesturesState
     _sinkController?.dispose();
     _burst?.dispose();
     _sink.dispose();
+    _hover?.dispose();
     super.dispose();
   }
 
@@ -622,134 +740,178 @@ class _ConversationMessageGesturesState
     final menu = widget.onLongPress != null;
     final burstEmoji = _burstEmoji;
     final burst = _burst;
-    return Semantics(
-      customSemanticsActions: {
-        CustomSemanticsAction(label: widget.replyLabel): ?reply,
-        if (like) CustomSemanticsAction(label: widget.likeLabel): _like,
-        if (menu)
-          CustomSemanticsAction(label: widget.menuLabel): _semanticsMenu,
-      },
-      child: Listener(
-        onPointerDown: _pointerDown,
-        onPointerMove: _pointerMove,
-        onPointerUp: _pointerUp,
-        onPointerCancel: _pointerCancel,
-        child: RawGestureDetector(
-          key: ValueKey(widget.identity),
-          behavior: HitTestBehavior.deferToChild,
-          excludeFromSemantics: true,
-          gestures: {
-            if (_touchEnabled && reply != null)
-              _MessageHorizontalDragRecognizer:
-                  GestureRecognizerFactoryWithHandlers<
-                    _MessageHorizontalDragRecognizer
-                  >(
-                    () => _MessageHorizontalDragRecognizer(_pointerAllowed),
-                    (recognizer) => recognizer
-                      ..dragStartBehavior = DragStartBehavior.down
-                      ..onStart = _dragStart
-                      ..onUpdate = _dragUpdate
-                      ..onEnd = _dragEnd
-                      ..onCancel = _dragCancel,
-                  ),
-            if (_touchEnabled && like)
-              _MessageDoubleTapRecognizer:
-                  GestureRecognizerFactoryWithHandlers<
-                    _MessageDoubleTapRecognizer
-                  >(
-                    () => _MessageDoubleTapRecognizer(_doubleTapAllowed),
-                    (recognizer) => recognizer
-                      ..onDoubleTapDown = _doubleTapDown
-                      ..onDoubleTap = _doubleTap,
-                  ),
-            if (menu) ...{
-              LongPressGestureRecognizer:
-                  GestureRecognizerFactoryWithHandlers<
-                    LongPressGestureRecognizer
-                  >(
-                    () => LongPressGestureRecognizer(debugOwner: this),
-                    (recognizer) => recognizer
-                      ..onLongPressStart = _longPressStart
-                      ..onLongPressMoveUpdate = _longPressMove
-                      ..onLongPressEnd = _longPressEnd,
-                  ),
-              TapGestureRecognizer:
-                  GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-                    () => TapGestureRecognizer(debugOwner: this),
-                    (recognizer) =>
-                        recognizer..onSecondaryTapUp = _secondaryTap,
-                  ),
+    if (!_hoverEnabled) _hover?.clear();
+    return _withHover(
+      Semantics(
+        customSemanticsActions: {
+          CustomSemanticsAction(label: widget.replyLabel): ?reply,
+          if (like) CustomSemanticsAction(label: widget.likeLabel): _like,
+          if (menu)
+            CustomSemanticsAction(label: widget.menuLabel): _semanticsMenu,
+        },
+        child: Listener(
+          onPointerDown: _pointerDown,
+          onPointerMove: _pointerMove,
+          onPointerUp: _pointerUp,
+          onPointerCancel: _pointerCancel,
+          child: RawGestureDetector(
+            key: ValueKey(widget.identity),
+            behavior: HitTestBehavior.deferToChild,
+            excludeFromSemantics: true,
+            gestures: {
+              if (_touchEnabled && reply != null)
+                _MessageHorizontalDragRecognizer:
+                    GestureRecognizerFactoryWithHandlers<
+                      _MessageHorizontalDragRecognizer
+                    >(
+                      () => _MessageHorizontalDragRecognizer(_pointerAllowed),
+                      (recognizer) => recognizer
+                        ..dragStartBehavior = DragStartBehavior.down
+                        ..onStart = _dragStart
+                        ..onUpdate = _dragUpdate
+                        ..onEnd = _dragEnd
+                        ..onCancel = _dragCancel,
+                    ),
+              if (_touchEnabled && like)
+                _MessageDoubleTapRecognizer:
+                    GestureRecognizerFactoryWithHandlers<
+                      _MessageDoubleTapRecognizer
+                    >(
+                      () => _MessageDoubleTapRecognizer(_doubleTapAllowed),
+                      (recognizer) => recognizer
+                        ..onDoubleTapDown = _doubleTapDown
+                        ..onDoubleTap = _doubleTap,
+                    ),
+              if (menu) ...{
+                LongPressGestureRecognizer:
+                    GestureRecognizerFactoryWithHandlers<
+                      LongPressGestureRecognizer
+                    >(
+                      () => LongPressGestureRecognizer(debugOwner: this),
+                      (recognizer) => recognizer
+                        ..onLongPressStart = _longPressStart
+                        ..onLongPressMoveUpdate = _longPressMove
+                        ..onLongPressEnd = _longPressEnd,
+                    ),
+                TapGestureRecognizer:
+                    GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                      () => TapGestureRecognizer(debugOwner: this),
+                      (recognizer) =>
+                          recognizer..onSecondaryTapUp = _secondaryTap,
+                    ),
+              },
             },
-          },
-          child: Stack(
-            clipBehavior: Clip.none,
-            alignment: Alignment.center,
-            children: [
-              if (_offset.abs() > 16)
-                Positioned(
-                  left: _direction > 0 ? 8 : null,
-                  right: _direction < 0 ? 8 : null,
-                  child: ExcludeSemantics(
-                    child: Opacity(
-                      opacity: ((_offset.abs() - 16) / 48).clamp(0.0, 1.0),
-                      child: Icon(
-                        Icons.reply_rounded,
-                        size: 22,
-                        color: _armed
-                            ? Theme.of(context).colorScheme.primary
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                if (_offset.abs() > 16)
+                  Positioned(
+                    left: _direction > 0 ? 8 : null,
+                    right: _direction < 0 ? 8 : null,
+                    child: ExcludeSemantics(
+                      child: Opacity(
+                        opacity: ((_offset.abs() - 16) / 48).clamp(0.0, 1.0),
+                        child: Icon(
+                          Icons.reply_rounded,
+                          size: 22,
+                          color: _armed
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              Transform.translate(
-                key: const ValueKey('message-surface'),
-                offset: Offset(_offset, 0),
-                // A held bubble sinks a little until the long-press opens
-                // the menu (no rebuild per tick).
-                child: ValueListenableBuilder<double>(
-                  valueListenable: _sink,
-                  child: _SurfaceBoundary(
-                    handle: _boundary,
-                    child: widget.child,
-                  ),
-                  builder: (context, scale, child) => Transform.scale(
-                    scale: scale,
-                    alignment: widget.pressAlignment,
-                    child: child,
-                  ),
-                ),
-              ),
-              if (burstEmoji != null && burst != null)
-                Positioned(
-                  left: _burstAt.dx - NotionReactions.burstEmoji,
-                  top: _burstAt.dy - NotionReactions.burstEmoji,
-                  width: NotionReactions.burstEmoji * 2,
-                  height: NotionReactions.burstEmoji * 2,
-                  child: NotionReactionBurst(
-                    animation: burst,
-                    child: Center(
-                      child: burstEmoji.startsWith('mxc://')
-                          ? const Icon(
-                              Icons.add_reaction_outlined,
-                              size: NotionReactions.burstEmoji,
-                            )
-                          : Text(
-                              burstEmoji,
-                              maxLines: 1,
-                              style: const TextStyle(
-                                fontSize: NotionReactions.burstEmoji,
-                              ),
-                            ),
+                Transform.translate(
+                  key: const ValueKey('message-surface'),
+                  offset: Offset(_offset, 0),
+                  // A held bubble sinks a little until the long-press opens
+                  // the menu (no rebuild per tick).
+                  child: ValueListenableBuilder<double>(
+                    valueListenable: _sink,
+                    child: _SurfaceBoundary(
+                      handle: _boundary,
+                      child: widget.child,
+                    ),
+                    builder: (context, scale, child) => Transform.scale(
+                      scale: scale,
+                      alignment: widget.pressAlignment,
+                      child: child,
                     ),
                   ),
                 ),
-            ],
+                if (burstEmoji != null && burst != null)
+                  Positioned(
+                    left: _burstAt.dx - NotionReactions.burstEmoji,
+                    top: _burstAt.dy - NotionReactions.burstEmoji,
+                    width: NotionReactions.burstEmoji * 2,
+                    height: NotionReactions.burstEmoji * 2,
+                    child: NotionReactionBurst(
+                      animation: burst,
+                      child: Center(
+                        child: burstEmoji.startsWith('mxc://')
+                            ? const Icon(
+                                Icons.add_reaction_outlined,
+                                size: NotionReactions.burstEmoji,
+                              )
+                            : Text(
+                                burstEmoji,
+                                maxLines: 1,
+                                style: const TextStyle(
+                                  fontSize: NotionReactions.burstEmoji,
+                                ),
+                              ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+/// Whether the pointer is over a message surface or its hover toolbar; the
+/// toolbar shows while either holds. Exit and enter of one pointer move
+/// land in the same frame, so crossing from the bubble onto the toolbar
+/// never hides it.
+class _HoverToolbarState {
+  final portal = OverlayPortalController();
+  final link = LayerLink();
+  bool _surface = false;
+  bool _bar = false;
+  bool _disposed = false;
+
+  void set({bool? surface, bool? bar}) {
+    if (_disposed) return;
+    _surface = surface ?? _surface;
+    _bar = bar ?? _bar;
+    _apply();
+  }
+
+  void clear() {
+    _surface = false;
+    _bar = false;
+    _apply();
+  }
+
+  void _apply() {
+    if (_disposed) return;
+    final show = _surface || _bar;
+    if (show == portal.isShowing) return;
+    // Pointer events may arrive while the tree is locked (a layout-driven
+    // hover update): toggle after this frame in that case.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) => _apply());
+      return;
+    }
+    show ? portal.show() : portal.hide();
+  }
+
+  void dispose() => _disposed = true;
 }
 
 /// The render object the surface is drawn into: probed for interactive
