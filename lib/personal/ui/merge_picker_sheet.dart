@@ -15,23 +15,45 @@ import 'package:matrix/matrix.dart';
 
 /// Picks the chats (or merged persons) to merge with [anchor]; without an
 /// anchor (People settings) at least two are needed. Search is local only:
-/// name, private nickname and network. Resolves to null when dismissed.
+/// name, private nickname and network. Chats that look like the anchor's
+/// person (same name or phone on another network) come first under
+/// Suggested. [excludeGroupId] leaves that person out (adding to it);
+/// [single] picks exactly one chat (replacing a chat). Resolves to null
+/// when dismissed.
 Future<List<MergeCandidate>?> showMergePicker(
   BuildContext context, {
   required PersonalClient personal,
   Room? anchor,
+  String? title,
+  String? excludeGroupId,
+  bool single = false,
 }) => showNotionSheet<List<MergeCandidate>>(
   context: context,
-  title: anchor == null
-      ? 'Merge conversations'
-      : 'Merge ${InboxProjection(personal).displayName(anchor)} with…',
-  builder: (context) => MergePicker(personal: personal, anchor: anchor),
+  title:
+      title ??
+      (anchor == null
+          ? 'Merge conversations'
+          : 'Merge ${InboxProjection(personal).displayName(anchor)} with…'),
+  builder: (context) => MergePicker(
+    personal: personal,
+    anchor: anchor,
+    excludeGroupId: excludeGroupId,
+    single: single,
+  ),
 );
 
 class MergePicker extends StatefulWidget {
   final PersonalClient personal;
   final Room? anchor;
-  const MergePicker({super.key, required this.personal, this.anchor});
+  final String? excludeGroupId;
+  final bool single;
+  const MergePicker({
+    super.key,
+    required this.personal,
+    this.anchor,
+    this.excludeGroupId,
+    this.single = false,
+  });
   @override
   State<MergePicker> createState() => _MergePickerState();
 }
@@ -39,14 +61,41 @@ class MergePicker extends StatefulWidget {
 class _MergePickerState extends State<MergePicker> {
   final _search = TextEditingController();
   final _selected = <String>{};
-  late final List<MergeCandidate> _candidates = mergeCandidates(
-    widget.personal,
-    anchor: widget.anchor,
-  );
+  late final List<MergeCandidate> _candidates = [
+    for (final candidate in mergeCandidates(
+      widget.personal,
+      anchor: widget.anchor,
+    ))
+      if (widget.excludeGroupId == null ||
+          candidate.group?.id != widget.excludeGroupId)
+        candidate,
+  ];
+
+  /// Entities that look like the anchor's person, newest first. Local only.
+  late final List<String> _suggested = widget.anchor == null
+      ? const []
+      : _suggestionsFor(widget.anchor!);
   late final InboxProjection _projection = InboxProjection.snapshot(
     widget.personal,
   );
   String _query = '';
+
+  List<String> _suggestionsFor(Room anchor) {
+    final entity = InboxProjection.snapshot(widget.personal).entityFor(anchor);
+    final known = {for (final c in _candidates) c.entityId};
+    final result = <String>[];
+    for (final suggestion in personMergeSuggestions(
+      widget.personal,
+      anchor: anchor,
+      limit: 5,
+    )) {
+      final other = suggestion.first.entityId == entity
+          ? suggestion.second.entityId
+          : suggestion.first.entityId;
+      if (known.contains(other) && !result.contains(other)) result.add(other);
+    }
+    return result;
+  }
 
   @override
   void dispose() {
@@ -58,13 +107,29 @@ class _MergePickerState extends State<MergePicker> {
       widget.personal.ready &&
       identical(Matrix.of(context).client, widget.personal.client);
 
-  int get _needed => widget.anchor == null ? 2 : 1;
+  int get _needed => widget.anchor == null && !widget.single ? 2 : 1;
 
-  List<MergeCandidate> get _visible => _query.trim().isEmpty
-      ? _candidates
-      : _candidates.where((c) => c.matches(_query)).toList();
+  /// Suggested candidates first (while not searching), then the rest.
+  List<MergeCandidate> get _visible {
+    if (_query.trim().isNotEmpty) {
+      return _candidates.where((c) => c.matches(_query)).toList();
+    }
+    if (_suggested.isEmpty) return _candidates;
+    return [
+      for (final id in _suggested)
+        ?_candidates.where((c) => c.entityId == id).firstOrNull,
+      for (final candidate in _candidates)
+        if (!_suggested.contains(candidate.entityId)) candidate,
+    ];
+  }
 
   void _toggle(MergeCandidate candidate) => setState(() {
+    if (widget.single) {
+      final was = _selected.contains(candidate.entityId);
+      _selected.clear();
+      if (!was) _selected.add(candidate.entityId);
+      return;
+    }
     if (!_selected.remove(candidate.entityId)) {
       _selected.add(candidate.entityId);
     }
@@ -92,11 +157,14 @@ class _MergePickerState extends State<MergePicker> {
     final visible = _visible;
     final count = _selected.length;
     final ready = _current && count >= _needed;
-    final label = count < _needed
+    final label = widget.single
+        ? (count == 0 ? 'Select a chat' : 'Use this chat')
+        : count < _needed
         ? (widget.anchor == null ? 'Select at least two chats' : 'Select chats')
         : widget.anchor == null
         ? 'Merge $count chats'
         : 'Merge ${count + 1} chats';
+    final suggesting = _query.trim().isEmpty && _suggested.isNotEmpty;
     return Padding(
       padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
       child: SizedBox(
@@ -138,7 +206,7 @@ class _MergePickerState extends State<MergePicker> {
                       itemCount: visible.length,
                       itemBuilder: (context, index) {
                         final candidate = visible[index];
-                        return _CandidateRow(
+                        final row = _CandidateRow(
                           key: ValueKey(candidate.entityId),
                           candidate: candidate,
                           selected: _selected.contains(candidate.entityId),
@@ -155,6 +223,24 @@ class _MergePickerState extends State<MergePicker> {
                           ),
                           onTap: () => _toggle(candidate),
                         );
+                        if (!suggesting ||
+                            (index != 0 && index != _suggested.length)) {
+                          return row;
+                        }
+                        // Section labels above the suggestions and the rest.
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            NotionSectionHeader(
+                              title: index == 0 ? 'Suggested' : 'All chats',
+                              padding: EdgeInsets.only(
+                                top: index == 0 ? 0 : NotionSpace.sm,
+                                bottom: NotionSpace.xxs,
+                              ),
+                            ),
+                            row,
+                          ],
+                        );
                       },
                     ),
             ),
@@ -162,7 +248,7 @@ class _MergePickerState extends State<MergePicker> {
             NotionButton.primary(
               key: const ValueKey('merge-confirm'),
               label: label,
-              icon: Icons.call_merge,
+              icon: widget.single ? Icons.swap_horiz : Icons.call_merge,
               expand: true,
               onPressed: ready ? _confirm : null,
             ),

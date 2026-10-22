@@ -396,8 +396,10 @@ void main() {
         defaultRoomId: whatsapp.id,
       );
       await mountRoute(tester);
+      // A source that was left is not retried: the notice leads to the
+      // person page instead (FT-01).
       const notice =
-          'Some sources are unavailable. History from available networks is shown.';
+          'The WhatsApp chat is no longer part of this conversation. The other networks keep working.';
       expect(find.text(notice), findsOneWidget);
       final l10n = L10n.of(tester.element(find.byType(ChatEventList)));
       await tester.tap(find.byTooltip(l10n.close).first);
@@ -413,6 +415,56 @@ void main() {
       expect(chip(tester).network, 'telegram');
     },
   );
+
+  testWidgets('"Always <network>" ignores where they last wrote (FT-03)', (
+    tester,
+  ) async {
+    group.value = PersonGroup(
+      id: 'switch-person',
+      name: 'Anna',
+      members: [
+        personal.ref(whatsapp),
+        personal.ref(telegram),
+        personal.ref(messenger),
+      ],
+      defaultRoomId: telegram.id,
+    );
+    // Automatic: the newest message came from WhatsApp.
+    await mountRoute(tester);
+    expect(chip(tester).network, 'whatsapp');
+    // The person page switched to "Always Telegram" (synced preference).
+    personal.values[personPreferencesKey('switch-person')] = {
+      'routing': PersonRouting.fixed.name,
+    };
+    personal.poke();
+    await tester.pumpAndSettle();
+    expect(chip(tester).network, 'telegram');
+    expect(find.text('Message via Telegram'), findsOneWidget);
+    // A choice for one message still wins.
+    await choose(tester, 'Messenger');
+    await tester.pumpAndSettle();
+    expect(chip(tester).network, 'messenger');
+  });
+
+  testWidgets('a source that was left is never picked automatically', (
+    tester,
+  ) async {
+    // The newest message is from WhatsApp, which was left meanwhile.
+    client.rooms.remove(whatsapp);
+    group.value = PersonGroup(
+      id: 'switch-person',
+      name: 'Anna',
+      members: [
+        personal.ref(whatsapp),
+        personal.ref(telegram),
+        personal.ref(messenger),
+      ],
+      defaultRoomId: whatsapp.id,
+    );
+    await mountRoute(tester);
+    expect(chip(tester).network, isNot('whatsapp'));
+    expect(chip(tester).hint, ConversationSourceHint.none);
+  });
 
   test('person identity compares the stored group, not the object', () {
     final client = ConversationClient();
