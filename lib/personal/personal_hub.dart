@@ -3,35 +3,31 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/automatic_push.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
-import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
-import 'package:chatloom/personal/push_registration.dart';
 import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/send_later.dart' show runSendLater;
 import 'package:chatloom/personal/storage/storage_failure.dart';
-import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/personal/ui/people_section.dart';
 import 'package:chatloom/personal/ui/reminders_page.dart'
     show requestConversationReminder;
 import 'package:chatloom/personal/ui/sync_changes_section.dart';
 import 'package:chatloom/personal/ui/transcription_settings.dart';
+import 'package:chatloom/personal/ui/worker_status_row.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/background_push.dart';
-import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/notion_room_actions.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -39,7 +35,6 @@ import 'package:mime/mime.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:uuid/uuid.dart';
 
-import 'person_route.dart';
 
 export 'package:chatloom/personal/ui/reminders_page.dart'
     show requestConversationReminder;
@@ -267,10 +262,10 @@ Future<bool> schedulePersonalAttachment(
 
 enum PersonalSettingsSection {
   sync('Private sync'),
-  people('People & merged conversations'),
+  people('Merged conversations'),
   transcriptions('Transcription'),
   scheduled('Scheduled messages'),
-  push('Push setup & registration');
+  push('Push setup');
 
   final String title;
   const PersonalSettingsSection(this.title);
@@ -348,113 +343,6 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
     );
   }
 
-  Future<void> _configurePush() async {
-    final account = widget.client;
-    final owner = account.userID, device = account.deviceID;
-    bool current() =>
-        mounted &&
-        identical(account, widget.client) &&
-        identical(Matrix.of(context).client, account) &&
-        account.userID == owner &&
-        account.deviceID == device &&
-        account.isLogged();
-    final url = await personalText(
-      context,
-      'Notification gateway HTTPS address',
-      initial: AppSettings.pushNotificationsGatewayUrl.value,
-    );
-    if (url == null || !mounted || !current()) return;
-    final uri = Uri.tryParse(url.trim());
-    if (uri == null ||
-        uri.scheme != 'https' ||
-        uri.host.isEmpty ||
-        uri.userInfo.isNotEmpty ||
-        uri.query.isNotEmpty ||
-        uri.fragment.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Enter a full HTTPS address without credentials, query parameters or a fragment.',
-          ),
-        ),
-      );
-      return;
-    }
-    final nonceController = TextEditingController();
-    final form = GlobalKey<FormState>();
-    String? nonce;
-    try {
-      nonce = await showNotionCustomDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Private device key'),
-          content: Form(
-            key: form,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Paste the random key also saved in your gateway configuration. Use 43–128 base64url characters and keep it private.',
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: nonceController,
-                  obscureText: true,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  decoration: const InputDecoration(labelText: 'Device key'),
-                  validator: (value) => validGatewayNonce(value)
-                      ? null
-                      : 'Use 43–128 random letters, digits, underscores or hyphens.',
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (form.currentState?.validate() == true) {
-                  Navigator.pop(context, nonceController.text);
-                }
-              },
-              child: const Text('Save & register'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      nonceController.dispose();
-    }
-    if (nonce == null || !mounted || !current()) return;
-    final push = BackgroundPush(Matrix.of(context));
-    push.beginRegistrationUpdate();
-    try {
-      await personalSecureStorage.write(
-        key: 'personal_gateway_nonce',
-        value: nonce,
-      );
-      if (!current()) return;
-      await AppSettings.pushNotificationsGatewayUrl.setItem(uri.toString());
-    } finally {
-      push.endRegistrationUpdate();
-    }
-    if (!mounted || !current()) return;
-    await BackgroundPush(Matrix.of(context)).setupPush(context);
-    if (mounted && current()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Settings saved. Notifications require the same device key in the gateway configuration.',
-          ),
-        ),
-      );
-    }
-  }
-
   Future<void> _setupAutomaticPush() async {
     final account = widget.client;
     final owner = account.userID;
@@ -477,59 +365,6 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
     }
     if (!mounted || !current()) return;
     await push.setupPush(context);
-  }
-
-  Future<void> _copyPushRegistration() async {
-    final account = widget.client;
-    final owner = account.userID;
-    final push = BackgroundPush(Matrix.of(context));
-    final token = push.fcmToken;
-    final revision = push.registrationRevision;
-    final device = widget.client.deviceID;
-    final nonce = await personalSecureStorage.read(
-      key: 'personal_gateway_nonce',
-    );
-    if (!mounted ||
-        !identical(account, widget.client) ||
-        !identical(Matrix.of(context).client, account) ||
-        account.userID != owner ||
-        account.deviceID != device ||
-        !account.isLogged() ||
-        _push?.fcmToken != token ||
-        push.registrationRevision != revision) {
-      return;
-    }
-    if (token == null ||
-        token.isEmpty ||
-        device == null ||
-        device.isEmpty ||
-        nonce == null ||
-        !validGatewayNonce(nonce)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Save the configuration and register notifications first. A token or valid device key is missing.',
-          ),
-        ),
-      );
-      return;
-    }
-    var appId = '${AppConfig.pushNotificationsAppId}.$device';
-    if (appId.length > 64) appId = appId.substring(0, 64);
-    await Clipboard.setData(
-      ClipboardData(
-        text: jsonEncode({'app_id': appId, 'pushkey': token, 'nonce': nonce}),
-      ),
-    );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Registration secrets copied. Paste them only into your private gateway configuration.',
-          ),
-        ),
-      );
-    }
   }
 
   Future<void> run(Future<void> Function() f) async {
@@ -555,54 +390,6 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
         );
       }
     }
-  }
-
-  /// Merge from People settings: the picker needs at least two chats; the
-  /// first selected chat names the person (see [planMerge]).
-  Future<void> merge() async {
-    final owner = personal;
-    if (!owner.ready) return;
-    final picked = await showMergePicker(context, personal: owner);
-    if (picked == null ||
-        picked.length < 2 ||
-        !mounted ||
-        !identical(owner, personal) ||
-        !identical(Matrix.of(context).client, owner.client))
-      return;
-    final plan = planMerge(owner, [
-      for (final candidate in picked) ...candidate.sources,
-    ], anchor: picked.first.representative);
-    await applyMerge(owner, plan);
-  }
-
-  Future<void> _unmerge(PersonGroup group) async {
-    final owner = personal;
-    final confirmed = await showNotionConfirmDialog(
-      context: context,
-      title: 'Unmerge conversations?',
-      message:
-          'The source chats and their messages are kept and return to the inbox as separate chats.',
-      confirmLabel: 'Unmerge',
-    );
-    if (!confirmed ||
-        !mounted ||
-        !identical(owner, personal) ||
-        !identical(Matrix.of(context).client, owner.client) ||
-        !owner.ready)
-      return;
-    // Hidden at once; the delete may wait for a merge acknowledgement. If
-    // that never comes, the person returns and the user is told.
-    final messenger = ScaffoldMessenger.of(context);
-    unawaited(
-      owner.removeGroup(group.id).catchError((Object _) {
-        if (!mounted || !identical(owner, personal)) return;
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('The change was not saved. Check private sync.'),
-          ),
-        );
-      }),
-    );
   }
 
   @override
@@ -652,7 +439,9 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                     kIsWeb
                         ? 'Private encrypted storage requires the native app. Ordinary conversations are available in the browser.'
                         : personal.problem ??
-                              personal.workerReadinessDescription,
+                              (personal.ready
+                                  ? 'Your private preferences, drafts and schedules sync between your devices.'
+                                  : 'Connect to keep private preferences in sync.'),
                   ),
                 ),
                 NotionSizeReveal(
@@ -664,11 +453,7 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                     onTap: () => run(personal.connect),
                   ),
                 ),
-                NotionListRow(
-                  leading: const Icon(Icons.cloud_outlined),
-                  title: 'Background services',
-                  subtitle: personal.workerReadinessDescription,
-                ),
+                WorkerStatusRow(personal: personal),
                 NotionSizeReveal(
                   visible: personal.problem != null,
                   child: NotionListRow(
@@ -718,87 +503,19 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                         : const Icon(Icons.refresh),
                   ),
                 ),
-                ExpansionTile(
-                  title: const Text('Advanced notification settings'),
-                  children: [
-                    ListTile(
-                      title: const Text('Configure a gateway manually'),
-                      onTap: kIsWeb ? null : () => run(_configurePush),
-                    ),
-                    ListTile(
-                      title: const Text(
-                        'Copy private push registration (secrets)',
-                      ),
-                      subtitle: const Text(
-                        'Only needed for manual gateway configuration.',
-                      ),
-                      leading: const Icon(Icons.copy_outlined),
-                      onTap: kIsWeb ? null : () => run(_copyPushRegistration),
-                    ),
-                  ],
-                ),
-                NotionListRow(
-                  title: 'Notification registration details',
-                  subtitle: 'Registered devices and available push providers',
-                  onTap: () => context.push(
-                    '/rooms/settings/notifications/registration',
-                  ),
-                ),
-                NotionListRow(
-                  leading: const Icon(Icons.troubleshoot_outlined),
-                  title: 'Notification diagnostics',
-                  subtitle: 'Checks, recent outcomes and a test notification',
-                  onTap: () =>
-                      context.push('/rooms/settings/notifications/diagnostics'),
-                ),
+                // Manual gateway setup, its secrets and registration details
+                // are in Settings › Advanced › Developer (CS-02); diagnostics
+                // has its own row on the Notifications page (CS-20).
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
                   child: Text(
-                    'On Android, notifications are set up after sign-in. Allow the notification permission when asked. Use Notification diagnostics to send a test notification.',
+                    'On Android, notifications are set up after sign-in. Allow the notification permission when asked. To send a test notification, use Troubleshoot notifications.',
                   ),
                 ),
               ],
               PersonalSettingsSection.people => <Widget>[
-                ListTile(
-                  title: const Text('Merge conversations'),
-                  trailing: IconButton(
-                    tooltip: 'Merge conversations',
-                    icon: const Icon(Icons.add),
-                    onPressed: personal.ready ? () => run(merge) : null,
-                  ),
-                ),
-                for (final group in personal.groups)
-                  _pressable(
-                    ListTile(
-                      key: ValueKey(group.id),
-                      title: Text(group.name),
-                      subtitle: Text('${group.members.length} sources'),
-                      onTap: () => context.push(personChatLocation(group.id)),
-                      trailing: IconButton(
-                        tooltip: 'Unmerge',
-                        icon: const Icon(Icons.call_split),
-                        onPressed: personal.ready
-                            ? () => run(() => _unmerge(group))
-                            : null,
-                      ),
-                    ),
-                  ),
-                if (personal.invalidGroupCount > 0)
-                  ListTile(
-                    leading: const Icon(Icons.warning_amber_outlined),
-                    title: const Text(
-                      'Some saved conversation groups could not be loaded. Their data is preserved.',
-                    ),
-                    subtitle: Text(
-                      '${personal.invalidGroupCount} saved groups',
-                    ),
-                  ),
-                if (personal.groups.isEmpty)
-                  const ListTile(
-                    subtitle: Text(
-                      'Merge two or more conversations for one person using the add button. Every message keeps its source network.',
-                    ),
-                  ),
+                // Merge, suggestions and merged persons (people_section.dart).
+                PeopleSettingsSection(personal: personal, run: run),
               ],
               PersonalSettingsSection.scheduled => <Widget>[
                 for (final e in personal.schedules.entries)
@@ -895,10 +612,13 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                     ),
                   ),
                 if (personal.schedules.isEmpty)
-                  const ListTile(
-                    title: Text('No scheduled messages'),
-                    subtitle: Text(
-                      'Choose Send later when composing a message in a conversation.',
+                  const Padding(
+                    padding: EdgeInsets.only(top: NotionSpace.xl),
+                    child: NotionEmptyState(
+                      icon: Icons.schedule_outlined,
+                      title: 'No scheduled messages',
+                      message:
+                          'In a chat, open the conversation tools and choose Send later.',
                     ),
                   ),
               ],

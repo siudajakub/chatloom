@@ -550,7 +550,7 @@ class BridgeDirectory extends ChangeNotifier {
           // Shown under the network: words, not `HTTP 404 M_UNRECOGNIZED`.
           ..reason = e.unreachable || e.unsupported
               ? 'ChatLoom can’t reach this bridge'
-              : humanErrorText(e);
+              : humanErrorText(e, network: bridge.label);
       } catch (_) {
         state
           ..status = BridgeRemoteStatus.unavailable
@@ -560,6 +560,43 @@ class BridgeDirectory extends ChangeNotifier {
       _changed();
     });
   }
+
+  /// Asks [bridge] for its current logins (`whoami` only) for the network
+  /// status, and keeps the answer: a login that signed out stops being
+  /// offered for contacts and new chats. Throws
+  /// [BridgeProvisioningException] on failure without touching the cached
+  /// state (search shows its own probe result).
+  Future<BridgeWhoami> refreshLogins(BridgeEndpoint bridge) async {
+    final api = this.api;
+    if (api == null) {
+      throw BridgeProvisioningException(0, message: disabledReason);
+    }
+    final running = _logins[bridge.botId];
+    if (running != null) return running;
+    final request = api.whoami(bridge);
+    _logins[bridge.botId] = request;
+    try {
+      final whoami = await request;
+      final state = stateOf(bridge);
+      String logins(BridgeWhoami? value) =>
+          value?.usableLogins.map((login) => login.id).join(' ') ?? '';
+      final before = (state.status, logins(state.whoami));
+      state.whoami = whoami;
+      if (state.status == BridgeRemoteStatus.ready ||
+          state.status == BridgeRemoteStatus.notLoggedIn) {
+        state.status = whoami.usableLogins.isEmpty
+            ? BridgeRemoteStatus.notLoggedIn
+            : BridgeRemoteStatus.ready;
+      }
+      // Search rebuilds only when what it offers changed.
+      if (before != (state.status, logins(whoami))) _changed();
+      return whoami;
+    } finally {
+      _logins.remove(bridge.botId);
+    }
+  }
+
+  final _logins = <String, Future<BridgeWhoami>>{};
 
   /// Contact lists of ready bridges that offer one (once per [contactsTtl]).
   Future<void> loadContacts(Iterable<BridgeEndpoint> bridges) =>
@@ -593,7 +630,9 @@ class BridgeDirectory extends ChangeNotifier {
             ),
           );
         } on BridgeProvisioningException catch (e) {
-          error = e.unsupported ? null : humanErrorText(e);
+          error = e.unsupported
+              ? null
+              : humanErrorText(e, network: bridge.label);
           if (e.unsupported) {
             state.capabilities = BridgeProvisioningCapabilities(
               createDm: state.capabilities.createDm,
@@ -646,6 +685,9 @@ class BridgeDirectory extends ChangeNotifier {
         state.searches[key] = [
           for (final hit in hits) BridgeRemoteContact(hit, loginId),
         ];
+      } on BridgeProvisioningException catch (e) {
+        state.actionError = state.searchErrors[key] =
+            humanErrorText(e, network: bridge.label);
       } catch (e) {
         state.actionError = state.searchErrors[key] = humanErrorText(e);
       }
@@ -682,18 +724,15 @@ class BridgeDirectory extends ChangeNotifier {
         state.lookups[key] = contact == null
             ? null
             : BridgeRemoteContact(contact, loginId);
+      } on BridgeProvisioningException catch (e) {
+        state.actionError = state.lookupErrors[key] =
+            humanErrorText(e, network: bridge.label);
       } catch (e) {
         state.actionError = state.lookupErrors[key] = humanErrorText(e);
       }
       state.lookingUp.remove(key);
       _changed();
     });
-  }
-
-  /// Forgets cached answers (Retry).
-  void reset() {
-    _states.clear();
-    _changed();
   }
 }
 

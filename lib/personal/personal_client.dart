@@ -320,10 +320,23 @@ class PersonalClient extends ChangeNotifier {
       problem == null;
   bool get workerOnline =>
       ready && (workerReadiness?.freshAt(DateTime.now()) ?? false);
+  /// Full background-service details, for the tap-through sheet and
+  /// diagnostics; rows show [workerStatus] instead.
   String get workerReadinessDescription => !ready
-      ? 'Worker readiness is unknown until private sync is available.'
+      ? 'The background service status is unknown until private sync is available.'
       : workerReadiness?.describe(DateTime.now()) ??
-            'No authenticated worker heartbeat. Pair the worker and verify its session.';
+            'The background service has not checked in. Pair it and verify its session.';
+
+  /// Short background-service status for a settings row (pill + line).
+  WorkerStatus workerStatus({bool transcription = false}) {
+    final heartbeat = workerReadiness;
+    if (!ready) return WorkerStatus.unavailable;
+    if (heartbeat == null) return WorkerStatus.notPaired;
+    final now = DateTime.now();
+    return transcription
+        ? heartbeat.transcriptionStatus(now)
+        : heartbeat.status(now);
+  }
   ConversationRef ref(Room r) => ConversationRef(
     accountId: client.userID!,
     roomId: r.id,

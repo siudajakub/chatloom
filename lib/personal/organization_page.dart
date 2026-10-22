@@ -8,7 +8,6 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/private_avatar.dart';
-import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/cover_resize_image.dart';
@@ -18,8 +17,6 @@ import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:uuid/uuid.dart';
-
-String? _privateText(Object? value) => value is String ? value : null;
 
 const _bubbleColors = <int>[
   0xffdfebdb,
@@ -104,51 +101,6 @@ class _OrganizationPageState extends State<OrganizationPage> {
     await personal.put('org:${metadata.entityId}', value);
   }
 
-  Future<void> _nickname(ConversationMetadata metadata) async {
-    final controller = TextEditingController(
-      text:
-          metadata.nickname ??
-          _privateText(
-            personal.values['nickname:${metadata.entityId}']?['name'],
-          ) ??
-          '',
-    );
-    String? result;
-    try {
-      result = await showNotionCustomDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Private nickname'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLength: 120,
-            decoration: const InputDecoration(
-              hintText: 'Leave blank to use the source network name',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text),
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      controller.dispose();
-    }
-    if (result == null) return;
-    final value = result.trim().isEmpty ? null : result.trim();
-    await _saveMetadata(metadata.setNickname(value));
-    // Keep the existing nickname hook interoperable, including explicit reset.
-    await personal.put('nickname:${metadata.entityId}', {'name': value ?? ''});
-  }
-
   Future<void> _avatar(String entity) =>
       pickAndUploadPrivateAvatar(personal, entity);
 
@@ -166,7 +118,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
       final key = metadata == null ? '' : 'org:${metadata.entityId}';
       final editing = metadata != null && _canEdit(key);
       return Scaffold(
-        appBar: AppBar(title: Text('Private conversation preferences')),
+        appBar: AppBar(title: const Text('Colours & avatar')),
         body: Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
@@ -187,7 +139,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
                       leading: Icon(Icons.lock_outline),
                       title: Text('Private sync is unavailable'),
                       subtitle: Text(
-                        'Set it up in Settings → Sync & transcriptions to sync preferences between your devices.',
+                        'Connect it in Settings › Advanced › Private sync to change these.',
                       ),
                     ),
                   if (metadata != null && room != null) ...[
@@ -208,92 +160,8 @@ class _OrganizationPageState extends State<OrganizationPage> {
                         title: Text('Change awaiting sync confirmation'),
                       ),
                     ),
-                    _pressable(
-                      ListTile(
-                        leading: const Icon(Icons.tune),
-                        title: const Text('Visibility & notifications'),
-                        subtitle: const Text(
-                          'Ignore, restore or override network rules',
-                        ),
-                        onTap: () => Navigator.of(context).push<void>(
-                          MaterialPageRoute(
-                            builder: (_) => ChatPreferencesPage(
-                              personal: personal,
-                              room: room,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    SwitchListTile(
-                      title: const Text('Pin chat'),
-                      value: metadata.isPinned,
-                      onChanged: editing
-                          ? (v) => _run(
-                              () => _saveMetadata(
-                                metadata.setPin(
-                                  v ? _nextPinOrder(personal) : null,
-                                ),
-                              ),
-                            )
-                          : null,
-                    ),
-                    NotionSizeReveal(
-                      visible: metadata.isPinned,
-                      child: _pressable(
-                        ListTile(
-                          title: const Text(
-                            'Move pinned conversation to the top',
-                          ),
-                          leading: const Icon(Icons.vertical_align_top),
-                          onTap: editing
-                              ? () => _run(
-                                  () => _movePinToTop(personal, metadata),
-                                )
-                              : null,
-                        ),
-                      ),
-                    ),
-                    SwitchListTile(
-                      title: const Text('Archive'),
-                      subtitle: const Text(
-                        'New activity returns this conversation to the inbox.',
-                      ),
-                      value: metadata.archived,
-                      onChanged: editing
-                          ? (v) => _run(
-                              () => _saveMetadata(metadata.setArchived(v)),
-                            )
-                          : null,
-                    ),
-                    SwitchListTile(
-                      title: const Text('Low priority'),
-                      subtitle: const Text(
-                        'Outside the inbox. Mentions and thread replies may still notify.',
-                      ),
-                      value: metadata.lowPriority,
-                      onChanged: editing
-                          ? (v) => _run(
-                              () => _saveMetadata(metadata.setLowPriority(v)),
-                            )
-                          : null,
-                    ),
-                    const Divider(),
-                    _pressable(
-                      ListTile(
-                        leading: const Icon(Icons.edit_outlined),
-                        title: const Text('Private nickname'),
-                        subtitle: NotionFadeThrough(
-                          child: Text(
-                            metadata.nickname ?? 'Source network name',
-                            key: ValueKey(metadata.nickname),
-                          ),
-                        ),
-                        onTap: editing
-                            ? () => _run(() => _nickname(metadata))
-                            : null,
-                      ),
-                    ),
+                    // Notifications, visibility, low priority, pin, archive
+                    // and the nickname are on Chat details (CS-06).
                     _pressable(
                       ListTile(
                         leading: const Icon(Icons.add_photo_alternate_outlined),
@@ -316,7 +184,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
                       child: _pressable(
                         ListTile(
                           leading: const Icon(Icons.hide_image_outlined),
-                          title: const Text('Restore source network avatar'),
+                          title: const Text('Use the network’s photo'),
                           onTap: personal.ready && !_busy
                               ? () => _run(
                                   () => personal.delete(
@@ -330,7 +198,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
                     _pressable(
                       ListTile(
                         leading: const Icon(Icons.palette_outlined),
-                        title: const Text('Conversation colors'),
+                        title: const Text('Conversation colours'),
                         onTap: editing
                             ? () => _run(() => _theme(metadata))
                             : null,
@@ -355,7 +223,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
                       leading: Icon(Icons.chat_bubble_outline),
                       title: Text('Choose a conversation'),
                       subtitle: Text(
-                        'Open Chat details from a conversation to change its private appearance, nickname and visibility.',
+                        'Open Chat details from a conversation to change its colours and avatar.',
                       ),
                     ),
                     for (final source
@@ -370,7 +238,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
                           leading: const Icon(Icons.chat_bubble_outline),
                           title: Text(projection.displayName(source)),
                           subtitle: const Text(
-                            'Private appearance and conversation preferences',
+                            'Colours and avatar',
                           ),
                           onTap: () => Navigator.of(context).push<void>(
                             MaterialPageRoute(
@@ -424,44 +292,6 @@ Future<ChatTheme?> showChatThemeDialog(
   context: context,
   builder: (_) => _ThemeDialog(initial: initial),
 );
-
-int _nextPinOrder(PersonalClient personal) {
-  final orders = personal.values.entries
-      .where((e) => e.key.startsWith('org:'))
-      .map((e) => e.value['pinOrder'])
-      .whereType<int>();
-  return orders.isEmpty ? 0 : orders.reduce((a, b) => a > b ? a : b) + 1;
-}
-
-Future<void> _movePinToTop(
-  PersonalClient personal,
-  ConversationMetadata selected,
-) async {
-  final entries =
-      personal.values.entries
-          .where((e) => e.key.startsWith('org:') && e.value['pinOrder'] is int)
-          .toList()
-        ..sort(
-          (a, b) => (a.value['pinOrder'] as int).compareTo(
-            b.value['pinOrder'] as int,
-          ),
-        );
-  if (entries.any(
-    (e) => personal.pending.values.any((op) => op.entityId == e.key),
-  )) {
-    throw StateError('Pins are awaiting synchronization');
-  }
-  await personal.put(
-    'org:${selected.entityId}',
-    selected.setPin(0).toJson().cast<String, dynamic>(),
-  );
-  var order = 1;
-  for (final entry in entries.where(
-    (e) => e.key != 'org:${selected.entityId}',
-  )) {
-    await personal.put(entry.key, {...entry.value, 'pinOrder': order++});
-  }
-}
 
 class _ColorChoices extends StatelessWidget {
   final List<int> colors;
@@ -1218,13 +1048,15 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
                         ? const NotionEmptyState(
                             key: ValueKey('empty'),
                             icon: Icons.bookmark_outline,
-                            title: 'Bookmark a message to find it here later.',
+                            title: 'No bookmarks',
+                            message:
+                                'Long-press a message and choose Bookmark.',
                           )
                         : noMatches || filtered.isEmpty
                         ? const NotionEmptyState(
                             key: ValueKey('none'),
                             icon: Icons.search_off_outlined,
-                            title: 'No bookmarks match this search.',
+                            title: 'No matching bookmarks',
                           )
                         : NotionEntranceScope(
                             key: ValueKey('list:$_network'),

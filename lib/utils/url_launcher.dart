@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
+
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/stickers/sticker_pack_import.dart';
@@ -226,25 +228,34 @@ class UrlLauncher {
         if (await showOkCancelAlertDialog(
               useRootNavigator: false,
               context: context,
-              title: 'Join room $roomIdOrAlias',
+              title: 'Join this chat?',
+              okLabel: 'Join',
             ) ==
             OkCancelResult.ok) {
           roomId = roomIdOrAlias;
           if (!context.mounted) return;
+          final client = matrix.client;
           final response = await showFutureLoadingDialog(
             context: context,
-            future: () => matrix.client.joinRoom(
-              roomIdOrAlias,
-              via: servers.isNotEmpty ? servers.toList() : null,
-            ),
+            future: () async {
+              final joined = await client.joinRoom(
+                roomIdOrAlias,
+                via: servers.isNotEmpty ? servers.toList() : null,
+              );
+              // Open it once sync has it, not after a fixed wait (CS-34).
+              if (client.getRoomById(joined)?.membership != Membership.join) {
+                try {
+                  await client
+                      .waitForRoomInSync(joined, join: true)
+                      .timeout(const Duration(seconds: 10));
+                } on TimeoutException {
+                  // Open it anyway; the chat fills in when sync catches up.
+                }
+              }
+              return joined;
+            },
           );
           if (response.error != null) return;
-          if (!context.mounted) return;
-          // wait for two seconds so that it probably came down /sync
-          await showFutureLoadingDialog(
-            context: context,
-            future: () => Future.delayed(const Duration(seconds: 2)),
-          );
           if (!context.mounted) return;
           if (event != null) {
             context.go(

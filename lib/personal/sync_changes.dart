@@ -151,7 +151,7 @@ class SyncChanges {
     return SyncChanges(pending, conflicts);
   }
 
-  /// The subtitle of Settings → Sync & transcriptions.
+  /// The subtitle of Settings › Advanced and of its Private sync row.
   static String settingsSummary(PersonalClient personal) {
     final changes = SyncChanges.of(personal);
     if (!personal.ready) {
@@ -179,7 +179,7 @@ class SyncChanges {
           ? '1 change waiting for the background service'
           : '$count changes waiting for the background service';
     }
-    return 'Private sync configured · Services and transcriptions';
+    return 'Private sync on';
   }
 }
 

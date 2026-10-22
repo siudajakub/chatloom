@@ -8,7 +8,6 @@ import 'dart:io';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:flutter/foundation.dart';
-import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -75,30 +74,8 @@ abstract class PlatformInfos {
           icon: const Icon(Icons.source_outlined),
           label: Text('${AppConfig.upstreamName} ${l10n.sourceCode}'),
         ),
-        Builder(
-          builder: (innerContext) {
-            return TextButton.icon(
-              onPressed: () {
-                context.go('/logs');
-                Navigator.of(innerContext).pop();
-              },
-              icon: const Icon(Icons.list_outlined),
-              label: Text(l10n.logs),
-            );
-          },
-        ),
-        Builder(
-          builder: (innerContext) {
-            return TextButton.icon(
-              onPressed: () {
-                context.go('/configs');
-                Navigator.of(innerContext).pop();
-              },
-              icon: const Icon(Icons.settings_applications_outlined),
-              label: Text(l10n.advancedConfigs),
-            );
-          },
-        ),
+        // Logs and the configuration editor are in Settings › Advanced ›
+        // Developer (developer options).
       ],
       applicationIcon: ClipRRect(
         borderRadius: BorderRadius.circular(64),
