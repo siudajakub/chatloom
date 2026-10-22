@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat_timeline_preload.dart';
 import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart'
     show notionInboxAvatar;
@@ -193,6 +194,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       return; // Spaces are not part of the ChatLoom UI.
     }
 
+    // Telegram: the chat slides in with its messages already there.
+    await ChatTimelinePreload.warm(room);
+    if (!mounted) return;
     context.go('/rooms/${room.id}');
   }
 
