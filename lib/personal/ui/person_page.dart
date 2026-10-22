@@ -26,6 +26,7 @@ import 'package:chatloom/personal/ui/notion_settings_body.dart'
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/personal/ui/person_sheets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -809,7 +810,16 @@ class _PersonPageState extends State<PersonPage> {
         NotionListRow(
           leading: const Icon(Icons.notifications_none_outlined),
           title: 'Notifications',
-          subtitle: personMode != null
+          // A mute from the inbox menu outranks the chosen mode while it
+          // lasts (only mentions notify): say so instead of the mode.
+          subtitle:
+              metadata.muted && personMode != PersonalNotificationMode.muted
+              ? switch (metadata.mutedUntil) {
+                  final until? =>
+                    'Muted until ${until.toLocal().localizedTimeShort(context)} · mentions still notify',
+                  null => 'Muted · mentions still notify',
+                }
+              : personMode != null
               ? '${privateNotificationLabel(personMode)} · every network'
               : effective == null
               ? 'Network default'

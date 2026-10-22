@@ -32,6 +32,8 @@ import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_search_page.dart';
+import 'package:chatloom/personal/ui/person_sheets.dart'
+    show showPersonNotificationsSheet;
 import 'package:chatloom/ui/notion/metadata_actions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/error_reporter.dart';
@@ -673,11 +675,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         );
         if (choice == null || !mounted || !_sameInbox(owner, account)) return;
         if (choice == MuteChoice.settings) {
-          await Navigator.of(context).push<void>(
-            MaterialPageRoute(
-              builder: (_) => ChatPreferencesPage(personal: owner, room: room),
-            ),
-          );
+          await _openNotificationSettings(owner, room);
           return;
         }
         final target = entity();
@@ -745,11 +743,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         if (current != null) await _unmerge(current);
         return;
       case ChatMenuAction.notifications:
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute(
-            builder: (_) => ChatPreferencesPage(personal: owner, room: room),
-          ),
-        );
+        await _openNotificationSettings(owner, room);
         return;
       case ChatMenuAction.ignore:
         final target = entity();
@@ -805,6 +799,29 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         );
         return;
     }
+  }
+
+  /// Notification settings of an inbox row: a merged person's own sheet
+  /// (the person's mode for every network, as on its person page), else the
+  /// chat's preferences page.
+  Future<void> _openNotificationSettings(
+    PersonalClient owner,
+    Room room,
+  ) async {
+    final group = InboxProjection(owner).groupFor(room);
+    if (group != null) {
+      await showPersonNotificationsSheet(
+        context,
+        personal: owner,
+        group: group,
+      );
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ChatPreferencesPage(personal: owner, room: room),
+      ),
+    );
   }
 
   /// Runs a private change without blocking the UI: the inbox shows it as
