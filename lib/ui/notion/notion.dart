@@ -12,6 +12,7 @@ export 'notion_callout.dart';
 export 'notion_contrast.dart';
 export 'notion_entrance.dart';
 export 'notion_glass.dart';
+export 'notion_hover_toolbar.dart';
 export 'notion_loops.dart';
 export 'notion_media_viewer.dart';
 export 'notion_media_playback_controls.dart';

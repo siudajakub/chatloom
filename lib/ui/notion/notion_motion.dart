@@ -367,6 +367,11 @@ abstract final class NotionHaptics {
 
   /// Long-press recognised (context menu, reaction picker, drag start).
   static void longPress() => light();
+
+  /// A selection tick: the finger moved onto another choice while scrubbing
+  /// (reaction bar, swipe-to-reply arming). Fires once per change, never per
+  /// frame.
+  static void selection() => unawaited(HapticFeedback.selectionClick());
 }
 
 /// Builds [child] only once the hosting route finished animating in, showing
