@@ -28,7 +28,7 @@ Prywatny fork FluffyChat v2.10.0 dla Androida i macOS, z zachowanym transportem 
 
 Flutter 3.47.4 / Dart3.13.3. `flutter pub get`, następnie build według instrukcji [Androida](android/README.personal.md) lub [macOS](macos/README.personal.md). Własne application/bundle ID: `pl.personal.chat`. SDK vendored w `packages/matrix`, pin i poprawki w `UPSTREAM-PIN.md`; nie aktualizować do `main` bez ponowienia bramek E2EE/storage/read/send.
 
-Android release ma własny podpis, bez upstream dummykeystore. Klucz i hasło są poza Git (lokalizacja: [środowiska deweloperskie](docs/personal/development-environments.md)); lokalny `android/key.properties` jest ignorowany. Zrób niezależny prywatny backup klucza przed regularnym użyciem; utrata klucza uniemożliwi upgrade tej instalacji. APKdebug i release są podpisane różnymi kluczami. Nie usuwać instalacji z danymi w celu obejścia signaturemismatch.
+Android release ma własny podpis, bez upstream dummykeystore. Klucz i hasło są poza Git (zob. [środowisko deweloperskie](docs/DEVELOPMENT.md)); lokalny `android/key.properties` jest ignorowany. Zrób niezależny prywatny backup klucza przed regularnym użyciem; utrata klucza uniemożliwi upgrade tej instalacji. APKdebug i release są podpisane różnymi kluczami. Nie usuwać instalacji z danymi w celu obejścia signaturemismatch.
 
 macOS wymaga pełnego Xcode, wybranej wersji SDK i własnego signing. CommandLineTools nie wystarczają do buildu Flutter macOS. Web służy do transportu/publiccompile; personal native SQLCipher nie używa web plaintextfallback.
 
@@ -45,8 +45,6 @@ Filtry w dolnym pasku rozdzielają kategorię rozmów od komunikatora. Telegram 
 Przed używaniem sync/zadań: połącz prywatny E2EEjournal, zweryfikuj własne sesje, skonfiguruj worker według [worker/README.md](worker/README.md). WorkerOnline oznacza aktualny heartbeat; czekanie na sync nie oznacza trwałego ACK. Dane i konflikty zachowują się lokalnie przy awarii; wyświetlane błędy nie kasują bazy/kluczy.
 
 ## Konfiguracja push
-
-Stan wdrożenia bramy u właściciela: [środowiska deweloperskie](docs/personal/development-environments.md#push-gateway-deployment-state).
 
 Adres bramy podaje się przy buildzie: `--dart-define=CHATLOOM_PUSH_GATEWAY=https://push.example.org` (origin bez ścieżki; brak wartości domyślnej). Build bez tej wartości nie ma automatycznej konfiguracji push; bramę można wtedy wpisać ręcznie w Settings → Developer. Android z tak zbudowaną aplikacją po zalogowaniu automatycznie konfiguruje bramę: generuje klucz urządzenia w secure storage, pobiera krótkotrwałe potwierdzenie OpenID z Matrix, rejestruje telefon w bramie, a następnie ustawia pusher `event_id_only`. Użytkownik akceptuje wyłącznie systemową zgodę na powiadomienia. Główny token sesji Matrix nie trafia do bramy. Puste ustawienie ze starszej instalacji również wybiera konfigurację automatyczną; własne inne adresy i wcześniej wybrany UnifiedPush pozostają zachowane.
 
@@ -68,7 +66,7 @@ Notion: `rtk python3 scripts/verify-notion-ui.py --flutter /pełna/ścieżka/flu
 
 Regresje kwalifikacji powiadomień oraz kontekstu harmonogramu korzystają z konfiguracji pakietów pure Dart workera: `rtk /pełna/ścieżka/dart --packages=worker/.dart_tool/package_config.json test/personal/integration/notification_eligibility_test.dart` oraz analogicznie `scheduled_composer_test.dart`. Najpierw rozwiąż zależności workera z jego lockfile. Testy nie pobierają historii ani nie wysyłają wiadomości.
 
-[Specyfikacja](docs/personal/prds/beeper-personal-client-v1-spec.md), [plan](docs/personal/beeper-personal-client-plan-2026-10-03.md), [raport dowodów i NOTRUN](docs/personal/fluffychat-compatibility-spike-2026-10-03.md). Każda sieć/platforma osobno; czytelna historia nie dowodzi push/send/media/receipts.
+Każda sieć/platforma osobno; czytelna historia nie dowodzi push/send/media/receipts.
 
 ## Przełączenie starej transkrypcji
 
@@ -80,6 +78,6 @@ Powtarzalny personal release: `rtk python3 scripts/build-personal-release.py --p
 
 Analyzer plugin pinned `dart_code_linter`4.4.0: upstream value `latest` is not a valid SemVer constraint in Dart3.13. [Plugin configuration](https://pub.dev/packages/dart_code_linter).
 
-Pełne lokalne testy aplikacji na Macu z CommandLineTools: [środowiska deweloperskie](docs/personal/development-environments.md#mac-app-tests-with-command-line-tools).
+Środowisko, toolchain i konfiguracja buildu: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-Web assets: `scripts/verify-personal-web-assets.py` sprawdza przypięte binaria oraz źródłowy manifest workera. `scripts/build-personal-web-worker.py` kompiluje worker dwukrotnie z ustalonymi flagami; publikacja po backupie wymaga `--publish`. [Procedura powtarzalnego web builda](docs/personal/test-graph-web-assets-2026-10-15.md). Nowy signed APK i web build nie zamykają przerwanego odbioru zalogowanej sesji.
+Web assets: `scripts/verify-personal-web-assets.py` sprawdza przypięte binaria oraz źródłowy manifest workera. `scripts/build-personal-web-worker.py` kompiluje worker dwukrotnie z ustalonymi flagami; publikacja po backupie wymaga `--publish`. Nowy signed APK i web build nie zamykają przerwanego odbioru zalogowanej sesji.

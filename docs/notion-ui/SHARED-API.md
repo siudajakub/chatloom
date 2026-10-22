@@ -132,7 +132,7 @@ duration, playing, speed and callbacks. It owns no decoder or media lease.
 it dismisses the sheet before invoking the selected action.
 Voice, video and round playback retain their existing media ownership and
 playback coordination. Focused playback uses `NotionMediaColors.stageScrim`.
-See `docs/personal/media-playback-2026-10-21.md` for verification boundaries.
+Device playback remains a separate acceptance check.
 
 ## Glass and rounded surfaces — 2026-10-19
 

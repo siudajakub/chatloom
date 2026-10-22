@@ -1,6 +1,6 @@
 # client/ — reguły dla agentów
 
-Najpierw przeczytaj `../AGENTS.md` (granice produktu, `rtk`, izolowany toolchain, brak commitów bez zlecenia).
+Najpierw przeczytaj `docs/DEVELOPMENT.md` (izolowany toolchain, jedna operacja Flutter naraz). Bez commitów, wdrożeń i prawdziwych wiadomości bez zlecenia.
 
 ## Platformy i gałąź
 

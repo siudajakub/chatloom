@@ -229,7 +229,7 @@ Each read-only SQLite connection is closed explicitly, including error paths.
 The worker owns and closes its underlying Matrix HTTP transport, active local
 source requests and reminder-relay requests during shutdown before disposing
 storage. The deployed resource limits, native session check and measured clean
-shutdown are recorded in the [2026-10-17 acceptance](../../session-logs/2026-10-17-worker-resource-repair.md).
+shutdown are recorded in the operator's private acceptance notes.
 
 `deploy/admin.sh inspect|pair|enqueue|verify` runs offline administration under
 the worker account while the daemon is stopped. Pairing reuses an unambiguous

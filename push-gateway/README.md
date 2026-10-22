@@ -1,6 +1,6 @@
 # Własny push Androida — automatyczna konfiguracja
 
-Aktualizacja 2026-10-16: klient i gateway mają lokalny automatyczny enrollment. Ta zmiana nie została jeszcze wdrożona na VPS ani zainstalowana na telefonie. Historyczny stan wdrożenia z 6 października jest opisany niżej; nie jest świeżym potwierdzeniem runtime. **Dostarczanie powiadomień na telefon nadal wymaga odbioru.**
+Klient i gateway obsługują automatyczny enrollment po zalogowaniu. **Dostarczanie powiadomień na telefon wymaga osobnego odbioru na urządzeniu.**
 
 ## Przepływ po zalogowaniu
 
@@ -25,24 +25,19 @@ Gateway przyjmuje `POST /_matrix/push/v1/notify`, wiąże dokładne własne `app
 
 Problemy pojedynczego urządzenia nie blokują kolejki homeservera (aktualizacja 2026-10-17). Brakujący lub błędny `gateway_nonce` jest liczony, urządzenie jest pomijane bez wysyłki, a odpowiedź to nadal **200** bez wpisu w `rejected` — homeserver nie wycofuje się z backoffem i nie usuwa pushera. Inny `format` niż `event_id_only` przy poprawnym nonce jest liczony, ale wysyłka następuje (payload FCM i tak nie zawiera treści). Nieznany pushkey lub inny app ID pozostają w `rejected`. **400** oznacza wyłącznie niepoprawną kopertę JSON (np. brak `notification`, zła lista `devices`, złe `counts`/`event_id`/`room_id`).
 
-## Konfiguracja Firebase — 2026-10-06
+## Konfiguracja Firebase
 
-Firebase CLI skonfigurowało własny projekt `<firebase-project-id>` i aplikację Android `pl.personal.chat` (Firebase app ID `<firebase-app-id>`). FCM API ma stan ENABLED. Konto `personal-push` ma własną rolę `personalPushSender` z jedynym uprawnieniem `cloudmessaging.messages.create`.
+Użyj własnego projektu Firebase z aplikacją Android `pl.personal.chat` i włączonym FCM API. Do wysyłki wystarcza dedykowane konto serwisowe z jedynym uprawnieniem `cloudmessaging.messages.create`. Konfigurację Androida (`google-services.json`) i klucz serwerowy trzymaj w prywatnym katalogu (np. `~/.config/personal-chat/firebase/`, uprawnienia 700/600); ignorowany `android/app/google-services.json` może być dowiązaniem do tego pliku. Klient używa przypiętego `fcm_shared_isolate` 3.0.0 i natywnego `FcmPushService`; FCM jest włączany tylko na Androidzie.
 
-Konfiguracja Android i klucz serwerowy są w prywatnym katalogu `~/.config/personal-chat/firebase/` z uprawnieniami 700/600. Ignorowany `android/app/google-services.json` jest dowiązaniem do prywatnego pliku. Klient używa przypiętego `fcm_shared_isolate` 3.0.0 i aktywnego `FcmPushService`; FCM włączamy tylko na Androidzie. Prywatny `gateway.local.json` służy do kontroli konfiguracji, ma pustą listę urządzeń.
+Typowe wdrożenie: Nginx publikuje przez HTTPS wyłącznie `/_matrix/push/v1/notify` i `/_personal/push/v1/register`, systemd uruchamia gateway jako osobny użytkownik na loopback 8088, a `prepare_credentials.py` kopiuje chronione credentials systemd do prywatnej kopii runtime. Origin tej bramy podaj klientowi przy buildzie przez `--dart-define=CHATLOOM_PUSH_GATEWAY=https://push.example.org`.
 
-Brama została wdrożona pod `https://push.example.org/_matrix/push/v1/notify`. Nginx publikuje tylko tę ścieżkę przez HTTPS; port 80 służy wyłącznie ACME. Systemd uruchamia gateway jako `personalpush` na loopback 8088. Certyfikat Let’s Encrypt ma timer odnowienia i hook przeładowania Nginx. `prepare_credentials.py` kopiuje chronione credentials systemd (na tym hoście 0440) do prywatnego RuntimeDirectory jako pliki 0600, zachowując kontrolę owner-only w gateway.
+### Build bez Firebase = brak push
 
-Rejestracje są nadal puste, nie ma potwierdzonego odbioru na telefonie. Pozostają rejestracja urządzenia i fizyczne testy. Szczegóły wdrożenia: `../../docs/personal-push-deployment-2026-10-06.md`.
-
-### Build bez Firebase = brak push (2026-10-21)
-
-APK zbudowane na devboksie od 2026-10-20 (debug `chatloom-wave-20261020`, debug i release `wave2-20261020`) nie zawierają zasobów Firebase (`google_app_id`, `gcm_defaultSenderId`): `android/app/google-services.json` w kopii na VPS jest dowiązaniem do ścieżki Maca (`~/.config/...`), które na Linuksie nie istnieje, więc Gradle pomijał plugin Google services bez błędu. Taka aplikacja startuje normalnie, ale `FirebaseMessaging.getInstance()` rzuca wyjątek, nie ma tokena FCM, rejestracji w bramie ani aktualizacji pushera. Release z Maca (16, 18, 19.10) zawierają te zasoby; release z devboksa jest podpisany tym samym kluczem i instaluje się na nie jako aktualizacja.
+APK zbudowane bez `android/app/google-services.json` nie zawierają zasobów Firebase (`google_app_id`, `gcm_defaultSenderId`), więc nie otrzymają tokena FCM.
 
 - Gradle (`android/app/build.gradle.kts`) ostrzega przy każdym buildzie bez pliku i **przerywa build release** (`preReleaseBuild`), chyba że świadomie podano `-Pchatloom.allowNoFirebase=true`.
 - `scripts/build-personal-release.py` odrzuca APK bez `string/google_app_id` w `aapt2 dump resources`.
 - Ręczna kontrola APK: `aapt2 dump resources APK | grep -E 'string/(google_app_id|gcm_defaultSenderId)'` musi zwrócić obie linie.
-- Naprawa na devboksie (bez commitowania pliku): skopiować prywatny plik z Maca do `~/.config/personal-chat/firebase/google-services.json` na VPS (katalog 0700, plik 0600) i przestawić ignorowane dowiązanie `client/android/app/google-services.json` (oraz w worktree używanym do buildu) na tę ścieżkę. Plik nie jest sekretem serwerowym (jego wartości są w każdym APK), ale projekt trzyma go poza repo.
 - Na telefonie: Settings → Notifications → Notification diagnostics pokazuje krok 1 „App build” jako Problem; po instalacji poprawnego APK „Re-register this device” rejestruje token, bramę i pusher jednym dotknięciem.
 
 ## Historyczna ręczna konfiguracja / własny alternatywny gateway
