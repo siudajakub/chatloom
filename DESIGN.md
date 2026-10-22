@@ -118,6 +118,22 @@ picker, slide-to-react while still holding) and a `NotionGlassPanel` card of
 first quick reaction and plays `NotionReactionBurst` at the finger. There is
 no multi-selection.
 
+A jump to a message (reply quote, pinned message, notification) flashes its
+bubble once (`ConversationFlash`, Telegram's unselect): the bubble's text
+colour at `ConversationBubble.flashOpacity` over the fill rises in `quick`,
+holds `ConversationMotion.flashHold` (1 s) and fades in `long`; under
+reduced motion it appears and disappears without a fade. The highlight
+never stays.
+
+Days are separated by a centred `ConversationDayChip` (opaque `surface`
+pill, `captionMuted`). While the user scrolls, the same chip floats under
+the header with the day of the topmost message; it fades (so it is opaque,
+not glass), stays `ConversationMotion.dateHold` (0.5 s) after the list is
+idle and hides while that day's own chip is right under it. Unread messages
+start under a "N unread messages" `ConversationUnreadDivider`; a chat with
+unread messages opens with it just under the header, and the jump button
+goes there first.
+
 Text on colours you do not control (private chat palettes, chat
 backgrounds) goes through `NotionContrast`: `on(bg)` for body text,
 `readable(bg, preferred)` for muted text, never a hard-coded black or white.
@@ -455,7 +471,11 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
    (a popover reveals its glass by clip, `NotionGlassReveal`).
 2. Lists: entrances play on a page's first appearance (≤ 10 items, inside a
    `NotionEntranceScope`) or for the one newest message. Scroll-built items
-   never animate. No per-item controllers beyond that.
+   never animate. No per-item controllers beyond that. The conversation
+   timeline has no first-screen entrance at all: its rows render during the
+   page push (Telegram), a list that replaces its loading placeholder fades
+   in once as a whole (from `refreshFrom`, `short`), and only the one newest
+   message animates its arrival.
 3. Every one-shot animation settles to identity (opacity 1, offset 0,
    scale 1); goldens of resting states stay pixel-identical.
 4. Every loop (`NotionTypingDots`, `NotionPulse`, skeleton shimmer, spinners)
