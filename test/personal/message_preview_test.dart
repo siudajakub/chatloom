@@ -168,6 +168,19 @@ void main() {
       }),
       'GIF',
     );
+    // Telegram video stickers arrive as GIF-flagged webm videos.
+    expect(
+      label({
+        'msgtype': 'm.video',
+        'body': 'sticker',
+        'info': {
+          'fi.mau.gif': true,
+          'fi.mau.telegram.animated_sticker': {'id': 1},
+          'mimetype': 'video/webm',
+        },
+      }),
+      'Sticker',
+    );
     expect(
       label({
         'msgtype': 'm.audio',

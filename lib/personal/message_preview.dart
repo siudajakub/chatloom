@@ -75,6 +75,11 @@ String? _pollQuestion(Map<String, Object?> content) {
   return null;
 }
 
+bool _isVideoSticker(Event event) {
+  final info = event.content['info'];
+  return info is Map && info['fi.mau.telegram.animated_sticker'] != null;
+}
+
 bool _isGif(Event event) {
   final info = event.content['info'];
   return info is Map && (info['fi.mau.gif'] == true);
@@ -98,6 +103,8 @@ String? _label(Event event) {
       if (RoundVideoDescriptor.fromContent(event.content) != null) {
         return 'Video message';
       }
+      // A Telegram video sticker carries the GIF flags too.
+      if (_isVideoSticker(event)) return 'Sticker';
       if (_isGif(event)) return _withCaption('GIF', event);
       return _withCaption('Video', event);
     case MessageTypes.Audio:
