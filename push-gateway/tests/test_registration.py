@@ -182,7 +182,64 @@ class RegistrationTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
-        self.assertIsNone(gateway.NoRedirect().redirect_request(None, None, 302, "", {}, "https://evil.invalid"))
+        # The identity transport refuses plain HTTP and never follows a redirect
+        # (see TransportTests.test_keep_alive_reuse_limits_redirects_and_stale_retry).
+        with patch.object(gateway, "_https_connection", side_effect=AssertionError("no connection")):
+            with self.assertRaises(ValueError):
+                gateway.ConnectionPool().request("http://matrix.beeper.com/x")
+
+    def test_verified_reregistration_clears_an_fcm_invalidated_token(self):
+        digest = hashlib.sha256(TOKEN.encode()).hexdigest()
+
+        def blacklisted():
+            with self.app.database() as db:
+                stored = db.execute("SELECT 1 FROM invalid WHERE digest = ?", (digest,)).fetchall()
+            return digest in self.app.invalid_tokens, bool(stored)
+
+        self.app.register(enrollment())
+        self.publisher.outcomes = [gateway.PublishResult("rejected")]  # FCM UNREGISTERED
+        self.assertEqual(self.app.notify(packet("$first")), {"rejected": [TOKEN]})
+        self.assertEqual(self.app.notify(packet("$second")), {"rejected": [TOKEN]})
+        self.assertEqual(len(self.publisher.calls), 1)
+        self.assertEqual(blacklisted(), (True, True))
+        # Unverified, failed or conflicting registrations never lift the blacklist.
+        for reply, status in [((401, {}, b"{}"), 403), ((200, {}, b'{"sub":"@other:invalid"}'), 403),
+                              ((503, {}, b"{}"), 503)]:
+            self.http.return_value = reply
+            with self.assertRaises(gateway.GatewayError) as caught:
+                self.app.register(enrollment())
+            self.assertEqual(caught.exception.status, status)
+        self.http.side_effect = TimeoutError()
+        with self.assertRaises(gateway.GatewayError):
+            self.app.register(enrollment())
+        self.http.side_effect = None
+        second_user = "@second:matrix.beeper.com"
+        second = hashlib.sha256(second_user.encode()).hexdigest()
+        self.app.config = replace(self.config, registration_allowed_users_sha256=(OWNER, second))
+        self.http.return_value = (200, {}, json.dumps({"sub": second_user}).encode())
+        with self.assertRaises(gateway.GatewayError) as caught:
+            self.app.register(enrollment(account_sha256=second))
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(blacklisted(), (True, True))
+        self.assertEqual(self.app.notify(packet("$third")), {"rejected": [TOKEN]})
+        self.assertEqual(len(self.publisher.calls), 1)
+        # A verified registration of the same token clears memory and SQLite.
+        self.http.return_value = (200, {}, json.dumps({"sub": USER}).encode())
+        self.assertEqual(self.app.register(enrollment()), {"registered": True})
+        self.assertEqual(blacklisted(), (False, False))
+        stats = gateway.read_stats(self.directory.name)["stats"]
+        self.assertEqual(stats["register.invalid_cleared"]["n"], 1)
+        self.assertEqual(self.app.notify(packet("$fourth")), {"rejected": []})
+        self.assertEqual(len(self.publisher.calls), 2)
+        self.assertEqual(self.publisher.calls[-1][0], TOKEN)
+        # The cleared state survives a restart; a refresh of a valid token is not counted.
+        restarted = gateway.Gateway(self.config, self.publisher)
+        self.assertNotIn(digest, restarted.invalid_tokens)
+        self.assertEqual(restarted.notify(packet("$fifth")), {"rejected": []})
+        self.assertEqual(len(self.publisher.calls), 3)
+        restarted.register(enrollment())
+        stats = gateway.read_stats(self.directory.name)["stats"]
+        self.assertEqual(stats["register.invalid_cleared"]["n"], 1)
 
     def test_config_requires_https_pin_and_valid_account_fingerprints(self):
         for values in [{"registration_openid_origin": "http://matrix.beeper.com"},

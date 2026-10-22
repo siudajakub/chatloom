@@ -11,20 +11,22 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import os
 from pathlib import Path
 import re
+import select
 import signal
 import socket
 import sqlite3
+import ssl
 import stat
 import threading
 import time
 from typing import Callable
-import urllib.error
 import urllib.request
 import urllib.parse
 
@@ -284,6 +286,10 @@ class PublishResult:
     retry_after: int = 60
 
 
+# Per-device send states that ask the caller to retry later (503 Retry-After).
+_RETRY_STATES = ("ratelimited", "inflight", "transient")
+
+
 @dataclass(frozen=True, repr=False)
 class NotifyRequest:
     """A validated notify request: content-free routing data and the devices
@@ -315,22 +321,167 @@ def provider_result(status: int, body: bytes, retry_after: str | None = None):
     return PublishResult("transient", delay)
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, file, code, message, headers, url):
-        return None
+MAX_RESPONSE_BYTES = 65536
+# The User-Agent urllib used to send: some front ends refuse requests without one.
+_USER_AGENT = f"Python-urllib/{urllib.request.__version__}"
+# The peer closed an idle keep-alive connection before answering the request.
+# Timeouts are never in this list: they are never retried.
+_STALE_CONNECTION = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ssl.SSLEOFError)
+_TLS_CONTEXT = None
+_TLS_LOCK = threading.Lock()
+
+
+def tls_context() -> ssl.SSLContext:
+    """One verifying TLS context for all provider/identity requests.
+
+    Built once, so the CA bundle is not reloaded for every connection (an
+    SSLContext is safe to share between threads).
+    """
+    global _TLS_CONTEXT
+    with _TLS_LOCK:
+        if _TLS_CONTEXT is None:
+            context = ssl.create_default_context()
+            context.set_alpn_protocols(["http/1.1"])
+            _TLS_CONTEXT = context
+        return _TLS_CONTEXT
+
+
+def _https_connection(host, port, timeout):
+    return http.client.HTTPSConnection(host, port, timeout=timeout, context=tls_context())
+
+
+def _idle_connection_usable(connection) -> bool:
+    """An idle keep-alive socket must have nothing to read: EOF or data while
+    idle means the peer closed it or sent something unexpected."""
+    sock = getattr(connection, "sock", None)
+    if sock is None:
+        return False
+    try:
+        if isinstance(sock, ssl.SSLSocket) and sock.pending():
+            return False
+        if hasattr(select, "poll"):
+            poller = select.poll()
+            poller.register(sock, select.POLLIN)
+            return not poller.poll(0)
+        return not select.select([sock], [], [], 0)[0]
+    except (OSError, ValueError):
+        return False
+
+
+class ConnectionPool:
+    """Keep-alive HTTPS connections shared by all request threads.
+
+    A connection serves one request at a time: it is taken out of the pool and
+    put back only after its response was read completely. No proxies (plain
+    http.client never reads proxy settings), no redirects (http.client never
+    follows them; a 3xx is returned like any other error reply), HTTPS with the
+    shared verifying context only. Keys are the few hosts this code calls (FCM,
+    Google OAuth, the operator-pinned OpenID origin).
+    """
+    MAX_IDLE_PER_HOST = 4
+    MAX_IDLE_SECONDS = 30
+
+    def __init__(self, connect: Callable = _https_connection):
+        self._connect = connect
+        self._lock = threading.Lock()
+        self._idle: dict[tuple[str, int], list] = {}
+
+    def _take(self, key, timeout, *, fresh=False):
+        stale = []
+        connection = None
+        with self._lock:
+            idle = self._idle.get(key, [])
+            while idle and not fresh:
+                candidate, since = idle.pop()
+                if time.monotonic() - since < self.MAX_IDLE_SECONDS and _idle_connection_usable(candidate):
+                    connection = candidate
+                    break
+                stale.append(candidate)
+        for candidate in stale:
+            candidate.close()
+        if connection is not None:
+            connection.timeout = timeout
+            connection.sock.settimeout(timeout)
+            return connection, True
+        return self._connect(key[0], key[1], timeout), False
+
+    def _put(self, key, connection):
+        with self._lock:
+            idle = self._idle.setdefault(key, [])
+            if len(idle) < self.MAX_IDLE_PER_HOST:
+                idle.append((connection, time.monotonic()))
+                return
+        connection.close()
+
+    def _discard(self, key):
+        with self._lock:
+            idle = self._idle.pop(key, [])
+        for connection, _ in idle:
+            connection.close()
+
+    def close(self):
+        with self._lock:
+            idle, self._idle = self._idle, {}
+        for entries in idle.values():
+            for connection, _ in entries:
+                connection.close()
+
+    def request(self, url, *, method="GET", body=None, headers=None, timeout=8):
+        parts = urllib.parse.urlsplit(url)
+        if (parts.scheme != "https" or not parts.hostname
+                or parts.username is not None or parts.password is not None):
+            raise ValueError("Only HTTPS URLs are allowed")
+        key = (parts.hostname, parts.port or 443)
+        target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+        names = {name.lower() for name in (headers or {})}
+        request_headers = {}
+        if "user-agent" not in names:
+            request_headers["User-Agent"] = _USER_AGENT
+        if body is not None and "content-type" not in names:
+            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
+        request_headers.update(headers or {})
+        for attempt in (1, 2):
+            connection, reused = self._take(key, timeout, fresh=attempt > 1)
+            keep = False
+            try:
+                try:
+                    connection.request(method, target, body=body, headers=request_headers)
+                    response = connection.getresponse()
+                except _STALE_CONNECTION:
+                    if not reused or attempt > 1:
+                        raise
+                    # The peer closed this idle connection without answering:
+                    # retry once on a new connection (other idle ones of this
+                    # host are dropped as well).
+                    self._discard(key)
+                    continue
+                try:
+                    data = response.read(MAX_RESPONSE_BYTES + 1)
+                    complete = response.isclosed()
+                finally:
+                    response.close()
+                oversized = len(data) > MAX_RESPONSE_BYTES
+                # Only a completely read response leaves the connection reusable.
+                keep = complete and not oversized and not response.will_close
+                if 200 <= response.status < 300:
+                    if oversized:
+                        raise GatewayError(503, "M_UNAVAILABLE", 60)
+                    return response.status, dict(response.headers), data
+                return response.status, dict(response.headers), data[:MAX_RESPONSE_BYTES]
+            finally:
+                if keep:
+                    self._put(key, connection)
+                else:
+                    connection.close()
+
+
+_POOL = ConnectionPool()
 
 
 def http_request(url, *, method="GET", body=None, headers=None, timeout=8):
-    request = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    try:
-        with opener.open(request, timeout=timeout) as response:
-            data = response.read(65537)
-            if len(data) > 65536:
-                raise GatewayError(503, "M_UNAVAILABLE", 60)
-            return response.status, dict(response.headers), data
-    except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers), error.read(65536)
+    """HTTPS request on a shared keep-alive connection: bounded reply size,
+    per-operation timeout, no proxy, no redirect."""
+    return _POOL.request(url, method=method, body=body, headers=headers, timeout=timeout)
 
 
 class OAuthRequest:
@@ -389,6 +540,10 @@ class Gateway:
         self.registrations = {reg.pushkey: reg for reg in config.registrations}
         self.invalid_tokens = set()
         self.lock = threading.RLock()
+        # Dedup digests of sends handed to the provider and not yet recorded;
+        # `settled` (on the global lock) wakes requests waiting for them.
+        self.inflight: set[str] = set()
+        self.settled = threading.Condition(self.lock)
         self.registration_attempts = []
         self.rate = {}  # only SHA-256 digests of registered tokens, bounded by config
         # Counters not yet written to the stats table (refused, unauthorized or
@@ -560,14 +715,20 @@ class Gateway:
             raise
         except Exception:
             raise GatewayError(503, "M_UNAVAILABLE", 60, reason="openid_unavailable") from None
+        token_digest = hashlib.sha256(reg.pushkey.encode()).hexdigest()
         with self.lock:
             with self.database() as db:
-                active = self._store_registration(db, owner, reg, trace)
+                active, cleared = self._store_registration(db, owner, reg, token_digest, trace)
             # Published only after the commit succeeded.
             self.active = active
+            if cleared or token_digest in self.invalid_tokens:
+                # The app has just proved it holds this token: an earlier FCM
+                # UNREGISTERED/SENDER_ID_MISMATCH no longer applies.
+                self.invalid_tokens.discard(token_digest)
+                trace.count("invalid_cleared")
         return {"registered": True}
 
-    def _store_registration(self, db, owner, reg, trace):
+    def _store_registration(self, db, owner, reg, token_digest, trace):
         previous = db.execute("SELECT owner, app_id FROM registrations WHERE pushkey = ?", (reg.pushkey,)).fetchone()
         if previous is not None and previous[0] != owner:
             # Another account can never claim a registered token.
@@ -596,7 +757,9 @@ class Gateway:
         db.execute("DELETE FROM registrations WHERE owner = ? AND app_id = ?", (owner, reg.app_id))
         db.execute("INSERT INTO registrations VALUES (?, ?, ?, ?)", (owner, reg.app_id, reg.pushkey, reg.nonce))
         trace.count("replaced" if existing else "added")
-        return self.active_registrations(db)
+        # Same transaction: a verified registration lifts the token's blacklist.
+        cleared = db.execute("DELETE FROM invalid WHERE digest = ?", (token_digest,)).rowcount > 0
+        return self.active_registrations(db), cleared
 
     def active_registrations(self, db):
         rows = db.execute("SELECT owner, app_id, pushkey, nonce FROM registrations").fetchall()
@@ -636,19 +799,7 @@ class Gateway:
             trace.finish(200, "ok" if not result["rejected"] else "rejected_devices")
             self.defer(trace)
             return result
-        with self.lock, self.database() as db:
-            try:
-                result = self._publish(request, db, trace)
-            except GatewayError as error:
-                self._failed(trace, error)
-                # Keep FCM-accepted dedup rows and counters before the homeserver
-                # is asked to retry; invalid tokens stay rejected on that retry.
-                self.write_stats(db, trace)
-                db.commit()
-                raise
-            trace.finish(200, "ok" if not result["rejected"] else "rejected_devices")
-            self.write_stats(db, trace)
-            return result
+        return self._publish(request, trace)
 
     def _classify(self, packet, registrations, trace) -> "NotifyRequest":
         if not isinstance(packet, dict) or not isinstance(packet.get("notification"), dict):
@@ -724,58 +875,146 @@ class Gateway:
             trace.count(f"prio.{priority}")
         return NotifyRequest(data, event, priority, authorized, rejected)
 
-    def _publish(self, request: "NotifyRequest", db, trace):
-        data, event, priority = request.data, request.event, request.priority
-        rejected = list(request.rejected)
-        transient = None
-        # Serialize dedup/rate bookkeeping and publish so concurrent repeats
-        # never generate another confirmed FCM send for the same device/event.
-        now = self.clock()
-        db.execute("DELETE FROM accepted WHERE expires <= ?", (now,))
-        current = self.active
+    def _publish(self, request: "NotifyRequest", trace):
+        data, event = request.data, request.event
+        targets = []
         for key, reg in request.authorized.items():
-            if current.get(key) != reg:
-                # Rotated or replaced while this request waited for the lock.
-                trace.count("device.changed")
-                continue
-            token_digest = hashlib.sha256(key.encode()).hexdigest()
-            if token_digest in self.invalid_tokens:
-                trace.tally("fcm", "invalid_token")
-                rejected.append(key)
-                continue
             digest = hashlib.sha256(json.dumps([key, data.get("room_id"), event],
                 separators=(",", ":")).encode()).hexdigest() if event else None
-            if digest and db.execute("SELECT 1 FROM accepted WHERE digest = ?", (digest,)).fetchone():
-                trace.tally("fcm", "dedup")
-                continue
-            minute = int(now // 60)
-            old_minute, old_count = self.rate.get(token_digest, (minute, 0))
-            count = old_count if old_minute == minute else 0
-            if count >= self.config.rate_per_minute:
-                trace.tally("fcm", "ratelimited")
-                transient = max(transient or 0, 60)
-                continue
-            self.rate[token_digest] = (minute, count + 1)
-            try:
-                outcome = self.publisher.publish(key, dict(data), priority)
-            except Exception:
-                outcome = PublishResult("transient")
-            trace.tally("fcm", outcome.status if outcome.status in ("accepted", "rejected") else "transient")
-            if outcome.status == "rejected":
-                rejected.append(key)
-                self.invalid_tokens.add(token_digest)
-                db.execute("INSERT OR IGNORE INTO invalid VALUES (?)", (token_digest,))
-            elif outcome.status == "accepted" and digest:
-                db.execute("INSERT OR REPLACE INTO accepted VALUES (?, ?)",
-                    (digest, now + self.config.dedup_seconds))
-                db.execute("DELETE FROM accepted WHERE digest IN ("
-                    "SELECT digest FROM accepted ORDER BY expires DESC, digest DESC LIMIT -1 OFFSET ?)",
-                    (self.config.max_dedup_entries,))
-            elif outcome.status != "accepted":
-                transient = max(transient or 0, outcome.retry_after)
-        if transient:
-            raise GatewayError(503, "M_UNAVAILABLE", transient, reason="fcm_retry")
-        return {"rejected": list(dict.fromkeys(rejected))}
+            targets.append((key, digest, lambda key=key, reg=reg: self.active.get(key) == reg))
+
+        def conclude(outcomes):
+            retry = max((after for _, state, after in outcomes if state in _RETRY_STATES), default=None)
+            if retry:
+                # FCM-accepted dedup rows and counters are already kept in this
+                # transaction; invalid tokens stay rejected on the retry.
+                raise GatewayError(503, "M_UNAVAILABLE", retry, reason="fcm_retry")
+            rejected = list(request.rejected) + [
+                key for key, state, _ in outcomes if state in ("invalid_token", "rejected")]
+            result = {"rejected": list(dict.fromkeys(rejected))}
+            return result, "ok" if not result["rejected"] else "rejected_devices"
+
+        return self._dispatch(trace, targets, data, request.priority, conclude)
+
+    # -- provider sends -----------------------------------------------------------
+
+    def _dispatch(self, trace, targets, payload, priority, conclude):
+        """Publish `payload` to (pushkey, dedup digest, still-current check) targets.
+
+        The global lock covers bookkeeping only, never provider I/O. Under the
+        lock each device is classified (changed, invalid token, dedup, rate
+        limit) and its send is reserved as in flight; the lock is released for
+        the provider calls; then the outcomes, the reply (`conclude`) and the
+        counters are committed in one transaction and the reservations end. A
+        repeat of a send still in flight waits for its outcome, so concurrent
+        identical notifications cause one provider call per device.
+        """
+        outcomes = [None] * len(targets)
+        sends = []
+        result = failure = None
+        released = False
+        deadline = time.monotonic() + 2 * self.config.provider_timeout_seconds
+        try:
+            with self.lock:
+                now = self.clock()
+                with self.database() as db:
+                    db.execute("DELETE FROM accepted WHERE expires <= ?", (now,))
+                    # Never wait for another send inside a write transaction:
+                    # that sender needs the database to record its outcome.
+                    db.commit()
+                    # One global order: requests naming the same devices in a
+                    # different order never wait for each other in a cycle.
+                    for index in sorted(range(len(targets)), key=lambda i: targets[i][1] or ""):
+                        key, digest, current = targets[index]
+                        token_digest = hashlib.sha256(key.encode()).hexdigest()
+                        state = self._reserve(db, token_digest, digest, current, now, deadline)
+                        if state == "send":
+                            sends.append((index, key, token_digest, digest))
+                        else:
+                            outcomes[index] = (key, state, 60)
+            sends.sort()
+            results = []
+            for _, key, _, _ in sends:
+                try:
+                    results.append(self.publisher.publish(key, dict(payload), priority))
+                except Exception:
+                    results.append(PublishResult("transient"))
+            with self.lock:
+                try:
+                    with self.database() as db:
+                        for (index, key, token_digest, digest), outcome in zip(sends, results):
+                            status = outcome.status if outcome.status in ("accepted", "rejected") else "transient"
+                            if status == "rejected":
+                                self.invalid_tokens.add(token_digest)
+                                db.execute("INSERT OR IGNORE INTO invalid VALUES (?)", (token_digest,))
+                            elif status == "accepted" and digest:
+                                db.execute("INSERT OR REPLACE INTO accepted VALUES (?, ?)",
+                                    (digest, now + self.config.dedup_seconds))
+                                db.execute("DELETE FROM accepted WHERE digest IN ("
+                                    "SELECT digest FROM accepted ORDER BY expires DESC, digest DESC LIMIT -1 OFFSET ?)",
+                                    (self.config.max_dedup_entries,))
+                            outcomes[index] = (key, status, outcome.retry_after)
+                        for _, state, _ in outcomes:
+                            if state == "changed":
+                                # Rotated or replaced while this request waited.
+                                trace.count("device.changed")
+                            else:
+                                trace.tally("fcm", state)
+                        try:
+                            result, reason = conclude(outcomes)
+                        except GatewayError as error:
+                            failure = error
+                            self._failed(trace, error)
+                        else:
+                            trace.finish(200, reason)
+                        self.write_stats(db, trace)
+                finally:
+                    self._release(sends)
+                    released = True
+        finally:
+            if sends and not released:
+                with self.lock:
+                    self._release(sends)
+        if failure is not None:
+            raise failure
+        return result
+
+    def _reserve(self, db, token_digest, digest, current, now, deadline):
+        """Under the global lock: classify one device; "send" reserves its send."""
+        while True:
+            if not current():
+                return "changed"
+            if token_digest in self.invalid_tokens:
+                return "invalid_token"
+            if digest is None:
+                break
+            # fetchall() ends the statement: no read lock is kept while waiting.
+            if db.execute("SELECT 1 FROM accepted WHERE digest = ?", (digest,)).fetchall():
+                return "dedup"
+            if digest not in self.inflight:
+                break
+            # The same device/event is with the provider right now: wait for its
+            # outcome (accepted -> dedup, failed -> this request sends).
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "inflight"
+            self.settled.wait(remaining)
+        minute = int(now // 60)
+        old_minute, old_count = self.rate.get(token_digest, (minute, 0))
+        count = old_count if old_minute == minute else 0
+        if count >= self.config.rate_per_minute:
+            return "ratelimited"
+        self.rate[token_digest] = (minute, count + 1)
+        if digest is not None:
+            self.inflight.add(digest)
+        return "send"
+
+    def _release(self, sends):
+        """Under the global lock: end in-flight reservations, wake waiters."""
+        for _, _, _, digest in sends:
+            if digest is not None:
+                self.inflight.discard(digest)
+        self.settled.notify_all()
 
     # -- worker reminder relay ------------------------------------------------------
 
@@ -787,17 +1026,7 @@ class Gateway:
             self._failed(trace, error)
             self.defer(trace)
             raise
-        with self.lock, self.database() as db:
-            try:
-                result = self._reminder(hint, db, trace)
-            except GatewayError as error:
-                self._failed(trace, error)
-                self.write_stats(db, trace)
-                db.commit()
-                raise
-            trace.finish(200, "ok")
-            self.write_stats(db, trace)
-            return result
+        return self._reminder(hint, trace)
 
     def _reminder_hint(self, packet, authorization, peer):
         if self.reminder_token is None:
@@ -825,53 +1054,30 @@ class Gateway:
         # are being configured. emittedAt is validated but never logged/stored.
         return hint
 
-    def _reminder(self, hint, db, trace):
-        now = self.clock()
-        db.execute("DELETE FROM accepted WHERE expires <= ?", (now,))
+    def _reminder(self, hint, trace):
         # Every active device of every allowed account: the relay credential is
         # not bound to one account (see README). The wake is content-free.
-        tokens = [key for key in self.active if hashlib.sha256(key.encode()).hexdigest() not in self.invalid_tokens]
+        with self.lock:
+            tokens = [key for key in self.active
+                      if hashlib.sha256(key.encode()).hexdigest() not in self.invalid_tokens]
         trace.field("devices", len(tokens))
         if not tokens:
-            raise GatewayError(503, "M_NO_DEVICES", 300, reason="no_devices")
-        transient = None
-        accepted = 0
-        for key in tokens:
-            token_digest = hashlib.sha256(key.encode()).hexdigest()
-            digest = hashlib.sha256(json.dumps(["reminder", key, hint], separators=(",", ":")).encode()).hexdigest()
-            if db.execute("SELECT 1 FROM accepted WHERE digest = ?", (digest,)).fetchone():
-                trace.tally("fcm", "dedup")
-                accepted += 1
-                continue
-            minute = int(now // 60)
-            old_minute, old_count = self.rate.get(token_digest, (minute, 0))
-            count = old_count if old_minute == minute else 0
-            if count >= self.config.rate_per_minute:
-                trace.tally("fcm", "ratelimited")
-                transient = max(transient or 0, 60)
-                continue
-            self.rate[token_digest] = (minute, count + 1)
-            try:
-                outcome = self.publisher.publish(key, {"personal_wake": "reminder"}, "high")
-            except Exception:
-                outcome = PublishResult("transient")
-            trace.tally("fcm", outcome.status if outcome.status in ("accepted", "rejected") else "transient")
-            if outcome.status == "rejected":
-                self.invalid_tokens.add(token_digest)
-                db.execute("INSERT OR IGNORE INTO invalid VALUES (?)", (token_digest,))
-            elif outcome.status == "accepted":
-                accepted += 1
-                db.execute("INSERT OR REPLACE INTO accepted VALUES (?, ?)", (digest, now + self.config.dedup_seconds))
-                db.execute("DELETE FROM accepted WHERE digest IN ("
-                    "SELECT digest FROM accepted ORDER BY expires DESC, digest DESC LIMIT -1 OFFSET ?)",
-                    (self.config.max_dedup_entries,))
-            else:
-                transient = max(transient or 0, outcome.retry_after)
-        if transient:
-            raise GatewayError(503, "M_UNAVAILABLE", transient, reason="fcm_retry")
-        if not accepted:
-            raise GatewayError(503, "M_NO_DEVICES", 300, reason="no_valid_devices")
-        return {"accepted": True, "state": "fcm_accepted"}
+            error = GatewayError(503, "M_NO_DEVICES", 300, reason="no_devices")
+            self._failed(trace, error)
+            self.flush(trace)
+            raise error
+        targets = [(key, hashlib.sha256(json.dumps(["reminder", key, hint], separators=(",", ":")).encode()).hexdigest(),
+                    lambda key=key: key in self.active) for key in tokens]
+
+        def conclude(outcomes):
+            retry = max((after for _, state, after in outcomes if state in _RETRY_STATES), default=None)
+            if retry:
+                raise GatewayError(503, "M_UNAVAILABLE", retry, reason="fcm_retry")
+            if not any(state in ("accepted", "dedup") for _, state, _ in outcomes):
+                raise GatewayError(503, "M_NO_DEVICES", 300, reason="no_valid_devices")
+            return {"accepted": True, "state": "fcm_accepted"}, "ok"
+
+        return self._dispatch(trace, targets, {"personal_wake": "reminder"}, "high", conclude)
 
 
 def read_stats(state_directory: str | Path) -> dict:
@@ -911,7 +1117,7 @@ def read_stats(state_directory: str | Path) -> dict:
         report["hints"].append("pusher_format_not_event_id_only")
     if total("notify.device.unknown") or total("notify.device.appid_mismatch"):
         report["hints"].append("unregistered_pusher_reregister_phone")
-    if total("notify.fcm.transient") or total("notify.fcm.ratelimited"):
+    if total("notify.fcm.transient") or total("notify.fcm.ratelimited") or total("notify.fcm.inflight"):
         report["hints"].append("fcm_retries_seen")
     if total("notify.fcm.accepted"):
         report["hints"].append("fcm_accepted_check_phone_diagnostics")
@@ -1123,6 +1329,7 @@ def main():
                 server.serve_forever()
         finally:
             gateway.flush_pending()
+            _POOL.close()
     except KeyboardInterrupt:
         pass
     except Exception:

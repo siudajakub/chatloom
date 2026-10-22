@@ -5,11 +5,13 @@ import contextlib
 from contextlib import contextmanager
 from dataclasses import replace
 import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -576,6 +578,281 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(gateway.ua_product("@user:server"),"-")
         self.assertEqual(gateway.ua_product(None),"-")
         self.assertEqual(gateway.ua_product("x"*80),"x"*32)
+
+
+TOKEN_B = "fixture-registration-token-b"
+APP_B = "pl.personal.chat.FIXTURE_B"
+
+
+class GatedPublisher:
+    """Fake FCM: the first send to `gated` blocks until `release`; an outcome
+    may be an exception the provider call raises."""
+    def __init__(self, gated, outcomes=()):
+        self.gated, self.outcomes, self.calls = gated, list(outcomes), []
+        self.started, self.release = threading.Event(), threading.Event()
+        self.lock = threading.Lock()
+
+    def publish(self, token, data, priority):
+        with self.lock:
+            self.calls.append((token, data, priority))
+            gate = token == self.gated and not self.started.is_set()
+            outcome = self.outcomes.pop(0) if self.outcomes else gateway.PublishResult("accepted")
+        if gate:
+            self.started.set()
+            if not self.release.wait(5):
+                raise TimeoutError()
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+@contextmanager
+def two_devices(publisher):
+    with tempfile.TemporaryDirectory() as directory:
+        config = gateway.Config(project_id="fixture-project", service_account_file="/fixture/account.json",
+            registrations=(gateway.Registration(TOKEN, APP, NONCE), gateway.Registration(TOKEN_B, APP_B, NONCE)),
+            state_directory=directory)
+        yield gateway.Gateway(config, publisher)
+
+
+def device_b(event="$fixture-event"):
+    request = packet(event)
+    request["notification"]["devices"][0].update(pushkey=TOKEN_B, app_id=APP_B)
+    return request
+
+
+def observe_waits(app):
+    """Event set when a request starts waiting for a send in flight."""
+    waiting, wait = threading.Event(), app.settled.wait
+    def observed(timeout=None):
+        waiting.set()
+        return wait(timeout)
+    app.settled.wait = observed
+    return waiting
+
+
+class ProviderConcurrencyTests(unittest.TestCase):
+    def test_slow_send_for_one_device_does_not_block_another_device(self):
+        publisher = GatedPublisher(TOKEN)
+        with two_devices(publisher) as app, concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            try:
+                slow = pool.submit(app.notify, packet())
+                self.assertTrue(publisher.started.wait(2))
+                # Device B is sent and answered while device A's FCM call is open.
+                self.assertEqual(pool.submit(app.notify, device_b()).result(timeout=2), {"rejected": []})
+                self.assertFalse(slow.done())
+                self.assertEqual([call[0] for call in publisher.calls], [TOKEN, TOKEN_B])
+            finally:
+                publisher.release.set()
+            self.assertEqual(slow.result(timeout=2), {"rejected": []})
+            stats = gateway.read_stats(app.config.state_directory)["stats"]
+            self.assertEqual(stats["notify.fcm.accepted"]["n"], 2)
+            self.assertEqual(app.inflight, set())
+
+    def test_identical_notification_waits_for_the_send_in_flight(self):
+        publisher = GatedPublisher(TOKEN)
+        with two_devices(publisher) as app, concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            waiting = observe_waits(app)
+            try:
+                first = pool.submit(app.notify, packet())
+                self.assertTrue(publisher.started.wait(2))
+                repeat = pool.submit(app.notify, packet())
+                self.assertTrue(waiting.wait(2))
+                self.assertFalse(repeat.done())
+            finally:
+                publisher.release.set()
+            self.assertEqual(first.result(timeout=2), {"rejected": []})
+            self.assertEqual(repeat.result(timeout=2), {"rejected": []})
+            self.assertEqual(len(publisher.calls), 1)
+            stats = gateway.read_stats(app.config.state_directory)["stats"]
+            self.assertEqual(stats["notify.fcm.dedup"]["n"], 1)
+            self.assertEqual(app.inflight, set())
+
+    def test_in_flight_send_that_raised_is_released_for_a_retry(self):
+        publisher = GatedPublisher(TOKEN, [RuntimeError("provider failed")])
+        with two_devices(publisher) as app, concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            waiting = observe_waits(app)
+            try:
+                first = pool.submit(app.notify, packet())
+                self.assertTrue(publisher.started.wait(2))
+                repeat = pool.submit(app.notify, packet())
+                self.assertTrue(waiting.wait(2))
+            finally:
+                publisher.release.set()
+            with self.assertRaises(gateway.GatewayError) as caught:
+                first.result(timeout=2)
+            self.assertEqual(caught.exception.status, 503)
+            # The waiting repeat sends itself once the failed send is released.
+            self.assertEqual(repeat.result(timeout=2), {"rejected": []})
+            self.assertEqual(len(publisher.calls), 2)
+            self.assertEqual(app.inflight, set())
+            self.assertEqual(app.notify(packet()), {"rejected": []})
+            self.assertEqual(len(publisher.calls), 2)
+
+
+class FakeResponse:
+    status, will_close = 200, False
+
+    def __init__(self, body):
+        self.body, self.closed, self.headers = body, False, {"Content-Type": "application/json"}
+
+    def read(self, amount):
+        self.closed = True
+        return self.body[:amount]
+
+    def isclosed(self):
+        return self.closed
+
+    def close(self):
+        self.closed = True
+
+
+class FakeConnection:
+    """Stands in for http.client.HTTPSConnection; its socket is one end of a
+    socketpair, so the idle-connection check runs on a real socket."""
+    instances = []
+
+    def __init__(self, host, port=None, *, timeout=None, context=None):
+        self.host, self.port, self.timeout, self.context = host, port, timeout, context
+        self.sock, self.peer = socket.socketpair()
+        self.requests = []
+        FakeConnection.instances.append(self)
+
+    def request(self, method, target, body=None, headers=None):
+        self.requests.append((method, target, body, dict(headers or {})))
+
+    def getresponse(self):
+        return FakeResponse(b'{"name":"fixture"}')
+
+    def close(self):
+        if self.sock is not None:
+            self.sock.close()
+            self.peer.close()
+            self.sock = None
+
+
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    timeout = 5
+    REPLIES = {"/ok": (200, b"ok", {}), "/drop-when-reused": (200, b"fresh", {}),
+               "/big": (200, b"x" * 65537, {}), "/error-big": (500, b"e" * 70000, {}),
+               "/redirect": (302, b"moved", {"Location": "https://evil.invalid/"})}
+
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        self.answered = getattr(self, "answered", 0) + 1
+        self.server.seen.append((self.path, self.client_address[1]))
+        if self.path == "/drop-when-reused" and self.answered > 1:
+            self.close_connection = True  # read the request, close without an answer
+            return
+        status, body, headers = self.REPLIES[self.path]
+        self.send_response(status)
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except OSError:
+            self.close_connection = True
+
+
+class KeepAliveServer(ThreadingHTTPServer):
+    daemon_threads = False  # server_close() joins the handler threads
+
+    def handle_error(self, request, address):
+        pass
+
+
+class TransportTests(unittest.TestCase):
+    def test_tls_context_is_built_once_and_connections_are_reused(self):
+        FakeConnection.instances = []
+        self.addCleanup(gateway._POOL.close)
+        url = "https://fcm.googleapis.com/v1/projects/fixture-project/messages:send"
+        expected = (200, {"Content-Type": "application/json"}, b'{"name":"fixture"}')
+        with patch.object(gateway, "_TLS_CONTEXT", None), \
+                patch.object(gateway.ssl, "create_default_context", wraps=gateway.ssl.create_default_context) as create, \
+                patch.object(gateway.http.client, "HTTPSConnection", FakeConnection):
+            for timeout in (8, 3, 5):
+                self.assertEqual(gateway.http_request(url, method="POST", body=b"{}",
+                    headers={"Content-Type": "application/json"}, timeout=timeout), expected)
+            gateway.http_request("https://oauth2.googleapis.com/token", method="POST", body=b"grant", timeout=8)
+            fcm, oauth = FakeConnection.instances
+            self.assertEqual((fcm.timeout, fcm.sock.gettimeout()), (5, 5))
+            # A peer that closed an idle connection is detected before reuse.
+            fcm.peer.close()
+            self.assertEqual(gateway.http_request(url, method="POST", body=b"{}", timeout=8), expected)
+            gateway._POOL.close()
+        self.assertEqual(create.call_count, 1)
+        fcm, oauth, renewed = FakeConnection.instances
+        self.assertIsNotNone(fcm.context)
+        self.assertIs(oauth.context, fcm.context)
+        self.assertIs(renewed.context, fcm.context)
+        self.assertEqual(((fcm.host, fcm.port), (oauth.host, oauth.port)),
+                         (("fcm.googleapis.com", 443), ("oauth2.googleapis.com", 443)))
+        self.assertEqual([request[1] for request in fcm.requests],
+                         ["/v1/projects/fixture-project/messages:send"] * 3)
+        self.assertEqual(len(renewed.requests), 1)
+        self.assertTrue(fcm.requests[0][3]["User-Agent"].startswith("Python-urllib/"))
+        self.assertEqual(fcm.requests[0][3]["Content-Type"], "application/json")
+        self.assertEqual(oauth.requests[0][3]["Content-Type"], "application/x-www-form-urlencoded")
+        self.assertTrue(all(connection.sock is None for connection in FakeConnection.instances))
+
+    def test_timeouts_are_never_retried(self):
+        FakeConnection.instances = []
+        pool = gateway.ConnectionPool(lambda host, port, timeout: FakeConnection(host, port, timeout=timeout))
+        self.addCleanup(pool.close)
+        url = "https://fcm.googleapis.com/send"
+        pool.request(url, timeout=1)
+        def timed_out():
+            raise TimeoutError()
+        FakeConnection.instances[0].getresponse = timed_out
+        with self.assertRaises(TimeoutError):
+            pool.request(url, timeout=1)
+        self.assertEqual(len(FakeConnection.instances), 1)
+        self.assertEqual(len(FakeConnection.instances[0].requests), 2)
+        self.assertIsNone(FakeConnection.instances[0].sock)
+
+    def test_keep_alive_reuse_limits_redirects_and_stale_retry(self):
+        server = KeepAliveServer(("127.0.0.1", 0), KeepAliveHandler)
+        server.seen = []
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host, port = server.server_address
+        # Plain HTTP stands in for TLS; everything above the socket is the
+        # production request/reuse code.
+        pool = gateway.ConnectionPool(lambda h, p, timeout: http.client.HTTPConnection(h, p, timeout=timeout))
+        base = f"https://{host}:{port}"
+        try:
+            self.assertEqual(pool.request(base + "/ok", timeout=2)[::2], (200, b"ok"))
+            self.assertEqual(pool.request(base + "/ok", timeout=2)[::2], (200, b"ok"))
+            status, headers, body = pool.request(base + "/redirect", timeout=2)
+            # A redirect is returned, never followed.
+            self.assertEqual((status, headers["Location"], body), (302, "https://evil.invalid/", b"moved"))
+            # The peer closes a reused connection without answering: one retry
+            # on a new connection.
+            self.assertEqual(pool.request(base + "/drop-when-reused", timeout=2)[::2], (200, b"fresh"))
+            # Oversized success fails closed, oversized errors are truncated;
+            # neither connection is reused.
+            with self.assertRaises(gateway.GatewayError):
+                pool.request(base + "/big", timeout=2)
+            status, _, body = pool.request(base + "/error-big", timeout=2)
+            self.assertEqual((status, len(body)), (500, 65536))
+            self.assertEqual(pool.request(base + "/ok", timeout=2)[::2], (200, b"ok"))
+        finally:
+            pool.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertEqual([path for path, _ in server.seen], ["/ok", "/ok", "/redirect", "/drop-when-reused",
+                         "/drop-when-reused", "/big", "/error-big", "/ok"])
+        connections = [client_port for _, client_port in server.seen]
+        self.assertEqual(len(set(connections[:4])), 1)
+        self.assertNotEqual(connections[4], connections[0])
+        self.assertEqual(connections[5], connections[4])
+        self.assertEqual(len(set(connections)), 4)
 
 
 if __name__ == "__main__":
