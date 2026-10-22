@@ -47,15 +47,17 @@ class ReplyContent extends StatelessWidget {
     final display = timeline != null
         ? replyEvent.getDisplayEvent(timeline)
         : replyEvent;
-    final thumbnail =
+    final media =
         !display.redacted &&
         !isUndecryptable(display) &&
         _thumbnailTypes.contains(display.messageType);
+    // A video without a thumbnail has nothing to download: a static glyph
+    // instead of a loader that never resolves.
+    final thumbnail =
+        media &&
+        (display.hasThumbnail || display.messageType == MessageTypes.Image);
     return ConversationReplyQuote(
-      text: personalPreviewLabel(
-        display,
-        i18n: MatrixLocals(L10n.of(context)),
-      ),
+      text: personalPreviewLabel(display, i18n: MatrixLocals(L10n.of(context))),
       fill: fill,
       textColor: textColor,
       outgoing: outgoing,
@@ -67,6 +69,15 @@ class ReplyContent extends StatelessWidget {
               fit: BoxFit.cover,
               width: NotionBubble.quoteThumbnail,
               height: NotionBubble.quoteThumbnail,
+            )
+          : media
+          ? SizedBox.square(
+              dimension: NotionBubble.quoteThumbnail,
+              child: Icon(
+                Icons.videocam_outlined,
+                size: NotionSize.iconSm,
+                color: textColor,
+              ),
             )
           : null,
       onTap: onTap,

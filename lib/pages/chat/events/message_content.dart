@@ -13,23 +13,28 @@ import 'package:chatloom/pages/chat/events/round_video_bridge_message.dart';
 import 'package:chatloom/pages/chat/events/round_video_message.dart';
 import 'package:chatloom/pages/chat/events/undecryptable_message.dart';
 import 'package:chatloom/pages/chat/events/video_player.dart';
+import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
 import '../../../config/app_config.dart';
 import '../../../utils/event_checkbox_extension.dart';
+import '../../../utils/file_description.dart';
 import '../../../utils/platform_infos.dart';
 import '../../../utils/url_launcher.dart';
 import 'audio_player.dart';
 import 'cute_events.dart';
 import 'html_message.dart';
 import 'image_bubble.dart';
+import 'inline_loop_video.dart';
+import 'link_preview.dart';
 import 'map_bubble.dart';
 import 'message_download_content.dart';
 
@@ -49,6 +54,10 @@ class MessageContent extends StatelessWidget {
   /// Conversation side; defaults to the event sender being this account.
   final bool? outgoing;
 
+  /// An album this (newest) photo/video leads: drawn as one grid, oldest
+  /// first, with this event's caption below.
+  final List<Event>? album;
+
   const MessageContent(
     this.event, {
     this.onInfoTab,
@@ -61,6 +70,7 @@ class MessageContent extends StatelessWidget {
     required this.bigEmojis,
     this.roundStatus,
     this.outgoing,
+    this.album,
   });
 
   /// True when [event] renders as a round (circle) rather than a bubble:
@@ -73,6 +83,13 @@ class MessageContent extends StatelessWidget {
         event.messageType == MessageTypes.Video &&
         RoundVideoDescriptor.fromContent(event.content) != null;
   }
+
+  /// True when [event] is a sticker (image, Lottie or video): Telegram
+  /// draws it without a bubble fill.
+  static bool rendersSticker(Event event) =>
+      !event.redacted &&
+      (event.messageType == MessageTypes.Sticker ||
+          InlineLoopVideo.isVideoSticker(event));
 
   @override
   Widget build(BuildContext context) {
@@ -104,6 +121,23 @@ class MessageContent extends StatelessWidget {
     if (isUndecryptable(event)) {
       return UndecryptableMessage(event, textColor: textColor);
     }
+    final album = this.album;
+    if (album != null && album.length > 1) {
+      final grid = MediaAlbumGrid(
+        events: album,
+        borderRadius: borderRadius,
+        timelineFor: (_) => timeline,
+      );
+      final caption = event.fileDescription;
+      if (caption == null) return grid;
+      return _MediaCaption(
+        media: grid,
+        caption: caption,
+        width: NotionBubble.mediaMaxWidth,
+        textColor: textColor,
+        linkColor: linkColor,
+      );
+    }
     switch (event.type) {
       case EventTypes.Message:
       case EventTypes.Encrypted:
@@ -113,6 +147,17 @@ class MessageContent extends StatelessWidget {
           case MessageTypes.Sticker:
             if (event.redacted) continue textmessage;
             final sticker = event.messageType == MessageTypes.Sticker;
+            // A video sticker (`m.sticker` with a video file) loops inline.
+            if (InlineLoopVideo.isVideoSticker(event)) {
+              final box = InlineLoopVideo.stickerBox(event);
+              return InlineLoopVideo(
+                event,
+                width: box.width,
+                height: box.height,
+                borderRadius: NotionRadius.mdAll,
+                timeline: timeline,
+              );
+            }
             final w = event.content
                 .tryGetMap<String, Object?>('info')
                 ?.tryGet<int>('w');
@@ -193,6 +238,42 @@ class MessageContent extends StatelessWidget {
                 // Built only on an explicit play, not on every row build.
                 continuationQueue: () =>
                     RoundPlaybackQueue.after(event, timeline.events),
+              );
+            }
+            // Bridged GIFs and Telegram video stickers: muted inline loops.
+            if (InlineLoopVideo.applies(event)) {
+              final sticker = InlineLoopVideo.isVideoSticker(event);
+              final info = event.content.tryGetMap<String, Object?>('info');
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final box = sticker
+                      ? InlineLoopVideo.stickerBox(event)
+                      : ConversationMedia.frame(
+                          maxWidth: constraints.maxWidth,
+                          width: info?.tryGet<num>('w'),
+                          height: info?.tryGet<num>('h'),
+                          maxHeight: ConversationMedia.maxHeightOf(
+                            context,
+                            constraints,
+                          ),
+                        );
+                  final loop = InlineLoopVideo(
+                    event,
+                    width: box.width,
+                    height: box.height,
+                    borderRadius: sticker ? NotionRadius.mdAll : borderRadius,
+                    timeline: timeline,
+                  );
+                  final caption = sticker ? null : event.fileDescription;
+                  if (caption == null) return loop;
+                  return _MediaCaption(
+                    media: loop,
+                    caption: caption,
+                    width: box.width,
+                    textColor: textColor,
+                    linkColor: linkColor,
+                  );
+                },
               );
             }
             return EventVideoPlayer(
@@ -281,7 +362,8 @@ class MessageContent extends StatelessWidget {
             final bigEmotes =
                 !event.isRichMessage && bigEmojis.contains(event.body);
 
-            return Padding(
+            final previews = BridgedLinkPreview.fromContent(event.content);
+            final text = Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: HtmlMessage(
                 html: html,
@@ -301,6 +383,26 @@ class MessageContent extends StatelessWidget {
                   EventCheckboxRoomExtension.relationshipType,
                 ),
               ),
+            );
+            if (previews.isEmpty) return text;
+            // The bridge's preview of the first link, under the text.
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                text,
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: NotionSpace.xxs,
+                    bottom: NotionSpace.xxs,
+                  ),
+                  child: LinkPreviewAttachment(
+                    event: event,
+                    preview: previews.first,
+                    textColor: textColor,
+                  ),
+                ),
+              ],
             );
         }
       case PollEventContent.startType:
@@ -421,4 +523,54 @@ class _ButtonContent extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Media with its caption below, inside the media bubble.
+class _MediaCaption extends StatelessWidget {
+  const _MediaCaption({
+    required this.media,
+    required this.caption,
+    required this.width,
+    required this.textColor,
+    required this.linkColor,
+  });
+
+  final Widget media;
+  final String caption;
+  final double width;
+  final Color textColor;
+  final Color linkColor;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    spacing: NotionSpace.xs,
+    children: [
+      media,
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: width),
+        child: Padding(
+          padding: NotionBubble.padding.copyWith(top: 0),
+          child: Linkify(
+            text: caption,
+            textWidthBasis: TextWidthBasis.longestLine,
+            textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
+            style: TextStyle(
+              color: textColor,
+              fontSize: AppConfig.messageFontSize,
+            ),
+            options: const LinkifyOptions(humanize: false),
+            linkStyle: TextStyle(
+              color: linkColor,
+              fontSize: AppConfig.messageFontSize,
+              decoration: TextDecoration.underline,
+              decorationColor: linkColor,
+            ),
+            onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
+          ),
+        ),
+      ),
+    ],
+  );
 }

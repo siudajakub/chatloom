@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
+import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
@@ -77,8 +78,14 @@ class Message extends StatelessWidget {
   /// not refused, before they are offered.
   final bool strictCapabilities;
 
+  /// This row's place in a photo/video album (`MediaAlbums`): the lead
+  /// draws the whole grid, a hidden member draws nothing (its row stays for
+  /// list indexes and scroll targets); null for an ordinary message.
+  final MediaAlbumSlot? album;
+
   const Message(
     this.event, {
+    this.album,
     this.nextEvent,
     this.previousEvent,
     this.displayReadMarker = false,
@@ -127,6 +134,7 @@ class Message extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (album?.lead == false) return const SizedBox.shrink();
     final theme = Theme.of(context);
     // A message this device cannot decrypt yet is still a message: it keeps
     // its sender, side and grouping, and MessageContent shows its key state.
@@ -318,6 +326,7 @@ class Message extends StatelessWidget {
       bigEmojis: bigEmojis,
       outgoing: own,
       roundStatus: roundStatus,
+      album: album?.members,
     );
     final isReply = event.inReplyToEventId(includingFallback: false) != null;
     // The quoted original takes the muted colour of its own side, blended
@@ -374,7 +383,8 @@ class Message extends StatelessWidget {
                 outgoing: own,
                 groupPosition: position,
                 media: media,
-                chromeless: round,
+                // Rounds and stickers float without a bubble (Telegram).
+                chromeless: round || MessageContent.rendersSticker(display),
                 flash: highlightMarker,
                 backgroundColor: custom is int ? Color(custom) : null,
                 quote: isReply

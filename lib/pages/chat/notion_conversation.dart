@@ -136,6 +136,14 @@ class NotionAudioFileBlock extends StatefulWidget {
 
   /// Shows speed for the active note; secondary actions remain in a menu.
   final bool controls;
+
+  /// An incoming voice note nobody played on this device yet: a small dot
+  /// after the time (Telegram).
+  final bool unplayed;
+
+  /// Diameter of the [unplayed] dot.
+  static const double unplayedDot = 6;
+
   const NotionAudioFileBlock({
     super.key,
     required this.duration,
@@ -154,6 +162,7 @@ class NotionAudioFileBlock extends StatefulWidget {
     this.speedAction,
     this.onExpand,
     this.controls = true,
+    this.unplayed = false,
   });
 
   @override
@@ -332,15 +341,41 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
                                         horizontal: NotionSpace.xs,
                                         vertical: NotionSpace.sm,
                                       ),
-                                      child: Text(
-                                        time,
-                                        textDirection: TextDirection.ltr,
-                                        style: NotionType.footnote.copyWith(
-                                          color: foreground,
-                                          fontFeatures: const [
-                                            FontFeature.tabularFigures(),
-                                          ],
-                                        ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        spacing: NotionSpace.xs,
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              time,
+                                              textDirection: TextDirection.ltr,
+                                              style: NotionType.footnote.copyWith(
+                                                color: foreground,
+                                                fontFeatures: const [
+                                                  FontFeature.tabularFigures(),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                          if (widget.unplayed)
+                                            Semantics(
+                                              key: const ValueKey(
+                                                'voice-unplayed',
+                                              ),
+                                              label: 'Not played',
+                                              child: DecoratedBox(
+                                                decoration: ShapeDecoration(
+                                                  color: foreground,
+                                                  shape: const CircleBorder(),
+                                                ),
+                                                child: const SizedBox.square(
+                                                  dimension:
+                                                      NotionAudioFileBlock
+                                                          .unplayedDot,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
                                       ),
                                     ),
                                   ),

@@ -4,18 +4,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/bounded_byte_cache.dart';
 import 'package:chatloom/utils/client_download_content_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:chatloom/widgets/cover_resize_image.dart';
+import 'package:chatloom/widgets/lottie_sticker_data.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:http/http.dart' as http;
 import 'package:lottie/lottie.dart';
@@ -48,8 +47,16 @@ class MxcImage extends StatefulWidget {
   /// Paint opacity applied while drawing the image (no compositing layer).
   final double opacity;
 
+  /// Encryption of an [uri] attachment (an `EncryptedFile` JSON without
+  /// `url`, as in `com.beeper.linkpreviews` `beeper:image:encryption`): the
+  /// original is downloaded and decrypted locally; no thumbnail is asked for.
+  final Map<String, Object?>? encryption;
+
   static void clearCache(String cacheName) =>
       _MxcImageState._imageDataCache.removeWhere((key) => key.$2 == cacheName);
+
+  /// Drops parsed Lottie stickers (tests, memory pressure).
+  static void clearLottieCache() => _MxcImageState._lottieCache.clear();
 
   const MxcImage({
     this.uri,
@@ -72,6 +79,7 @@ class MxcImage extends StatefulWidget {
     this.cacheName,
     this.decodeToCover = false,
     this.opacity = 1,
+    this.encryption,
     super.key,
   });
 
@@ -90,15 +98,25 @@ typedef _ImageKey = (
   bool,
 );
 
+/// Identity of a source for the parsed-Lottie cache: the same sticker shown
+/// in two rows or scrolled back into view parses once.
+typedef _LottieKey = (Client, String, bool);
+
 class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   static final _imageDataCache = BoundedByteCache<_ImageKey>(
     maxBytes: 32 * 1024 * 1024,
     maxEntries: 512,
   );
-  Uint8List? _imageData, _lottieData;
+  static final _lottieCache = LottieCompositionCache<_LottieKey>();
+  Uint8List? _imageData;
+  LottieComposition? _lottie;
   Timer? _retryTimer;
   int _generation = 0, _failures = 0;
   bool _loading = false;
+
+  /// A terminal failure (unavailable, unsupported, undecryptable): a static
+  /// fallback replaces the loader, so nothing animates forever.
+  bool _failed = false;
 
   /// Bytes came from the memory cache before the first frame: render them
   /// directly, without the placeholder cross-fade.
@@ -111,14 +129,74 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     return state == null || state == AppLifecycleState.resumed;
   }
 
-  void _accept(Uint8List data, _ImageKey? key, int generation) {
+  Client _client() =>
+      widget.client ?? widget.event?.room.client ?? Matrix.of(context).client;
+
+  _LottieKey? _lottieKey(Client client) {
+    final source = widget.uri?.toString() ?? widget.event?.eventId;
+    return source == null ? null : (client, source, widget.isThumbnail);
+  }
+
+  void _accept(
+    Uint8List data,
+    _ImageKey? key,
+    int generation, {
+    LottieComposition? lottie,
+  }) {
     if (!mounted || generation != _generation) return;
     if (key != null) _imageDataCache.put(key, data);
     setState(() {
       _imageData = data;
-      _lottieData = _ungzipLottie(data);
+      _lottie = lottie;
       _failures = 0;
+      _failed = false;
     });
+  }
+
+  void _fail(int generation) {
+    if (!mounted || generation != _generation) return;
+    setState(() => _failed = true);
+  }
+
+  /// Accepts [data] as a Lottie sticker (TGS or Lottie JSON), parsing it once
+  /// per source; false when it is not one.
+  Future<bool> _acceptLottie(
+    Uint8List data,
+    _ImageKey? key,
+    int generation,
+    Client client,
+  ) async {
+    final lottieKey = _lottieKey(client);
+    final composition =
+        (lottieKey == null ? null : _lottieCache.get(lottieKey)) ??
+        await LottieStickerData.decode(data);
+    if (composition == null) return false;
+    if (lottieKey != null) _lottieCache.put(lottieKey, composition);
+    _accept(data, key, generation, lottie: composition);
+    return true;
+  }
+
+  Future<Uint8List> _decrypt(
+    Client client,
+    Uint8List data,
+    Map<String, Object?> file,
+  ) async {
+    final key = file.tryGetMap<String, Object?>('key');
+    if (key?.tryGetList<String>('key_ops')?.contains('decrypt') != true) {
+      throw StateError('Attachment key cannot decrypt');
+    }
+    final decrypted = await client.nativeImplementations.decryptFile(
+      EncryptedFile(
+        data: data,
+        iv: file.tryGet<String>('iv')!,
+        k: key!.tryGet<String>('k')!,
+        sha256: file
+            .tryGetMap<String, Object?>('hashes')!
+            .tryGet<String>('sha256')!,
+      ),
+    );
+    if (decrypted == null) throw StateError('Unable to decrypt attachment');
+    return decrypted;
   }
 
   _ImageKey? _cacheKey(Client client) {
@@ -138,14 +216,27 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   }
 
   Future<void> _load(int generation) async {
-    final client =
-        widget.client ?? widget.event?.room.client ?? Matrix.of(context).client;
+    final client = _client();
     final uri = widget.uri;
     final event = widget.event;
     final key = _cacheKey(client);
     final cached = key == null ? null : _imageDataCache.get(key);
     if (cached != null) {
+      if (await _acceptLottie(cached, null, generation, client)) return;
       _accept(cached, null, generation);
+      return;
+    }
+
+    final encryption = widget.encryption;
+    if (uri != null && encryption != null) {
+      // Encrypted media has no server-side thumbnail: the original only.
+      final data = await _decrypt(
+        client,
+        await client.downloadMxcCached(uri),
+        encryption,
+      );
+      if (!mounted || generation != _generation) return;
+      _accept(data, key, generation);
       return;
     }
 
@@ -173,34 +264,60 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
         Logs().d('Thumbnail unavailable, loading original', e);
         remoteData = await client.downloadMxcCached(uri);
       }
+      if (await _acceptLottie(remoteData, key, generation, client)) return;
       _accept(remoteData, key, generation);
       return;
     }
 
     if (event != null) {
-      final useThumbnail = widget.isThumbnail && event.hasThumbnail;
+      // A Lottie sticker animates from its original; its thumbnail (if the
+      // bridge made one) is a still.
+      final lottieMime = LottieStickerData.isLottieMime(
+        event.attachmentMimetype,
+      );
+      final useThumbnail =
+          widget.isThumbnail && event.hasThumbnail && !lottieMime;
       if (!useThumbnail &&
+          !lottieMime &&
           !{
             MessageTypes.Image,
             MessageTypes.Sticker,
           }.contains(event.messageType)) {
-        Logs().e('Event of type ${event.messageType} has no thumbnail!');
+        Logs().d('Event of type ${event.messageType} has no thumbnail');
+        _fail(generation);
         return;
       }
       final data = await event.downloadAndDecryptAttachment(
         getThumbnail: useThumbnail,
       );
+      if (!mounted || generation != _generation) return;
+      if (data.detectFileType is MatrixImageFile && !lottieMime) {
+        _accept(data.bytes, key, generation);
+        return;
+      }
+      if (await _acceptLottie(data.bytes, key, generation, client)) return;
+      // An image whose mimetype was wrong still renders as an image.
       if (data.detectFileType is MatrixImageFile) {
         _accept(data.bytes, key, generation);
         return;
       }
+      Logs().d('Unsupported media for an image: ${event.attachmentMimetype}');
+      _fail(generation);
     }
+  }
+
+  /// Rate limits and server errors are worth another try; anything else a
+  /// server says about media (not found, forbidden, too large) is final.
+  static bool _retriable(MatrixException e) {
+    final status = e.response?.statusCode ?? 0;
+    return e.error == MatrixError.M_LIMIT_EXCEEDED || status >= 500;
   }
 
   Future<void> _tryLoad() async {
     if (!mounted ||
         !_active ||
         _loading ||
+        _failed ||
         _imageData != null ||
         (widget.uri == null && widget.event == null)) {
       return;
@@ -217,11 +334,17 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       _scheduleRetry(generation);
     } on MatrixException catch (e) {
       Logs().d('Unable to load image', e);
+      if (_retriable(e)) {
+        _scheduleRetry(generation);
+      } else {
+        _fail(generation);
+      }
     } catch (e) {
       // Authorization, unavailable keys or malformed attachments stay closed.
-      // A scoped thumbnail placeholder remains usable instead of an unhandled
+      // A static fallback replaces the loader instead of an unhandled
       // asynchronous exception or retrying protected media.
       Logs().d('Unable to load image', e);
+      _fail(generation);
     } finally {
       if (generation == _generation) _loading = false;
     }
@@ -245,20 +368,23 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     _retryTimer?.cancel();
     _loading = false;
     _failures = 0;
-    _imageData = _lottieData = null;
+    _failed = false;
+    _imageData = null;
+    _lottie = null;
     _fromCache = false;
     if (widget.uri != null || widget.event != null) {
-      final client =
-          widget.client ??
-          widget.event?.room.client ??
-          Matrix.of(context).client;
+      final client = _client();
       final key = _cacheKey(client);
       final cached = key == null ? null : _imageDataCache.get(key);
-      if (cached != null) {
-        // Synchronous memory hit: no post-frame load, no fade-in on rebuilds
-        // and list reorders.
+      final lottieKey = _lottieKey(client);
+      final lottie = lottieKey == null ? null : _lottieCache.get(lottieKey);
+      // Synchronous memory hit: no post-frame load, no fade-in on rebuilds
+      // and list reorders. A Lottie sticker needs its parsed composition
+      // too; without it the bytes are parsed once by the load below.
+      if (cached != null &&
+          (lottie != null || LottieStickerData.jsonBytes(cached) == null)) {
         _imageData = cached;
-        _lottieData = _ungzipLottie(cached);
+        _lottie = lottie;
         _fromCache = true;
         return;
       }
@@ -298,7 +424,10 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   }
 
   @override
-  void didHaveMemoryPressure() => _imageDataCache.removeWhere((_) => true);
+  void didHaveMemoryPressure() {
+    _imageDataCache.removeWhere((_) => true);
+    _lottieCache.clear();
+  }
 
   @override
   void didUpdateWidget(MxcImage oldWidget) {
@@ -311,7 +440,8 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
         oldWidget.width != widget.width ||
         oldWidget.height != widget.height ||
         oldWidget.isThumbnail != widget.isThumbnail ||
-        oldWidget.animated != widget.animated) {
+        oldWidget.animated != widget.animated ||
+        oldWidget.encryption != widget.encryption) {
       _resetImage();
     }
   }
@@ -328,7 +458,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final data = _imageData;
     final hasData = data != null && data.isNotEmpty;
-    final ungzippedLottieData = _lottieData;
+    final lottie = _lottie;
     int? decodeSize(double? logical) {
       if (!widget.isThumbnail ||
           logical == null ||
@@ -395,6 +525,19 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       height: widget.height,
       placeholder: widget.placeholder,
     );
+    if (_failed && !hasData) {
+      // Static: the caller's placeholder (with a broken-image mark unless it
+      // asked for the placeholder alone) or the broken-image tile.
+      final custom = widget.placeholder;
+      if (custom == null) {
+        return errorFallback(context, 'unavailable', null);
+      }
+      if (widget.usePlaceholderOnError) return custom(context);
+      return Stack(
+        alignment: Alignment.center,
+        children: [custom(context), const _MxcImageFailureMark()],
+      );
+    }
     // A network or disk load fades the first decoded frame in over the
     // placeholder (initials, spinner) instead of popping; memory hits and
     // synchronous decodes show at once, so scrolling never flickers.
@@ -436,13 +579,14 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
             height: widget.height,
             placeholder: widget.placeholder,
           )
-        : (ungzippedLottieData != null
-              ? Lottie.memory(
-                  ungzippedLottieData,
+        : (lottie != null
+              ? Lottie(
+                  composition: lottie,
                   width: widget.width,
                   height: widget.height,
                   fit: widget.fit,
-                  errorBuilder: errorFallback,
+                  // Reduced motion shows the first frame, like a still.
+                  animate: !NotionMotion.reduced(context),
                 )
               : Image(
                   image: imageProvider(data),
@@ -469,7 +613,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     if (!hasData) return placeholder;
     // Images fade their first frame in (above); a Lottie sticker fades in
     // once when it arrives.
-    if (ungzippedLottieData == null) return clipped;
+    if (lottie == null) return clipped;
     return NotionEntrance(
       rise: 0,
       afterRoute: false,
@@ -502,23 +646,24 @@ class _MxcImagePlaceholder extends StatelessWidget {
   }
 }
 
-Uint8List? _ungzipLottie(Uint8List data) {
-  // early return if the data is not gzipped
-  if (data.length < 2 || data.first != 0x1f || data[1] != 0x8b) {
-    return null;
-  }
+/// A small static mark over a placeholder whose media could not be loaded.
+class _MxcImageFailureMark extends StatelessWidget {
+  const _MxcImageFailureMark();
 
-  // try decoding json
-  try {
-    final decompressed = GZipDecoder().decodeBytes(data);
-    final jsonStr = utf8.decode(decompressed);
-    final json = jsonDecode(jsonStr);
-    if (json is Map && json.containsKey('v')) {
-      return Uint8List.fromList(utf8.encode(jsonStr));
-    }
-  } catch (_) {
-    return null;
-  }
-
-  return null;
+  @override
+  Widget build(BuildContext context) => const DecoratedBox(
+    decoration: ShapeDecoration(
+      color: NotionMediaColors.scrim,
+      shape: CircleBorder(),
+    ),
+    child: Padding(
+      padding: EdgeInsets.all(NotionSpace.xs),
+      child: Icon(
+        Icons.broken_image_outlined,
+        color: NotionMediaColors.onScrim,
+        size: NotionSize.icon,
+        semanticLabel: 'Media unavailable',
+      ),
+    ),
+  );
 }
