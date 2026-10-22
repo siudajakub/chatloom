@@ -1,16 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/read_targets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 /// One explicit public receipt per source, even while automatic receipts are
 /// suppressed. Freeze every cutoff at the tap, before awaiting any source.
+/// The cutoff is the newest server event of the page's loaded timeline
+/// ([loadedEvents]) or the preview, never a local echo; a source with
+/// nothing to mark is skipped ([conversationReadTargets]).
 class ConversationReadButton extends StatefulWidget {
   final List<Room> rooms;
 
-  const ConversationReadButton({super.key, required this.rooms});
+  /// The events the page has loaded for a source room (its timeline).
+  final Iterable<Event> Function(Room room)? loadedEvents;
+
+  const ConversationReadButton({
+    super.key,
+    required this.rooms,
+    this.loadedEvents,
+  });
 
   @override
   State<ConversationReadButton> createState() => _ConversationReadButtonState();
@@ -26,27 +37,15 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
         ModalRoute.of(context)?.isCurrent != true) {
       return;
     }
-    final targets = [
-      for (final room in widget.rooms) (room, room.lastEvent?.eventId),
-    ];
+    final targets = conversationReadTargets(
+      widget.rooms,
+      loaded: widget.loadedEvents,
+    );
+    if (targets.isEmpty) return;
     setState(() => _sending = true);
     try {
-      await Future.wait(
-        targets.map((target) async {
-          final (room, id) = target;
-          if (id == null ||
-              !id.startsWith(r'$') ||
-              room.client.baseUri == null) {
-            throw StateError('Read target unavailable');
-          }
-          await PersonalPrivacy.markRead(
-            room,
-            id,
-            manual: true,
-            publicReceipt: true,
-          );
-        }),
-      );
+      final failed = await markConversationRead(targets, publicReceipt: true);
+      if (failed > 0) throw StateError('Read marker not confirmed');
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

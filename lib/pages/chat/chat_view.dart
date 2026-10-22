@@ -431,6 +431,9 @@ class ChatView extends StatelessWidget {
                                     const SizedBox(height: NotionSpace.xs),
                                     ConversationReadButton(
                                       rooms: [controller.room],
+                                      loadedEvents: (_) =>
+                                          controller.timeline?.events ??
+                                          const [],
                                     ),
                                   ],
                                 ],

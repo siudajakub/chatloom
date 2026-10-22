@@ -38,6 +38,17 @@ class _Room extends ConversationRoom {
     content: {'msgtype': MessageTypes.Text, 'body': 'Fictional message'},
   );
 
+  /// The user's own message that failed to send: the preview is a local echo.
+  Event echo() => latest = Event(
+    room: this,
+    eventId: 'fixture-transaction',
+    type: EventTypes.Message,
+    senderId: client.userID!,
+    status: EventStatus.error,
+    originServerTs: DateTime.utc(2026, 10, 21, 0, 1),
+    content: {'msgtype': MessageTypes.Text, 'body': 'Fictional message'},
+  );
+
   @override
   Future<void> setReadMarker(
     String? eventId, {
@@ -50,13 +61,19 @@ class _Room extends ConversationRoom {
   }
 }
 
-Future<void> _mount(WidgetTester tester, List<Room> rooms) async {
+Future<void> _mount(
+  WidgetTester tester,
+  List<Room> rooms, {
+  Iterable<Event> Function(Room room)? loaded,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       theme: NotionTheme.build(Brightness.dark),
       localizationsDelegates: L10n.localizationsDelegates,
       supportedLocales: L10n.supportedLocales,
-      home: Scaffold(body: ConversationReadButton(rooms: rooms)),
+      home: Scaffold(
+        body: ConversationReadButton(rooms: rooms, loadedEvents: loaded),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -119,6 +136,29 @@ void main() {
     await tester.tap(find.byType(ConversationReadButton));
     await tester.pumpAndSettle();
     expect(b.receipts.last, (r'$new', r'$new', true));
+  });
+
+  testWidgets('a pending own message as the preview marks the newest server '
+      'event of the loaded timeline; a source with nothing to mark is '
+      'skipped, not an error', (tester) async {
+    final client = _Client();
+    final a = _Room(client, '!a:example.invalid')..incoming(r'$loaded');
+    final loaded = a.latest!;
+    final echo = a.echo();
+    final b = _Room(client, '!b:example.invalid');
+    await _mount(
+      tester,
+      [a, b],
+      loaded: (room) => room == a ? [echo, loaded] : const [],
+    );
+    await tester.tap(find.byType(ConversationReadButton));
+    await tester.pumpAndSettle();
+    expect(a.receipts, [(r'$loaded', r'$loaded', true)]);
+    expect(b.receipts, isEmpty);
+    expect(
+      find.text('Could not mark all messages as read. Tap to retry.'),
+      findsNothing,
+    );
   });
 
   test('public override requires an explicit manual action', () async {
