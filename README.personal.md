@@ -14,7 +14,16 @@ Kod natywny i narzędzia budowania mają osobne katalogi:
 | Budowanie i kontrola artefaktów | `scripts/android/build.py` | `scripts/macos/build.py` |
 | Natywne narzędzia pomocnicze | `scripts/android/` | `scripts/macos/` |
 | Testy natywne macOS | — | `integration_test/macos/` |
-| GitHub Actions z `main` | `personal-checks.yml` | `personal-macos.yml` |
+| Ręczne buildy GitHub Actions | `personal-checks.yml` | `personal-macos.yml` |
+
+Na push do `main` i pasujące pull requesty `Personal client synthetic checks`
+uruchamia automatycznie tylko lekkie testy (`synthetic`). Przed wydaniem wybierz
+w GitHub → Actions → **Run workflow** dla `Personal client synthetic checks`
+(testy oraz kompilacja Androida i weba) oraz `Personal macOS` (testy i buildy
+Apple Silicon i Intel). Wybierz gałąź lub tag odpowiadający wydaniu i sprawdź,
+że oba uruchomienia dotyczą tego samego commita. Analiza Fluttera i testy
+komponentów pozostają w ręcznych bramkach; automatyczny zielony wynik lekkich
+testów nie potwierdza kompilacji aplikacji ani odbioru na prawdziwym koncie.
 
 Wspólne testy komponentów i adapterów są w `test/`. Skrypty kolejki, analizy
 i weryfikacji wspólnego kodu pozostają w `scripts/`. Dotychczasowe komendy

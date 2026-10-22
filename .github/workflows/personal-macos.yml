@@ -1,22 +1,8 @@
 name: Personal macOS
 
 on:
+  # Run manually before a release; routine pushes use lightweight shared checks.
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/personal-macos.yml'
-      - 'macos/**'
-      - 'lib/**'
-      - 'packages/**'
-      - 'integration_test/macos/**'
-      - 'test/**'
-      - 'scripts/build-personal-macos.py'
-      - 'scripts/macos/**'
-      - 'scripts/macos_native_toolchain.py'
-      - 'scripts/macos-webcrypto.cmake'
-      - 'scripts/flutter-queue.py'
-      - 'pubspec.*'
 
 permissions:
   contents: read
