@@ -11,6 +11,7 @@ export 'notion_activity.dart';
 export 'notion_appearance.dart';
 export 'notion_callout.dart';
 export 'notion_contrast.dart';
+export 'notion_delivery_tick.dart';
 export 'notion_entrance.dart';
 export 'notion_glass.dart';
 export 'notion_lazy_switcher.dart';

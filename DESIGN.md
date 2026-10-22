@@ -222,6 +222,7 @@ in new code; read `context.notion` instead.
 | `NotionEmptyState(icon:, title:, message:, action:)` | empty lists, soft errors |
 | `NotionCallout(icon:, title:, message:, actionLabel:, onAction:, onDismiss:, tone:)` | inline fixable status (inbox encryption/sync notice, connection retry); `tone` colours only the icon |
 | `NotionStatusPill(label:, tone:)` | read-only status in a row or header (network Connected / Needs attention / Disconnected); `tone` colours only the dot, changes fade through |
+| `NotionDeliveryTick(state:, color:, readColor:)` | ticks of an own message beside its time and before the time of an inbox row whose last message is own (Telegram): clock sending, ✓ sent, ✓✓ delivered to the network, ✓✓ in the accent once read. Metadata colour except read; a state change fades once (`NotionLazySwitcher`), no ticker on first build; failures keep their own "Not sent" line (`notion_delivery_tick.dart`) |
 | `ConversationBubble(quote:)`, `ConversationReplyQuote`, `ConversationReplyCaption`, `ConversationMetaChip` | message bubbles and Messenger-style replies (`lib/pages/chat/conversation_bubble.dart`, see Message bubbles) |
 | `NotionTextField(label:, hint:, helper:, error:, ...)` | text input with the label above |
 | `NotionCompactChatHeader`, `NotionInitialAvatar` | chat header, letter avatar |

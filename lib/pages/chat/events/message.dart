@@ -12,6 +12,7 @@ import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
 import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/message_delivery.dart';
@@ -30,6 +31,7 @@ import 'package:personal_core/personal_core.dart' show ChatTheme;
 
 import 'message_content.dart';
 import 'message_delivery_status.dart';
+import 'message_delivery_ticks.dart';
 import 'message_reactions.dart';
 import 'outgoing_upload_progress.dart';
 import 'reply_content.dart';
@@ -239,6 +241,12 @@ class Message extends StatelessWidget {
                 notionNetworkLabel(PersonalClient.networkOf(event.room)),
           )
         : MessageDelivery.none;
+    // Ticks of an own message the server has: ✓ sent, ✓✓ delivered to the
+    // network, ✓✓ in the accent once read (delivery-ticks lane).
+    final ticks = own && delivery.kind == MessageDeliveryKind.none
+        ? messageDeliveryProgress(event, timeline)
+        : DeliveryProgress.none;
+    final showsTicks = ticks.tick != null;
     // Over the circle: always the time, colours inherited from the pill.
     final roundStatus = round
         ? Row(
@@ -247,6 +255,18 @@ class Message extends StatelessWidget {
             children: [
               if (edited) Text(L10n.of(context).edited),
               Text(event.originServerTs.localizedTimeOfDay(context)),
+              if (showsTicks)
+                MessageDeliveryTicks(
+                  event: event,
+                  timeline: timeline,
+                  progress: ticks,
+                  color: roundVideoOnScrim,
+                  readColor: NotionContrast.readable(
+                    NotionMediaColors.stageScrim.withValues(alpha: 1),
+                    context.notion.colors.accent,
+                    minimum: 3,
+                  ),
+                ),
               if (delivery.failed)
                 Icon(
                   Icons.error,
@@ -287,6 +307,18 @@ class Message extends StatelessWidget {
           Text(
             L10n.of(context).edited,
             style: TextStyle(fontSize: 11, color: statusColor),
+          ),
+        if (last && showsTicks)
+          MessageDeliveryTicks(
+            event: event,
+            timeline: timeline,
+            progress: ticks,
+            color: statusColor,
+            readColor: NotionContrast.readable(
+              pageBackground,
+              context.notion.colors.accent,
+              minimum: 3,
+            ),
           ),
         if (sending)
           NotionDelayedReveal(

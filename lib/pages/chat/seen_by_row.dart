@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -32,12 +33,16 @@ class SeenByRow extends StatelessWidget {
             false,
       ),
       builder: (context, asyncSnapshot) {
+        // A bridge bot's receipt means "delivered", not "seen" (the ticks
+        // show it).
+        final bots = bridgeBotsOf(event.room);
         final seenByUsers = event.receipts
             .map((r) => r.user)
             .where(
               (user) =>
                   user.id != event.room.client.userID &&
-                  user.id != event.senderId,
+                  user.id != event.senderId &&
+                  !bots.contains(user.id),
             )
             .toList();
         final own = event.senderId == Matrix.of(context).client.userID;
