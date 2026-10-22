@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/report_policy.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/permission_slider_dialog.dart';
 import 'package:material_ui/material_ui.dart';
@@ -197,7 +198,8 @@ Future<void> showMemberActionsPopupMenu({
             ],
           ),
         ),
-      if (!isMe)
+      // Native Matrix only: a bridged report reaches Beeper (CS-24).
+      if (!isMe && canReportUser(user.room.client, user.id, room: user.room))
         PopupMenuItem(
           value: _MemberActions.report,
           child: Row(

@@ -9,6 +9,7 @@ import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/report_policy.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/utils/file_description.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
@@ -150,7 +151,9 @@ List<ConversationMessageAction> chatMessageActions(
         label: l10n.messageInfo,
         onSelected: () => controller.showEventInfo(event),
       ),
-    if (sent && !own)
+    // A report goes to the homeserver's admins: Beeper for a bridged chat,
+    // never the network itself (CS-24).
+    if (sent && !own && canReportInRoom(room))
       ConversationMessageAction(
         icon: Icons.shield_outlined,
         label: l10n.reportMessage,

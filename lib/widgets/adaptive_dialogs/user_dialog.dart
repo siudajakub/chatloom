@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/report_policy.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/chatloom_share.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
@@ -217,30 +218,33 @@ class UserDialog extends StatelessWidget {
                             );
                           },
                   ),
-                  AdaptiveIconTextButton(
-                    label: L10n.of(context).report,
-                    icon: Icons.gavel_outlined,
-                    onTap: client.userID == profile.userId
-                        ? null
-                        : () async {
-                            Navigator.of(context).pop();
-                            final reason = await showTextInputDialog(
-                              context: context,
-                              title: L10n.of(context).whyDoYouWantToReportThis,
-                              okLabel: L10n.of(context).report,
-                              cancelLabel: L10n.of(context).cancel,
-                              hintText: L10n.of(context).reason,
-                            );
-                            if (reason == null || reason.isEmpty) return;
-                            if (!context.mounted) return;
-                            await showFutureLoadingDialog(
-                              context: context,
-                              future: () => Matrix.of(
-                                context,
-                              ).client.reportUser(profile.userId, reason),
-                            );
-                          },
-                  ),
+                  // A bridged contact's report reaches Beeper, not the
+                  // network (CS-24): offered for native Matrix users only.
+                  if (canReportUser(client, profile.userId))
+                    AdaptiveIconTextButton(
+                      label: L10n.of(context).report,
+                      icon: Icons.gavel_outlined,
+                      onTap: client.userID == profile.userId
+                          ? null
+                          : () async {
+                              Navigator.of(context).pop();
+                              final reason = await showTextInputDialog(
+                                context: context,
+                                title: L10n.of(context).whyDoYouWantToReportThis,
+                                okLabel: L10n.of(context).report,
+                                cancelLabel: L10n.of(context).cancel,
+                                hintText: L10n.of(context).reason,
+                              );
+                              if (reason == null || reason.isEmpty) return;
+                              if (!context.mounted) return;
+                              await showFutureLoadingDialog(
+                                context: context,
+                                future: () => Matrix.of(
+                                  context,
+                                ).client.reportUser(profile.userId, reason),
+                              );
+                            },
+                    ),
                   AdaptiveIconTextButton(
                     label: L10n.of(context).share,
                     icon: Icons.adaptive.share,
