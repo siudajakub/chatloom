@@ -547,10 +547,7 @@ void main() {
         find.text('Not delivered to WhatsApp · Tap for details'),
       );
       await tester.pumpAndSettle();
-      expect(
-        find.text('The recipient blocked you. It will not be retried.'),
-        findsOneWidget,
-      );
+      expect(find.text('The recipient blocked you.'), findsOneWidget);
       // Permanent: no "Send again", only Cancel.
       expect(find.text('Send again'), findsNothing);
     });
@@ -558,70 +555,6 @@ void main() {
 
   group('delivery logic', () {
     final at = DateTime.utc(2026, 10, 20, 12);
-    test('final outcomes pass through one hook', () {
-      final client = ConversationClient();
-      final room = ConversationRoom(client, '!outcome:example.invalid');
-      room.state('m.bridge', {
-        'protocol': {'id': 'telegram'},
-        'bridgebot': '@bot:example.invalid',
-      }, key: 'fixture');
-      Event event(
-        String sender,
-        EventStatus status, {
-        String? type,
-        Map<String, Object?>? content,
-        DateTime? ts,
-      }) => Event(
-        room: room,
-        eventId: '\$e${sender.hashCode}${status.name}',
-        type: type ?? EventTypes.Message,
-        senderId: sender,
-        originServerTs: ts ?? at,
-        status: status,
-        content: content ?? {'msgtype': MessageTypes.Text, 'body': 'x'},
-      );
-      bool? outcome(Event e) =>
-          deliveryOutcomeOf(e, ownUserId: client.userID, now: at);
-      expect(outcome(event(client.userID, EventStatus.error)), isTrue);
-      expect(outcome(event(client.userID, EventStatus.sent)), isFalse);
-      expect(outcome(event(client.userID, EventStatus.sending)), isNull);
-      expect(outcome(event(client.userID, EventStatus.synced)), isNull);
-      Event report(
-        String status, {
-        String sender = '@bot:example.invalid',
-        DateTime? ts,
-      }) => event(
-        sender,
-        EventStatus.synced,
-        type: beeperMessageSendStatusType,
-        content: {
-          'm.relates_to': {'rel_type': 'm.reference', 'event_id': r'$own'},
-          'status': status,
-        },
-        ts: ts,
-      );
-      expect(outcome(report('FAIL_RETRIABLE')), isTrue);
-      expect(outcome(report('SUCCESS')), isFalse);
-      expect(outcome(report('PENDING')), isNull);
-      expect(
-        outcome(report('FAIL_PERMANENT', sender: '@anna:example.invalid')),
-        isNull,
-      );
-      // A catch-up sync replaying old reports is not a live outcome.
-      expect(
-        outcome(
-          report('FAIL_PERMANENT', ts: at.subtract(const Duration(hours: 2))),
-        ),
-        isNull,
-      );
-      final seen = <bool>[];
-      void listener(Room r, bool failed) => seen.add(failed);
-      deliveryOutcomeListeners.add(listener);
-      addTearDown(() => deliveryOutcomeListeners.remove(listener));
-      reportDeliveryOutcome(room, failed: true);
-      expect(seen, [true]);
-    });
-
     test('only the declared bridge bot may report delivery', () {
       final content = {'status': 'FAIL_PERMANENT', 'message': 'Nope'};
       expect(
@@ -678,7 +611,20 @@ void main() {
       expect(retriable.canRetry, isTrue);
       expect(retriable.canDelete, isFalse);
       expect(retriable.label, 'Not delivered to Telegram · Tap for details');
-      expect(retriable.detail, contains('Sending it again may work.'));
+      expect(retriable.detail, contains('Try sending it again.'));
+      // An echo/ack timeout may have arrived: no retry, no "too old".
+      final unconfirmed = MessageDelivery.resolve(
+        own: true,
+        status: EventStatus.synced,
+        bridge: BridgeSendStatus(
+          status: 'FAIL_RETRIABLE',
+          reason: 'm.event_too_old',
+          at: at,
+        ),
+        network: 'Telegram',
+      );
+      expect(unconfirmed.canRetry, isFalse);
+      expect(unconfirmed.detail, contains('may still have arrived'));
     });
 
     test('server states map to the bubble', () {
@@ -712,7 +658,7 @@ void main() {
           ),
           network: 'Signal',
         ),
-        'Signal does not support this message. It will not be retried.',
+        'Signal doesn’t support this message.',
       );
     });
   });

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:matrix/matrix.dart';
 
 /// The status event mautrix bridges send about each bridged Matrix event
@@ -6,60 +7,6 @@ import 'package:matrix/matrix.dart';
 /// references the original with `m.reference` and says whether the remote
 /// network accepted it.
 const beeperMessageSendStatusType = 'com.beeper.message_send_status';
-
-/// Listeners of [reportDeliveryOutcome] (tests, health monitors).
-final deliveryOutcomeListeners = <void Function(Room room, bool failed)>[];
-
-/// The one place every own send's final outcome passes through, once per
-/// outcome: the SDK confirmed (`sent`) or gave up on (`error`) a local echo
-/// of a text, edit, media or round send, or the room's bridge reported
-/// `SUCCESS` / `FAIL_*` in `com.beeper.message_send_status`. Called by
-/// `PersonalClient` from the client's timeline stream; never from a build.
-///
-/// Deliberately not forwarded to `BridgeHealthMonitor.noteDelivery`: the
-/// monitor reads the bridge reports itself (forwarding would count each
-/// failure twice), and an SDK outcome only says whether the homeserver took
-/// the event, not whether the bridge delivered it.
-void reportDeliveryOutcome(Room room, {required bool failed}) {
-  for (final listener in List.of(deliveryOutcomeListeners)) {
-    try {
-      listener(room, failed);
-    } catch (_) {
-      // An observer never affects sending.
-    }
-  }
-}
-
-/// The delivery outcome [event] (a live timeline update) carries, or null.
-/// Own local echoes report the SDK's final status; bridge reports younger
-/// than [maxAge] (not history replayed by a catch-up sync) report theirs.
-bool? deliveryOutcomeOf(
-  Event event, {
-  required String? ownUserId,
-  required DateTime now,
-  Duration maxAge = const Duration(minutes: 15),
-}) {
-  if (event.senderId == ownUserId) {
-    if (event.type == beeperMessageSendStatusType) return null;
-    return switch (event.status) {
-      EventStatus.error => true,
-      EventStatus.sent => false,
-      _ => null,
-    };
-  }
-  if (event.type != beeperMessageSendStatusType ||
-      now.difference(event.originServerTs) > maxAge) {
-    return null;
-  }
-  final report = BridgeSendStatus.parse(
-    event.content,
-    sender: event.senderId,
-    bridgeBots: bridgeBotsOf(event.room),
-    at: event.originServerTs,
-  );
-  if (report == null || report.status == 'PENDING') return null;
-  return report.failed;
-}
 
 /// The bridge state events that name the room's bridge bot.
 const _bridgeStateTypes = [
@@ -91,6 +38,11 @@ class BridgeSendStatus {
 
   bool get failed => status == 'FAIL_RETRIABLE' || status == 'FAIL_PERMANENT';
   bool get retriable => status == 'FAIL_RETRIABLE';
+
+  /// An echo or ack timeout (`m.event_too_old`, bridgev2 `IsCertain=false`):
+  /// the message may still have arrived, so ChatLoom never offers to send it
+  /// again.
+  bool get uncertain => reason == 'm.event_too_old';
 
   /// Parses [content] of a status event sent by [sender]. Only a declared
   /// bridge bot of the room may report delivery; anything else is ignored.
@@ -230,7 +182,7 @@ class MessageDelivery {
         MessageDeliveryKind.notDelivered,
         label: 'Not delivered$where · Tap for details',
         detail: bridgeFailureText(bridge, network: network),
-        canRetry: bridge.retriable,
+        canRetry: bridge.retriable && !bridge.uncertain,
         // Never delivered: removing it from the chat is always possible.
         canDelete: true,
       );
@@ -239,30 +191,16 @@ class MessageDelivery {
   }
 }
 
-/// A plain-language reason for a bridge rejection. The bridge's own display
-/// message is preferred; the reason code is the fallback.
-String bridgeFailureText(BridgeSendStatus status, {String? network}) {
-  final remote = network ?? 'The other network';
-  final fallback = switch (status.reason) {
-    'm.foreign_network_error' => '$remote returned an error.',
-    'm.no_permission' => 'You are not allowed to send this here.',
-    'com.beeper.unsupported_event' => '$remote does not support this message.',
-    'com.beeper.undecryptable_event' =>
-      'The bridge could not decrypt this message.',
-    'm.event_too_old' => 'The message was too old to deliver.',
-    'm.bridge_unavailable' => 'The bridge is offline.',
-    _ => 'The bridge could not deliver this message.',
-  };
-  final message = status.message;
-  final base = message == null
-      ? fallback
-      : RegExp(r'[.!?…]$').hasMatch(message)
-      ? message
-      : '$message.';
-  return status.retriable
-      ? '$base Sending it again may work.'
-      : '$base It will not be retried.';
-}
+/// A plain-language reason for a bridge rejection: the bridge's own display
+/// message in ChatLoom's words when it is known or readable, else the
+/// reason code (`bridgeDeliveryText` in `matrix_error_text.dart`).
+String bridgeFailureText(BridgeSendStatus status, {String? network}) =>
+    bridgeDeliveryText(
+      retriable: status.retriable,
+      reason: status.reason,
+      message: status.message,
+      network: network,
+    );
 
 /// The declared bridge bots of [room] (`bridgebot` of its bridge state).
 Set<String> bridgeBotsOf(Room room) => {

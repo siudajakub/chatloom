@@ -188,17 +188,15 @@ abstract final class RoomCapabilities {
         return _denied('You do not have permission to delete this message.');
       }
     } else if (!room.canSendDefaultMessages) {
-      return _denied(
-        'Sending is blocked by Matrix permissions or encryption keys.',
-      );
+      return _denied('You can’t send messages in this chat.');
     }
     if (feature == BridgeFeature.reaction &&
         !room.canSendEvent(EventTypes.Reaction)) {
-      return _denied('You do not have permission to send a Matrix reaction.');
+      return _denied('You can’t react in this chat.');
     }
     if (feature == BridgeFeature.sticker &&
         !room.canSendEvent(EventTypes.Sticker)) {
-      return _denied('You do not have permission to send a Matrix sticker.');
+      return _denied('You can’t send stickers in this chat.');
     }
     if (feature == BridgeFeature.edit &&
         event != null &&

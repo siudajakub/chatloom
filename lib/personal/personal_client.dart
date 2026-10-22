@@ -9,7 +9,6 @@ import 'package:chatloom/personal/disappearing_state.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/journal_replay_batch.dart';
 import 'package:chatloom/personal/journal_trust.dart';
-import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -96,7 +95,6 @@ class PersonalClient extends ChangeNotifier {
   }
 
   PersonalClient._(this.client) : _openStore = PersonalStore.open {
-    _watchDelivery();
     _watchOwnMedia();
   }
   @visibleForTesting
@@ -104,22 +102,7 @@ class PersonalClient extends ChangeNotifier {
     this.client, {
     required Future<PersonalStore> Function() openStore,
   }) : _openStore = openStore {
-    _watchDelivery();
     _watchOwnMedia();
-  }
-
-  /// Final send outcomes (SDK local echo sent/error, bridge send-status
-  /// reports) go to [reportDeliveryOutcome] once each.
-  StreamSubscription<Event>? _deliveryWatch;
-  void _watchDelivery() {
-    _deliveryWatch = client.onTimelineEvent.stream.listen((event) {
-      final failed = deliveryOutcomeOf(
-        event,
-        ownUserId: client.userID,
-        now: DateTime.now(),
-      );
-      if (failed != null) reportDeliveryOutcome(event.room, failed: failed);
-    });
   }
 
   final Future<PersonalStore> Function() _openStore;
@@ -2074,7 +2057,6 @@ class PersonalClient extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _deliveryWatch?.cancel();
     _ownMediaWatch?.cancel();
     if (identical(_instances[client], this)) _instances.remove(client);
     cancelAutoTranscriptionTimers();

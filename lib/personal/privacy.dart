@@ -132,7 +132,7 @@ abstract final class PersonalPrivacy {
     client.authorizeAttachmentAccess = (event, thumbnail) async {
       if (!RoundMediaPolicy.fromContent(event.content).canPlay) {
         throw const PersonalCapabilityUnavailable(
-          'To medium wymaga bezpiecznego otwarcia w Telegramie.',
+          'This media can only be opened in Telegram.',
         );
       }
       if (RoundVideoDescriptor.fromContent(event.content) != null &&
