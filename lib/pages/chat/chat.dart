@@ -33,6 +33,7 @@ import 'package:chatloom/pages/chat_details/chat_details.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/composer_commands.dart';
 import 'package:chatloom/personal/copy_notice.dart';
+import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/network_rejections.dart';
@@ -2055,7 +2056,7 @@ class ChatController extends State<ChatPageWithRoom>
         );
       }
       await event.cancelSend();
-      if (mounted) setState(() {});
+      if (mounted) setTimelineState(() {});
     } catch (e, s) {
       if (!mounted) return;
       ErrorReporter(
@@ -2085,8 +2086,10 @@ class ChatController extends State<ChatPageWithRoom>
       event,
       timeline: timeline,
       redact: redact,
+      // The rows render the hidden set: re-filter them (a plain setState
+      // never reaches the gated timeline rows).
       refresh: () {
-        if (mounted) setState(() {});
+        if (mounted) setTimelineState(() {});
       },
     );
   }
@@ -2227,7 +2230,7 @@ class ChatController extends State<ChatPageWithRoom>
         ).then<void>((_) {}, onError: _reportSendFailure),
       );
     }
-    setState(() {});
+    setTimelineState(() {});
   }
 
   /// A send the user started failed outside the bubble's own status (the
@@ -2744,8 +2747,12 @@ class ChatController extends State<ChatPageWithRoom>
   bool get isArchived =>
       {Membership.leave, Membership.ban}.contains(room.membership);
 
+  /// Raw message source: developer options only (CS-23), also when a
+  /// deleted or unknown message row is tapped.
   @override
-  void showEventInfo(Event event) => event.showInfoDialog(context);
+  void showEventInfo(Event event) {
+    if (DeveloperOptions.enabled) event.showInfoDialog(context);
+  }
 
   @override
   void cancelReplyEventAction() => setState(() {

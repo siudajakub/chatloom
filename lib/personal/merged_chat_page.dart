@@ -1188,8 +1188,12 @@ class _MergedChatPageState extends State<_MergedChatView>
   void mentionSender(Event event) =>
       sendController.text += '${event.senderFromMemoryOrFallback.mention} ';
 
+  /// Raw message source: developer options only (CS-23), also when a
+  /// deleted or unknown message row is tapped.
   @override
-  void showEventInfo(Event event) => event.showInfoDialog(context);
+  void showEventInfo(Event event) {
+    if (DeveloperOptions.enabled) event.showInfoDialog(context);
+  }
 
   @override
   Future<void> scrollToEventId(
@@ -2453,14 +2457,22 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
   }
 
+  /// The person's chats a read marker can go to: joined and part of this
+  /// conversation. A left or claimed chat (FT-01) is skipped, so it never
+  /// turns "Mark as read" into a failure.
+  List<Room> get _readSources => [
+    for (final member in group.members)
+      if (!_inactive.contains(member.roomId))
+        if (personal.client.getRoomById(member.roomId) case final Room room
+            when room.membership == Membership.join)
+          room,
+  ];
+
   Future<void> _allRead() async {
     // Same targets as the read button (never a local echo); a source with
     // nothing to mark is skipped. The receipt follows the receipt setting.
     final targets = conversationReadTargets(
-      [
-        for (final member in group.members)
-          ?personal.client.getRoomById(member.roomId),
-      ],
+      _readSources,
       loaded: (room) => timelines[room.id]?.events ?? const [],
     );
     // The user asked for this: say so and offer the retry (CS-13).
@@ -2858,16 +2870,8 @@ class _MergedChatPageState extends State<_MergedChatView>
                                 onPressed: _jumpToLatest,
                               ),
                               if (AppSettings.personalIncognito.value) ...[
-                                const SizedBox(height: NotionSpace.xs),
                                 ConversationReadButton(
-                                  rooms: [
-                                    for (final member in group.members)
-                                      if (personal.client.getRoomById(
-                                            member.roomId,
-                                          )
-                                          case final Room room)
-                                        room,
-                                  ],
+                                  rooms: _readSources,
                                   loadedEvents: (room) =>
                                       timelines[room.id]?.events ?? const [],
                                 ),
