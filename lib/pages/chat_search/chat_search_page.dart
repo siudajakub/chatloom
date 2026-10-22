@@ -35,7 +35,13 @@ class ChatSearchController extends State<ChatSearchPage>
   bool isLoading = false;
   DateTime? searchedUntil;
 
+  // A new query starts a new generation: answers of an older query (and
+  // their next batch) never land in the newer list.
+  int _generation = 0;
+  int _inFlight = 0;
+
   void restartSearch() {
+    _generation++;
     setState(() {
       messages.clear();
       images.clear();
@@ -52,11 +58,12 @@ class ChatSearchController extends State<ChatSearchPage>
   /// Searches the current tab; a failed request is explained with "Try
   /// again" instead of leaving the page loading forever.
   Future<void> startSearch() async {
+    final generation = _generation;
     try {
       await _search();
     } catch (error, stack) {
-      if (!mounted) return;
-      setState(() => isLoading = false);
+      if (!mounted || generation != _generation) return;
+      setState(() => isLoading = _inFlight > 0);
       await ErrorReporter.action(
         context,
         action: ErrorAction.load,
@@ -66,73 +73,72 @@ class ChatSearchController extends State<ChatSearchPage>
   }
 
   Future<void> _search() async {
-    switch (tabController.index) {
-      case 0:
-        final searchQuery = searchController.text.trim();
-        if (searchQuery.isEmpty) return;
-        setState(() {
-          isLoading = true;
-        });
-        final result = await room!.searchEvents(
-          searchTerm: searchController.text.trim(),
+    final generation = _generation;
+    final tab = tabController.index;
+    final query = searchController.text.trim();
+    if (tab == 0 && query.isEmpty) return;
+    if (tab < 0 || tab > 2) return;
+    setState(() => isLoading = true);
+    _inFlight++;
+    final ({List<Event> events, String? nextBatch, DateTime? searchedUntil})
+    result;
+    try {
+      result = await switch (tab) {
+        0 => room!.searchEvents(
+          searchTerm: query,
           nextBatch: messagesNextBatch,
-        );
-        setState(() {
-          isLoading = false;
-          messages.addAll(result.events);
-          messagesNextBatch = result.nextBatch;
-          messagesEndReached = result.nextBatch == null;
-          searchedUntil = result.searchedUntil;
-        });
-        return;
-      case 1:
-        setState(() {
-          isLoading = true;
-        });
-        final result = await room!.searchEvents(
+        ),
+        1 => room!.searchEvents(
           searchFunc: (event) => {
             MessageTypes.Image,
             MessageTypes.Video,
           }.contains(event.messageType),
           nextBatch: imagesNextBatch,
-        );
-        setState(() {
-          isLoading = false;
-          images.addAll(result.events);
-          imagesNextBatch = result.nextBatch;
-          imagesEndReached = result.nextBatch == null;
-          searchedUntil = result.searchedUntil;
-        });
-        return;
-      case 2:
-        setState(() {
-          isLoading = true;
-        });
-        final result = await room!.searchEvents(
+        ),
+        _ => room!.searchEvents(
           searchFunc: (event) =>
               event.messageType == MessageTypes.File ||
               (event.messageType == MessageTypes.Audio &&
                   !event.content.containsKey('org.matrix.msc3245.voice')),
           nextBatch: filesNextBatch,
-        );
-        setState(() {
-          isLoading = false;
+        ),
+      };
+    } finally {
+      _inFlight--;
+    }
+    // A newer query (or a closed page) owns the lists now.
+    if (!mounted || generation != _generation) return;
+    setState(() {
+      isLoading = _inFlight > 0;
+      switch (tab) {
+        case 0:
+          messages.addAll(result.events);
+          messagesNextBatch = result.nextBatch;
+          messagesEndReached = result.nextBatch == null;
+        case 1:
+          images.addAll(result.events);
+          imagesNextBatch = result.nextBatch;
+          imagesEndReached = result.nextBatch == null;
+        default:
           files.addAll(result.events);
           filesNextBatch = result.nextBatch;
           filesEndReached = result.nextBatch == null;
-          searchedUntil = result.searchedUntil;
-        });
-        return;
-      default:
-        return;
-    }
+      }
+      searchedUntil = result.searchedUntil;
+    });
   }
 
   void _onTabChanged() {
+    // A tap notifies twice (animation start and end); search once.
+    if (tabController.indexIsChanging) return;
     switch (tabController.index) {
       case 1:
+        // Media and files load their first page once; the list's footer
+        // loads more.
+        if (images.isEmpty && !imagesEndReached) startSearch();
+        break;
       case 2:
-        startSearch();
+        if (files.isEmpty && !filesEndReached) startSearch();
         break;
       case 0:
       default:

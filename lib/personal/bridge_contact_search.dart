@@ -373,6 +373,12 @@ class BridgeRemoteState {
   /// Last explicit request that failed, for the network's caption.
   String? actionError;
 
+  /// Why the explicit search for a folded query or the lookup of an
+  /// identifier failed (human text); cleared when it is tried again. The row
+  /// shows it with "try again" instead of silently resetting (CC-24).
+  final searchErrors = <String, String>{};
+  final lookupErrors = <String, String>{};
+
   String? get defaultLoginId => whoami?.usableLogins.firstOrNull?.id;
 }
 
@@ -625,6 +631,7 @@ class BridgeDirectory extends ChangeNotifier {
     return _once('search:${bridge.botId}:$key', () async {
       state
         ..searching.add(key)
+        ..searchErrors.remove(key)
         ..actionError = null;
       _changed();
       try {
@@ -639,10 +646,8 @@ class BridgeDirectory extends ChangeNotifier {
         state.searches[key] = [
           for (final hit in hits) BridgeRemoteContact(hit, loginId),
         ];
-      } on BridgeProvisioningException catch (e) {
-        state.actionError = humanErrorText(e);
-      } catch (_) {
-        state.actionError = 'unexpected answer';
+      } catch (e) {
+        state.actionError = state.searchErrors[key] = humanErrorText(e);
       }
       state.searching.remove(key);
       _changed();
@@ -662,6 +667,7 @@ class BridgeDirectory extends ChangeNotifier {
     return _once('lookup:${bridge.botId}:$key', () async {
       state
         ..lookingUp.add(key)
+        ..lookupErrors.remove(key)
         ..actionError = null;
       _changed();
       try {
@@ -676,10 +682,8 @@ class BridgeDirectory extends ChangeNotifier {
         state.lookups[key] = contact == null
             ? null
             : BridgeRemoteContact(contact, loginId);
-      } on BridgeProvisioningException catch (e) {
-        state.actionError = humanErrorText(e);
-      } catch (_) {
-        state.actionError = 'unexpected answer';
+      } catch (e) {
+        state.actionError = state.lookupErrors[key] = humanErrorText(e);
       }
       state.lookingUp.remove(key);
       _changed();
@@ -798,6 +802,8 @@ class SearchNetworkGroup {
     this.loadingContacts = false,
     this.canStartChats = false,
     this.error,
+    this.searchError,
+    this.lookupError,
   });
 
   final BridgeEndpoint bridge;
@@ -818,6 +824,11 @@ class SearchNetworkGroup {
   /// The bridge can create DMs (people without a chat can be started).
   final bool canStartChats;
   final String? error;
+
+  /// Why the explicit search for this query / the lookup of [lookup]
+  /// failed; null when it did not run or succeeded.
+  final String? searchError;
+  final String? lookupError;
 
   bool get hasActions => canSearch || lookup != null;
 }
@@ -1036,6 +1047,8 @@ UnifiedSearchResults mergeUnifiedSearch({
         loadingContacts: state?.contactsLoading ?? false,
         canStartChats: ready && capabilities.createDm,
         error: state?.actionError,
+        searchError: state?.searchErrors[folded],
+        lookupError: lookup == null ? null : state?.lookupErrors[lookup.value],
       ),
     );
   }

@@ -76,6 +76,9 @@ class NotionSearchPage extends StatefulWidget {
   /// Result rows per section before "Show more".
   static const chatLimit = 6, peopleLimit = 5, messageLimit = 5;
 
+  /// People in the recent row before typing.
+  static const recentLimit = 8;
+
   @override
   State<NotionSearchPage> createState() => _NotionSearchPageState();
 }
@@ -110,6 +113,28 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     });
   }
 
+  // The inbox stops publishing while its route is covered (by this page);
+  // search shows inbox data, so it keeps the inbox live while it is the
+  // current route. Otherwise a chat started here kept offering "Start chat"
+  // and new messages never appeared (CC-23).
+  VoidCallback? _releaseInbox;
+
+  void _holdInbox() {
+    final current = ModalRoute.isCurrentOf(context) ?? true;
+    if (current) {
+      _releaseInbox ??= widget.inbox.holdActive();
+    } else {
+      _releaseInbox?.call();
+      _releaseInbox = null;
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _holdInbox();
+  }
+
   @override
   void didUpdateWidget(NotionSearchPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -117,10 +142,17 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       oldWidget.directory.removeListener(_directoryChanged);
       widget.directory.addListener(_directoryChanged);
     }
+    if (!identical(oldWidget.inbox, widget.inbox)) {
+      _releaseInbox?.call();
+      _releaseInbox = null;
+      _holdInbox();
+    }
   }
 
   @override
   void dispose() {
+    _releaseInbox?.call();
+    _releaseInbox = null;
     _typing?.cancel();
     _directory.removeListener(_directoryChanged);
     _query.dispose();
@@ -242,6 +274,39 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       roomExists: (id) => _client.getRoomById(id) != null,
     ),
   );
+
+  final _recentMemo = PersonalSearchMemo<List<Room>>();
+
+  /// People of the latest conversations (Telegram's and Messenger's recent
+  /// row), computed from the inbox's own recency on the device: one-to-one
+  /// chats and merged persons, newest first, at most
+  /// [NotionSearchPage.recentLimit]. Nothing is stored.
+  List<Room> _recentPeople() => _recentMemo.resolve(_generation, () {
+    final index = widget.inbox.index;
+    final records =
+        index.records
+            .where(
+              (record) =>
+                  !record.technical &&
+                  !record.isGroup &&
+                  !record.metadata.ignored &&
+                  record.lastActivity != null,
+            )
+            .toList()
+          ..sort((a, b) => b.lastActivity!.compareTo(a.lastActivity!));
+    final result = <Room>[];
+    for (final record in records) {
+      final room = _client.getRoomById(record.representativeRoomId);
+      if (room == null ||
+          room.membership != Membership.join ||
+          !room.isDirectChatForDisplay) {
+        continue;
+      }
+      result.add(room);
+      if (result.length == NotionSearchPage.recentLimit) break;
+    }
+    return result;
+  });
 
   // -------------------------------------------------------------------------
   // Actions
@@ -380,6 +445,10 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
               child: empty
                   ? _EmptySearch(
                       key: const ValueKey('search-empty'),
+                      recent: _recentPeople(),
+                      onOpenRecent: _openRoom,
+                      personal: widget.personal,
+                      projection: widget.inbox.projection,
                       bridges: _bridges(),
                       directory: _directory,
                       onSelectView: widget.onSelectView == null
@@ -700,13 +769,20 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     String query,
   ) {
     final network = group.bridge.label;
+    final error = group.searching ? null : group.searchError;
     return NotionListRow(
-      leading: const Icon(Icons.travel_explore, size: NotionSize.icon),
+      leading: Icon(
+        error == null ? Icons.travel_explore : Icons.error_outline,
+        size: NotionSize.icon,
+        color: error == null ? null : context.notion.colors.danger,
+      ),
       title: 'Search $network for “$query”',
       subtitle: group.searching
           ? 'Searching…'
+          : error != null
+          ? 'Couldn’t search $network. ${_retryHint(error)}'
           : group.searched
-          ? (group.error ?? 'Search done. New people appear above.')
+          ? 'Search done. New people appear above.'
           : 'Sends “$query” to $network',
       trailing: group.searching ? const NotionDelayedSpinner() : null,
       onTap: group.searching || group.searched
@@ -724,13 +800,20 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     final notFound =
         group.lookedUp &&
         _directory.stateOf(group.bridge).lookups[lookup.value] == null;
+    final error = group.lookingUp ? null : group.lookupError;
     return NotionListRow(
-      leading: const Icon(Icons.person_search_outlined, size: NotionSize.icon),
+      leading: Icon(
+        error == null ? Icons.person_search_outlined : Icons.error_outline,
+        size: NotionSize.icon,
+        color: error == null ? null : context.notion.colors.danger,
+      ),
       title: 'Look up ${lookup.display} on $network',
       subtitle: group.lookingUp
           ? 'Looking up…'
+          : error != null
+          ? 'Couldn’t look it up on $network. ${_retryHint(error)}'
           : notFound
-          ? (group.error ?? 'No $network account found')
+          ? 'No $network account found'
           : group.lookedUp
           ? 'Found. Tap the person above to open the chat.'
           : switch (lookup.kind) {
@@ -758,6 +841,12 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
   }
 }
 
+/// [error] plus how to retry, unless it already says so.
+String _retryHint(String error) =>
+    RegExp(r'try again( later)?\.$', caseSensitive: false).hasMatch(error)
+    ? error
+    : '$error Tap to try again.';
+
 /// One row of the result list; [key] keeps rows (and their elements) while
 /// typing reorders them.
 class _Item {
@@ -771,12 +860,20 @@ class _Item {
 class _EmptySearch extends StatelessWidget {
   const _EmptySearch({
     super.key,
+    required this.recent,
+    required this.onOpenRecent,
+    required this.personal,
+    required this.projection,
     required this.bridges,
     required this.directory,
     required this.onRetry,
     this.onSelectView,
   });
 
+  final List<Room> recent;
+  final ValueChanged<Room> onOpenRecent;
+  final PersonalClient personal;
+  final InboxProjection projection;
   final List<BridgeEndpoint> bridges;
   final BridgeDirectory directory;
   final VoidCallback onRetry;
@@ -822,6 +919,21 @@ class _EmptySearch extends StatelessWidget {
         padding.bottom + NotionSpace.xxl,
       ),
       children: [
+        if (recent.isNotEmpty) ...[
+          const NotionSectionHeader(
+            title: 'Recent',
+            padding: EdgeInsets.only(
+              top: NotionSpace.md,
+              bottom: NotionSpace.xs,
+            ),
+          ),
+          _RecentPeople(
+            rooms: recent,
+            personal: personal,
+            projection: projection,
+            onOpen: onOpenRecent,
+          ),
+        ],
         if (selectView != null) ...[
           const NotionSectionHeader(
             title: 'Show',
@@ -871,6 +983,82 @@ class _EmptySearch extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A horizontal row of recent people: avatar with the name below.
+class _RecentPeople extends StatelessWidget {
+  const _RecentPeople({
+    required this.rooms,
+    required this.personal,
+    required this.projection,
+    required this.onOpen,
+  });
+
+  final List<Room> rooms;
+  final PersonalClient personal;
+  final InboxProjection projection;
+  final ValueChanged<Room> onOpen;
+
+  static const _cellWidth = NotionSize.avatarLg + NotionSpace.md;
+
+  @override
+  Widget build(BuildContext context) {
+    final typography = context.notion.typography;
+    // At most [NotionSearchPage.recentLimit] cells: a plain row sizes
+    // itself to the text scale.
+    return SingleChildScrollView(
+      key: const ValueKey('search-recent'),
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [for (final room in rooms) _cell(context, room, typography)],
+      ),
+    );
+  }
+
+  Widget _cell(BuildContext context, Room room, NotionTypography typography) {
+    final name = projection.displayName(room);
+    return Semantics(
+      button: true,
+      label: name,
+      excludeSemantics: true,
+      child: NotionPressable(
+        scale: NotionMotion.pressIcon,
+        child: InkWell(
+          key: ValueKey('search-recent:${room.id}'),
+          borderRadius: NotionRadius.mdAll,
+          onTap: () => onOpen(room),
+          child: SizedBox(
+            width: _cellWidth,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: NotionSpace.xs),
+              child: Column(
+                children: [
+                  SizedBox.square(
+                    dimension: NotionSize.avatarLg,
+                    child: notionInboxAvatar(
+                      personal,
+                      projection,
+                      room,
+                      size: NotionSize.avatarLg,
+                    ),
+                  ),
+                  const SizedBox(height: NotionSpace.xxs),
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: typography.captionMuted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

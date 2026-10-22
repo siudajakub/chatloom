@@ -483,4 +483,93 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     fixture.dispose();
   });
+
+  testWidgets('search keeps the covered inbox live while it is shown', (
+    tester,
+  ) async {
+    final fixture = _Fixture();
+    // The inbox route is covered by the search page (CC-23).
+    fixture.inbox.active = false;
+    final opened = _Opened();
+    await _openSearch(
+      tester,
+      fixture,
+      BridgeDirectory.disabled('Not available in tests.'),
+      opened,
+    );
+    expect(fixture.inbox.active, isTrue);
+    await tester.tap(find.byTooltip('Close search'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NotionSearchPage), findsNothing);
+    expect(fixture.inbox.active, isFalse);
+    await tester.pumpWidget(const SizedBox.shrink());
+    fixture.dispose();
+  });
+
+  testWidgets('a failed network search explains itself and can be retried', (
+    tester,
+  ) async {
+    final fixture = _Fixture();
+    final working = _bridges(fixture);
+    var fail = true;
+    final transport = FakeProvisioning((bridge, request) {
+      if (fail && request.path == '/v3/search_users') {
+        throw const BridgeProvisioningException(503);
+      }
+      return working.handler(bridge, request);
+    });
+    final directory = BridgeDirectory(BridgeProvisioningApi(transport));
+    await _openSearch(tester, fixture, directory, _Opened());
+    await _type(tester, 'anna');
+    await tester.tap(find.text('Search WhatsApp for “anna”'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Couldn’t search WhatsApp. The bridge had a problem. Try again later.',
+      ),
+      findsOneWidget,
+    );
+    fail = false;
+    await tester.tap(find.text('Search WhatsApp for “anna”'));
+    await tester.pumpAndSettle();
+    expect(find.text('Search done. New people appear above.'), findsOneWidget);
+    expect(
+      transport.paths.where((path) => path.contains('search_users')),
+      hasLength(2),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    fixture.dispose();
+  });
+
+  testWidgets('the empty search starts with recent people', (tester) async {
+    final fixture = _Fixture();
+    fixture.dm.lastEvent = Event(
+      room: fixture.dm,
+      type: EventTypes.Message,
+      content: {'msgtype': MessageTypes.Text, 'body': 'Fictional hello'},
+      eventId: r'$fixture-recent',
+      senderId: _alicja,
+      originServerTs: DateTime.utc(2026, 10, 2),
+    );
+    final opened = _Opened();
+    await _openSearch(
+      tester,
+      fixture,
+      BridgeDirectory.disabled('Not available in tests.'),
+      opened,
+    );
+    expect(find.text('Recent'), findsOneWidget);
+    final recent = find.byKey(ValueKey('search-recent:${fixture.dm.id}'));
+    expect(recent, findsOneWidget);
+    // Groups are not people.
+    expect(
+      find.byKey(ValueKey('search-recent:${fixture.family.id}')),
+      findsNothing,
+    );
+    await tester.tap(recent);
+    await tester.pumpAndSettle();
+    expect(opened.rooms, [fixture.dm.id]);
+    await tester.pumpWidget(const SizedBox.shrink());
+    fixture.dispose();
+  });
 }
