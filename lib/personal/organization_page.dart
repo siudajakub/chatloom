@@ -149,28 +149,11 @@ class _OrganizationPageState extends State<OrganizationPage> {
     await personal.put('nickname:${metadata.entityId}', {'name': value ?? ''});
   }
 
-  Future<void> _avatar(String entity) async {
-    final selection = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: ['png', 'jpg', 'jpeg', 'webp'],
-    );
-    if (selection == null) return;
-    final length = await selection.length();
-    if (length == null || length <= 0 || length > 2 * 1024 * 1024) {
-      throw ArgumentError('Avatar must be an image under 2 MiB');
-    }
-    final bytes = await selection.readAsBytes();
-    if (bytes.isEmpty || bytes.length > 2 * 1024 * 1024) {
-      throw ArgumentError('Avatar must be an image under 2 MiB');
-    }
-    await uploadPrivateAvatar(personal, entity, bytes);
-  }
+  Future<void> _avatar(String entity) =>
+      pickAndUploadPrivateAvatar(personal, entity);
 
   Future<void> _theme(ConversationMetadata metadata) async {
-    final result = await showNotionCustomDialog<ChatTheme>(
-      context: context,
-      builder: (_) => _ThemeDialog(initial: metadata.theme),
-    );
+    final result = await showChatThemeDialog(context, metadata.theme);
     if (result != null) await _saveMetadata(metadata.setTheme(result));
   }
 
@@ -409,6 +392,38 @@ class _OrganizationPageState extends State<OrganizationPage> {
     },
   );
 }
+
+/// Picks an image and stores it as the private avatar of [entity]; false
+/// when nothing was picked. Throws for an unsupported or too large image.
+Future<bool> pickAndUploadPrivateAvatar(
+  PersonalClient personal,
+  String entity,
+) async {
+  final selection = await FilePicker.pickFile(
+    type: FileType.custom,
+    allowedExtensions: ['png', 'jpg', 'jpeg', 'webp'],
+  );
+  if (selection == null) return false;
+  final length = await selection.length();
+  if (length == null || length <= 0 || length > 2 * 1024 * 1024) {
+    throw ArgumentError('Avatar must be an image under 2 MiB');
+  }
+  final bytes = await selection.readAsBytes();
+  if (bytes.isEmpty || bytes.length > 2 * 1024 * 1024) {
+    throw ArgumentError('Avatar must be an image under 2 MiB');
+  }
+  await uploadPrivateAvatar(personal, entity, bytes);
+  return true;
+}
+
+/// The private colours of a conversation; null when cancelled.
+Future<ChatTheme?> showChatThemeDialog(
+  BuildContext context,
+  ChatTheme? initial,
+) => showNotionCustomDialog<ChatTheme>(
+  context: context,
+  builder: (_) => _ThemeDialog(initial: initial),
+);
 
 int _nextPinOrder(PersonalClient personal) {
   final orders = personal.values.entries

@@ -14,6 +14,7 @@ import 'package:chatloom/personal/ui/notion_chat_details_notifications.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/personal/ui/person_page.dart';
 import 'package:chatloom/ui/notion/metadata_actions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -29,15 +30,13 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
+/// Details of a merged person: the one person page (name, photo, chats,
+/// routing, notifications, unmerge), never native per-source pages.
 Future<void> showNotionMergedChatDetails(
   BuildContext context, {
   required PersonalClient personal,
   required PersonGroup group,
-}) => Navigator.of(context).push<void>(
-  MaterialPageRoute(
-    builder: (_) => NotionLiveChatDetails(personal: personal, group: group),
-  ),
-);
+}) => showPersonPage(context, personal: personal, group: group);
 
 String notionNotificationLabel(PushRuleState state) => switch (state) {
   PushRuleState.notify => 'All messages',
