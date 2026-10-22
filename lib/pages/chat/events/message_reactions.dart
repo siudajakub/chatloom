@@ -113,6 +113,9 @@ class _MessageReactionsState extends State<MessageReactions> {
     final client = Matrix.of(context).client;
 
     for (final e in allReactionEvents) {
+      // A reaction the SDK gave up sending was never given; the footer
+      // says so and offers Retry.
+      if (e.status.isError) continue;
       final key = e.content
           .tryGetMap<String, Object?>('m.relates_to')
           ?.tryGet<String>('key');
