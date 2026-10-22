@@ -9,6 +9,7 @@ import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/round_media_preparer.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 
 class FakeCapture implements RoundCaptureBackend {
@@ -1047,4 +1048,83 @@ void main() {
       }
     },
   );
+  group('a permission prompt during camera setup (CC-08)', () {
+    void lifecycle(WidgetTester tester, List<AppLifecycleState> states) {
+      for (final state in states) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+    }
+
+    testWidgets('keeps the draft and records hands-free after Allow', (
+      tester,
+    ) async {
+      lifecycle(tester, [AppLifecycleState.resumed]);
+      final backend = FakeCapture()..pendingInitialize = Completer();
+      final controller = RoundCaptureController(
+        backend: backend,
+        profile: profile,
+      );
+      final init = controller.initialize();
+      // Android shows the prompt over the app: only `inactive`.
+      lifecycle(tester, [AppLifecycleState.inactive]);
+      await RoundCaptureController.interruptActive();
+      expect(controller.state, RoundCaptureState.initializing);
+      expect(controller.locked, isTrue);
+      expect(backend.cancelCalls, 0);
+      backend.pendingInitialize!.complete(capturePreview());
+      await tester.pump();
+      // Still behind the prompt: nothing starts until the app is back.
+      expect(controller.state, RoundCaptureState.initializing);
+      lifecycle(tester, [AppLifecycleState.resumed]);
+      await init;
+      expect(controller.state, RoundCaptureState.ready);
+      expect(controller.wasInterrupted, isFalse);
+      await controller.start();
+      expect(controller.state, RoundCaptureState.recording);
+      expect(controller.locked, isTrue);
+      await controller.cancel();
+      controller.dispose();
+    });
+
+    testWidgets('a background during setup still cancels', (tester) async {
+      lifecycle(tester, [AppLifecycleState.resumed]);
+      final backend = FakeCapture()..pendingInitialize = Completer();
+      final controller = RoundCaptureController(
+        backend: backend,
+        profile: profile,
+      );
+      final init = controller.initialize();
+      lifecycle(tester, [AppLifecycleState.inactive]);
+      await controller.interrupt();
+      expect(controller.state, RoundCaptureState.initializing);
+      lifecycle(tester, [AppLifecycleState.hidden]);
+      backend.pendingInitialize!.complete(capturePreview());
+      await init;
+      expect(controller.state, RoundCaptureState.canceled);
+      expect(controller.wasInterrupted, isTrue);
+      lifecycle(tester, [
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]);
+      controller.dispose();
+    });
+
+    testWidgets('an app lock or account switch in the foreground cancels', (
+      tester,
+    ) async {
+      lifecycle(tester, [AppLifecycleState.resumed]);
+      final backend = FakeCapture()..pendingInitialize = Completer();
+      final controller = RoundCaptureController(
+        backend: backend,
+        profile: profile,
+      );
+      final init = controller.initialize();
+      await RoundCaptureController.interruptActive();
+      expect(controller.state, RoundCaptureState.canceled);
+      backend.pendingInitialize!.complete(capturePreview());
+      await init;
+      expect(controller.state, RoundCaptureState.canceled);
+      controller.dispose();
+    });
+  });
 }

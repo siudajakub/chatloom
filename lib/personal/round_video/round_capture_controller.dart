@@ -4,6 +4,8 @@ import 'dart:async';
 import 'dart:ui' show Rect;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart'
+    show AppLifecycleListener, AppLifecycleState, WidgetsBinding;
 
 import 'round_capture_backend.dart';
 import 'round_media_preparer.dart';
@@ -233,8 +235,24 @@ class RoundCaptureController extends ChangeNotifier {
       state == RoundCaptureState.recording &&
       duration.inMilliseconds < profile.maxDurationMs - pauseCutoffMs;
 
+  /// An interruption while the camera is still opening, with the app only
+  /// `inactive`: the first camera/microphone permission prompt (Android
+  /// shows it over the app). Cancelling would lose the gesture and record
+  /// nothing after "Allow". Instead the recording continues hands-free
+  /// (locked) once the app is back in the foreground; a background, app
+  /// lock or account switch in between still cancels (they interrupt again
+  /// with the app not `inactive`, or the settle below sees them).
+  bool _deferredInterrupt = false;
+
   Future<void> interrupt() async {
     if (_closed) return;
+    if (state == RoundCaptureState.initializing &&
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.inactive) {
+      _deferredInterrupt = true;
+      locked = true;
+      _changed();
+      return;
+    }
     wasInterrupted = true;
     locked = true;
     if (active) {
@@ -290,6 +308,16 @@ class RoundCaptureController extends ChangeNotifier {
       if (!_current(generation) || state != RoundCaptureState.initializing) {
         return;
       }
+      if (_deferredInterrupt && !await _backInForeground()) {
+        if (_current(generation) && state == RoundCaptureState.initializing) {
+          wasInterrupted = true;
+          await cancel();
+        }
+        return;
+      }
+      if (!_current(generation) || state != RoundCaptureState.initializing) {
+        return;
+      }
       preview = result;
       _facingRevision = result.cameraRevision;
       state = RoundCaptureState.ready;
@@ -299,6 +327,33 @@ class RoundCaptureController extends ChangeNotifier {
     }
     _changed();
   }
+
+  /// Waits until a [_deferredInterrupt] resolves: true when the app is
+  /// resumed again, false when it went to the background (or closed).
+  Future<bool> _backInForeground() async {
+    _deferredInterrupt = false;
+    var lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle == AppLifecycleState.inactive) {
+      final settled = _settled = Completer<AppLifecycleState?>();
+      final listener = AppLifecycleListener(
+        onStateChange: (next) {
+          if (next != AppLifecycleState.inactive && !settled.isCompleted) {
+            settled.complete(next);
+          }
+        },
+      );
+      try {
+        lifecycle = await settled.future;
+      } finally {
+        if (identical(_settled, settled)) _settled = null;
+        listener.dispose();
+      }
+    }
+    return !_closed &&
+        (lifecycle == null || lifecycle == AppLifecycleState.resumed);
+  }
+
+  Completer<AppLifecycleState?>? _settled;
 
   Future<void> start({bool lock = false}) {
     if (_closed || controlsBusy || state != RoundCaptureState.ready) {
@@ -319,7 +374,8 @@ class RoundCaptureController extends ChangeNotifier {
             nativeEpoch != _nativeEpoch) {
           return;
         }
-        locked = lock;
+        // A permission prompt during setup already locked it (hands-free).
+        locked = locked || lock;
         _clock.reset();
         _clock.start();
         state = RoundCaptureState.recording;
@@ -705,6 +761,8 @@ class RoundCaptureController extends ChangeNotifier {
   void dispose() {
     _open.remove(this);
     _closed = true;
+    final settled = _settled;
+    if (settled != null && !settled.isCompleted) settled.complete(null);
     _generation++;
     _ticker?.cancel();
     _elapsed.dispose();

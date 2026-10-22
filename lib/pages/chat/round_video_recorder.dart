@@ -228,8 +228,15 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
         (phase == RoundCaptureGesturePhase.holding ||
             phase == RoundCaptureGesturePhase.locked)) {
       _externalStarted = true;
+      // A permission prompt during setup locked the controller: record
+      // hands-free even if the system never cancelled the held pointer.
+      if (_controller.locked && phase == RoundCaptureGesturePhase.holding) {
+        gesture.lock();
+      }
       unawaited(
-        _controller.start(lock: phase == RoundCaptureGesturePhase.locked),
+        _controller.start(
+          lock: _controller.locked || phase == RoundCaptureGesturePhase.locked,
+        ),
       );
     }
   }
