@@ -9,6 +9,8 @@ import 'notion_tokens.dart';
 /// Shared rules for looping animations: one repeating controller, started
 /// only when motion is allowed. Tickers are muted under `TickerMode` off
 /// (offstage routes, hidden tabs), so a hidden loop schedules no frames.
+/// A loop runs at most [loopCap] and then rests on its static frame
+/// (DESIGN.md: no endless animation); [restartLoop] starts it afresh.
 mixin _NotionLoop<T extends StatefulWidget>
     on State<T>, SingleTickerProviderStateMixin<T> {
   late final AnimationController loop = AnimationController(
@@ -19,15 +21,43 @@ mixin _NotionLoop<T extends StatefulWidget>
   Duration get period;
   bool get loopEnabled => true;
 
+  /// Longest run of the loop; null loops until disabled.
+  Duration? get loopCap => NotionMotion.loopCap;
+
+  bool _rested = false;
+
+  /// The loop ran for [loopCap] and now shows its static frame.
+  bool get loopRested => _rested;
+
   void syncLoop() {
-    final run = loopEnabled && !NotionMotion.reduced(context);
+    final run = loopEnabled && !_rested && !NotionMotion.reduced(context);
     if (run && !loop.isAnimating) {
-      loop.repeat();
+      final cap = loopCap;
+      loop
+          .repeat(
+            count: cap == null
+                ? null
+                : NotionMotion.loopCount(period, cap: cap),
+          )
+          // A stopped loop never completes this future; only the cap does.
+          .then((_) {
+            if (!mounted) return;
+            setState(() {
+              _rested = true;
+              loop.value = 0;
+            });
+          });
     } else if (!run && (loop.isAnimating || loop.value != 0)) {
       loop
         ..stop()
         ..value = 0;
     }
+  }
+
+  /// Starts a rested loop again (the state it shows began anew).
+  void restartLoop() {
+    _rested = false;
+    syncLoop();
   }
 
   @override
@@ -137,7 +167,11 @@ class NotionPulse extends StatefulWidget {
     this.enabled = true,
     this.spread = 1.35,
     this.borderRadius = NotionRadius.pillAll,
+    this.maxDuration = NotionMotion.liveLoopCap,
   });
+
+  /// The ring rests after this long (null: until [enabled] turns off).
+  final Duration? maxDuration;
 
   final Widget child;
 
@@ -174,9 +208,12 @@ class _NotionPulseState extends State<NotionPulse>
   bool get loopEnabled => widget.enabled;
 
   @override
+  Duration? get loopCap => widget.maxDuration;
+
+  @override
   void didUpdateWidget(NotionPulse oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.enabled != widget.enabled) syncLoop();
+    if (oldWidget.enabled != widget.enabled) restartLoop();
   }
 
   @override
