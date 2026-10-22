@@ -280,6 +280,24 @@ class _Journal implements Room {
   }
 }
 
+/// A journal whose timeline cannot be opened while [failing]: every attach
+/// fails the same way (a persistent journal error).
+class _FailingJournal extends _Journal {
+  bool failing = true;
+  int attaches = 0;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (invocation.memberName == #getTimeline) {
+      attaches++;
+      if (failing) {
+        return Future<Timeline>.error(StateError('Synthetic journal failure'));
+      }
+    }
+    return super.noSuchMethod(invocation);
+  }
+}
+
 DateTime _min(num minutes) =>
     _t0.add(Duration(milliseconds: (minutes * 60000).round()));
 
@@ -470,9 +488,13 @@ void main() {
         reason: 'One page reaches the watermark and its safety margin',
       );
       expect(resumed.events.length, lessThan(200));
+      // CB-15: seen markers live in bounded buckets. A result already in its
+      // bucket costs one read (result-1200, in the safety margin); a new one
+      // three (bucket, legacy `seen:<opId>` marker, bucket update before the
+      // write: result-1230). Replaying the 12 older results would be >= 12.
       expect(
         store.seenReads(),
-        lessThanOrEqualTo(2),
+        lessThanOrEqualTo(4),
         reason: 'Only results of the resumed window are replayed',
       );
       expect(second.workerReadiness?.receivedAt, _min(1240));
@@ -1022,5 +1044,77 @@ void main() {
       isTrue,
       reason: 'History before the margin stays on the server',
     );
+  });
+
+  test('a persistent journal error re-attaches with a capped exponential '
+      'backoff, reset by success and retry (CC-27)', () async {
+    final store = _Store();
+    final journal = _FailingJournal();
+    journal.history.add(_create(journal));
+    final personal = _start(client, store, journal);
+    addTearDown(personal.dispose);
+    var now = _t0;
+    personal.debugNow = () => now;
+    await personal.load();
+    expect(personal.problem, isNotNull);
+    expect(journal.attaches, 1);
+
+    Future<void> syncElsewhere() async {
+      client.onSync.add(
+        SyncUpdate(
+          nextBatch: 'elsewhere',
+          rooms: RoomsUpdate(
+            join: {'!synthetic-other:example.org': JoinedRoomUpdate()},
+          ),
+        ),
+      );
+      await _idle();
+    }
+
+    // The first re-attach after a failure is immediate.
+    await syncElsewhere();
+    expect(journal.attaches, 2);
+    expect(personal.debugReattachFailures, 1);
+    // Then every sync inside the wait leaves the journal alone.
+    for (var i = 0; i < 5; i++) {
+      await syncElsewhere();
+    }
+    expect(journal.attaches, 2);
+
+    now = now.add(PersonalClient.reattachBackoffBase);
+    await syncElsewhere();
+    expect(journal.attaches, 3);
+    expect(personal.debugReattachFailures, 2);
+    // The wait doubled: 30 s more is not enough.
+    now = now.add(PersonalClient.reattachBackoffBase);
+    await syncElsewhere();
+    expect(journal.attaches, 3);
+    now = now.add(PersonalClient.reattachBackoffBase);
+    await syncElsewhere();
+    expect(journal.attaches, 4);
+
+    // An explicit retry attaches at once and starts over.
+    await personal.retry();
+    expect(journal.attaches, 5);
+    expect(personal.debugReattachFailures, 0);
+    await syncElsewhere();
+    expect(journal.attaches, 6, reason: 'First re-attach is immediate again');
+
+    // Success resets the backoff.
+    journal.failing = false;
+    now = now.add(PersonalClient.reattachBackoffCap);
+    await syncElsewhere();
+    expect(journal.attaches, 7);
+    expect(personal.problem, isNull);
+    expect(personal.debugReattachFailures, 0);
+  });
+
+  test('re-attach delay doubles from 30 s and stops at 30 min', () {
+    expect(PersonalClient.reattachDelay(0), Duration.zero);
+    expect(PersonalClient.reattachDelay(1), const Duration(seconds: 30));
+    expect(PersonalClient.reattachDelay(2), const Duration(minutes: 1));
+    expect(PersonalClient.reattachDelay(4), const Duration(minutes: 4));
+    expect(PersonalClient.reattachDelay(7), const Duration(minutes: 30));
+    expect(PersonalClient.reattachDelay(100), const Duration(minutes: 30));
   });
 }

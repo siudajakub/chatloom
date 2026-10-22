@@ -568,7 +568,10 @@ class PersonalClient extends ChangeNotifier {
       if (_attaching != null) {
         await _attaching;
       } else if (_timeline == null || problem != null) {
-        await _attach();
+        // A journal that keeps failing is not re-attached on every sync
+        // (each message elsewhere, each idle long-poll): see [_reattachDue].
+        if (!_reattachDue()) return;
+        await _reattachFromSync();
       } else if (replayRequested || !_membershipValidated) {
         await _validate();
       } else {
@@ -600,8 +603,67 @@ class PersonalClient extends ChangeNotifier {
     return _startLoad(const Duration(seconds: 3));
   }
 
-  Future<void> retry() =>
-      _startLoad(const Duration(seconds: 15), refreshHistory: true);
+  Future<void> retry() {
+    // An explicit retry always attaches now and starts the backoff over.
+    _resetReattachBackoff();
+    return _startLoad(const Duration(seconds: 15), refreshHistory: true);
+  }
+
+  // Re-attach backoff after a persistent journal error (code-client CC-27).
+  // Attaching validates members, opens a timeline, pages back to the resume
+  // point and replays; a non-transient failure (stalled pagination, a replay
+  // that throws, unsafe membership) used to repeat all of it on every sync.
+  // The first re-attach after a failure is immediate (transient errors such
+  // as a failed publication recover at once); every further failed one
+  // doubles the wait from [reattachBackoffBase] up to [reattachBackoffCap].
+  // A successful attach (any path) or [retry] resets it; opening a surface
+  // ([load]) still attaches directly.
+  static const reattachBackoffBase = Duration(seconds: 30);
+  static const reattachBackoffCap = Duration(minutes: 30);
+  int _reattachFailures = 0;
+  DateTime? _reattachNotBefore;
+
+  /// Clock of the re-attach backoff; tests only.
+  @visibleForTesting
+  DateTime Function() debugNow = DateTime.now;
+
+  /// Consecutive failed re-attaches from sync; tests and diagnostics.
+  @visibleForTesting
+  int get debugReattachFailures => _reattachFailures;
+
+  /// The wait after [failures] consecutive failed re-attaches.
+  @visibleForTesting
+  static Duration reattachDelay(int failures) {
+    if (failures <= 0) return Duration.zero;
+    final shift = failures - 1 > 16 ? 16 : failures - 1;
+    final delay = reattachBackoffBase * (1 << shift);
+    return delay > reattachBackoffCap ? reattachBackoffCap : delay;
+  }
+
+  bool _reattachDue() {
+    final notBefore = _reattachNotBefore;
+    return notBefore == null || !debugNow().isBefore(notBefore);
+  }
+
+  void _resetReattachBackoff() {
+    _reattachFailures = 0;
+    _reattachNotBefore = null;
+  }
+
+  Future<void> _reattachFromSync() async {
+    try {
+      await _attach();
+    } catch (_) {
+      _noteReattachFailure();
+      rethrow;
+    }
+    if (problem != null) _noteReattachFailure();
+  }
+
+  void _noteReattachFailure() {
+    _reattachFailures++;
+    _reattachNotBefore = debugNow().add(reattachDelay(_reattachFailures));
+  }
 
   bool _liveAndUnchanged() {
     final room = journal;
@@ -765,6 +827,7 @@ class PersonalClient extends ChangeNotifier {
     } finally {
       _attaching = null;
     }
+    if (problem == null) _resetReattachBackoff();
     // Readiness flips after the final replay pass of a successful attach.
     _notifyIfChanged();
   }

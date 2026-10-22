@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/events/round_mini_player.dart';
+import 'package:chatloom/personal/conversation_shortcuts.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -449,6 +450,8 @@ class MatrixState extends State<Matrix> {
           backgroundPush?.forgetClients([c]);
           PersonalPrivacy.forget(c);
           PersonalClient.of(c).dispose();
+          // Launcher shortcuts name this account's chats (FT-21).
+          if (PlatformInfos.isAndroid) clearConversationShortcuts();
           widget.clients.remove(c);
           ClientManager.removeClientNameFromStore(c.clientName, store);
           InitWithRestoreExtension.deleteSessionBackup(name);
