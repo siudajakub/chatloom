@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -27,7 +28,12 @@ class LogViewerState extends State<LogViewer> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         title: Text(logLevel.toString()),
-        leading: BackButton(onPressed: () => context.go('/')),
+        // Opened from Settings › Advanced › Developer: back returns there.
+        leading: BackButton(
+          onPressed: () => context.canPop()
+              ? context.pop()
+              : context.go(DeveloperOptions.route),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.zoom_in_outlined),
