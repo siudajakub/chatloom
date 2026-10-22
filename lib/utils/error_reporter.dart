@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:chatloom/personal/diagnostics.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/chatloom_app.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -163,7 +164,7 @@ class ErrorReporter {
     _dialogHost = c;
     _dialogContext = null;
     try {
-      await _showDialog(c, error, report);
+      await _showDialog(c, error, report, unhandled: unhandled);
     } finally {
       if (identical(_dialogHost, c)) {
         _dialogHost = null;
@@ -172,43 +173,59 @@ class ErrorReporter {
     }
   }
 
-  Future<void> _showDialog(BuildContext c, Object error, String report) =>
-      showDialog<void>(
-        context: c,
-        builder: (context) {
-          _dialogContext = context;
-          final retry = onRetry;
-          return AlertDialog(
-            title: const Text('Could not complete this action'),
-            // A sentence, never the errcode or the diagnostic code; the
-            // safe report stays one tap away for support.
-            content: Text(humanErrorText(error, action: action)),
-            actions: [
-              TextButton(
-                onPressed: () => Clipboard.setData(ClipboardData(text: report)),
-                child: const Text('Copy safe report'),
-              ),
-              if (retry != null && isRetryableError(error))
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    // A failed retry reports like the first attempt.
-                    unawaited(
-                      Future.sync(retry).then(
-                        (_) {},
-                        onError: (Object e, StackTrace s) =>
-                            _report(e, s, unhandled: false),
-                      ),
-                    );
-                  },
-                  child: const Text('Try again'),
+  /// A Notion dialog (DESIGN.md: `showNotionDialog`, never a Material
+  /// `AlertDialog`). An action the user started says it could not be
+  /// completed; an error nobody asked about gets a calm "Something went
+  /// wrong". "Copy report" copies only the fixed diagnostic code and
+  /// source locations (see [PersonalDiagnostic.report]): no message text,
+  /// IDs, URLs or exception text.
+  Future<void> _showDialog(
+    BuildContext c,
+    Object error,
+    String report, {
+    required bool unhandled,
+  }) => showNotionDialog<void>(
+    context: c,
+    title: unhandled
+        ? 'Something went wrong'
+        : 'Could not complete this action',
+    content: Builder(
+      builder: (context) {
+        _dialogContext = context;
+        // A sentence, never the errcode or the diagnostic code.
+        return Text(
+          humanErrorText(error, action: action),
+          style: context.notion.typography.calloutMuted,
+        );
+      },
+    ),
+    actions: (context) {
+      final retry = onRetry;
+      return [
+        NotionButton.ghost(
+          label: 'Copy report',
+          onPressed: () => Clipboard.setData(ClipboardData(text: report)),
+        ),
+        if (retry != null && isRetryableError(error))
+          NotionButton.ghost(
+            label: 'Try again',
+            onPressed: () {
+              Navigator.pop(context);
+              // A failed retry reports like the first attempt.
+              unawaited(
+                Future.sync(retry).then(
+                  (_) {},
+                  onError: (Object e, StackTrace s) =>
+                      _report(e, s, unhandled: false),
                 ),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close'),
-              ),
-            ],
-          );
-        },
-      );
+              );
+            },
+          ),
+        NotionButton(
+          label: 'Close',
+          onPressed: () => Navigator.pop(context),
+        ),
+      ];
+    },
+  );
 }

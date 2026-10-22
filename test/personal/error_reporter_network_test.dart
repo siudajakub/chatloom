@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:chatloom/personal/diagnostics.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -75,7 +76,7 @@ void main() {
         ).onErrorCallback(entry.value).then((_) => completed = true),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(NotionDialog), findsNothing);
       expect(completed, isTrue);
       expect(find.text('Fixture ready'), findsOneWidget);
     });
@@ -92,7 +93,7 @@ void main() {
       ErrorReporter.onFlutterError(const _RenamedPrivacySuppressed());
       await tester.pumpAndSettle();
       expect(find.text('Fixture shell stays mounted'), findsOneWidget);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(NotionDialog), findsNothing);
       expect(
         find.text('Could not start the app. Your data and keys are preserved.'),
         findsNothing,
@@ -130,16 +131,16 @@ void main() {
         ).onErrorCallback(error).then((_) => completed = true),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(NotionDialog), findsOneWidget);
       expect(find.text('Could not complete this action'), findsOneWidget);
-      expect(find.text('Copy safe report'), findsOneWidget);
+      expect(find.text('Copy report'), findsOneWidget);
       expect(completed, isFalse);
       expect(find.text('synthetic private operation details'), findsNothing);
       expect(find.text('synthetic private storage details'), findsNothing);
       expect(find.textContaining('/fictional/private/path'), findsNothing);
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(NotionDialog), findsNothing);
       expect(completed, isTrue);
     });
   }

@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -41,16 +42,19 @@ void main() {
       await tester.pump();
     }
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
+    // Nobody started an action: a calm title, not an action failure.
+    expect(find.text('Something went wrong'), findsOneWidget);
+    expect(find.text('Could not complete this action'), findsNothing);
 
     await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(NotionDialog), findsNothing);
 
     // The same uncaught error right after closing stays in the log only.
     unawaited(ErrorReporter(context).reportUnhandled(StateError('frame')));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(NotionDialog), findsNothing);
     expect(find.text('Fixture ready'), findsOneWidget);
   });
 
@@ -65,12 +69,12 @@ void main() {
 
     unawaited(ErrorReporter(context).onErrorCallback(StateError('action')));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
 
     // While it is open, another failure does not stack a second modal.
     unawaited(ErrorReporter(context).onErrorCallback(StateError('again')));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
   });
 
   testWidgets('a dialog lost with its tree does not block the next one', (
@@ -79,13 +83,13 @@ void main() {
     final first = await host(tester);
     unawaited(ErrorReporter(first).onErrorCallback(StateError('one')));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     final second = await host(tester);
     unawaited(ErrorReporter(second).onErrorCallback(StateError('two')));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
   });
 
   testWidgets('a root dialog that outlives its host page still blocks', (
@@ -107,16 +111,16 @@ void main() {
     await tester.pumpAndSettle();
     unawaited(ErrorReporter(page).onErrorCallback(StateError('one')));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
 
     // The page under the root dialog goes away; the dialog stays.
     navigator.currentState!.removeRoute(ModalRoute.of(page)!);
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
     final home = navigator.currentContext!;
     unawaited(ErrorReporter(home).onErrorCallback(StateError('two')));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
   });
 
   testWidgets('an uncaught Matrix error is logged, never a modal', (
@@ -125,12 +129,12 @@ void main() {
     final context = await host(tester);
     unawaited(ErrorReporter(context).reportUnhandled(_unknown()));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(NotionDialog), findsNothing);
 
     // The zone/framework entry point keeps the shell, too.
     ErrorReporter.onFlutterError(_unknown());
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(NotionDialog), findsNothing);
     expect(find.text('Fixture ready'), findsOneWidget);
     expect(find.textContaining('Could not start the app'), findsNothing);
   });
@@ -141,11 +145,11 @@ void main() {
     final context = await host(tester);
     unawaited(ErrorReporter(context).onErrorCallback(_unknown()));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(NotionDialog), findsOneWidget);
     expect(find.text('Something went wrong. Try again.'), findsOneWidget);
     expect(find.textContaining('M_UNKNOWN'), findsNothing);
     expect(find.textContaining('matrix_m_unknown'), findsNothing);
-    expect(find.text('Copy safe report'), findsOneWidget);
+    expect(find.text('Copy report'), findsOneWidget);
     // No retry callback: no retry button.
     expect(find.text('Try again'), findsNothing);
   });
@@ -165,7 +169,7 @@ void main() {
     await tester.tap(find.text('Try again'));
     await tester.pumpAndSettle();
     expect(retries, 1);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(NotionDialog), findsNothing);
   });
 
   testWidgets('a final failure offers no retry', (tester) async {
