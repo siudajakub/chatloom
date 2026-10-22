@@ -13,7 +13,7 @@ import 'flows/login_and_chat_backup.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  group('FluffyChat Integration Tests', () {
+  group('ChatLoom Integration Tests', () {
     testWidgets('Login and logout flow', loginAndChatBackup);
     testWidgets('Basic Messaging', basicMessaging);
     testWidgets('Final logout', finalLogout);
