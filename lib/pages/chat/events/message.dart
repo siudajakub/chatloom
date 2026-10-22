@@ -52,6 +52,8 @@ class Message extends StatelessWidget {
   /// added by the menu itself.
   final List<ConversationMessageAction> Function(Event event)? menuActions;
   final Timeline timeline;
+
+  /// The message a jump landed on: it flashes once (Telegram), then rests.
   final bool highlightMarker;
   final bool wallpaperMode;
   final ScrollController scrollController;
@@ -372,7 +374,7 @@ class Message extends StatelessWidget {
                 groupPosition: position,
                 media: media,
                 chromeless: round,
-                selected: highlightMarker,
+                flash: highlightMarker,
                 backgroundColor: custom is int ? Color(custom) : null,
                 quote: isReply
                     ? _ReplyPreview(
@@ -501,27 +503,8 @@ class Message extends StatelessWidget {
                 ),
                 body: content,
               ),
-              if (displayReadMarker)
-                Row(
-                  children: [
-                    Expanded(
-                      child: Divider(color: theme.colorScheme.outlineVariant),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 12,
-                      ),
-                      child: Text(
-                        L10n.of(context).readUpToHere,
-                        style: TextStyle(fontSize: 11, color: statusColor),
-                      ),
-                    ),
-                    Expanded(
-                      child: Divider(color: theme.colorScheme.outlineVariant),
-                    ),
-                  ],
-                ),
+              // The "N unread messages" divider is drawn by the list above
+              // the first unread row (ConversationUnreadDivider).
             ],
           ),
         ),

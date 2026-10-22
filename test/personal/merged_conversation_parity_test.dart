@@ -198,9 +198,10 @@ void _expectSharedTimeline(WidgetTester tester, {required int rows}) {
     ),
     findsOneWidget,
   );
-  // Unread divider directly under the read message.
-  expect(find.text(L10n.of(context).readUpToHere), findsOneWidget);
-  final divider = tester.getTopLeft(find.text(L10n.of(context).readUpToHere));
+  // Unread divider directly under the read message, counting what others
+  // sent after it (the own message does not count).
+  expect(find.text('1 unread message'), findsOneWidget);
+  final divider = tester.getTopLeft(find.text('1 unread message'));
   expect(
     divider.dy,
     greaterThan(tester.getTopLeft(find.text('Read fictional message')).dy),

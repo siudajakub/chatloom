@@ -10,8 +10,10 @@ void main() {
         home: Scaffold(body: ChatTimelineLoadError(onRetry: () => retries++)),
       ),
     );
-    expect(find.text('Could not load this conversation.'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('Couldn’t load messages'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(Dialog), findsNothing);
     await tester.tap(find.text('Try again'));
     expect(retries, 1);
     expect(tester.takeException(), isNull);

@@ -1118,11 +1118,20 @@ class _MergedChatPageState extends State<_MergedChatView>
         _listRevision++;
       });
     }
+    // Scroll tags carry the row index (the footer is not tagged).
     await scrollController.scrollToIndex(
-      index + 1,
+      index,
       duration: ChatLoomThemes.animationDuration,
       preferPosition: AutoScrollPosition.middle,
     );
+    // The landed-on message flashes once (its bubble finishes the flash by
+    // itself); clearing the marker keeps later rebuilds from replaying it.
+    if (mounted && highlightEvent && scrollToEventIdMarker == eventId) {
+      setState(() {
+        scrollToEventIdMarker = null;
+        _listRevision++;
+      });
+    }
   }
 
   @override
@@ -2655,6 +2664,7 @@ class _MergedChatPageState extends State<_MergedChatView>
                         ChatWallpaper(
                           uri: wallpaper.wallpaperUrl!,
                           opacity: wallpaper.wallpaperOpacity ?? 0.5,
+                          blur: wallpaper.wallpaperBlur ?? 0.0,
                         ),
                       // Composer keystrokes, notices and send state rebuild
                       // this page; the gate hands back the previous list

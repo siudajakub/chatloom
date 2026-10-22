@@ -76,12 +76,28 @@ class ChatView extends StatelessWidget {
       child: FutureBuilder(
         future: controller.loadTimelineFuture,
         builder: (BuildContext context, snapshot) {
-          // Built once per controller rebuild and handed to the room-state
-          // listener as a stable child: room-state and sync-status ticks only
-          // rebuild the chrome (app bar, notice, composer), never the timeline.
-          final timelineBody = snapshot.hasError && controller.timeline == null
-              ? ChatTimelineLoadError(onRetry: controller.retryLoadTimeline)
-              : ChatEventList(controller: controller);
+          // Handed to the room-state listener as a stable child: room-state
+          // and sync-status ticks only rebuild the chrome (app bar, notice,
+          // composer). The gate also keeps controller rebuilds for the
+          // composer, send state and notices away from the rows: they
+          // rebuild only when the timeline revision changes.
+          final failed =
+              (snapshot.hasError || controller.timelineLoadFailed) &&
+              controller.timeline == null;
+          final timelineBody = ConversationListGate(
+            revision: (
+              controller.timelineRevision,
+              controller.room.id,
+              accountConfig.wallpaperUrl != null,
+              failed,
+            ),
+            child: failed
+                ? ChatTimelineLoadError(onRetry: controller.retryLoadTimeline)
+                : ChatEventList(
+                    controller: controller,
+                    hold: controller.timelineHold,
+                  ),
+          );
           return ChatRoomSignals(
             room: controller.room,
             child: timelineBody,
@@ -395,14 +411,19 @@ class ChatView extends StatelessWidget {
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  ValueListenableBuilder<int>(
-                                    valueListenable: controller.newBelow,
-                                    builder: (context, count, _) =>
-                                        ConversationJumpButton(
-                                          visible:
-                                              controller.showScrollDownButton,
-                                          count: count,
-                                          onPressed: controller.scrollDown,
+                                  ValueListenableBuilder<bool>(
+                                    valueListenable:
+                                        controller.jumpButtonVisible,
+                                    builder: (context, visible, _) =>
+                                        ValueListenableBuilder<int>(
+                                          valueListenable: controller.newBelow,
+                                          builder: (context, count, _) =>
+                                              ConversationJumpButton(
+                                                visible: visible,
+                                                count: count,
+                                                onPressed:
+                                                    controller.scrollDown,
+                                              ),
                                         ),
                                   ),
                                   if (AppSettings.personalIncognito.value) ...[
@@ -549,20 +570,18 @@ class _ChatRoomSignalsState extends State<ChatRoomSignals> {
   Widget build(BuildContext context) => widget.builder(context, widget.child);
 }
 
+/// The timeline could not be opened: said in the list itself, with a
+/// retry, never as a dialog the user did not ask for.
 class ChatTimelineLoadError extends StatelessWidget {
   final VoidCallback onRetry;
 
   const ChatTimelineLoadError({required this.onRetry, super.key});
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text('Could not load this conversation.'),
-        const SizedBox(height: 12),
-        FilledButton(onPressed: onRetry, child: const Text('Try again')),
-      ],
-    ),
+  Widget build(BuildContext context) => NotionEmptyState(
+    icon: Icons.cloud_off_outlined,
+    title: 'Couldn’t load messages',
+    message: 'Check your connection, then try again.',
+    action: NotionButton(label: 'Try again', onPressed: onRetry),
   );
 }
