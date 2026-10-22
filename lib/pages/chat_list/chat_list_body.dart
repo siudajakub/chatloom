@@ -8,6 +8,7 @@ import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
@@ -51,7 +52,13 @@ class ChatListViewBody extends StatelessWidget {
           for (final (index, room) in rooms.indexed) room.id: index,
         };
         controller.rowMemo.retain(rooms.length);
+        // Network marks on avatars only while every network is listed and
+        // there is more than one (UX-17, FT-12).
+        final showNetworks =
+            controller.selectedNetwork == null &&
+            controller.availableNetworks.length > 1;
         return NotionInboxPage(
+          unreadCount: controller.unreadViewCount(),
           scrollController: controller.scrollController,
           rowCount: rooms.length,
           rowBuilder: (context, index) {
@@ -65,13 +72,14 @@ class ChatListViewBody extends StatelessWidget {
             // An unchanged row returns the same widget, so a publish
             // (another room's message, a typing change) rebuilds only the
             // rows whose inputs changed.
-            return controller.rowMemo.resolve(
+            final row = controller.rowMemo.resolve(
               entity,
               chatListItemSignature(
                 room,
                 projection,
                 activeChat: active,
                 flash: flash,
+                showNetworks: showNetworks,
               ),
               () => ChatListItem(
                 room,
@@ -83,7 +91,18 @@ class ChatListViewBody extends StatelessWidget {
                 onLongPress: (posContext) =>
                     controller.chatContextAction(room, posContext),
                 activeChat: active,
+                showNetworks: showNetworks,
               ),
+            );
+            // Swipes (UX-14) wrap the memoised row; same key, so the list
+            // still finds the row by room.
+            final sides = controller.rowSwipeSides(room, projection);
+            if (sides == null) return row;
+            return NotionSwipeAction(
+              key: ValueKey(chatListItemKey(room.id)),
+              endToStart: sides.archive,
+              startToEnd: sides.read,
+              child: row,
             );
           },
           rowIndexOf: (key) {

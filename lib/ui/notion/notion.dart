@@ -29,6 +29,7 @@ export 'notion_shimmer_lines.dart';
 export 'notion_skeleton.dart';
 export 'notion_status_line.dart';
 export 'notion_status_pill.dart';
+export 'notion_swipe_action.dart';
 export 'notion_switchers.dart';
 export 'notion_tokens.dart';
 

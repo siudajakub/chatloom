@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/private_avatar.dart';
+import 'package:chatloom/personal/ui/notion_inbox_network_badge.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
+import 'package:chatloom/personal/ui/notion_network_adapter.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
@@ -90,6 +93,7 @@ List<Object?> chatListItemSignature(
   InboxProjection projection, {
   bool activeChat = false,
   int flash = 0,
+  bool showNetworks = false,
 }) {
   final now = DateTime.now();
   final own = room.client.userID;
@@ -98,6 +102,7 @@ List<Object?> chatListItemSignature(
     projection,
     activeChat,
     flash,
+    showNetworks,
     // Day of the time labels ("12:30" becomes "Mon").
     DateTime(now.year, now.month, now.day),
     room.membership,
@@ -121,6 +126,7 @@ List<Object?> chatListItemSignature(
         event.redacted,
         event.content['body'],
         event.content['m.new_content'],
+        inboxDeliveryProgress(source, event),
       ] else
         null,
     ],
@@ -140,11 +146,16 @@ class ChatListItem extends StatefulWidget {
   /// flashes once ([flashOnMount] when the row is new).
   final int flash;
   final bool flashOnMount;
+
+  /// Mark the row's network(s) on its avatar: the list shows all networks
+  /// (UX-17, FT-12). Off in a single-network view.
+  final bool showNetworks;
   const ChatListItem(
     this.room, {
     this.projection,
     this.flash = 0,
     this.flashOnMount = false,
+    this.showNetworks = false,
     this.activeChat = false,
     required this.onTap,
     this.onLongPress,
@@ -242,12 +253,20 @@ class _ChatListItemState extends State<ChatListItem> {
         : 'Mentions only on this source';
     String? lastPreview;
     var failed = false;
+    var delivery = DeliveryProgress.none;
     if (lastEvent != null) {
       final own = OwnSenderResolver.of(room.client).isOwnEvent(lastEvent);
       // Telegram and Messenger mark a chat whose last own message failed.
       failed =
           lastEvent.status.isError &&
           (own || lastEvent.senderId == room.client.userID);
+      // Ticks before the time (Telegram's dialog list).
+      delivery = inboxDeliveryProgress(lastEvent.room, lastEvent);
+      // A network rejection is marked like a send failure.
+      failed |= delivery == DeliveryProgress.failed;
+      if (delivery == DeliveryProgress.sent) {
+        BridgeDeliveryLedger.of(room.client).lookUp(lastEvent.room, lastEvent);
+      }
       _trackIncoming(lastEvent, own);
       final showsSender = personalPreviewShowsSender(lastEvent);
       if (!own &&
@@ -286,6 +305,9 @@ class _ChatListItemState extends State<ChatListItem> {
         : lastPreview;
     return NotionInboxRow(
       avatar: notionInboxAvatar(personal, projection, room),
+      networks: widget.showNetworks
+          ? notionBadgeNetworks(notionRoomNetworks(projection, room))
+          : const [],
       name: name,
       preview: preview,
       time: lastEvent?.originServerTs.localizedTimeShort(context),
@@ -300,6 +322,15 @@ class _ChatListItemState extends State<ChatListItem> {
       typing: showsTyping,
       pinned: metadata.isPinned,
       failed: showsFailed && !showsTyping,
+      // Sending keeps its delayed spinner; a failure its danger mark.
+      delivery: invite || conflict || draft != null
+          ? null
+          : switch (delivery) {
+              DeliveryProgress.sent ||
+              DeliveryProgress.delivered ||
+              DeliveryProgress.read => delivery.tick,
+              _ => null,
+            },
       previewLeading: showsFailed && !showsTyping
           ? null
           : lastEvent?.status.isSending == true

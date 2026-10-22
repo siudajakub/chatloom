@@ -19,8 +19,11 @@ import 'package:chatloom/pages/chat_list/inbox_keyboard_navigation.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart'
     show BridgeDirectory;
 import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/conversation_shortcuts.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/message_notification.dart'
+    show personalAppLockConfigured;
 import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/person_route.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -354,8 +357,38 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     }
     _selectionKey = null;
     rowMemo.clear();
-    return _inbox = InboxController(client, personal)..active = _inboxVisible;
+    return _inbox = InboxController(client, personal)
+      ..active = _inboxVisible
+      ..addListener(_offerShortcuts);
   }
+
+  final _shortcuts = ConversationShortcutPublisher();
+  DateTime? _shortcutsCheckedAt;
+
+  /// Android launcher shortcuts for the newest chats (FT-21), checked at most
+  /// once a minute and published at most every few minutes; none while the
+  /// app lock is set or notification previews are off.
+  void _offerShortcuts() {
+    if (!PlatformInfos.isAndroid || !mounted) return;
+    final inbox = _inbox;
+    if (inbox == null || inbox.loading) return;
+    final now = DateTime.now();
+    final checked = _shortcutsCheckedAt;
+    if (checked != null && now.difference(checked) < _shortcutCheckInterval) {
+      return;
+    }
+    _shortcutsCheckedAt = now;
+    final top = topConversationShortcuts(inbox.projection, inbox.index);
+    personalAppLockConfigured().then((locked) {
+      if (!mounted || !identical(_inbox, inbox)) return;
+      _shortcuts.offer(
+        top,
+        allowed: !locked && AppSettings.personalNotificationPreviews.value,
+      );
+    }, onError: (Object _) {});
+  }
+
+  static const _shortcutCheckInterval = Duration(minutes: 1);
 
   @override
   void didChangeDependencies() {
@@ -507,8 +540,24 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   }
 
   @protected
-  void onLauncherShortcut(String action) =>
+  void onLauncherShortcut(String action) {
+    final entity = conversationShortcutEntity(action);
+    if (entity == null) {
       UrlLauncher(context, action).launchUrl();
+      return;
+    }
+    // A conversation shortcut (FT-21): a merged person or one chat of the
+    // current account; a shortcut of a chat that is gone does nothing.
+    if (!PersonalPrivacy.surfaceUnlocked) return;
+    if (entity.startsWith('person:')) {
+      context.go(personChatLocation(entity.substring('person:'.length)));
+      return;
+    }
+    final room = Matrix.of(context).client.getRoomById(entity);
+    if (room != null && room.membership == Membership.join) {
+      unawaited(onChatTap(room));
+    }
+  }
 
   @protected
   Future<void> bindLauncherShortcuts() async {
@@ -636,20 +685,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
     switch (action) {
       case ChatMenuAction.read:
-        _runChange(
-          owner,
-          account,
-          () => markInboxRowRead(owner, room),
-          failure: 'Couldn’t mark the chat as read. Try again.',
-        );
-        return;
       case ChatMenuAction.unread:
-        _runChange(
-          owner,
-          account,
-          () => markInboxRowUnread(owner, room),
-          failure: 'Couldn’t mark the chat as unread. Try again.',
-        );
+        applyRowAction(room, action, owner: owner, account: account);
         return;
       case ChatMenuAction.pin:
         final pinned = InboxProjection(owner).metadataFor(room).isPinned;
@@ -709,31 +746,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         return;
       case ChatMenuAction.archive:
       case ChatMenuAction.unarchive:
-        final archive = action == ChatMenuAction.archive;
-        final target = entity();
-        final sources = inboxSources(owner, room);
-        _runChange(
-          owner,
-          account,
-          () => NotionMetadataActions.setArchived(
-            owner,
-            target,
-            archive,
-            sources: sources,
-          ),
-          failure: archive
-              ? 'Couldn’t archive the chat. Check private sync and try again.'
-              : 'Couldn’t move the chat back. Check private sync and try again.',
-          done: archive ? 'Chat archived' : null,
-          undo: archive
-              ? () => NotionMetadataActions.setArchived(
-                  owner,
-                  target,
-                  false,
-                  sources: sources,
-                )
-              : null,
-        );
+        applyRowAction(room, action, owner: owner, account: account);
         return;
       case ChatMenuAction.merge:
         await mergeFrom(room);
@@ -822,6 +835,155 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         builder: (_) => ChatPreferencesPage(personal: owner, room: room),
       ),
     );
+  }
+
+  /// Mark read/unread and archive/unarchive of an inbox row, from its
+  /// long-press menu or a swipe (UX-14): applied at once, "Chat archived"
+  /// with Undo, a failure explained in a snackbar.
+  void applyRowAction(
+    Room room,
+    ChatMenuAction action, {
+    PersonalClient? owner,
+    String? account,
+  }) {
+    final personal = owner ?? this.personal;
+    final key = account ?? inboxAccountKey;
+    switch (action) {
+      case ChatMenuAction.read:
+        _runChange(
+          personal,
+          key,
+          () => markInboxRowRead(personal, room),
+          failure: 'Couldn’t mark the chat as read. Try again.',
+        );
+      case ChatMenuAction.unread:
+        _runChange(
+          personal,
+          key,
+          () => markInboxRowUnread(personal, room),
+          failure: 'Couldn’t mark the chat as unread. Try again.',
+        );
+      case ChatMenuAction.archive:
+      case ChatMenuAction.unarchive:
+        final archive = action == ChatMenuAction.archive;
+        final target = InboxProjection(personal).entityFor(room);
+        final sources = inboxSources(personal, room);
+        _runChange(
+          personal,
+          key,
+          () => NotionMetadataActions.setArchived(
+            personal,
+            target,
+            archive,
+            sources: sources,
+          ),
+          failure: archive
+              ? 'Couldn’t archive the chat. Check private sync and try again.'
+              : 'Couldn’t move the chat back. Check private sync and try again.',
+          done: archive ? 'Chat archived' : null,
+          undo: archive
+              ? () => NotionMetadataActions.setArchived(
+                  personal,
+                  target,
+                  false,
+                  sources: sources,
+                )
+              : null,
+        );
+      default:
+        return;
+    }
+  }
+
+  /// The swipe sides of an inbox row (UX-14, Telegram): towards the start
+  /// archives (unarchives in the Archive view), towards the end marks read
+  /// or unread. Null without the setting, for invites and left chats. The
+  /// menu's rules decide at release, so a swipe never does what its menu
+  /// row would refuse.
+  ({NotionSwipeActionSide? archive, NotionSwipeActionSide? read})?
+  rowSwipeSides(Room room, InboxProjection projection) {
+    if (!AppSettings.inboxSwipeActions.value ||
+        room.membership != Membership.join) {
+      return null;
+    }
+    final group = projection.groupFor(room);
+    final sources = group == null
+        ? [room]
+        : [
+            for (final member in group.members)
+              ?room.client.getRoomById(member.roomId),
+          ];
+    final unread = sources.any((source) => source.isUnread);
+    final archived = projection.metadataFor(room).archived;
+    final ignored = projection.placementFor(room) == ChatPlacement.ignored;
+    void commit(ChatMenuAction action, String refused) {
+      if (!mounted) return;
+      final item = chatMenuItems(
+        personal,
+        room,
+        pinLabel: '',
+        unpinLabel: '',
+      ).firstWhereOrNull((item) => item.action == action);
+      if (item == null || !item.enabled) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(refused)));
+        return;
+      }
+      applyRowAction(room, action);
+    }
+
+    return (
+      archive: ignored
+          ? null
+          : NotionSwipeActionSide(
+              icon: archived
+                  ? Icons.unarchive_outlined
+                  : Icons.archive_outlined,
+              label: archived ? 'Unarchive' : 'Archive',
+              onCommit: () => commit(
+                archived ? ChatMenuAction.unarchive : ChatMenuAction.archive,
+                'Archive needs private sync. Try again in a moment.',
+              ),
+            ),
+      read: NotionSwipeActionSide(
+        icon: unread
+            ? Icons.mark_chat_read_outlined
+            : Icons.mark_chat_unread_outlined,
+        label: unread ? 'Read' : 'Unread',
+        onCommit: () => commit(
+          unread ? ChatMenuAction.read : ChatMenuAction.unread,
+          'Couldn’t change this chat right now. Try again.',
+        ),
+      ),
+    );
+  }
+
+  Object? _unreadKey;
+  int _unreadChats = 0;
+
+  /// Chats in the Unread view for the selected network: the "Unread" chip's
+  /// count (UX-16). Memoised per inbox change, like [filterRooms].
+  int unreadViewCount() {
+    final inbox = this.inbox;
+    final network = selectedNetwork;
+    final key = (inbox, inbox.generation, network);
+    if (key == _unreadKey) return _unreadChats;
+    final index = inbox.index;
+    _unreadChats = inbox.projection
+        .select(index, filter: InboxFilter.unread)
+        .where(
+          (room) =>
+              network == null ||
+              notionMatchesNetwork(
+                index.recordFor(room)?.networks ??
+                    notionRoomNetworks(inbox.projection, room),
+                network,
+              ),
+        )
+        .length;
+    _unreadKey = key;
+    return _unreadChats;
   }
 
   /// Runs a private change without blocking the UI: the inbox shows it as
