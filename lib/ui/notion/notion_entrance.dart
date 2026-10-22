@@ -101,10 +101,12 @@ class NotionEntrance extends StatefulWidget {
 
 class _NotionEntranceState extends State<NotionEntrance>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: widget.duration,
-  );
+  // An entrance that does not play (rows built by scrolling, reduced motion,
+  // disabled) never creates its controller or effect chain.
+  AnimationController? _motion;
+  AnimationController get _controller =>
+      _motion ??= AnimationController(vsync: this, duration: widget.duration);
+  bool _skip = false;
   bool _decided = false;
   int _index = 0;
   Widget? _chain;
@@ -114,7 +116,7 @@ class _NotionEntranceState extends State<NotionEntrance>
     super.didChangeDependencies();
     final reduced = NotionMotion.reduced(context);
     if (_decided) {
-      if (reduced) _controller.value = 1;
+      if (reduced) _motion?.value = 1;
       return;
     }
     _decided = true;
@@ -123,7 +125,7 @@ class _NotionEntranceState extends State<NotionEntrance>
         scope?._claim(widget.playKey, widget.index) ??
         (play: true, index: widget.index ?? 0);
     if (!widget.enabled || !claim.play || reduced) {
-      _controller.value = 1;
+      _skip = true;
       return;
     }
     _index = claim.index;
@@ -144,7 +146,7 @@ class _NotionEntranceState extends State<NotionEntrance>
   @override
   void didUpdateWidget(NotionEntrance oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.enabled) _controller.value = 1;
+    if (!widget.enabled) _motion?.value = 1;
     if (oldWidget.rise != widget.rise ||
         oldWidget.slide != widget.slide ||
         oldWidget.scale != widget.scale ||
@@ -155,7 +157,7 @@ class _NotionEntranceState extends State<NotionEntrance>
 
   @override
   void dispose() {
-    _controller.dispose();
+    _motion?.dispose();
     super.dispose();
   }
 
@@ -194,7 +196,7 @@ class _NotionEntranceState extends State<NotionEntrance>
   @override
   Widget build(BuildContext context) => _EffectSlot(
     content: widget.child,
-    child: _chain ??= _buildChain(context),
+    child: _skip ? const _SlotChild() : _chain ??= _buildChain(context),
   );
 }
 

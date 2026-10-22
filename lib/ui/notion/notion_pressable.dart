@@ -59,10 +59,19 @@ class NotionPressable extends StatefulWidget {
 
 class _NotionPressableState extends State<NotionPressable>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _scale = AnimationController.unbounded(
-    vsync: this,
-    value: 1,
-  );
+  // Created on the first press: a list of rows costs no tickers until one
+  // is touched. Until then the transform reads a constant 1.
+  AnimationController? _controller;
+  AnimationController get _scale {
+    final existing = _controller;
+    if (existing != null) return existing;
+    final created = AnimationController.unbounded(vsync: this, value: 1);
+    _controller = created;
+    // Rebuild once so the transform listens to the new controller.
+    setState(() {});
+    return created;
+  }
+
   bool _down = false;
   Offset _origin = Offset.zero;
 
@@ -86,7 +95,7 @@ class _NotionPressableState extends State<NotionPressable>
   }
 
   void _release([PointerEvent? event]) {
-    if (!_down) return;
+    if (!_down || _controller == null) return;
     _down = false;
     if (!mounted) return;
     // A quick tap still shows a visible dip before springing back.
@@ -120,15 +129,16 @@ class _NotionPressableState extends State<NotionPressable>
   @override
   void didUpdateWidget(NotionPressable oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.enabled && _scale.value != 1) {
+    final controller = _controller;
+    if (!widget.enabled && controller != null && controller.value != 1) {
       _down = false;
-      _scale.value = 1;
+      controller.value = 1;
     }
   }
 
   @override
   void dispose() {
-    _scale.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
@@ -159,7 +169,7 @@ class _NotionPressableState extends State<NotionPressable>
       onPointerUp: _release,
       onPointerCancel: _release,
       child: _ScaleTransform(
-        scale: _scale,
+        scale: _controller ?? kAlwaysCompleteAnimation,
         alignment: widget.alignment,
         child: child,
       ),

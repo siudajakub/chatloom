@@ -245,27 +245,51 @@ class NotionSizeReveal extends StatefulWidget {
 
 class _NotionSizeRevealState extends State<NotionSizeReveal>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: widget.duration,
-    reverseDuration: NotionMotion.short,
-    value: widget.visible && !widget.revealOnMount ? 1 : 0,
-  )..addStatusListener(_status);
-  late final CurvedAnimation _size = CurvedAnimation(
-    parent: _controller,
-    curve: NotionMotion.emphasized,
-    reverseCurve: NotionMotion.exitFast,
-  );
-  late final CurvedAnimation _fade = CurvedAnimation(
-    parent: _controller,
-    curve: const Interval(.25, 1, curve: NotionMotion.standard),
-    reverseCurve: const Interval(.4, 1, curve: NotionMotion.standard),
-  );
+  // Created on the first change of [visible] (or a reveal on mount): rows
+  // whose element never changes cost no ticker. Until then the reveal is
+  // settled at its initial state.
+  AnimationController? _motion;
+  CurvedAnimation? _sizeCurve, _fadeCurve;
+  late final bool _initiallyVisible = widget.visible && !widget.revealOnMount;
+
+  AnimationController get _controller {
+    final existing = _motion;
+    if (existing != null) return existing;
+    final controller = _motion = AnimationController(
+      vsync: this,
+      duration: widget.duration,
+      reverseDuration: NotionMotion.short,
+      value: _initiallyVisible ? 1 : 0,
+    )..addStatusListener(_status);
+    _sizeCurve = CurvedAnimation(
+      parent: controller,
+      curve: NotionMotion.emphasized,
+      reverseCurve: NotionMotion.exitFast,
+    );
+    _fadeCurve = CurvedAnimation(
+      parent: controller,
+      curve: const Interval(.25, 1, curve: NotionMotion.standard),
+      reverseCurve: const Interval(.4, 1, curve: NotionMotion.standard),
+    );
+    return controller;
+  }
+
+  Animation<double> get _size =>
+      _sizeCurve ??
+      (_initiallyVisible
+          ? kAlwaysCompleteAnimation
+          : kAlwaysDismissedAnimation);
+  Animation<double> get _fade =>
+      _fadeCurve ??
+      (_initiallyVisible
+          ? kAlwaysCompleteAnimation
+          : kAlwaysDismissedAnimation);
+  bool get _dismissed => _motion?.isDismissed ?? !_initiallyVisible;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (widget.visible && _controller.isDismissed) _show();
+    if (widget.visible && _dismissed) _show();
   }
 
   void _status(AnimationStatus status) {
@@ -283,7 +307,7 @@ class _NotionSizeRevealState extends State<NotionSizeReveal>
   @override
   void didUpdateWidget(NotionSizeReveal oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _controller.duration = widget.duration;
+    _motion?.duration = widget.duration;
     if (oldWidget.visible == widget.visible) return;
     if (widget.visible) {
       _show();
@@ -296,15 +320,15 @@ class _NotionSizeRevealState extends State<NotionSizeReveal>
 
   @override
   void dispose() {
-    _size.dispose();
-    _fade.dispose();
-    _controller.dispose();
+    _sizeCurve?.dispose();
+    _fadeCurve?.dispose();
+    _motion?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.visible && _controller.isDismissed) {
+    if (!widget.visible && _dismissed) {
       return const SizedBox.shrink();
     }
     final alignment = widget.alignment.resolve(Directionality.maybeOf(context));
@@ -509,7 +533,9 @@ class NotionRowHighlight extends StatefulWidget {
 
 class _NotionRowHighlightState extends State<NotionRowHighlight>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
+  // Created on the first flash: rows that never flash cost no ticker.
+  AnimationController? _flash;
+  AnimationController get _controller => _flash ??= AnimationController(
     vsync: this,
     duration: NotionMotion.highlight,
   );
@@ -553,14 +579,14 @@ class _NotionRowHighlightState extends State<NotionRowHighlight>
 
   @override
   void dispose() {
-    _controller.dispose();
+    _flash?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => CustomPaint(
     painter: _HighlightPainter(
-      animation: _controller.drive(_alpha),
+      animation: _flash?.drive(_alpha) ?? kAlwaysDismissedAnimation,
       color: widget.color ?? context.notion.colors.selected,
       borderRadius: widget.borderRadius,
       direction: Directionality.maybeOf(context),
@@ -594,7 +620,9 @@ class _HighlightPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HighlightPainter old) =>
-      old.color != color || old.borderRadius != borderRadius;
+      old.color != color ||
+      old.borderRadius != borderRadius ||
+      !identical(old.animation, animation);
 }
 
 /// Shows [child] only after [delay] (then fades it in), so an operation that
