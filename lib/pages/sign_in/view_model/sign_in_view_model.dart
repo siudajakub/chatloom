@@ -3,24 +3,15 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:convert';
-
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/sign_in/view_model/model/public_homeserver_data.dart';
 import 'package:chatloom/pages/sign_in/view_model/sign_in_state.dart';
-import 'package:chatloom/widgets/matrix.dart';
-import 'package:collection/collection.dart';
 import 'package:flutter/widgets.dart';
-import 'package:matrix/matrix_api_lite/utils/logs.dart';
 
 class SignInViewModel extends ValueNotifier<SignInState> {
-  final MatrixState matrixService;
-  final bool signUp;
   final TextEditingController filterTextController = TextEditingController();
 
-  SignInViewModel(this.matrixService, {required this.signUp})
-    : super(SignInState()) {
+  SignInViewModel() : super(SignInState()) {
     refreshPublicHomeservers();
     filterTextController.addListener(_filterHomeservers);
   }
@@ -54,51 +45,17 @@ class SignInViewModel extends ValueNotifier<SignInState> {
     notifyListeners();
   }
 
-  Future<void> refreshPublicHomeservers() async {
-    notifyListeners();
-    value.publicHomeservers = AsyncSnapshot.waiting();
+  /// Offers the default homeserver (Beeper); any other server can be typed
+  /// into the filter. No public list is fetched, so opening sign-in sends
+  /// no request to a third party.
+  void refreshPublicHomeservers() {
     final defaultHomeserverData = PublicHomeserverData(
       name: AppSettings.defaultHomeserver.value,
     );
-    try {
-      final client = await matrixService.getLoginClient();
-      final response = await client.httpClient.get(AppConfig.homeserverList);
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      final homeserverJsonList = json['public_servers'] as List;
-
-      final publicHomeservers = homeserverJsonList
-          .map((json) => PublicHomeserverData.fromJson(json))
-          .toList();
-
-      if (signUp) {
-        publicHomeservers.removeWhere((server) {
-          return server.regMethod == null;
-        });
-      }
-
-      final defaultServer = publicHomeservers.singleWhereOrNull(
-        (server) => server.name == AppSettings.defaultHomeserver.value,
-      );
-
-      if (defaultServer == null) {
-        publicHomeservers.insert(0, defaultHomeserverData);
-      }
-
-      value.selectedHomeserver =
-          value.selectedHomeserver ?? publicHomeservers.first;
-      value.publicHomeservers = AsyncSnapshot.withData(
-        ConnectionState.done,
-        publicHomeservers,
-      );
-      notifyListeners();
-    } catch (e, s) {
-      Logs().w('Unable to fetch public homeservers...', e, s);
-      value.selectedHomeserver = defaultHomeserverData;
-      value.publicHomeservers = AsyncSnapshot.withData(ConnectionState.done, [
-        defaultHomeserverData,
-      ]);
-      notifyListeners();
-    }
+    value.selectedHomeserver ??= defaultHomeserverData;
+    value.publicHomeservers = AsyncSnapshot.withData(ConnectionState.done, [
+      defaultHomeserverData,
+    ]);
     _filterHomeservers();
   }
 

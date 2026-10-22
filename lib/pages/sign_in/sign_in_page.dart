@@ -11,7 +11,6 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/sign_in_flows/check_homeserver.dart';
 import 'package:chatloom/widgets/layouts/login_scaffold.dart';
-import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/view_model_builder.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -24,7 +23,7 @@ class SignInPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return ViewModelBuilder(
-      create: () => SignInViewModel(Matrix.of(context), signUp: signUp),
+      create: SignInViewModel.new,
       builder: (context, viewModel, _) {
         final state = viewModel.value;
         final publicHomeservers = state.filteredPublicHomeservers;
