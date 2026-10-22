@@ -321,12 +321,7 @@ void main() {
       expect(transport.paths.where((p) => p.contains('contacts')), isEmpty);
       expect(find.text('Your networks'), findsOneWidget);
       expect(find.text('Find people and start chats'), findsOneWidget);
-      expect(
-        find.text(
-          'People from your chats only (ChatLoom can’t reach this bridge)',
-        ),
-        findsOneWidget,
-      );
+      expect(find.text('People from your chats only'), findsOneWidget);
 
       await _type(tester, 'anna');
       // People of bridged chats and bridge contacts, under their network.
@@ -471,10 +466,7 @@ void main() {
     final directory = BridgeDirectory.disabled('Not available in tests.');
     final opened = _Opened();
     await _openSearch(tester, fixture, directory, opened);
-    expect(
-      find.text('People from your chats only (Not available in tests.)'),
-      findsNWidgets(2),
-    );
+    expect(find.text('People from your chats only'), findsNWidgets(2));
     await tester.tap(find.text('Archive'));
     await tester.pumpAndSettle();
     expect(opened.views, [InboxFilter.archive]);

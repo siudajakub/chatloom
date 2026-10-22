@@ -778,7 +778,47 @@ void main() {
           ),
           'WhatsApp',
         ),
-        'Identifier not found',
+        'No one on WhatsApp has that number or username.',
+      );
+      // The network's own sentence stays; bridgev2's technical ones don't.
+      expect(
+        bridgedChatError(
+          const BridgeProvisioningException(
+            400,
+            message: 'The phone number is not on WhatsApp',
+          ),
+          'WhatsApp',
+        ),
+        'The phone number is not on WhatsApp.',
+      );
+      expect(
+        bridgedChatError(
+          const BridgeProvisioningException(
+            400,
+            errcode: 'FI.MAU.NOT_LOGGED_IN',
+            message: 'Not logged in',
+          ),
+          'WhatsApp',
+        ),
+        'You’re signed out of WhatsApp. Sign in on the Networks page.',
+      );
+      expect(
+        bridgedChatError(
+          const BridgeProvisioningException(
+            500,
+            errcode: 'M_UNKNOWN',
+            message: 'Failed to create portal room',
+          ),
+          'WhatsApp',
+        ),
+        'The bridge couldn’t open the chat. Try again.',
+      );
+      expect(
+        bridgedChatError(
+          const BridgeProvisioningException(400, message: 'M_NOT_JSON'),
+          'WhatsApp',
+        ),
+        'The bridge couldn’t do that.',
       );
     });
   });

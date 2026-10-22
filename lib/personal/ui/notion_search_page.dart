@@ -901,9 +901,8 @@ class _EmptySearch extends StatelessWidget {
     BridgeRemoteStatus.unknown ||
     BridgeRemoteStatus.checking => 'Checking the bridge…',
     BridgeRemoteStatus.notLoggedIn => 'Bridge not signed in',
-    BridgeRemoteStatus.unavailable =>
-      'People from your chats only'
-          '${state.reason == null ? '' : ' (${state.reason})'}',
+    // The technical reason stays in the diagnostics log (CC-31).
+    BridgeRemoteStatus.unavailable => 'People from your chats only',
   };
 
   @override

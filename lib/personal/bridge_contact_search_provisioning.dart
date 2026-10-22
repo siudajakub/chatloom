@@ -64,13 +64,23 @@ class BridgeEndpoint {
 /// One remote login of a bridge (a WhatsApp number, a Telegram account).
 @immutable
 class BridgeLogin {
-  const BridgeLogin({required this.id, required this.name, this.state});
+  const BridgeLogin({
+    required this.id,
+    required this.name,
+    this.state,
+    this.stateDetails,
+  });
 
   final String id;
   final String name;
 
   /// bridgev2 state event (`CONNECTED`, `BAD_CREDENTIALS`, `LOGGED_OUT`, …).
   final String? state;
+
+  /// The whole bridge state object (`state_event`, `timestamp`, `error`,
+  /// `user_action`, …) for the network status; read through
+  /// `BridgeStateReport.fromLogin`, never logged.
+  final Map<Object?, Object?>? stateDetails;
 
   /// Logged out or rejected logins cannot list contacts or start chats.
   bool get usable => state != 'BAD_CREDENTIALS' && state != 'LOGGED_OUT';
@@ -86,6 +96,11 @@ class BridgeLogin {
     return BridgeLogin(
       id: id,
       name: name is String ? name : '',
+      stateDetails: state is Map
+          ? state
+          : legacy is String
+          ? {'state_event': legacy}
+          : null,
       state: stateEvent is String
           ? stateEvent
           : legacy is String
