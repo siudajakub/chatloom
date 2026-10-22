@@ -228,6 +228,7 @@ in new code; read `context.notion` instead.
 | `NotionReactionChip`, `NotionReactionOverlap`, `NotionReactionBar`, `NotionReactionBurst` | reaction pills under a bubble, the long-press reaction pill, the double-tap burst (`notion_reactions.dart`, tokens `NotionReactions.*`) |
 | `NotionGlassSurface`, `NotionGlassBar`, `NotionGlassScope` | glass chrome and overlays (see Glass) |
 | `NotionGlassPanel`, `NotionGlassMenuRow`, `NotionGlassDivider`, `NotionGlassPill` | the dock's language: glass menus, dialogs, sheets, pill buttons (see Glass) |
+| `NotionLinkPreviewCard(title:, description:, site:, image:, fill:, textColor:, mutedColor:, onTap:)` | a bridged link preview inside a text bubble: opaque card, image on top (1:1 to 16:9), site, title, description; colours from the bubble, no blur, never fetches the URL (`notion_link_preview.dart`) |
 | `NotionMediaPlaybackControls`, `NotionMediaActionsButton` | Focused media transport over `stageScrim`: play/pause, time, seek, speed; secondary actions in one menu. Data and callbacks only; `seekControl` accepts a voice waveform instead of the slider. |
 | `NotionPressable`, `NotionEntrance`, `NotionSkeleton`, `NotionFadeThrough`, `NotionPop`, ... | motion (see Motion) |
 
@@ -372,6 +373,7 @@ dialogs and sheets never bounce.
 | `gestureTravel` · `gestureCommit` | 1.0 · `easeOutQuad` | Android predictive back: the page follows the finger, a release continues from there (see Page motion) |
 | `stagger` / `staggerCap` | 28 ms / 10 | per-item delay, never more than 10 steps |
 | `loaderGrace` | 250 ms | a loader stays invisible this long |
+| `loopCap` · `liveLoopCap` | 30 s · 2 min | longest run of a spinner, shimmer or typing dots · of a live-state `NotionPulse`; then the loop rests on a static frame |
 | `standard` | `Cubic(.2, 0, 0, 1)` | general tweens (= `ChatLoomThemes.animationCurve`) |
 | `emphasized` | `Cubic(.05, .7, .1, 1)` | entrances, page enter |
 | `exitFast` | `Cubic(.3, 0, .8, .15)` | exits |
@@ -410,9 +412,9 @@ decide; nothing buzzes by default.
 | `NotionShake(trigger:, child:)` | rejected input (wrong PIN) | `NotionShake(trigger: errors, child: field)` |
 | `NotionRowHighlight(trigger:, child:)` | one-shot `selected` flash of a row that moved or changed (inbox reorder is not animated) | `NotionRowHighlight(trigger: room.lastEventId, child: row)` |
 | `NotionSkeleton(enabled:, child:)`, `.sliver`, `NotionSkeletonRow()`, `NotionSkeleton.keep/ignore/unite` | loading state with the final layout; cross-fades to content | `NotionSkeleton(enabled: loading, child: Column(children: [for (var i = 0; i < 8; i++) const NotionSkeletonRow()]))` |
-| `NotionDelayedSpinner()`, `NotionDelayedReveal(child:)` | loaders that only show after `loaderGrace` | `if (busy) const NotionDelayedSpinner()` |
-| `NotionShimmerLines(color:, lines:)` | text that is on its way inside a bubble (transcripts); one `CustomPaint` behind a `RepaintBoundary`, bubble foreground colour, static under reduced motion | `NotionShimmerLines(color: bubbleText, lines: 2)` |
-| `NotionTypingDots(size:)`, `NotionPulse(child:, color:)` | loops: typing, live call/recording | `NotionPulse(color: colors.danger, child: callButton)` |
+| `NotionDelayedSpinner(maxSpin:)`, `NotionDelayedReveal(child:)` | loaders that only show after `loaderGrace`; the spinner freezes on its last frame after `maxSpin` (`loopCap`) | `if (busy) const NotionDelayedSpinner()` |
+| `NotionShimmerLines(color:, lines:, maxDuration:, onRest:)` | text that is on its way inside a bubble (transcripts); one `CustomPaint` behind a `RepaintBoundary`, bubble foreground colour, static under reduced motion and after `maxDuration` (`onRest` lets the owner explain a long wait) | `NotionShimmerLines(color: bubbleText, lines: 2)` |
+| `NotionTypingDots(size:)`, `NotionPulse(child:, color:, maxDuration:)` | loops: typing (rests after `loopCap`), live call/recording (rests after `liveLoopCap`; toggling `enabled` restarts it) | `NotionPulse(color: colors.danger, child: callButton)` |
 | `showNotionCustomDialog(context:, builder:)`, `NotionDialogRoute`, `NotionDialogTransition` | any dialog: barrier fade, scale .94 → 1 on `smoothCurve`, faster exit | `showNotionCustomDialog(context: context, builder: (_) => NotionDialog(...))` |
 | `showNotionPopover(context:, builder:, alignment:)`, `NotionPopoverRoute` | anchored panels/menus: the `NotionGlassPanel` in `builder` grows out of `alignment` (the anchor) with its blur on, content fades in; collapses back in `quick`; instant under reduced motion. Content without a glass panel appears without motion | `showNotionPopover(context: context, alignment: Alignment.bottomRight, builder: panel)` |
 | `AfterRouteTransition(child:)` | heavy content after the push; now fades the child in | as before |
@@ -481,8 +483,13 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
 3. Every one-shot animation settles to identity (opacity 1, offset 0,
    scale 1); goldens of resting states stay pixel-identical.
 4. Every loop (`NotionTypingDots`, `NotionPulse`, skeleton shimmer, spinners)
-   stops under `TickerMode` off and reduced motion. Never leave a skeleton
-   enabled in a settled golden; use fixed pumps for loops.
+   stops under `TickerMode` off and reduced motion, and rests on a static
+   frame after its cap (`NotionMotion.loopCap`, `liveLoopCap` for live
+   states): a wait that never ends (failed media, an offline worker) must
+   not draw frames forever. Failed media shows a static fallback, never a
+   spinner. Content loops (Lottie stickers, inline GIFs) play only while
+   visible, under `TickerMode` on and outside reduced motion. Never leave a
+   skeleton enabled in a settled golden; use fixed pumps for loops.
 5. No timers for motion. flutter_animate's `Animate` widget, `.animate()`
    and `AnimateList` always schedule a `Future.delayed` (even with zero
    delay) and leave pending timers in tests; `notion_entrance.dart` drives
