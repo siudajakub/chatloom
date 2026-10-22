@@ -20,6 +20,15 @@ class TelegramRoomBinding {
   static final _uploadLimits = <Client, int>{};
   static final _trusted = <Client, Set<String>>{};
 
+  /// Clients whose last [preflight] could not reach the server's media
+  /// configuration (a connection problem, not a refusal by the bridge).
+  static final _unreachable = Expando<bool>();
+
+  /// Whether the last [preflight] for [client] failed to ask the server for
+  /// its upload limit, so a refused round is a connection problem.
+  static bool uploadLimitUnreachable(Client client) =>
+      _unreachable[client] ?? false;
+
   /// Bumped on every trust change so cached availability can be refreshed.
   static int get trustRevision => _trustRevision;
   static int _trustRevision = 0;
@@ -164,14 +173,17 @@ class TelegramRoomBinding {
       } else {
         _uploadLimits[room.client] = limit;
       }
+      _unreachable[room.client] = null;
     } catch (_) {
       _uploadLimits.remove(room.client);
+      _unreachable[room.client] = true;
     }
     return of(room)?.capabilities(room);
   }
 
   static void forget(Client client) {
     _uploadLimits.remove(client);
+    _unreachable[client] = null;
     _trusted.remove(client);
     _trustRevision++;
   }

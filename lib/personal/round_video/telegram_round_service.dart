@@ -247,11 +247,16 @@ class TelegramRoundService extends ChangeNotifier
         if (!room.encrypted || !client.fileEncryptionEnabled) {
           throw const ImmediateMediaRejected('encryptionUnavailable');
         }
-        return client.uploadContent(
-          bytes,
-          filename: 'media.bin',
-          contentType: 'application/octet-stream',
-        );
+        try {
+          return await client.uploadContent(
+            bytes,
+            filename: 'media.bin',
+            contentType: 'application/octet-stream',
+          );
+        } on PrivacySuppressed {
+          // Refused on this device before any byte left it.
+          throw const ImmediateMediaRejected('privacySuppressed');
+        }
       },
       sendEvent: (target, content, txid) async {
         final room = _sourceRoom(target);
@@ -272,6 +277,10 @@ class TelegramRoundService extends ChangeNotifier
           );
         } on PersonalCapabilityUnavailable {
           throw const ImmediateMediaRejected('bridgeUnavailable');
+        } on PrivacySuppressed {
+          // Refused on this device before the request was made: definitely
+          // not sent (not "unconfirmed").
+          throw const ImmediateMediaRejected('privacySuppressed');
         } on MatrixException catch (error) {
           if ({
             'M_FORBIDDEN',
@@ -321,7 +330,7 @@ class TelegramRoundService extends ChangeNotifier
     return !_closed &&
         _dispatchEligible &&
         PersonalPrivacy.surfaceUnlocked &&
-        PersonalPrivacy.surfaceForeground &&
+        _surfaceVisible &&
         room.encrypted &&
         client.encryptionEnabled &&
         client.fileEncryptionEnabled &&
@@ -357,7 +366,7 @@ class TelegramRoundService extends ChangeNotifier
       throw const ImmediateMediaRejected('frozenBridgeIdentityChanged');
     }
     if (!PersonalPrivacy.surfaceUnlocked ||
-        !PersonalPrivacy.surfaceForeground ||
+        !_surfaceVisible ||
         !room.encrypted ||
         !client.encryptionEnabled ||
         !client.fileEncryptionEnabled) {
@@ -369,7 +378,14 @@ class TelegramRoundService extends ChangeNotifier
         (target.silent &&
             caps?.extension.operation('silent_send').allowed != true) ||
         descriptor.outgoingError(caps!.profile!) != null) {
-      throw const ImmediateMediaRejected('roundCapabilityUnavailable');
+      // No upload limit because the server could not be asked: a
+      // connection problem, not a bridge that refuses rounds.
+      throw ImmediateMediaRejected(
+        caps?.profile == null &&
+                TelegramRoomBinding.uploadLimitUnreachable(client)
+            ? 'uploadLimitUnavailable'
+            : 'roundCapabilityUnavailable',
+      );
     }
     for (final pair in [
       (target.replyEventId, BridgeFeature.reply),
@@ -456,6 +472,8 @@ class TelegramRoundService extends ChangeNotifier
       throw const ImmediateMediaRejected('saveExistingDraftFirst');
     capturing = true;
     notifyListeners();
+    // Actions this call reserved in [_staging] (released in `finally`).
+    final reserved = <String>{};
     try {
       await initialize();
       if (!context.mounted || !stillCurrent()) return null;
@@ -526,6 +544,10 @@ class TelegramRoundService extends ChangeNotifier
       // has the round. Staging, encryption and the upload follow.
       final actionId = _outbox!.newActionId();
       final transactionId = 'round-$actionId';
+      // Reserved before the bubble and the durable record exist, until the
+      // dispatch owns it: a chat opening meanwhile must not mark it failed.
+      _staging.add(actionId);
+      reserved.add(actionId);
       final descriptor = _descriptorOf(prepared);
       Uint8List? frame;
       try {
@@ -550,10 +572,14 @@ class TelegramRoundService extends ChangeNotifier
       if (staged.state == ImmediateMediaState.failed) {
         // Protected storage refused it: the bubble says "Not sent" and its
         // Retry saves and sends this in-memory recording again.
+        _staging.remove(actionId);
+        reserved.remove(actionId);
         await _markFailed(room, transactionId);
         notifyListeners();
         return staged;
       }
+      _staging.add(staged.actionId);
+      reserved.add(staged.actionId);
       _unstaged.remove(frozen.roomId);
       await prepared.close();
       if (staged.actionId != actionId) {
@@ -564,9 +590,12 @@ class TelegramRoundService extends ChangeNotifier
       // while this one uploads (Telegram parity). Sends stay ordered per room.
       capturing = false;
       notifyListeners();
+      // Synchronously claims the action in [_dispatching] before the
+      // reservation below is released.
       unawaited(_dispatch(room, staged.actionId, onAccepted: onAccepted));
       return staged;
     } finally {
+      _staging.removeAll(reserved);
       capturing = false;
       if (!_closed) notifyListeners();
     }
@@ -662,8 +691,7 @@ class TelegramRoundService extends ChangeNotifier
   }) async {
     final transactionId = 'round-$actionId';
     if (_closed || !_dispatching.add(actionId)) return null;
-    if (!PersonalPrivacy.surfaceUnlocked ||
-        !PersonalPrivacy.surfaceForeground) {
+    if (!PersonalPrivacy.surfaceUnlocked || !_surfaceVisible) {
       // Do not keep the multi-megabyte copy in memory; Retry reads storage.
       _outbox!.releaseStaged(actionId);
       await _markFailed(room, transactionId);
@@ -839,6 +867,22 @@ class TelegramRoundService extends ChangeNotifier
       await OutgoingEcho.setStatus(target, transactionId, EventStatus.sending);
     } catch (_) {}
     if (unstaged == null) return _dispatch(target, actionId);
+    // Staging again: reconcile leaves the bubble alone until dispatch owns it.
+    _staging.add(actionId);
+    try {
+      return await _retryUnstaged(target, actionId, unstaged);
+    } finally {
+      _staging.remove(actionId);
+    }
+  }
+
+  Future<ImmediateMediaResult?> _retryUnstaged(
+    Room target,
+    String actionId,
+    (RoundSendTarget, RoundEncodingProfile, PreparedRoundMedia, String)
+    unstaged,
+  ) async {
+    final transactionId = 'round-$actionId';
     ImmediateMediaResult staged;
     try {
       staged = await _stage(
@@ -919,6 +963,12 @@ class TelegramRoundService extends ChangeNotifier
         'The Telegram bridge of this chat changed. Delete the round video '
             'and record it again.',
       'sendRejected' => 'The server did not accept this round video.',
+      'uploadLimitUnavailable' =>
+        'ChatLoom could not reach the server to check the upload limit. '
+            'Check your connection and retry. $same',
+      'privacySuppressed' =>
+        'ChatLoom was locked or signed out, so the round video was not '
+            'sent. Retry sends it now.',
       'preDispatchFailure' =>
         'The upload did not finish. Check your connection and retry. $same',
       _ => 'The round video was not sent. $same',
@@ -927,6 +977,25 @@ class TelegramRoundService extends ChangeNotifier
 
   /// Actions dispatched (or queued for dispatch) by this process.
   final _dispatching = <String>{};
+
+  /// Actions whose bubble or durable draft is being created (recorded, or
+  /// saved again by Retry) and not yet dispatched. [reconcileRoom] leaves
+  /// them alone, so a chat opening meanwhile never says "Not sent" while
+  /// the round is about to upload.
+  final _staging = <String>{};
+
+  /// Sends continue while ChatLoom is on screen but not focused (`inactive`:
+  /// the notification shade, a permission or biometric dialog), as
+  /// Telegram's do. Hidden, paused or locked stops them.
+  static bool get _surfaceVisible {
+    if (PersonalPrivacy.surfaceForeground) return true;
+    try {
+      return WidgetsBinding.instance.lifecycleState ==
+          AppLifecycleState.inactive;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Attempts whose server response was lost: their copy arriving in sync
   /// confirms them ([_receive]).
@@ -947,6 +1016,7 @@ class TelegramRoundService extends ChangeNotifier
       if (target is! Map ||
           target['roomId'] != room.id ||
           _dispatching.contains(id) ||
+          _staging.contains(id) ||
           !_reconciling.add(id)) {
         continue;
       }
