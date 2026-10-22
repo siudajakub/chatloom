@@ -83,6 +83,10 @@ class ConversationClassifier {
     }
   }
 
+  /// Whether [userId] is a bridge bot or another declared service member of
+  /// any loaded room (bridge info `bridgebot`, functional members).
+  bool isServiceMember(String userId) => _serviceMembers.contains(userId);
+
   /// Whether this classifier already knows every service member [room]
   /// declares and no bridge started declaring room kinds since it was built,
   /// i.e. a changed [room] cannot change other rooms' results.

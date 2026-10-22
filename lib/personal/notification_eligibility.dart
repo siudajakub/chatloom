@@ -76,3 +76,24 @@ Future<bool> personalNotificationEligible(
       parent.status.isSynced &&
       {EventTypes.Message, EventTypes.Sticker}.contains(parent.type);
 }
+
+/// How long after the user wrote in a bot or service chat its replies still
+/// alert like a person's message.
+const serviceReplyWindow = Duration(minutes: 10);
+
+/// Bridge bots and other service chats notify quietly: in the shade, without
+/// sound or pop-up (bridges/BR-10). Their messages are status, not a person
+/// writing. The exception is a reply the user waits for: they wrote in that
+/// chat within [serviceReplyWindow] (a sign-in, a command).
+bool personalNotificationQuiet({
+  required bool technical,
+  required bool fromService,
+  required DateTime now,
+  DateTime? lastOwnMessage,
+}) {
+  if (!technical && !fromService) return false;
+  if (lastOwnMessage == null) return true;
+  final age = now.difference(lastOwnMessage);
+  // A clock ahead of this device's counts as recent.
+  return !age.isNegative && age > serviceReplyWindow;
+}
