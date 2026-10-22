@@ -122,6 +122,10 @@ enum AppSettings<T> {
   /// An emoji the user picked for double tap; empty means automatic: the
   /// network's first quick reaction, a heart wherever it has one.
   doubleTapReaction<String>('chat.fluffy.double_tap_reaction', ''),
+
+  /// Inbox row swipes (Telegram): left archives (with Undo), right marks
+  /// read or unread. Settings › Chats › "Swipe chats in the list" (UX-14).
+  inboxSwipeActions<bool>('pl.personal.inbox.swipe_actions', true),
   benchmarksInLogs<bool>('chat.fluffy.benchmarks_in_logs', false);
 
   final String key;

@@ -39,6 +39,11 @@ class SettingsChatView extends StatelessWidget {
             setting: AppSettings.swipeRightToLeftToReply,
           ),
           SettingsSwitchListTile.adaptive(
+            title: 'Swipe chats in the list',
+            subtitle: 'Left to archive, right to mark as read or unread',
+            setting: AppSettings.inboxSwipeActions,
+          ),
+          SettingsSwitchListTile.adaptive(
             title: L10n.of(context).doubleTapToReact,
             subtitle: L10n.of(context).doubleTapToReactDescription,
             setting: AppSettings.doubleTapToReact,
