@@ -31,6 +31,15 @@ T? selectNotificationClient<T>(
 int messageNotificationId(String clientName, String roomId) =>
     '${clientName}_$roomId'.hashCode;
 
+/// Thread key of a merged person: all of its source rooms share one
+/// notification (Room IDs start with `!`, so it never equals a room key).
+String personNotificationKey(String groupId) => 'person:$groupId';
+
+/// The one notification of a merged person ([messageNotificationId] keyed by
+/// [personNotificationKey]).
+int personNotificationId(String clientName, String groupId) =>
+    messageNotificationId(clientName, personNotificationKey(groupId));
+
 /// The group summary notification of one account.
 int summaryNotificationId(String clientName) => clientName.hashCode;
 

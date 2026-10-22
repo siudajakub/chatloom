@@ -14,10 +14,18 @@
 /// Pages report themselves with one call from the place where they observe
 /// what is seen ([seen]); coming back from the background or the lock screen
 /// into an open chat clears it again.
+///
+/// A merged person has one notification for all its networks
+/// (`notification_threads.dart`). It is cleared by a page that shows every
+/// joined network of the person (the merged page); a page showing one
+/// network clears only that network's own (pre-merge) notification, so
+/// another network's unread lines stay in the shade.
 library;
 
 import 'dart:async';
 
+import 'package:chatloom/personal/notification_threads.dart';
+import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -28,6 +36,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart' show PersonGroup;
 
 class _OpenConversation {
   final BuildContext context;
@@ -55,6 +64,10 @@ abstract final class SeenChatNotifications {
   /// Test seam: whether the Android group summary is maintained.
   @visibleForTesting
   static bool? debugUpdatesSummary;
+
+  /// Test seam replacing [personGroupOf].
+  @visibleForTesting
+  static PersonGroup? Function(Room room)? debugGroupOf;
 
   /// The app is in the foreground and not behind the app lock.
   static bool _surfaceVisible() =>
@@ -159,7 +172,15 @@ abstract final class SeenChatNotifications {
   static void _evaluate() {
     _prune();
     if (_open.isEmpty || !_surfaceVisible()) return;
-    final due = <String, Set<String>>{};
+    final due = <String, Set<int>>{};
+    bool clear(String clientName, int id, String token) {
+      if (_cleared[id] == token) return false;
+      if (_cleared.length > 256) _cleared.clear();
+      _cleared[id] = token;
+      (due[clientName] ??= <int>{}).add(id);
+      return true;
+    }
+
     for (final entry in _open) {
       if (!_current(entry.context)) continue;
       bool bottom;
@@ -169,27 +190,52 @@ abstract final class SeenChatNotifications {
         bottom = false;
       }
       if (!bottom) continue;
+      final shown = {for (final room in entry.rooms) room.id};
+      final people = <String>{};
       for (final room in entry.rooms) {
         final clientName = room.client.clientName;
-        final id = messageNotificationId(clientName, room.id);
-        final token = '${room.lastEvent?.eventId}|$_generation';
-        if (_cleared[id] == token) continue;
-        if (_cleared.length > 256) _cleared.clear();
-        _cleared[id] = token;
-        (due[clientName] ??= <String>{}).add(room.id);
+        // The merge is looked up only when something new is seen here.
+        if (!clear(
+          clientName,
+          messageNotificationId(clientName, room.id),
+          '${room.lastEvent?.eventId}|$_generation',
+        )) {
+          continue;
+        }
+        final group = _groupOf(room);
+        if (group == null || !people.add(group.id)) continue;
+        final members = [
+          for (final member in group.members)
+            if (room.client.getRoomById(member.roomId) case final Room source
+                when source.membership == Membership.join)
+              source,
+        ];
+        if (!members.every((source) => shown.contains(source.id))) continue;
+        clear(
+          clientName,
+          personNotificationId(clientName, group.id),
+          '${members.map((source) => source.lastEvent?.eventId).join(',')}'
+          '|$_generation',
+        );
       }
     }
-    for (final MapEntry(key: clientName, value: roomIds) in due.entries) {
-      unawaited(_cancel(clientName, roomIds).catchError((Object _) {}));
+    for (final MapEntry(key: clientName, value: ids) in due.entries) {
+      unawaited(_cancel(clientName, ids).catchError((Object _) {}));
     }
   }
 
-  static Future<void> _cancel(String clientName, Set<String> roomIds) async {
+  static PersonGroup? _groupOf(Room room) {
+    try {
+      return (debugGroupOf ?? personGroupOf)(room);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> _cancel(String clientName, Set<int> ids) async {
     final notifications =
         debugPlugin?.call() ?? FlutterLocalNotificationsPlugin();
-    final ids = {
-      for (final id in roomIds) messageNotificationId(clientName, id),
-    };
+    NotificationThreads.forget(ids);
     Iterable<int> present;
     try {
       present = (await notifications.getActiveNotifications().timeout(

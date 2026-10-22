@@ -9,6 +9,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../notion/conversation_test_support.dart';
@@ -106,6 +107,7 @@ void main() {
     SeenChatNotifications.debugPlugin = () => plugin;
     SeenChatNotifications.debugSurfaceVisible = () => visible;
     SeenChatNotifications.debugUpdatesSummary = true;
+    SeenChatNotifications.debugGroupOf = (_) => null;
     SeenChatNotifications.debugReset();
     client = ConversationClient();
     first = ConversationRoom(client, '!first:example.invalid');
@@ -122,6 +124,7 @@ void main() {
     SeenChatNotifications.debugPlugin = null;
     SeenChatNotifications.debugSurfaceVisible = null;
     SeenChatNotifications.debugUpdatesSummary = null;
+    SeenChatNotifications.debugGroupOf = null;
     SeenChatNotifications.debugReset();
   });
 
@@ -249,6 +252,52 @@ void main() {
 
     await tester.pumpWidget(const SizedBox());
     expect(SeenChatNotifications.isOpen(client.clientName, first.id), isFalse);
+  });
+
+  group('a merged person (one notification for all networks)', () {
+    late PersonGroup person;
+    late int personId;
+    setUp(() {
+      person = PersonGroup(
+        id: 'fictional-person',
+        name: 'Fictional person',
+        members: [
+          ConversationRef(accountId: client.userID, roomId: first.id),
+          ConversationRef(accountId: client.userID, roomId: second.id),
+        ],
+        defaultRoomId: first.id,
+      );
+      personId = personNotificationId(client.clientName, person.id);
+      SeenChatNotifications.debugGroupOf = (room) =>
+          person.members.any((m) => m.roomId == room.id) ? person : null;
+      plugin.active.add(
+        ActiveNotification(id: personId, groupKey: client.clientName),
+      );
+    });
+
+    testWidgets('the merged page clears the shared notification and any '
+        'per-network one', (tester) async {
+      await open(tester, [first, second]);
+      expect(
+        plugin.cancelled,
+        containsAll([personId, idOf(first), idOf(second)]),
+      );
+      expect(plugin.active.map((n) => n.id), [idOf(other)]);
+    });
+
+    testWidgets('one network\'s page keeps the shared notification (the other '
+        'network may be unread there)', (tester) async {
+      await open(tester, [first]);
+      expect(plugin.cancelled, [idOf(first)]);
+      expect(plugin.active.map((n) => n.id), contains(personId));
+    });
+
+    testWidgets('a network that left does not keep the shared notification '
+        'forever', (tester) async {
+      second.membership = Membership.leave;
+      await open(tester, [first]);
+      expect(plugin.cancelled, containsAll([personId, idOf(first)]));
+    });
   });
 
   testWidgets('without the active-notification query the ids are cancelled '
