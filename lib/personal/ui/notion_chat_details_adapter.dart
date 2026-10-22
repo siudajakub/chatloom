@@ -247,40 +247,57 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     );
   }
 
+  /// Archiving is private and reversible: it applies at once with Undo in a
+  /// snackbar (no confirmation, CS-16).
   Future<void> _archive() async {
     final archiveEntity = entity;
-    final confirmed = await showOkCancelAlertDialog(
-      context: context,
-      title: 'Archive this chat?',
-      message:
-          'This hides it from your private inbox and keeps the conversation history. New activity can reopen it.',
-      okLabel: 'Archive',
-      cancelLabel: 'Cancel',
-    );
-    if (confirmed != OkCancelResult.ok || !mounted) return;
+    final archiveSources = sources;
+    final messenger = ScaffoldMessenger.of(context);
+    var archived = false;
     await _run(
       () async {
         if (entity != archiveEntity ||
             (widget.group != null && currentGroup == null) ||
-            !NotionMetadataActions.canEdit(personal, archiveEntity))
+            !NotionMetadataActions.canEdit(personal, archiveEntity)) {
           throw StateError(
             'Conversation scope changed or private changes pending',
           );
-        final metadata = projection.metadataForEntity(entity).setArchived(true);
-        await personal.put(
-          'org:$entity',
-          {
-            ...?personal.values['org:$entity'],
-            ...metadata.toJson(),
-            'archivedAt': DateTime.now().toUtc().toIso8601String(),
-            'archiveSources': {
-              for (final room in sources) room.id: room.lastEvent?.eventId,
-            },
-          }.cast<String, dynamic>(),
+        }
+        await NotionMetadataActions.setArchived(
+          personal,
+          archiveEntity,
+          true,
+          sources: archiveSources,
         );
+        archived = true;
       },
       failure: 'Could not archive this chat. Check private sync and try again.',
     );
+    if (!archived) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Chat archived'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => NotionMetadataActions.setArchived(
+              personal,
+              archiveEntity,
+              false,
+              sources: archiveSources,
+            ).catchError((Object _) {
+              messenger.showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Couldn’t move the chat back. Check private sync and try again.',
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+      );
   }
 
   Future<void> _privatePreferences() async {
