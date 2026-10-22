@@ -72,6 +72,23 @@ Future<void> _mount(WidgetTester tester, Client client, String roomId) async {
   await tester.pump(const Duration(seconds: 1));
 }
 
+/// Opacity of the jump flash over the bubble that shows [text].
+double _flash(WidgetTester tester, String text) {
+  final fill = tester.widget<Container>(
+    find
+        .ancestor(
+          of: find.text(text, findRichText: true),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is Container && widget.foregroundDecoration != null,
+          ),
+        )
+        .first,
+  );
+  final color = (fill.foregroundDecoration! as BoxDecoration).color;
+  return color?.a ?? 0;
+}
+
 Future<void> _frames(WidgetTester tester, [int count = 30]) async {
   for (var i = 0; i < count; i++) {
     await tester.pump(const Duration(milliseconds: 50));
@@ -177,7 +194,7 @@ void main() {
     );
     // The jump animates: drive frames instead of awaiting it.
     unawaited(controller.scrollToEventId(r'$scroll-30'));
-    await _frames(tester, 40);
+    await _frames(tester, 12);
     final list = tester.getRect(find.byType(ListView).first);
     final centre = list.center.dy;
     double distance(int n) =>
@@ -195,6 +212,14 @@ void main() {
     // The target row, not its neighbour, sits in the middle of the list.
     expect(distance(30), lessThan(distance(29)));
     expect(distance(30), lessThan(distance(31)));
+    // UX-08: the target flashes once; the marker is cleared, so no rebuild
+    // replays it, and nothing stays highlighted.
+    expect(controller.scrollToEventIdMarker, isNull);
+    expect(_flash(tester, 'Fictional message number 30'), greaterThan(0));
+    expect(_flash(tester, 'Fictional message number 29'), 0);
+    await tester.pump(const Duration(seconds: 2));
+    expect(_flash(tester, 'Fictional message number 30'), 0);
+    expect(tester.hasRunningAnimations, isFalse);
     await _unmount(tester);
   });
 

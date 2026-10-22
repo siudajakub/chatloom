@@ -15,6 +15,14 @@ abstract final class ConversationMotion {
   /// Start scale of an arriving bubble; it grows from its tail corner.
   static const double arrivalFrom = .92;
 
+  /// How long the message a jump landed on stays highlighted before it
+  /// fades (Telegram holds 1 s; with the rise and fade about 1.5 s).
+  static const Duration flashHold = Duration(milliseconds: 1000);
+
+  /// How long the floating date pill stays once the list is idle before it
+  /// fades (Telegram 500 ms, Signal 400 ms).
+  static const Duration dateHold = Duration(milliseconds: 500);
+
   /// Duration for an `AnimatedSize`: [duration], or a single microsecond
   /// under reduced motion. A zero-length `AnimatedSize` completes inside its
   /// own layout and throws ("mutated in its own performLayout"); one
@@ -23,7 +31,7 @@ abstract final class ConversationMotion {
       reduced(context) ? const Duration(microseconds: 1) : duration;
 }
 
-enum _EntranceMode { rest, arrive, stagger }
+enum _EntranceMode { rest, arrive }
 
 /// Entrance of one timeline row.
 ///
@@ -31,11 +39,10 @@ enum _EntranceMode { rest, arrive, stagger }
 ///   the row's slot grows from zero height, so older messages glide up
 ///   instead of jumping, while the bubble rises out of the composer, fades in
 ///   and scales up from its tail corner ([outgoing] decides the side).
-/// * Otherwise, inside a [ConversationEntranceScope] that is still open (the
-///   first frame of a freshly opened chat), the row fades in with a short
-///   rise, staggered bottom-up.
-/// * History, paging, decryption, edits, reactions and rows built by
-///   scrolling never animate; a rebuild never replays the entrance.
+/// * Everything else is still: the rows of a freshly opened chat render
+///   during the page push (Telegram), and history, paging, decryption,
+///   edits, reactions and rows built by scrolling never animate; a rebuild
+///   never replays the entrance.
 ///
 /// Transform/opacity plus one size factor; settles to identity (no layers at
 /// rest), instant under reduced motion. The widget tree never changes shape,
@@ -63,7 +70,6 @@ class _ConversationMessageEntranceState
     extends State<ConversationMessageEntrance>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const _arriveFade = Interval(0, .45, curve: NotionMotion.standard);
-  static const _staggerFade = Interval(0, .6, curve: NotionMotion.standard);
 
   late final AnimationController _controller = AnimationController(
     vsync: this,
@@ -71,7 +77,6 @@ class _ConversationMessageEntranceState
     value: 1,
   );
   _EntranceMode _mode = _EntranceMode.rest;
-  double _delay = 0;
   bool _initialized = false;
 
   @override
@@ -85,7 +90,7 @@ class _ConversationMessageEntranceState
     super.didChangeDependencies();
     if (!_initialized) {
       _initialized = true;
-      _start(mount: true);
+      _start();
     } else if (ConversationMotion.reduced(context)) {
       _controller.value = 1;
     }
@@ -94,31 +99,17 @@ class _ConversationMessageEntranceState
   @override
   void didUpdateWidget(ConversationMessageEntrance oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.identity != widget.identity) _start(mount: false);
+    if (oldWidget.identity != widget.identity) _start();
   }
 
-  void _start({required bool mount}) {
-    if (ConversationMotion.reduced(context)) {
+  void _start() {
+    if (ConversationMotion.reduced(context) || !widget.animate) {
+      _mode = _EntranceMode.rest;
       _controller.value = 1;
       return;
     }
-    if (widget.animate) {
-      _mode = _EntranceMode.arrive;
-      _controller.duration = ConversationMotion.arrival;
-      _controller.forward(from: 0);
-      return;
-    }
-    final index = mount ? ConversationEntranceScope._claim(context) : null;
-    if (index != null) {
-      final delay = NotionMotion.staggerFor(index);
-      final total = delay + NotionMotion.medium;
-      _mode = _EntranceMode.stagger;
-      _delay = delay.inMicroseconds / total.inMicroseconds;
-      _controller.duration = total;
-      _controller.forward(from: 0);
-      return;
-    }
-    _controller.value = 1;
+    _mode = _EntranceMode.arrive;
+    _controller.forward(from: 0);
   }
 
   @override
@@ -147,28 +138,14 @@ class _ConversationMessageEntranceState
         final t = _controller.value;
         var height = 1.0;
         var opacity = 1.0;
-        var rise = 0.0;
         var scale = 1.0;
-        if (t < 1) {
-          switch (_mode) {
-            case _EntranceMode.arrive:
-              height = NotionMotion.emphasized.transform(t);
-              opacity = _arriveFade.transform(t);
-              final spring = NotionMotion.snappyCurve.transform(t);
-              scale =
-                  ConversationMotion.arrivalFrom +
-                  (1 - ConversationMotion.arrivalFrom) * spring;
-            case _EntranceMode.stagger:
-              final local = _delay >= 1
-                  ? 1.0
-                  : ((t - _delay) / (1 - _delay)).clamp(0.0, 1.0);
-              opacity = _staggerFade.transform(local);
-              rise =
-                  NotionMotion.riseList *
-                  (1 - NotionMotion.emphasized.transform(local));
-            case _EntranceMode.rest:
-              break;
-          }
+        if (t < 1 && _mode == _EntranceMode.arrive) {
+          height = NotionMotion.emphasized.transform(t);
+          opacity = _arriveFade.transform(t);
+          final spring = NotionMotion.snappyCurve.transform(t);
+          scale =
+              ConversationMotion.arrivalFrom +
+              (1 - ConversationMotion.arrivalFrom) * spring;
         }
         // The slot grows from its bottom edge (the list is reversed), and
         // the bubble sits at the slot's top, so it rises with the slot.
@@ -178,14 +155,7 @@ class _ConversationMessageEntranceState
           widthFactor: 1,
           child: Opacity(
             opacity: opacity.clamp(0.0, 1.0),
-            child: Transform.translate(
-              offset: Offset(0, rise),
-              child: Transform.scale(
-                scale: scale,
-                alignment: tail,
-                child: child,
-              ),
-            ),
+            child: Transform.scale(scale: scale, alignment: tail, child: child),
           ),
         );
       },
@@ -193,53 +163,111 @@ class _ConversationMessageEntranceState
   }
 }
 
-/// Around a conversation list: the rows built in the first frame after the
-/// list appears (the first screenful of a freshly opened chat) stagger in
-/// bottom-up, once. Rows built later (scrolling, history pages, the
-/// wider cache after the route settled) appear without animation.
-class ConversationEntranceScope extends StatefulWidget {
-  const ConversationEntranceScope({super.key, required this.child});
+/// The one-shot flash of a message the user jumped to (a reply quote, a
+/// pinned message, a search hit), Telegram's `startMessageUnselect`: the
+/// highlight comes up quickly, holds for [ConversationMotion.flashHold] and
+/// fades out, about 1.5 s in all. It plays when [active] turns true (or the
+/// row is built while it is true) and always finishes, even if [active]
+/// turns false meanwhile; a later jump to the same message plays it again.
+/// [builder] receives 0 at rest and 1 at the peak. Under reduced motion the
+/// highlight appears and disappears without a fade, after the same hold.
+///
+/// No controller exists until the first flash, and the subtree is always
+/// wrapped by the same [ValueListenableBuilder], so the row keeps its state.
+class ConversationFlash extends StatefulWidget {
+  const ConversationFlash({
+    super.key,
+    required this.active,
+    required this.builder,
+    this.child,
+  });
 
-  final Widget child;
-
-  /// Next stagger index, or null when the scope is closed or absent.
-  static int? _claim(BuildContext context) => context
-      .getInheritedWidgetOfExactType<_EntranceScopeMarker>()
-      ?.state
-      ._claim();
+  final bool active;
+  final ValueWidgetBuilder<double> builder;
+  final Widget? child;
 
   @override
-  State<ConversationEntranceScope> createState() =>
-      _ConversationEntranceScopeState();
+  State<ConversationFlash> createState() => _ConversationFlashState();
 }
 
-class _ConversationEntranceScopeState extends State<ConversationEntranceScope> {
-  int _next = 0;
-  bool _closed = false;
-  bool _closing = false;
+class _ConversationFlashState extends State<ConversationFlash>
+    with SingleTickerProviderStateMixin {
+  final ValueNotifier<double> _value = ValueNotifier(0);
+  AnimationController? _controller;
+  Animatable<double>? _sequence;
 
-  int? _claim() {
-    if (_closed) return null;
-    if (!_closing) {
-      _closing = true;
-      // Everything the first layout builds belongs to the first screenful.
-      WidgetsBinding.instance.addPostFrameCallback((_) => _closed = true);
+  static Animatable<double> _timeline({required bool reduced}) {
+    final hold = ConversationMotion.flashHold.inMilliseconds.toDouble();
+    if (reduced) {
+      return TweenSequence<double>([
+        TweenSequenceItem<double>(
+          tween: ConstantTween<double>(1),
+          weight: hold,
+        ),
+        TweenSequenceItem<double>(tween: ConstantTween<double>(0), weight: 1),
+      ]);
     }
-    return _next++;
+    return TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween<double>(
+          begin: 0,
+          end: 1,
+        ).chain(CurveTween(curve: NotionMotion.standard)),
+        weight: NotionMotion.quick.inMilliseconds.toDouble(),
+      ),
+      TweenSequenceItem<double>(tween: ConstantTween<double>(1), weight: hold),
+      TweenSequenceItem(
+        tween: Tween<double>(
+          begin: 1,
+          end: 0,
+        ).chain(CurveTween(curve: NotionMotion.standard)),
+        weight: NotionMotion.long.inMilliseconds.toDouble(),
+      ),
+    ]);
   }
 
   @override
-  Widget build(BuildContext context) =>
-      _EntranceScopeMarker(state: this, child: widget.child);
-}
-
-class _EntranceScopeMarker extends InheritedWidget {
-  const _EntranceScopeMarker({required this.state, required super.child});
-
-  final _ConversationEntranceScopeState state;
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_controller == null && widget.active) _play();
+  }
 
   @override
-  bool updateShouldNotify(_EntranceScopeMarker oldWidget) => false;
+  void didUpdateWidget(ConversationFlash oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) _play();
+  }
+
+  void _play() {
+    final reduced = ConversationMotion.reduced(context);
+    final sequence = _sequence = _timeline(reduced: reduced);
+    var controller = _controller;
+    if (controller == null) {
+      controller = _controller = AnimationController(vsync: this);
+      controller.addListener(
+        () => _value.value = _sequence!.transform(_controller!.value),
+      );
+    }
+    controller.duration = reduced
+        ? ConversationMotion.flashHold
+        : NotionMotion.quick + ConversationMotion.flashHold + NotionMotion.long;
+    _value.value = sequence.transform(0);
+    controller.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    _value.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<double>(
+    valueListenable: _value,
+    builder: widget.builder,
+    child: widget.child,
+  );
 }
 
 /// Base for conversation micro-motion that must not cost a controller per

@@ -76,46 +76,106 @@ void main() {
       expect(_opacity(tester, 'Instant'), 1);
     });
 
-    testWidgets('the first screenful staggers once; later rows are still', (
+    testWidgets('rows of an opened chat appear at once, never staggered', (
       tester,
     ) async {
       final rows = ValueNotifier<int>(3);
       addTearDown(rows.dispose);
       await tester.pumpWidget(
         _app(
-          ConversationEntranceScope(
-            child: ValueListenableBuilder<int>(
-              valueListenable: rows,
-              builder: (context, count, _) => Column(
-                children: [
-                  for (var i = 0; i < count; i++)
-                    ConversationMessageEntrance(
-                      key: ValueKey(i),
-                      identity: i,
-                      child: Text('Row $i'),
-                    ),
-                ],
-              ),
+          ValueListenableBuilder<int>(
+            valueListenable: rows,
+            builder: (context, count, _) => Column(
+              children: [
+                for (var i = 0; i < count; i++)
+                  ConversationMessageEntrance(
+                    key: ValueKey(i),
+                    identity: i,
+                    child: Text('Row $i'),
+                  ),
+              ],
             ),
           ),
         ),
       );
-      expect(tester.hasRunningAnimations, isTrue);
-      await tester.pump(const Duration(milliseconds: 16));
-      // Bottom-up stagger: the first claimed row is ahead of the third.
-      expect(
-        _opacity(tester, 'Row 0'),
-        greaterThanOrEqualTo(_opacity(tester, 'Row 2')),
-      );
-      await tester.pumpAndSettle();
+      // Telegram: the first screenful renders with the page, no entrance.
+      expect(tester.hasRunningAnimations, isFalse);
       for (var i = 0; i < 3; i++) {
         expect(_opacity(tester, 'Row $i'), 1);
+        expect(_slot(tester, 'Row $i').heightFactor, 1);
       }
       // A row built later (scrolling, history) appears without animation.
       rows.value = 4;
       await tester.pump();
       expect(tester.hasRunningAnimations, isFalse);
       expect(_opacity(tester, 'Row 3'), 1);
+    });
+  });
+
+  group('ConversationFlash', () {
+    Widget flash(bool active, List<double> seen, {bool reduced = false}) =>
+        _app(
+          ConversationFlash(
+            active: active,
+            builder: (context, value, _) {
+              seen.add(value);
+              return Text('flash ${value.toStringAsFixed(2)}');
+            },
+          ),
+          reduced: reduced,
+        );
+
+    testWidgets('rises, holds and fades once, about 1.5 s', (tester) async {
+      final seen = <double>[];
+      await tester.pumpWidget(flash(false, seen));
+      expect(seen.last, 0);
+      expect(tester.hasRunningAnimations, isFalse);
+      await tester.pumpWidget(flash(true, seen));
+      await tester.pump(NotionMotion.quick);
+      expect(seen.last, closeTo(1, .01));
+      // The marker going away does not cut the flash short.
+      await tester.pumpWidget(flash(false, seen));
+      await tester.pump(ConversationMotion.flashHold ~/ 2);
+      expect(seen.last, 1);
+      await tester.pump(ConversationMotion.flashHold ~/ 2);
+      await tester.pump(NotionMotion.long ~/ 2);
+      expect(seen.last, greaterThan(0));
+      expect(seen.last, lessThan(1));
+      await tester.pumpAndSettle();
+      expect(seen.last, 0);
+      expect(tester.hasRunningAnimations, isFalse);
+      // A later jump to the same message flashes again.
+      await tester.pumpWidget(flash(true, seen));
+      await tester.pump(NotionMotion.quick);
+      expect(seen.last, closeTo(1, .01));
+      await tester.pumpAndSettle();
+      expect(seen.last, 0);
+    });
+
+    testWidgets('a row built while it is the target flashes too', (
+      tester,
+    ) async {
+      final seen = <double>[];
+      await tester.pumpWidget(flash(true, seen));
+      await tester.pump(NotionMotion.quick);
+      expect(seen.last, closeTo(1, .01));
+      await tester.pumpAndSettle();
+      expect(seen.last, 0);
+    });
+
+    testWidgets('reduced motion shows and hides it without a fade', (
+      tester,
+    ) async {
+      final seen = <double>[];
+      await tester.pumpWidget(flash(false, seen, reduced: true));
+      await tester.pumpWidget(flash(true, seen, reduced: true));
+      expect(seen.last, 1);
+      await tester.pump(ConversationMotion.flashHold * .9);
+      expect(seen.last, 1);
+      await tester.pumpAndSettle();
+      expect(seen.last, 0);
+      // Only full on or off, never in between.
+      expect(seen.every((v) => v == 0 || v == 1), isTrue);
     });
   });
 

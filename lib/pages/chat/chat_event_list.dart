@@ -23,7 +23,7 @@ import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/rendering.dart' show ScrollCacheExtent, ScrollDirection;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
@@ -32,16 +32,27 @@ import '../../utils/date_time_extension.dart';
 
 /// The reversed message list of a conversation: one room ([ChatController])
 /// or the interleaved source rooms of a merged person chat.
+///
+/// The rows of a freshly opened chat render with the page (no per-row
+/// entrance; Telegram shows the messages during the slide). A list that
+/// replaces the loading placeholder, or is released by [hold], fades in once
+/// as a whole. While the user scrolls, a floating date pill under the header
+/// names the day of the topmost message.
 class ChatEventList extends StatefulWidget {
   final ConversationTimelineSource controller;
 
-  const ChatEventList({super.key, required this.controller});
+  /// While true the list is laid out but invisible (the chat positions it at
+  /// the first unread message first); when it turns false the list fades in.
+  final ValueListenable<bool>? hold;
+
+  const ChatEventList({super.key, required this.controller, this.hold});
 
   @override
   State<ChatEventList> createState() => _ChatEventListState();
 }
 
-class _ChatEventListState extends State<ChatEventList> {
+class _ChatEventListState extends State<ChatEventList>
+    with TickerProviderStateMixin {
   ConversationTimelineSource get controller => widget.controller;
   bool _textSelectionActive = false;
 
@@ -61,6 +72,85 @@ class _ChatEventListState extends State<ChatEventList> {
   /// the rows only when this changes (bubble colours), never per sync.
   PersonalClient? _personal;
   Object? _paletteSignature;
+
+  /// Whole-list appearance: one opacity for every row, never per row. It
+  /// stays at rest (no controller) when the rows were there on the first
+  /// frame.
+  final ProxyAnimation _opacity = ProxyAnimation(kAlwaysCompleteAnimation);
+  AnimationController? _appear;
+  CurvedAnimation? _appearCurve;
+  bool _placeholderShown = false;
+  ValueListenable<bool>? _hold;
+
+  /// Rows of the last build and the indexes that carry a day separator, for
+  /// the floating date pill.
+  List<Event> _rows = const [];
+  Set<int> _dayStarts = const {};
+
+  final ValueNotifier<String?> _pillLabel = ValueNotifier(null);
+  final ProxyAnimation _pillOpacity = ProxyAnimation(kAlwaysDismissedAnimation);
+  AnimationController? _pillShow, _pillHide;
+  CurvedAnimation? _pillFadeOut;
+  bool? _pillReduced;
+  bool _pillScanScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenHold();
+  }
+
+  @override
+  void didUpdateWidget(ChatEventList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.hold, widget.hold)) _listenHold();
+  }
+
+  void _listenHold() {
+    _hold?.removeListener(_holdChanged);
+    _hold = widget.hold?..addListener(_holdChanged);
+    if (_hold?.value ?? false) _hide();
+  }
+
+  bool get _held => _hold?.value ?? false;
+
+  AnimationController _appearController(double from) {
+    var controller = _appear;
+    if (controller == null) {
+      controller = _appear = AnimationController(
+        vsync: this,
+        duration: NotionMotion.short,
+      );
+      _opacity.parent = _appearCurve = CurvedAnimation(
+        parent: controller,
+        curve: NotionMotion.standard,
+      );
+    }
+    controller.value = from;
+    return controller;
+  }
+
+  void _hide() => _appearController(0);
+
+  /// Fades the whole list in from [from] (instant under reduced motion).
+  void _reveal({double? from}) {
+    final controller = from == null ? _appear : _appearController(from);
+    if (controller == null) return;
+    if (NotionMotion.reduced(context)) {
+      controller.value = 1;
+    } else {
+      controller.forward();
+    }
+  }
+
+  void _holdChanged() {
+    if (!mounted) return;
+    if (_held) {
+      _hide();
+    } else {
+      _reveal();
+    }
+  }
 
   void _listenPersonal() {
     final personal = PersonalClient.of(controller.room.client);
@@ -100,11 +190,148 @@ class _ChatEventListState extends State<ChatEventList> {
     ).attach(roomIds: rooms, events: () => _prefetchEvents);
   }
 
+  // ---------------------------------------------------------------------
+  // Floating date pill (Telegram's `floatingDateView`).
+
+  /// Shows the pill while the user scrolls; it stays for
+  /// [ConversationMotion.dateHold] once the list is idle, then fades. One
+  /// visibility pass per frame, after layout; nothing is laid out for it.
+  bool _onScroll(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is UserScrollNotification) {
+      if (notification.direction == ScrollDirection.idle) {
+        _hidePill();
+      } else {
+        _showPill();
+      }
+    } else if (notification is ScrollEndNotification) {
+      _hidePill();
+    }
+    if (notification is ScrollUpdateNotification &&
+        (_pillShow?.value ?? 0) > 0) {
+      _schedulePillScan();
+    }
+    return false;
+  }
+
+  void _showPill() {
+    final reduced = NotionMotion.reduced(context);
+    final show = _pillShow ??= AnimationController(
+      vsync: this,
+      duration: NotionMotion.quick,
+    );
+    var hide = _pillHide;
+    if (hide == null) {
+      hide = _pillHide = AnimationController(vsync: this);
+      hide.addStatusListener((status) {
+        if (status != AnimationStatus.completed) return;
+        // Faded out: the next scroll fades the pill in again.
+        _pillShow?.value = 0;
+        _pillHide?.value = 0;
+      });
+    }
+    hide
+      ..stop()
+      ..value = 0;
+    if (_pillReduced != reduced) {
+      // Built once per motion mode, not per scroll.
+      _pillReduced = reduced;
+      hide.duration = reduced
+          ? ConversationMotion.dateHold
+          : ConversationMotion.dateHold + NotionMotion.quick;
+      final holdShare =
+          ConversationMotion.dateHold.inMicroseconds /
+          hide.duration!.inMicroseconds;
+      _pillFadeOut?.dispose();
+      final fadeOut = _pillFadeOut = CurvedAnimation(
+        parent: hide,
+        curve: reduced
+            ? const Threshold(1)
+            : Interval(holdShare, 1, curve: NotionMotion.standard),
+      );
+      _pillOpacity.parent = AnimationMin<double>(
+        show,
+        ReverseAnimation(fadeOut),
+      );
+    }
+    if (reduced) {
+      show.value = 1;
+    } else {
+      show.forward();
+    }
+    _schedulePillScan();
+  }
+
+  void _hidePill() {
+    final hide = _pillHide;
+    if (hide == null || (_pillShow?.value ?? 0) == 0 || hide.isAnimating) {
+      return;
+    }
+    hide.forward(from: 0);
+  }
+
+  void _schedulePillScan() {
+    if (_pillScanScheduled) return;
+    _pillScanScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pillScanScheduled = false;
+      if (mounted) _scanPill();
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// The day of the topmost visible message, or null while that day's own
+  /// separator is right under the header (the pill would cover it).
+  void _scanPill() {
+    final scroll = controller.scrollController;
+    if (!scroll.hasClients) return;
+    final viewport = scroll.position.context.storageContext.findRenderObject();
+    if (viewport is! RenderBox || !viewport.hasSize || !viewport.attached) {
+      return;
+    }
+    final top =
+        viewport.localToGlobal(Offset.zero).dy +
+        MediaQuery.paddingOf(context).top;
+    final bottom =
+        viewport.localToGlobal(Offset.zero).dy + viewport.size.height;
+    int? topmost;
+    var topmostY = double.infinity;
+    var separatorNearTop = false;
+    for (final entry in scroll.tagMap.entries) {
+      final index = entry.key;
+      if (index < 0 || index >= _rows.length) continue;
+      final box = entry.value.context.findRenderObject();
+      if (box is! RenderBox || !box.hasSize || !box.attached) continue;
+      final rowTop = box.localToGlobal(Offset.zero).dy;
+      final rowBottom = rowTop + box.size.height;
+      if (rowBottom <= top || rowTop >= bottom) continue;
+      if (_dayStarts.contains(index) &&
+          rowTop > top - NotionSpace.xxl &&
+          rowTop < top + NotionSpace.xxl) {
+        separatorNearTop = true;
+      }
+      if (rowTop < topmostY) {
+        topmostY = rowTop;
+        topmost = index;
+      }
+    }
+    _pillLabel.value = topmost == null || separatorNearTop
+        ? null
+        : _rows[topmost].originServerTs.localizedDate(context);
+  }
+
   @override
   void dispose() {
     _wideCacheTimer?.cancel();
     _prefetch?.dispose();
     _personal?.removeListener(_onPersonalChanged);
+    _hold?.removeListener(_holdChanged);
+    _appearCurve?.dispose();
+    _appear?.dispose();
+    _pillFadeOut?.dispose();
+    _pillShow?.dispose();
+    _pillHide?.dispose();
+    _pillLabel.dispose();
     super.dispose();
   }
 
@@ -115,11 +342,21 @@ class _ChatEventListState extends State<ChatEventList> {
     final defaultInset =
         72.0 + (ChatLoomThemes.isColumnMode(context) ? 16.0 : 0.0);
     if (events == null) {
+      _placeholderShown = true;
       return ConversationTimelineSkeleton(
         bottomInset: controller.composerInset.value ?? defaultInset,
       );
     }
-    final theme = Theme.of(context);
+    if (_placeholderShown) {
+      // The rows replace the placeholder: the list fades in once, from the
+      // refresh opacity (never from an empty frame).
+      _placeholderShown = false;
+      if (_held) {
+        _hide();
+      } else {
+        _reveal(from: NotionMotion.refreshFrom);
+      }
+    }
 
     final horizontalPadding = ChatLoomThemes.isColumnMode(context) ? 8.0 : 0.0;
 
@@ -127,10 +364,19 @@ class _ChatEventListState extends State<ChatEventList> {
     // key must match the AutoScrollTag key below (transaction id first), or
     // own messages lose their element (and media state) on every insert.
     final thisEventsKeyMap = <String, int>{};
+    final dayStarts = <int>{};
     for (var i = 0; i < events.length; i++) {
       final event = events[i];
       thisEventsKeyMap[event.transactionId ?? event.eventId] = i;
+      final older = i + 1 < events.length ? events[i + 1] : null;
+      if (event.type == EventTypes.RoomCreate ||
+          older == null ||
+          !event.originServerTs.sameDay(older.originServerTs)) {
+        dayStarts.add(i);
+      }
     }
+    _rows = events;
+    _dayStarts = dayStarts;
     _scheduleWideCache();
     _attachPrefetch(events);
     // One palette lookup per list build instead of one per row.
@@ -141,15 +387,31 @@ class _ChatEventListState extends State<ChatEventList> {
     final hasWallpaper =
         controller.room.client.applicationAccountConfig.wallpaperUrl != null;
 
-    return SelectionArea(
+    // The unread divider sits above the oldest unread row: just newer than
+    // the row that shows the read marker (or the nearest older row when the
+    // marker is on a hidden event).
+    final markerRow = events.isEmpty
+        ? -1
+        : conversationReadMarkerRow(
+            events,
+            controller.readMarkerEventId,
+            timelineEvents: controller.timelineFor(events.first)?.events,
+          );
+    final unread = conversationUnreadCount(events, markerRow);
+    final firstUnread = unread > 0 ? markerRow - 1 : -1;
+    final readMarkerRowId = markerRow < 0
+        ? controller.readMarkerEventId
+        : events[markerRow].eventId;
+
+    final list = SelectionArea(
       onSelectionChanged: (content) {
         final active = content != null && content.plainText.isNotEmpty;
         if (active != _textSelectionActive) {
           setState(() => _textSelectionActive = active);
         }
       },
-      // The first screenful of a freshly opened chat staggers in once.
-      child: ConversationEntranceScope(
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _onScroll,
         child: ListView.custom(
           // The composer's height is a spacer under the newest row
           // ([_ComposerSpacer]), not padding: when the reply preview or
@@ -280,10 +542,7 @@ class _ChatEventListState extends State<ChatEventList> {
                   previousEvent?.isCollapsedState == true &&
                   !controller.expandedEventIds.contains(event.eventId);
 
-              final displayDate =
-                  event.type == EventTypes.RoomCreate ||
-                  nextEvent == null ||
-                  !event.originServerTs.sameDay(nextEvent.originServerTs);
+              final displayDate = dayStarts.contains(i);
 
               return AutoScrollTag(
                 key: ValueKey(event.transactionId ?? event.eventId),
@@ -297,24 +556,16 @@ class _ChatEventListState extends State<ChatEventList> {
                     mainAxisSize: .min,
                     children: [
                       if (!isCollapsed && displayDate)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(
-                              NotionTokens.inset,
-                              8,
-                              NotionTokens.inset,
-                              8,
-                            ),
-                            child: Text(
-                              event.originServerTs.localizedDate(context),
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: NotionSpace.xs,
+                          ),
+                          child: ConversationDayChip(
+                            label: event.originServerTs.localizedDate(context),
                           ),
                         ),
+                      if (i == firstUnread)
+                        ConversationUnreadDivider(count: unread),
                       Message(
                         event,
                         bigEmojis: controller.bigEmojis,
@@ -324,7 +575,7 @@ class _ChatEventListState extends State<ChatEventList> {
                         highlightMarker:
                             controller.scrollToEventIdMarker == event.eventId,
                         scrollToEventId: controller.scrollToEventId,
-                        readMarkerEventId: controller.readMarkerEventId,
+                        readMarkerEventId: readMarkerRowId,
                         textSelectionActive: _textSelectionActive,
                         menuActions: (event) =>
                             controller.messageActions(context, event),
@@ -332,9 +583,7 @@ class _ChatEventListState extends State<ChatEventList> {
                         sourceLabel: controller.sourceLabelFor(event),
                         seriesBoundary: controller.seriesBoundary,
                         strictCapabilities: controller.strictCapabilities,
-                        displayReadMarker:
-                            i > 0 &&
-                            controller.readMarkerEventId == event.eventId,
+                        displayReadMarker: firstUnread >= 0 && i == markerRow,
                         nextEvent: nextEvent,
                         previousEvent: previousEvent,
                         wallpaperMode: hasWallpaper,
@@ -361,6 +610,197 @@ class _ChatEventListState extends State<ChatEventList> {
                 controller.findChildIndexCallback(key, thisEventsKeyMap),
           ),
         ),
+      ),
+    );
+
+    return Stack(
+      fit: StackFit.passthrough,
+      children: [
+        FadeTransition(opacity: _opacity, child: list),
+        // Under the glass header, still while the rows move beneath it; it
+        // fades (opacity only), so it is opaque rather than glass.
+        Positioned(
+          top: MediaQuery.paddingOf(context).top + NotionSpace.xs,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: ExcludeSemantics(
+              child: FadeTransition(
+                opacity: _pillOpacity,
+                child: Center(
+                  child: ValueListenableBuilder<String?>(
+                    valueListenable: _pillLabel,
+                    builder: (context, label, _) => label == null
+                        ? const SizedBox.shrink()
+                        : ConversationDayChip(
+                            key: const ValueKey('conversation-date-pill'),
+                            label: label,
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Index of the row that shows the read marker [marker] in [rows] (newest
+/// first), or -1. A marker on an event without a row (reaction, edit, hidden
+/// state) maps to the nearest older row through [timelineEvents].
+int conversationReadMarkerRow(
+  List<Event> rows,
+  String? marker, {
+  List<Event>? timelineEvents,
+}) {
+  if (marker == null || marker.isEmpty) return -1;
+  final direct = rows.indexWhere((event) => event.eventId == marker);
+  if (direct >= 0 || timelineEvents == null) return direct;
+  final at = timelineEvents.indexWhere((event) => event.eventId == marker);
+  if (at < 0) return -1;
+  final rowOf = Map<Event, int>.identity();
+  for (var i = 0; i < rows.length; i++) {
+    rowOf[rows[i]] = i;
+  }
+  for (var i = at; i < timelineEvents.length; i++) {
+    final row = rowOf[timelineEvents[i]];
+    if (row != null) return row;
+  }
+  return -1;
+}
+
+/// Messages from others newer than the read marker row [markerRow] (rows are
+/// newest first): what "N unread messages" counts.
+int conversationUnreadCount(List<Event> rows, int markerRow) {
+  if (markerRow <= 0) return 0;
+  var count = 0;
+  for (var i = 0; i < markerRow && i < rows.length; i++) {
+    final event = rows[i];
+    if (event.senderId == event.room.client.userID) continue;
+    if (const {
+      EventTypes.Message,
+      EventTypes.Sticker,
+      EventTypes.Encrypted,
+      PollEventContent.startType,
+    }.contains(event.type)) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/// Returns its first child until [revision] changes. Parent rebuilds that do
+/// not affect the rows (composer keystrokes, send state, the jump button,
+/// notices) get the identical widget back, so Flutter skips the whole list
+/// subtree. The list still rebuilds itself for its own inherited
+/// dependencies (theme, insets) and private palette changes.
+class ConversationListGate extends StatefulWidget {
+  final Object revision;
+  final Widget child;
+  const ConversationListGate({
+    super.key,
+    required this.revision,
+    required this.child,
+  });
+
+  @override
+  State<ConversationListGate> createState() => _ConversationListGateState();
+}
+
+class _ConversationListGateState extends State<ConversationListGate> {
+  late Widget _child = widget.child;
+
+  @override
+  void didUpdateWidget(ConversationListGate oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.revision != widget.revision) _child = widget.child;
+  }
+
+  @override
+  Widget build(BuildContext context) => _child;
+}
+
+/// A centred day pill (Telegram, Messenger): between days in the timeline
+/// and, floating under the header, while the user scrolls. Opaque `surface`
+/// with secondary text, so it reads over wallpapers and private palettes.
+class ConversationDayChip extends StatelessWidget {
+  final String label;
+  const ConversationDayChip({super.key, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final notion = context.notion;
+    return Center(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: notion.colors.surface,
+          borderRadius: NotionRadius.pillAll,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: NotionSpace.sm,
+            vertical: NotionSpace.xxs,
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: notion.typography.captionMuted,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "N unread messages" above the oldest unread message (Telegram, Signal):
+/// a day-style pill between hairlines.
+class ConversationUnreadDivider extends StatelessWidget {
+  final int count;
+  const ConversationUnreadDivider({super.key, required this.count});
+
+  static String labelFor(int count) =>
+      count == 1 ? '1 unread message' : '$count unread messages';
+
+  @override
+  Widget build(BuildContext context) {
+    final notion = context.notion;
+    final line = Expanded(
+      child: Divider(height: 1, thickness: 1, color: notion.colors.border),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: NotionSpace.md,
+        vertical: NotionSpace.xs,
+      ),
+      child: Row(
+        children: [
+          line,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: notion.colors.surface,
+                borderRadius: NotionRadius.pillAll,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: NotionSpace.sm,
+                  vertical: NotionSpace.xxs,
+                ),
+                child: Text(
+                  labelFor(count),
+                  style: notion.typography.captionMuted.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          line,
+        ],
       ),
     );
   }
