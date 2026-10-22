@@ -231,6 +231,7 @@ in new code; read `context.notion` instead.
 | `NotionGlassPanel`, `NotionGlassMenuRow`, `NotionGlassDivider`, `NotionGlassPill` | the dock's language: glass menus, dialogs, sheets, pill buttons (see Glass) |
 | `NotionLinkPreviewCard(title:, description:, site:, image:, fill:, textColor:, mutedColor:, onTap:)` | a bridged link preview inside a text bubble: opaque card, image on top (1:1 to 16:9), site, title, description; colours from the bubble, no blur, never fetches the URL (`notion_link_preview.dart`) |
 | `NotionMediaPlaybackControls`, `NotionMediaActionsButton` | Focused media transport over `stageScrim`: play/pause, time, seek, speed; secondary actions in one menu. Data and callbacks only; `seekControl` accepts a voice waveform instead of the slider. |
+| `NotionSwipeAction(startToEnd:, endToStart:, child:)` + `NotionSwipeActionSide(icon:, label:, onCommit:)` | Telegram-style row swipe (inbox: archive / mark read): the row follows the finger over an opaque `accentTint` pill whose icon scales in, arms at 30 % of the width with one `NotionHaptics.selection()`, commits on release and springs back (`snappy`, instant under reduced motion); touch only, never from the back-gesture edges, off under a screen reader (custom semantics actions instead); no controller until the first swipe (`notion_swipe_action.dart`) |
 | `NotionPressable`, `NotionEntrance`, `NotionSkeleton`, `NotionFadeThrough`, `NotionPop`, ... | motion (see Motion) |
 
 Each primitive has a golden in `test/notion/goldens/primitives/`.
@@ -393,7 +394,8 @@ dialogs and sheets never bounce.
 `NotionHaptics.send()` / `.longPress()` (a light impact) and
 `.selection()` (a selection click) are the only haptics: on send, on a
 recognised long-press, and once per change of choice while the finger
-scrubs (the reaction bar's hovered emoji, swipe-to-reply arming). Screens
+scrubs (the reaction bar's hovered emoji, swipe-to-reply and inbox
+swipe arming). Screens
 decide; nothing buzzes by default.
 
 ### Primitives
