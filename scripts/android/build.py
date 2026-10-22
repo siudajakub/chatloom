@@ -393,7 +393,10 @@ def main():
         candidate = run_dir / "candidate.apk"
         print("Building with pub; keep all Flutter jobs and source edits sequential.", flush=True)
         with preserve_build_apks(ROOT, run_dir) as output:
-            run([flutter, "build", "apk", "--release", "--target-platform", "android-arm64"], ROOT, environment=environment)
+            # Push gateway origin (lib/personal/automatic_push.dart); no default.
+            gateway = os.environ.get("CHATLOOM_PUSH_GATEWAY", "").strip()
+            defines = [f"--dart-define=CHATLOOM_PUSH_GATEWAY={gateway}"] if gateway else []
+            run([flutter, "build", "apk", "--release", "--target-platform", "android-arm64", *defines], ROOT, environment=environment)
             require_unchanged(before, snapshot_sources(ROOT))
             if not output.is_file() or output.is_symlink():
                 raise ReleaseError("Expected freshly built APK is unavailable")
