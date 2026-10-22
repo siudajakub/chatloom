@@ -89,6 +89,44 @@ void main() {
       'low',
     );
   });
+  test('Unread includes chats placed in Groups; All chats and the main '
+      'list leave them out (CC-37)', () {
+    InboxRecord placed(
+      String id, {
+      bool unread = true,
+      ChatPlacement placement = ChatPlacement.groups,
+      bool archived = false,
+    }) => InboxRecord(
+      representativeRoomId: id,
+      entityId: id,
+      displayName: 'Synthetic group',
+      metadata: ConversationMetadata(entityId: id, archived: archived),
+      networks: const ['telegram'],
+      isGroup: true,
+      placement: placement,
+      unread: unread,
+      lastActivity: now,
+    );
+    final items = [
+      fixture('main-unread', unread: true),
+      placed('groups-unread'),
+      placed('groups-read', unread: false),
+      placed('groups-archived', archived: true),
+      placed('groups-ignored', placement: ChatPlacement.ignored),
+    ];
+    expect(
+      projectInbox(
+        items,
+        filter: InboxFilter.unread,
+      ).map((r) => r.entityId).toSet(),
+      {'main-unread', 'groups-unread'},
+    );
+    expect(
+      projectInbox(items, filter: InboxFilter.all).map((r) => r.entityId),
+      ['main-unread'],
+    );
+    expect(projectInbox(items).map((r) => r.entityId), ['main-unread']);
+  });
   test('unread filter cannot reintroduce hidden labels', () {
     final items = [
       fixture('unread', unread: true),

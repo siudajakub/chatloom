@@ -83,9 +83,17 @@ List<InboxRecord> projectInbox(
         !record.metadata.archived &&
         !record.metadata.lowPriority &&
         !record.labelKeys.any(hiddenLabelKeys.contains);
+    // Chats moved to Groups (Telegram groups by default) still count as
+    // unread, like Telegram's Unread folder; "All chats" and the main list
+    // keep leaving them out (code-client CC-37, J's decision).
+    final inGroups =
+        placement == ChatPlacement.groups &&
+        !record.metadata.archived &&
+        !record.metadata.lowPriority &&
+        !record.labelKeys.any(hiddenLabelKeys.contains);
     final matchesFilter = switch (filter) {
       InboxFilter.inbox => inInbox,
-      InboxFilter.unread => inInbox && record.unread,
+      InboxFilter.unread => (inInbox || inGroups) && record.unread,
       InboxFilter.drafts => inInbox && record.hasDraft,
       InboxFilter.unanswered => inInbox && record.unanswered,
       InboxFilter.direct => inInbox && !record.isGroup,
