@@ -17,6 +17,23 @@ class _Client extends Client {
   String get userID => '@me:example.invalid';
 }
 
+class _MemoryStorage implements VoicePlayedStorage {
+  Map<String, dynamic>? value;
+  bool fail = false;
+
+  @override
+  Future<Map<String, dynamic>?> read() async {
+    if (fail) throw StateError('storage unavailable');
+    return value;
+  }
+
+  @override
+  Future<void> write(Map<String, dynamic> value) async {
+    if (fail) throw StateError('storage unavailable');
+    this.value = Map.of(value);
+  }
+}
+
 class _Target implements RoundContinuationTarget {
   final RoundStartResult Function(RoundContinuationToken token) result;
   final calls = <List<Event>>[];
@@ -205,7 +222,7 @@ void main() {
       );
     });
 
-    test('played notes are bounded and in memory only', () {
+    test('played notes are bounded', () {
       clock = 0;
       final played = VoicePlayedNotes();
       final first = message(r'$first');
@@ -215,6 +232,61 @@ void main() {
       }
       expect(played.length, VoicePlayedNotes.capacity);
       expect(played.contains(first), isFalse);
+    });
+
+    test('played notes survive a restart through private storage', () async {
+      clock = 0;
+      final storage = _MemoryStorage();
+      final first = VoicePlayedNotes(storageFor: (_) => storage);
+      final old = message(r'$old');
+      // Loading: nothing is called unplayed yet (no flash on played notes).
+      expect(first.unplayed(old), isFalse);
+      await pumpEventQueue();
+      // Notes from before the first load count as played (no dot on the
+      // whole history after an update).
+      expect(first.unplayed(old), isFalse);
+      final since = DateTime.parse(storage.value!['since'] as String);
+      Event fresh(String id) => Event(
+        room: room,
+        eventId: id,
+        type: EventTypes.Message,
+        senderId: '@anna:example.invalid',
+        originServerTs: since.add(const Duration(minutes: 1)),
+        content: {
+          'msgtype': MessageTypes.Audio,
+          'body': 'Voice message',
+          'org.matrix.msc3245.voice': <String, Object?>{},
+        },
+      );
+      final note = fresh(r'$new');
+      expect(first.unplayed(note), isTrue);
+      first.add(note);
+      expect(first.unplayed(note), isFalse);
+      await pumpEventQueue();
+
+      final restarted = VoicePlayedNotes(storageFor: (_) => storage);
+      restarted.unplayed(note);
+      await pumpEventQueue();
+      expect(restarted.contains(note), isTrue);
+      expect(restarted.unplayed(note), isFalse);
+      expect(restarted.unplayed(fresh(r'$other')), isTrue);
+      // Own notes and non-voice audio never get a dot.
+      expect(
+        restarted.unplayed(message(r'$own', sender: client.userID)),
+        isFalse,
+      );
+    });
+
+    test('unavailable storage keeps the session in memory', () async {
+      clock = 0;
+      final played = VoicePlayedNotes(
+        storageFor: (_) => _MemoryStorage()..fail = true,
+      );
+      final note = message(r'$x');
+      played.unplayed(note);
+      await pumpEventQueue();
+      played.add(note);
+      expect(played.contains(note), isTrue);
     });
 
     test('speed cycle and stored values', () {

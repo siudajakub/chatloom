@@ -345,6 +345,32 @@ class PersonalClient extends ChangeNotifier {
   /// Hydrate local drafts and metadata without waiting for journal networking.
   Future<void> loadLocal() => _ensureLocal();
 
+  /// A device-local private record of this account in the encrypted store
+  /// (`local:` namespace): never synced, never sent (e.g. played voice
+  /// notes). Throws when encrypted storage is unavailable.
+  ///
+  /// It only uses storage the app already opens ([loadLocal]); it never opens
+  /// it itself, so a failure here cannot mark the private client failed.
+  Future<Map<String, dynamic>?> readLocalRecord(String key) async =>
+      (await _openedStore()).get('${_prefix}local:$key');
+
+  /// Writes a record read by [readLocalRecord].
+  Future<void> writeLocalRecord(String key, Map<String, dynamic> value) async =>
+      (await _openedStore()).put('${_prefix}local:$key', value);
+
+  Future<PersonalStore> _openedStore() async {
+    _checkActive();
+    if (_store == null) {
+      final loading = _localLoading;
+      if (loading == null) throw StateError('Encrypted storage is not open');
+      await loading;
+      _checkActive();
+    }
+    final store = _store;
+    if (store == null) throw StateError('Encrypted storage unavailable');
+    return store;
+  }
+
   Future<void> _ensureLocal() async {
     _checkActive();
     final loading = _localLoading ??= _openLocal();

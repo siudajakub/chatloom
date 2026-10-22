@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -31,13 +34,30 @@ abstract final class VoicePlayback {
       event.content.containsKey('org.matrix.msc3245.voice');
 }
 
-/// Voice notes played in this app session, in memory only and bounded. No
-/// bridge reports a verified played state for voice notes, so this is what
-/// "unplayed" means for continuation.
-class VoicePlayedNotes {
+/// Device-local, private storage of the played voice notes of one account
+/// (`PersonalClient` encrypted store). Never synced, never sent: playing a
+/// note sends no receipt either.
+abstract interface class VoicePlayedStorage {
+  Future<Map<String, dynamic>?> read();
+  Future<void> write(Map<String, dynamic> value);
+}
+
+/// Voice notes played on this device, bounded. No bridge reports a verified
+/// played state for voice notes, so this is what "unplayed" means for
+/// continuation and for the unplayed dot (Telegram). With [storageFor] the
+/// set survives restarts; notes older than the account's first load count
+/// as played, so an update does not mark the whole history unplayed.
+class VoicePlayedNotes extends ChangeNotifier {
+  VoicePlayedNotes({this.storageFor});
+
   static const capacity = 1000;
+
+  /// Storage of an account, or null to keep it in memory only.
+  final VoicePlayedStorage? Function(Client client)? storageFor;
+
   // A set literal keeps insertion order (oldest first).
   final _keys = <(Client, String, String)>{};
+  final _accounts = <Client, _PlayedAccount>{};
 
   static (Client, String, String) _key(Event event) =>
       (event.room.client, event.room.id, event.eventId);
@@ -46,17 +66,138 @@ class VoicePlayedNotes {
 
   void add(Event event) {
     final key = _key(event);
+    final added = !_keys.contains(key);
     _keys
       ..remove(key)
       ..add(key);
     while (_keys.length > capacity) {
       _keys.remove(_keys.first);
     }
+    if (!added) return;
+    notifyListeners();
+    _account(event.room.client)?.persist(this);
   }
+
+  /// True for an incoming, sent voice note not played on this device; false
+  /// otherwise and while the account's played notes are still loading (so a
+  /// played note never flashes a dot).
+  bool unplayed(Event event) {
+    if (!VoicePlayback.isVoice(event) ||
+        event.senderId == event.room.client.userID ||
+        !event.status.isSent ||
+        contains(event)) {
+      return false;
+    }
+    final client = event.room.client;
+    if (storageFor == null) return true;
+    final account = _account(client);
+    final since = account?.since;
+    if (account == null || since == null) return false;
+    return !event.originServerTs.isBefore(since);
+  }
+
+  _PlayedAccount? _account(Client client) {
+    final storageFor = this.storageFor;
+    if (storageFor == null) return null;
+    final existing = _accounts[client];
+    if (existing != null) return existing;
+    final storage = storageFor(client);
+    if (storage == null) return null;
+    final account = _accounts[client] = _PlayedAccount(client, storage);
+    account.load(this);
+    return account;
+  }
+
+  /// Sources of [client] in play order, for its storage record.
+  List<List<String>> _sourcesOf(Client client) => [
+    for (final key in _keys)
+      if (identical(key.$1, client)) [key.$2, key.$3],
+  ];
+
+  void _changed() => notifyListeners();
 
   void clear() => _keys.clear();
 
   int get length => _keys.length;
+}
+
+class _PlayedAccount {
+  _PlayedAccount(this.client, this.storage);
+
+  final Client client;
+  final VoicePlayedStorage storage;
+
+  /// Notes sent before this moment count as played; null while loading.
+  DateTime? since;
+  Future<void>? _writing;
+  bool _dirty = false;
+
+  void load(VoicePlayedNotes notes) {
+    unawaited(() async {
+      DateTime? stored;
+      var record = false;
+      try {
+        // After the current build pass, which opens the private store for
+        // the rows it builds.
+        await Future<void>.microtask(() {});
+        final value = await storage.read();
+        record = value != null;
+        final raw = value?['since'];
+        stored = raw is String ? DateTime.tryParse(raw) : null;
+        final sources = value?['notes'];
+        if (sources is List) {
+          final loaded = <(Client, String, String)>{
+            for (final source in sources)
+              if (source is List &&
+                  source.length == 2 &&
+                  source[0] is String &&
+                  source[1] is String)
+                (client, source[0] as String, source[1] as String),
+          };
+          // Notes played while loading stay the newest.
+          final played = notes._keys.toList();
+          notes._keys
+            ..clear()
+            ..addAll(loaded)
+            ..removeAll(played)
+            ..addAll(played);
+          while (notes._keys.length > VoicePlayedNotes.capacity) {
+            notes._keys.remove(notes._keys.first);
+          }
+        }
+      } catch (_) {
+        // Storage unavailable: this session starts the window now.
+      }
+      since = stored ?? DateTime.now();
+      notes._changed();
+      if (!record || stored == null) persist(notes);
+    }());
+  }
+
+  /// Writes the account's record, one write at a time; a change during a
+  /// write is written right after it.
+  void persist(VoicePlayedNotes notes) {
+    if (since == null) return; // The load writes once it finished.
+    if (_writing != null) {
+      _dirty = true;
+      return;
+    }
+    _writing = () async {
+      do {
+        _dirty = false;
+        try {
+          await storage.write({
+            'since': since!.toUtc().toIso8601String(),
+            'notes': notes._sourcesOf(client),
+          });
+        } catch (_) {
+          // Kept in memory; the next play tries again.
+          break;
+        }
+      } while (_dirty);
+      _writing = null;
+    }();
+  }
 }
 
 /// Source references only: building a queue never downloads, decrypts,

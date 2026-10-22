@@ -17,6 +17,7 @@ import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/voice_playback.dart';
+import 'package:chatloom/personal/voice_played_storage.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/init_with_restore.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
@@ -190,8 +191,13 @@ class MatrixState extends State<Matrix> {
         )
       : const Stream<Duration>.empty();
 
-  /// Voice notes played in this session (in memory), for continuation.
-  final voicePlayed = VoicePlayedNotes();
+  /// Voice notes played on this device (private encrypted store, bounded),
+  /// for continuation and the unplayed dot.
+  final voicePlayed = VoicePlayedNotes(
+    storageFor: (client) => client.userID == null
+        ? null
+        : PersonalVoicePlayedStorage(PersonalClient.of(client)),
+  );
 
   /// The voice speed, remembered across notes and restarts like Telegram.
   double get voiceSpeed {

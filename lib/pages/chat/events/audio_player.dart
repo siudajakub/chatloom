@@ -144,6 +144,8 @@ class AudioPlayerState extends State<AudioPlayerWidget>
     matrix = Matrix.of(context);
     _waveform = _parseWaveform();
     matrix.voiceMessageEventId.addListener(_rebind);
+    // The unplayed dot follows plays here and the private store's load.
+    matrix.voicePlayed.addListener(_onPlayedChanged);
     VoicePlayback.targets.register(widget.event, this);
     _rebind();
 
@@ -168,8 +170,11 @@ class AudioPlayerState extends State<AudioPlayerWidget>
     }
   }
 
+  void _onPlayedChanged() => _tick(null);
+
   @override
   void dispose() {
+    matrix.voicePlayed.removeListener(_onPlayedChanged);
     matrix.voiceMessageEventId.removeListener(_rebind);
     VoicePlayback.targets.unregister(widget.event, this);
     _cancelSubscriptions();
@@ -615,6 +620,10 @@ class AudioPlayerState extends State<AudioPlayerWidget>
       downloadProgress: _downloadProgress,
       // Speed stays beside the time; secondary actions live in the menu.
       controls: audioPlayer != null,
+      unplayed:
+          !expanded &&
+          audioPlayer == null &&
+          matrix.voicePlayed.unplayed(widget.event),
       onPlay: _onButtonTap,
       onSeek: !canSeek
           ? null
