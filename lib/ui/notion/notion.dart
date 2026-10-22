@@ -7,12 +7,15 @@ import 'notion_tokens.dart';
 
 export 'details_contract.dart';
 export 'initial_avatar.dart';
+export 'notion_activity.dart';
 export 'notion_appearance.dart';
 export 'notion_callout.dart';
 export 'notion_contrast.dart';
 export 'notion_entrance.dart';
 export 'notion_glass.dart';
+export 'notion_lazy_switcher.dart';
 export 'notion_hover_toolbar.dart';
+export 'notion_link_preview.dart';
 export 'notion_loops.dart';
 export 'notion_media_viewer.dart';
 export 'notion_media_playback_controls.dart';

@@ -8,8 +8,11 @@ import 'package:chatloom/config/routes.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/ui/keyboard_shortcuts_sheet.dart';
+import 'package:chatloom/ui/notion/notion_activity.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/client_startup.dart';
 import 'package:chatloom/widgets/layouts/call_overlay.dart';
@@ -95,37 +98,50 @@ class ChatLoomApp extends StatelessWidget {
         locale: AppConfig.appLocale,
         supportedLocales: const [AppConfig.appLocale],
         routerConfig: router,
-        builder: (context, child) => AppLockWidget(
-          controller: appLock,
-          pincode: appLockSettings.pincode,
-          useBiometrics: appLockSettings.useBiometrics,
-          isLoggedIn: clients.any((client) => client.isLogged()),
-          // Need a navigator above the Matrix widget for
-          // displaying dialogs
-          child: MacDesktopIntegration(
-            onSettings: () {
-              if (clients.any((client) => client.isLogged())) {
-                router.go('/rooms/settings');
-              }
-            },
-            onWake: () {
-              for (final client in clients.where(
-                (client) => client.isLogged(),
-              )) {
-                client.restartSync().catchError((Object _) {});
-              }
-            },
-            child: Matrix(
-              clients: clients,
-              store: store,
-              child: CallOverlay(
-                child: Column(
-                  children: [
-                    if (startup != null) ClientStartupNotice(startup: startup!),
-                    Expanded(
-                      child: testWidget ?? child ?? const SizedBox.shrink(),
-                    ),
-                  ],
+        // Decorative animation pauses while the app is not in front of the
+        // user (PF-08); sync and sending are unaffected.
+        builder: (context, child) => NotionActivity(
+          windowVisible: PlatformInfos.isMacOS
+              ? MacDesktopWindow.visible
+              : null,
+          child: AppLockWidget(
+            controller: appLock,
+            pincode: appLockSettings.pincode,
+            useBiometrics: appLockSettings.useBiometrics,
+            isLoggedIn: clients.any((client) => client.isLogged()),
+            // Need a navigator above the Matrix widget for
+            // displaying dialogs
+            child: MacDesktopIntegration(
+              onSettings: () {
+                if (clients.any((client) => client.isLogged())) {
+                  router.go('/rooms/settings');
+                }
+              },
+              onShortcutsHelp: () {
+                final navigator =
+                    router.routerDelegate.navigatorKey.currentContext;
+                if (navigator != null) showKeyboardShortcutsSheet(navigator);
+              },
+              onWake: () {
+                for (final client in clients.where(
+                  (client) => client.isLogged(),
+                )) {
+                  client.restartSync().catchError((Object _) {});
+                }
+              },
+              child: Matrix(
+                clients: clients,
+                store: store,
+                child: CallOverlay(
+                  child: Column(
+                    children: [
+                      if (startup != null)
+                        ClientStartupNotice(startup: startup!),
+                      Expanded(
+                        child: testWidget ?? child ?? const SizedBox.shrink(),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

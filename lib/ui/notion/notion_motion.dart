@@ -5,6 +5,8 @@ import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'notion_activity.dart';
+
 /// One motion vocabulary for the Notion UI: page navigation, durations,
 /// curves, springs, press scales and modal styles.
 ///
@@ -226,15 +228,18 @@ abstract final class NotionMotion {
   static const double pageFadeWindow = 0.35;
 
   /// Whether the user asked for less motion (Android "remove animations",
-  /// iOS Reduce Motion). The single reduced-motion check for the whole app;
-  /// depends only on the `disableAnimations` aspect of [MediaQuery].
+  /// iOS Reduce Motion), or the app is not in front of the user
+  /// ([NotionActivity]: another app has focus, the window is hidden). The
+  /// single reduced-motion check for the whole app; depends only on the
+  /// `disableAnimations` aspect of [MediaQuery] and on [NotionActivity].
   static bool reduced(BuildContext context) =>
       (MediaQuery.maybeDisableAnimationsOf(context) ?? false) ||
       WidgetsBinding
           .instance
           .platformDispatcher
           .accessibilityFeatures
-          .reduceMotion;
+          .reduceMotion ||
+      !NotionActivity.isActive(context);
 
   /// Completes once the route that hosts [context], and every page route
   /// around it (a nested navigator's shell sliding in), has finished its
