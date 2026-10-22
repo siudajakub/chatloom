@@ -335,6 +335,9 @@ class BackgroundPush {
           iOS: DarwinInitializationSettings(),
         ),
         onDidReceiveNotificationResponse: (response) async {
+          // A warm tap arrives here; Android also keeps it as the activity's
+          // intent, which a later launch check must not open again.
+          handledLaunchNotifications.add(response);
           try {
             await notificationTap(
               response,
@@ -409,6 +412,9 @@ class BackgroundPush {
     void Function(String errorMsg, {Uri? link})? onFcmError,
   }) {
     final instance = BackgroundPush.clientOnly(matrix.widget.clients);
+    // Settings pages ask for the shared instance with the same MatrixState;
+    // only a new app surface (MatrixState) checks the launch notification.
+    final attached = !identical(instance.matrix, matrix);
     instance.matrix = matrix;
     instance.setRegistrationForeground(
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
@@ -416,15 +422,21 @@ class BackgroundPush {
     // Surfaces that only need the shared instance (e.g. settings) must not
     // drop the error callback registered by MatrixState.
     if (onFcmError != null) instance.onFcmError = onFcmError;
-    unawaited(instance._openLaunchNotification());
+    if (attached) unawaited(instance._openLaunchNotification());
     return instance;
   }
+
+  /// Notification responses already opened in this process (warm taps and
+  /// launches), so a launch check never replays one (code-client CC-21).
+  @visibleForTesting
+  static final handledLaunchNotifications = HandledNotificationResponses();
 
   /// A notification tap that launched the app opens its chat as soon as the
   /// router has rendered and an account is signed in, independent of push
   /// registration (which may wait for permission dialogs or the network).
+  /// Android reports the activity's current intent, which after a warm tap
+  /// is that tap: such a response, or one already opened, is never replayed.
   Future<void> _openLaunchNotification() async {
-    if (_wentToRoomOnStartup) return;
     try {
       await ready;
       final details = await _flutterLocalNotificationsPlugin
@@ -433,10 +445,9 @@ class BackgroundPush {
       if (details == null ||
           !details.didNotificationLaunchApp ||
           response == null ||
-          _wentToRoomOnStartup) {
+          !handledLaunchNotifications.add(response)) {
         return;
       }
-      _wentToRoomOnStartup = true;
       await WidgetsBinding.instance.endOfFrame;
       final deadline = DateTime.now().add(const Duration(seconds: 30));
       while (!clients.any((client) => client.isLogged()) &&
@@ -838,8 +849,6 @@ class BackgroundPush {
 
   final pusherDataMessageFormat = Platform.isAndroid;
 
-  static bool _wentToRoomOnStartup = false;
-
   Future<void> setupPush(BuildContext context) async {
     await ready;
     if (!context.mounted) return;
@@ -1057,6 +1066,36 @@ class BackgroundPush {
         );
         await _catchUpAfter(outcome);
       });
+}
+
+/// Notification responses already opened, by content (id, action, payload).
+/// Bounded; the same tap reported again (Android keeps it as the activity
+/// intent) is recognized, a new notification is not.
+class HandledNotificationResponses {
+  static const _limit = 32;
+  final _keys = <String>[];
+
+  static String _key(NotificationResponse response) => [
+    response.notificationResponseType.name,
+    response.id,
+    response.actionId,
+    response.payload,
+  ].join('\u0000');
+
+  /// Records [response]; false when it was already recorded.
+  bool add(NotificationResponse response) {
+    final key = _key(response);
+    if (_keys.contains(key)) return false;
+    _keys.add(key);
+    if (_keys.length > _limit) _keys.removeAt(0);
+    return true;
+  }
+
+  bool contains(NotificationResponse response) =>
+      _keys.contains(_key(response));
+
+  @visibleForTesting
+  void clear() => _keys.clear();
 }
 
 /// Exactly the data map the Personal gateway sends to FCM. The test flag is

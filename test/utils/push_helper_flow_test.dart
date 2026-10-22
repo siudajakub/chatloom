@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/message_notification.dart';
+import 'package:chatloom/personal/notification_threads.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
@@ -22,6 +23,9 @@ const _owner = '@synthetic-owner:example.invalid';
 const _peer = '@synthetic-peer:example.invalid';
 const _roomId = '!synthetic-room:example.invalid';
 const _eventId = r'$synthetic-event';
+const _secondRoomId = '!synthetic-second:example.invalid';
+const _bot = '@synthetic-bridge-bot:example.invalid';
+const _groupId = 'synthetic-person';
 
 class _Database implements DatabaseApi {
   final events = <String, Event>{};
@@ -163,13 +167,39 @@ class _Fixture {
     };
   }
 
+  /// Merges [room] with a second direct chat of the same person.
+  Room merge() {
+    final second = Room(id: _secondRoomId, client: client);
+    client.rooms.add(second);
+    client.accountData['m.direct'] = BasicEvent(
+      type: 'm.direct',
+      content: {
+        _peer: [_roomId, _secondRoomId],
+      },
+    );
+    store.records['account:$_owner:value:person:$_groupId'] = {
+      'value': PersonGroup(
+        id: _groupId,
+        name: 'Synthetic person',
+        members: [
+          ConversationRef(accountId: _owner, roomId: _roomId),
+          ConversationRef(accountId: _owner, roomId: _secondRoomId),
+        ],
+        defaultRoomId: _roomId,
+      ).toJson().cast<String, dynamic>(),
+      'revision': 1,
+    };
+    return second;
+  }
+
   Event event({
     String id = _eventId,
     String sender = _peer,
     String body = 'Synthetic preview text',
     DateTime? at,
+    Room? inRoom,
   }) => Event(
-    room: room,
+    room: inRoom ?? room,
     type: EventTypes.Message,
     eventId: id,
     senderId: sender,
@@ -180,12 +210,13 @@ class _Fixture {
   Future<void> push({
     List<Client>? clients,
     String eventId = _eventId,
+    String roomId = _roomId,
     bool test = false,
   }) async {
     final l10n = await L10n.delegate.load(const Locale('en'));
     final outcome = await pushHelper(
       PushNotification(
-        roomId: _roomId,
+        roomId: roomId,
         eventId: eventId,
         counts: const PushNotificationCounts(unread: 1),
         devices: const [],
@@ -216,6 +247,7 @@ void main() {
     await PushDiagnostics.reset();
     ForegroundServices.runningServices.add(sentinel);
     debugAppLockConfigured = () async => false;
+    NotificationThreads.debugReset();
   });
 
   tearDown(() {
@@ -500,4 +532,133 @@ void main() {
       expect(shown.body, 'Synthetic-peer: Synthetic preview text');
     },
   );
+
+  group('one notification per merged person', () {
+    test('messages from both networks of a person replace one notification '
+        'titled by the person; each tap opens the network of its message', () async {
+      final f = fixture();
+      final second = f.merge();
+      f.client.fetch = () async => f.event(id: r'$first');
+      await f.push(eventId: r'$first');
+      f.client.fetch = () async => f.event(
+        id: r'$second',
+        inRoom: second,
+        at: DateTime.utc(2026, 10, 17, 12, 1),
+      );
+      await f.push(eventId: r'$second', roomId: _secondRoomId);
+      final person = personNotificationId('synthetic-account', _groupId);
+      expect(f.plugin.shown.map((n) => n.id), [person, person]);
+      expect(f.plugin.shown.map((n) => n.title), [
+        'Synthetic person',
+        'Synthetic person',
+      ]);
+      final payloads = [
+        for (final n in f.plugin.shown) ChatLoomPushPayload.fromString(n.payload!),
+      ];
+      expect(payloads.map((p) => p.roomId), [_roomId, _secondRoomId]);
+      expect(payloads.last.eventId, r'$second');
+    });
+
+    test('an older message handled after a newer one keeps the newer one as '
+        'tap target and time', () async {
+      final f = fixture();
+      final second = f.merge();
+      final newer = DateTime.utc(2026, 10, 17, 12, 5);
+      f.client.fetch = () async =>
+          f.event(id: r'$newer', inRoom: second, at: newer);
+      await f.push(eventId: r'$newer', roomId: _secondRoomId);
+      f.client.fetch = () async => f.event(id: r'$older');
+      await f.push(eventId: r'$older');
+      final last = f.plugin.shown.last;
+      final payload = ChatLoomPushPayload.fromString(last.payload!);
+      expect(payload.roomId, _secondRoomId);
+      expect(payload.eventId, r'$newer');
+      expect(last.details!.android!.when, newer.millisecondsSinceEpoch);
+    });
+
+    test('read on another device: the network\'s own notification goes; the '
+        'shared one stays while the other network is unread', () async {
+      final f = fixture();
+      final second = f.merge();
+      second.lastEvent = f.event(
+        id: r'$unread-elsewhere',
+        inRoom: second,
+        at: DateTime.utc(2026, 10, 17, 11),
+      );
+      f.room.roomAccountData['m.fully_read'] = BasicEvent(
+        type: 'm.fully_read',
+        content: {'event_id': _eventId},
+      );
+      f.client.fetch = () async => f.event();
+      await f.push();
+      expect(await _lastOutcome(), PushOutcome.seen);
+      final person = personNotificationId('synthetic-account', _groupId);
+      expect(
+        f.plugin.cancelled,
+        contains(messageNotificationId('synthetic-account', _roomId)),
+      );
+      expect(f.plugin.cancelled, isNot(contains(person)));
+
+      second.roomAccountData['m.fully_read'] = BasicEvent(
+        type: 'm.fully_read',
+        content: {'event_id': r'$unread-elsewhere'},
+      );
+      await f.push();
+      expect(f.plugin.cancelled, contains(person));
+    });
+  });
+
+  group('bot and service chats', () {
+    void bridge(_Fixture f) => f.room.setState(
+      Event(
+        room: f.room,
+        type: 'm.bridge',
+        stateKey: 'synthetic',
+        eventId: r'$synthetic-bridge',
+        senderId: _bot,
+        originServerTs: DateTime.utc(2026, 10, 17),
+        content: {
+          'bridgebot': _bot,
+          'protocol': {'id': 'whatsapp'},
+        },
+      ),
+    );
+
+    test('a bridge bot message is quiet (shade only, no sound or pop-up)', () async {
+      final f = fixture();
+      bridge(f);
+      f.client.fetch = () async => f.event(sender: _bot);
+      await f.push();
+      final android = f.plugin.shown.single.details!.android!;
+      expect(android.channelId, PersonalNotificationChannels.serviceId);
+      expect(android.importance, Importance.low);
+      expect(android.priority, Priority.low);
+    });
+
+    test('a bot reply the user is waiting for alerts normally', () async {
+      final f = fixture();
+      bridge(f);
+      f.room.lastEvent = f.event(
+        id: r'$own-command',
+        sender: _owner,
+        at: DateTime.now().subtract(const Duration(minutes: 2)),
+      );
+      f.client.fetch = () async => f.event(sender: _bot);
+      await f.push();
+      final android = f.plugin.shown.single.details!.android!;
+      expect(android.channelId, PersonalNotificationChannels.messagesId);
+      expect(android.importance, Importance.high);
+    });
+
+    test('a person in the same chat still alerts normally', () async {
+      final f = fixture();
+      bridge(f);
+      f.client.fetch = () async => f.event();
+      await f.push();
+      expect(
+        f.plugin.shown.single.details!.android!.channelId,
+        PersonalNotificationChannels.messagesId,
+      );
+    });
+  });
 }

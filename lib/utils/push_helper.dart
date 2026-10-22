@@ -17,6 +17,7 @@ import 'package:chatloom/personal/message_notification.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/notification_eligibility.dart';
 import 'package:chatloom/personal/notification_reply.dart';
+import 'package:chatloom/personal/notification_threads.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -215,6 +216,12 @@ class _Fallback {
   final bool group;
   final bool test;
   final int? unread;
+
+  /// The conversation's notification (a merged person shares one).
+  final NotificationThread thread;
+
+  /// A bot or service chat: the quiet channel (see [personalNotificationQuiet]).
+  final bool quiet;
   const _Fallback({
     required this.client,
     required this.roomId,
@@ -222,6 +229,8 @@ class _Fallback {
     required this.group,
     required this.test,
     required this.unread,
+    required this.thread,
+    this.quiet = false,
   });
 }
 
@@ -302,6 +311,18 @@ Future<PushOutcome> _tryPushHelper(
           group: !knownRoom.isDirectChatForDisplay,
           test: run.test,
           unread: run.unread,
+          thread: notificationThreadOf(
+            client.clientName,
+            knownRoom,
+            projection,
+          ),
+          // The sender is unknown before the fetch: the room decides.
+          quiet: personalNotificationQuiet(
+            technical: _technical(projection, knownRoom),
+            fromService: false,
+            now: DateTime.now(),
+            lastOwnMessage: _ownLastEvent(client, knownRoom),
+          ),
         );
       }
     }
@@ -350,7 +371,8 @@ Future<PushOutcome> _tryPushHelper(
   if (!run.test && await _seen(event, work)) {
     await _cancelChatNotification(
       client,
-      event.room.id,
+      event.room,
+      projection: projection,
       plugin: flutterLocalNotificationsPlugin,
       work: work,
     );
@@ -406,10 +428,67 @@ Future<PushOutcome> _tryPushHelper(
     personal: personal,
     unread: notification.counts?.unread,
     test: run.test,
+    quiet: await _quiet(client, event, private, work),
     plugin: flutterLocalNotificationsPlugin,
     work: work,
   );
   return PushOutcome.shown;
+}
+
+bool _technical(InboxProjection projection, Room room) {
+  try {
+    return projection.classifier.classify(room).technical;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// The room's preview when it is the account's own message (local, no I/O).
+DateTime? _ownLastEvent(Client client, Room room) {
+  final last = room.lastEvent;
+  return last != null && last.senderId == client.userID
+      ? last.originServerTs
+      : null;
+}
+
+/// Bot and service messages alert quietly unless the user just wrote there
+/// (see [personalNotificationQuiet]). Only those chats read their recent
+/// local history; any failure keeps the normal alert decision on the room.
+Future<bool> _quiet(
+  Client client,
+  Event event,
+  InboxProjection projection,
+  PushWorkBudget work,
+) async {
+  final technical = _technical(projection, event.room);
+  bool fromService;
+  try {
+    fromService = projection.classifier.isServiceMember(event.senderId);
+  } catch (_) {
+    fromService = false;
+  }
+  if (!technical && !fromService) return false;
+  final now = DateTime.now();
+  var own = _ownLastEvent(client, event.room);
+  if (own == null && work.remaining > _fallbackReserve * 2) {
+    try {
+      final recent = await client.database
+          .getEventList(event.room, limit: 20)
+          .timeout(const Duration(seconds: 1));
+      for (final candidate in recent) {
+        if (candidate.senderId != client.userID) continue;
+        if (own == null || candidate.originServerTs.isAfter(own)) {
+          own = candidate.originServerTs;
+        }
+      }
+    } catch (_) {}
+  }
+  return personalNotificationQuiet(
+    technical: technical,
+    fromService: fromService,
+    now: now,
+    lastOwnMessage: own,
+  );
 }
 
 /// A read-position lookup failure never hides a message.
@@ -459,6 +538,9 @@ String? _chatName(InboxProjection projection, Room room) {
 String _personKey(String senderId) =>
     sha256.convert(utf8.encode(senderId)).toString().substring(0, 16);
 
+/// Person key of the generic "new message" line of a fallback alert.
+const _genericSenderKey = 'chatloom-generic';
+
 /// Inline Reply only where the notification names the chat (previews on, no
 /// app lock) and the account can write there; never on the diagnostics test.
 /// The reply itself is user-initiated and goes through the durable outbox
@@ -500,12 +582,19 @@ AndroidNotificationDetails _messageDetails({
   DateTime? when,
   Uint8List? largeIcon,
   bool reply = false,
+  bool quiet = false,
 }) => AndroidNotificationDetails(
-  PersonalNotificationChannels.messagesId,
-  PersonalNotificationChannels.messagesName,
-  channelDescription: PersonalNotificationChannels.messagesDescription,
-  importance: Importance.high,
-  priority: Priority.high,
+  quiet
+      ? PersonalNotificationChannels.serviceId
+      : PersonalNotificationChannels.messagesId,
+  quiet
+      ? PersonalNotificationChannels.serviceName
+      : PersonalNotificationChannels.messagesName,
+  channelDescription: quiet
+      ? PersonalNotificationChannels.serviceDescription
+      : PersonalNotificationChannels.messagesDescription,
+  importance: quiet ? Importance.low : Importance.high,
+  priority: quiet ? Priority.low : Priority.high,
   visibility: NotificationVisibility.private,
   category: AndroidNotificationCategory.message,
   groupKey: clientName,
@@ -621,8 +710,9 @@ Future<void> _showMessageNotification({
   required PersonalClient personal,
   required int? unread,
   required bool test,
-  required FlutterLocalNotificationsPlugin plugin,
   required PushWorkBudget work,
+  required FlutterLocalNotificationsPlugin plugin,
+  bool quiet = false,
 }) async {
   final room = event.room;
   // The app lock hides names and previews even when previews are on.
@@ -631,7 +721,14 @@ Future<void> _showMessageNotification({
   // Bridged chats are often missing from `m.direct`.
   final group = !room.isDirectChatForDisplay;
   final chatName = _chatName(projection, room);
-  final senderName = event.senderFromMemoryOrFallback.calcDisplayname();
+  // A merged person is one conversation: one notification for all its
+  // networks, titled and keyed by the person, not by each network's profile.
+  final thread = notificationThreadOf(client.clientName, room, projection);
+  final person = thread.group != null && !group;
+  final profileName = event.senderFromMemoryOrFallback.calcDisplayname();
+  final senderName = person && chatName?.trim().isNotEmpty == true
+      ? chatName!
+      : profileName;
   String? preview;
   if (previews && notificationContentAvailable(event)) {
     try {
@@ -649,8 +746,8 @@ Future<void> _showMessageNotification({
     test: test,
     locked: locked,
   );
-  final id = messageNotificationId(client.clientName, room.id);
-  final senderKey = _personKey(event.senderId);
+  final id = thread.id;
+  final senderKey = _personKey(person ? thread.key : event.senderId);
   // Avatars identify the chat, so they follow the names: never with the
   // generic or locked text.
   final avatars = previews && PlatformInfos.isAndroid
@@ -663,69 +760,90 @@ Future<void> _showMessageNotification({
           work: work,
         )
       : const _NotificationAvatars();
-  MessagingStyleInformation? style;
-  if (text.detailed && preview != null && PlatformInfos.isAndroid) {
-    MessagingStyleInformation? previous;
-    try {
-      previous = await work.wait(
-        () async => await plugin
-            .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin
-            >()
-            ?.getActiveNotificationMessagingStyle(id: id),
-      );
-    } on TimeoutException {
-      rethrow;
-    } catch (_) {
-      previous = null;
-    }
-    style = messagingStyle(
-      text: text,
-      chatName: chatName,
-      group: group,
-      senderName: senderName,
-      senderKey: senderKey,
-      timestamp: event.originServerTs,
-      preview: preview,
-      senderIcon: avatars.sender == null
-          ? null
-          : ByteArrayAndroidIcon(avatars.sender!),
-      knownIcons: await _cachedPersonIcons(
-        client,
-        notificationKeysWithoutIcon(previous)..remove(senderKey),
-      ),
-      previous: previous,
-    );
-  }
-  await work.wait(() => PersonalNotificationChannels.ensure(plugin));
-  await work.wait(
-    () => plugin.show(
-      id: id,
-      title: text.title,
-      body: text.body,
-      notificationDetails: NotificationDetails(
-        android: _messageDetails(
-          clientName: client.clientName,
-          style: style,
-          unread: unread,
-          when: event.originServerTs,
-          largeIcon: avatars.chat,
-          reply: _offersReply(room, previews: previews, test: test),
-        ),
-        iOS: DarwinNotificationDetails(
-          threadIdentifier: '${client.clientName}_${room.id}',
-        ),
-        macOS: DarwinNotificationDetails(
-          threadIdentifier: '${client.clientName}_${room.id}',
-        ),
-      ),
-      payload: ChatLoomPushPayload(
-        client.clientName,
-        room.id,
-        event.eventId,
-      ).toString(),
-    ),
+  final replyRoom = notificationReplyRoom(
+    personal,
+    room,
+    eventId: event.eventId,
   );
+  // The MessagingStyle line of this message (previews on, content shown).
+  final line = text.detailed && PlatformInfos.isAndroid ? preview : null;
+  // Read the shown history, add this message, show: one push at a time per
+  // notification, so concurrent pushes neither drop nor reorder lines.
+  await NotificationThreads.serialize(id, () async {
+    MessagingStyleInformation? style;
+    MessagingStyleInformation? previous;
+    if (line != null) {
+      try {
+        previous = await work.wait(
+          () async => await plugin
+              .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin
+              >()
+              ?.getActiveNotificationMessagingStyle(id: id),
+        );
+      } on TimeoutException {
+        rethrow;
+      } catch (_) {
+        previous = null;
+      }
+      style = messagingStyle(
+        text: text,
+        chatName: chatName,
+        group: group,
+        senderName: senderName,
+        senderKey: senderKey,
+        timestamp: event.originServerTs,
+        preview: line,
+        senderIcon: avatars.sender == null
+            ? null
+            : ByteArrayAndroidIcon(avatars.sender!),
+        knownIcons: await _cachedPersonIcons(
+          client,
+          notificationKeysWithoutIcon(previous)..remove(senderKey),
+        ),
+        previous: previous,
+      );
+    }
+    // An older message handled last keeps the newer one as tap target.
+    final newest = NotificationThreads.newest(
+      id,
+      NotificationNewest(event.originServerTs, room.id, event.eventId),
+    );
+    var when = newest.timestamp;
+    for (final line in previous?.messages ?? const <Message>[]) {
+      if (line.timestamp.isAfter(when)) when = line.timestamp;
+    }
+    await work.wait(() => PersonalNotificationChannels.ensure(plugin));
+    await work.wait(
+      () => plugin.show(
+        id: id,
+        title: text.title,
+        body: text.body,
+        notificationDetails: NotificationDetails(
+          android: _messageDetails(
+            clientName: client.clientName,
+            style: style,
+            unread: unread,
+            when: when,
+            largeIcon: avatars.chat,
+            reply: _offersReply(replyRoom, previews: previews, test: test),
+            quiet: quiet,
+          ),
+          iOS: DarwinNotificationDetails(
+            threadIdentifier: thread.threadIdentifier,
+          ),
+          macOS: DarwinNotificationDetails(
+            threadIdentifier: thread.threadIdentifier,
+          ),
+        ),
+        payload: ChatLoomPushPayload(
+          client.clientName,
+          newest.roomId,
+          newest.eventId,
+        ).toString(),
+      ),
+    );
+  });
   if (PlatformInfos.isAndroid) {
     try {
       await updateSummaryNotification(
@@ -740,6 +858,9 @@ Future<void> _showMessageNotification({
 }
 
 /// Generic alert after a failed or timed-out fetch, with its own budget.
+///
+/// An earlier message of the same conversation keeps its lines: the generic
+/// "new message" is added to the shown history instead of replacing it.
 Future<void> _showFallback(
   _Fallback target,
   FlutterLocalNotificationsPlugin plugin,
@@ -756,45 +877,97 @@ Future<void> _showFallback(
     test: target.test,
     locked: locked,
   );
+  final thread = target.thread;
+  final id = thread.id;
   await budget.wait(() => PersonalNotificationChannels.ensure(plugin));
-  await budget.wait(
-    () => plugin.show(
-      id: messageNotificationId(target.client.clientName, target.roomId),
-      title: text.title,
-      body: text.body,
-      notificationDetails: NotificationDetails(
-        android: _messageDetails(
-          clientName: target.client.clientName,
-          unread: target.unread,
-          reply: _offersReply(
-            target.client.getRoomById(target.roomId),
-            previews: previews && !locked,
-            test: target.test,
+  await NotificationThreads.serialize(id, () async {
+    MessagingStyleInformation? style;
+    if (previews && !locked && PlatformInfos.isAndroid) {
+      try {
+        final previous = await budget.wait(
+          () async => await plugin
+              .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin
+              >()
+              ?.getActiveNotificationMessagingStyle(id: id),
+        );
+        if (previous?.messages?.isNotEmpty == true) {
+          style = messagingStyle(
+            text: text,
+            chatName: target.chatName,
+            group: target.group,
+            senderName: target.chatName ?? genericNotificationTitle,
+            senderKey: _genericSenderKey,
+            timestamp: DateTime.now(),
+            preview: genericNotificationBody,
+            previous: previous,
+          );
+        }
+      } on TimeoutException {
+        rethrow;
+      } catch (_) {
+        style = null;
+      }
+    }
+    await budget.wait(
+      () => plugin.show(
+        id: id,
+        title: text.title,
+        body: text.body,
+        notificationDetails: NotificationDetails(
+          android: _messageDetails(
+            clientName: target.client.clientName,
+            style: style,
+            unread: target.unread,
+            reply: _offersReply(
+              target.client.getRoomById(target.roomId),
+              previews: previews && !locked,
+              test: target.test,
+            ),
+            quiet: target.quiet,
+          ),
+          iOS: DarwinNotificationDetails(
+            threadIdentifier: thread.threadIdentifier,
           ),
         ),
-        iOS: DarwinNotificationDetails(
-          threadIdentifier: '${target.client.clientName}_${target.roomId}',
-        ),
+        payload: ChatLoomPushPayload(
+          target.client.clientName,
+          target.roomId,
+          null,
+        ).toString(),
       ),
-      payload: ChatLoomPushPayload(
-        target.client.clientName,
-        target.roomId,
-        null,
-      ).toString(),
-    ),
-  );
+    );
+  });
 }
 
+/// Read on another device: removes the room's notification. A merged
+/// person's shared notification goes only when no other network of the
+/// person still has an unread message in it.
 Future<void> _cancelChatNotification(
   Client client,
-  String roomId, {
+  Room room, {
+  required InboxProjection? projection,
   required FlutterLocalNotificationsPlugin plugin,
   required PushWorkBudget work,
 }) async {
   try {
-    await work.wait(
-      () => plugin.cancel(id: messageNotificationId(client.clientName, roomId)),
-    );
+    final thread = notificationThreadOf(client.clientName, room, projection);
+    final ids = {messageNotificationId(client.clientName, room.id)};
+    final members = thread.roomIds.difference({room.id});
+    var othersRead = true;
+    for (final member in members) {
+      final last = client.getRoomById(member)?.lastEvent;
+      if (last == null || last.senderId == client.userID) continue;
+      if (!await _seen(last, work)) {
+        othersRead = false;
+        break;
+      }
+    }
+    if (othersRead) ids.addAll(thread.cancelIds);
+    for (final id in ids) {
+      await work.wait(() => plugin.cancel(id: id));
+    }
+    NotificationThreads.forget(ids);
     if (PlatformInfos.isAndroid) {
       await updateSummaryNotification(
         flutterLocalNotificationsPlugin: plugin,
@@ -808,7 +981,8 @@ Future<void> _cancelChatNotification(
 }
 
 /// Count-only push (read elsewhere): remove notifications of chats that are
-/// no longer unread. Reminder notifications are never touched.
+/// no longer unread; a merged person's once none of its networks is unread.
+/// Reminder notifications are never touched.
 Future<void> _clearReadNotifications(
   Client client, {
   required int? unread,
@@ -825,6 +999,7 @@ Future<void> _clearReadNotifications(
     for (final notification in active) {
       await work.wait(() => plugin.cancel(id: notification.id!));
     }
+    NotificationThreads.forget(active.map((n) => n.id!));
     return;
   }
   // Make sure client is fully loaded and synced before dismiss notifications:
@@ -835,14 +1010,30 @@ Future<void> _clearReadNotifications(
         .timeout(const Duration(seconds: 8))
         .catchError((_) => null),
   );
+  // Which rooms each notification can show: single chats and the person
+  // merges of the private store (when it opens in time).
+  final shows = <int, List<Room>>{
+    for (final room in client.rooms)
+      messageNotificationId(client.clientName, room.id): [room],
+  };
+  try {
+    final personal = pushPersonalClientOf(client);
+    await personal.loadLocal().timeout(const Duration(seconds: 3));
+    for (final group in personal.groups) {
+      shows[personNotificationId(client.clientName, group.id)] = [
+        for (final member in group.members)
+          ?client.getRoomById(member.roomId),
+      ];
+    }
+  } catch (_) {}
   var changed = false;
   for (final notification in active) {
-    final room = client.rooms.firstWhereOrNull(
-      (room) =>
-          messageNotificationId(client.clientName, room.id) == notification.id,
-    );
-    if (room != null && !room.isUnreadOrInvited) {
+    final rooms = shows[notification.id];
+    if (rooms != null &&
+        rooms.isNotEmpty &&
+        rooms.every((room) => !room.isUnreadOrInvited)) {
       await work.wait(() => plugin.cancel(id: notification.id!));
+      NotificationThreads.forget([notification.id!]);
       changed = true;
     }
   }
