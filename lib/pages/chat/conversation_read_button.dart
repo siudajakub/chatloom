@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/read_targets.dart';
@@ -29,6 +31,41 @@ class ConversationReadButton extends StatefulWidget {
 
 class _ConversationReadButtonState extends State<ConversationReadButton> {
   bool _sending = false;
+  StreamSubscription<SyncUpdate>? _sync;
+
+  @override
+  void initState() {
+    super.initState();
+    _listen();
+  }
+
+  @override
+  void didUpdateWidget(ConversationReadButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.rooms.firstOrNull?.client != widget.rooms.firstOrNull?.client) {
+      _listen();
+    }
+  }
+
+  /// Re-evaluates visibility only when a sync touches one of the sources
+  /// (new message or the own receipt moved); the button alone rebuilds.
+  void _listen() {
+    _sync?.cancel();
+    final client = widget.rooms.firstOrNull?.client;
+    _sync = client?.onSync.stream.listen((update) {
+      final joined = update.rooms?.join;
+      if (joined == null || !mounted) return;
+      if (widget.rooms.any((room) => joined.containsKey(room.id))) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _sync?.cancel();
+    super.dispose();
+  }
 
   Future<void> _read() async {
     if (_sending ||
@@ -61,9 +98,18 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
   }
 
   @override
-  Widget build(BuildContext context) => NotionGlassPill(
-    icon: _sending ? Icons.more_horiz : Icons.done_all,
-    tooltip: L10n.of(context).markAsRead,
-    onPressed: _sending || widget.rooms.isEmpty ? null : _read,
-  );
+  Widget build(BuildContext context) {
+    final needed =
+        _sending ||
+        conversationNeedsPublicRead(widget.rooms, loaded: widget.loadedEvents);
+    if (!needed) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: NotionSpace.xs),
+      child: NotionGlassPill(
+        icon: _sending ? Icons.more_horiz : Icons.done_all,
+        tooltip: L10n.of(context).markAsRead,
+        onPressed: _sending || widget.rooms.isEmpty ? null : _read,
+      ),
+    );
+  }
 }
