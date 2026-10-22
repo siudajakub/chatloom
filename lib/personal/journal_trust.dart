@@ -268,6 +268,12 @@ class MegolmTrustSnapshot implements JournalTrust {
   static String? sessionIdOf(Event event) =>
       MegolmEnvelope.parse(_envelopeOf(event))?.sessionId;
 
+  /// The curve25519 key of the device that encrypted [event], if its
+  /// envelope is well-formed. For a [trusts]ed event this is a verified own
+  /// device (the trust rule matched it).
+  static String? senderKeyOf(Event event) =>
+      MegolmEnvelope.parse(_envelopeOf(event))?.senderKey;
+
   /// The SDK fills a direct session's claimed ed25519 key from the device
   /// list when the session arrives; this device's own outbound sessions may
   /// predate its own device keys there. Only this device can be the Olm

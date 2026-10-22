@@ -1132,6 +1132,7 @@ class PersonalClient extends ChangeNotifier {
       workerReadiness = WorkerReadiness.fromPayload(
         Map<String, dynamic>.from(heartbeat.$2.payload),
         heartbeat.$1.originServerTs,
+        deviceKey: MegolmTrustSnapshot.senderKeyOf(heartbeat.$1),
       );
     }
     for (final (event, op) in batch.results) {
