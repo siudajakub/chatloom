@@ -16,6 +16,14 @@ class NotionInboxRow extends StatelessWidget {
   final String? time;
   final int unreadCount;
   final bool unread;
+
+  /// Somebody mentioned the account (`highlightCount`): an accent "@" badge
+  /// beside the count, also in muted chats (Telegram).
+  final bool mentioned;
+
+  /// The last own message was not sent: a danger mark before the preview
+  /// (Telegram, Messenger).
+  final bool failed;
   final bool selected;
   final bool muted;
   final String? notificationLabel;
@@ -50,6 +58,8 @@ class NotionInboxRow extends StatelessWidget {
     this.time,
     this.unreadCount = 0,
     this.unread = false,
+    this.mentioned = false,
+    this.failed = false,
     this.selected = false,
     this.muted = false,
     this.notificationLabel,
@@ -79,6 +89,8 @@ class NotionInboxRow extends StatelessWidget {
       name,
       preview,
       ?time,
+      if (failed) 'Last message not sent',
+      if (mentioned) 'You were mentioned',
       if (unreadCount > 0)
         '$unreadCount unread messages'
       else if (unread)
@@ -103,16 +115,10 @@ class NotionInboxRow extends StatelessWidget {
         borderRadius: NotionRadius.rowAll,
         child: NotionPressable(
           scale: NotionMotion.pressRow,
-          child: AnimatedContainer(
-            // The selected background follows the open conversation.
-            duration: NotionMotion.of(context, NotionMotion.quick),
-            curve: NotionMotion.standard,
-            decoration: BoxDecoration(
-              color: selected
-                  ? Theme.of(context).colorScheme.surfaceContainerHighest
-                  : Colors.transparent,
-              borderRadius: NotionRadius.rowAll,
-            ),
+          // The selected background follows the open conversation.
+          child: _SelectedBackground(
+            selected: selected,
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
             child: Material(
               type: MaterialType.transparency,
               borderRadius: NotionRadius.rowAll,
@@ -153,8 +159,9 @@ class NotionInboxRow extends StatelessWidget {
                                   ),
                                   // Muting pops the bell in and out; the first
                                   // build shows it as is.
-                                  NotionMorphSwitcher(
-                                    rotate: false,
+                                  NotionLazySwitcher(
+                                    style: NotionLazySwitch.morph,
+                                    alignment: AlignmentDirectional.centerStart,
                                     child: muted
                                         ? Padding(
                                             key: const ValueKey('muted'),
@@ -178,7 +185,17 @@ class NotionInboxRow extends StatelessWidget {
                               const SizedBox(height: 3),
                               Row(
                                 children: [
-                                  if (previewLeading != null) ...[
+                                  if (failed) ...[
+                                    Icon(
+                                      Icons.error_outline,
+                                      key: const ValueKey(
+                                        'notion_inbox_failed',
+                                      ),
+                                      size: NotionType.footnote.fontSize,
+                                      color: colors.danger,
+                                    ),
+                                    const SizedBox(width: NotionSpace.xxs),
+                                  ] else if (previewLeading != null) ...[
                                     previewLeading!,
                                     const SizedBox(width: 4),
                                   ],
@@ -187,8 +204,7 @@ class NotionInboxRow extends StatelessWidget {
                                   NotionSizeReveal(
                                     visible: typing,
                                     axis: Axis.horizontal,
-                                    alignment:
-                                        AlignmentDirectional.centerStart,
+                                    alignment: AlignmentDirectional.centerStart,
                                     duration: NotionMotion.short,
                                     child: Padding(
                                       padding: const EdgeInsetsDirectional.only(
@@ -201,7 +217,7 @@ class NotionInboxRow extends StatelessWidget {
                                     ),
                                   ),
                                   Expanded(
-                                    child: _InboxCrossFade(
+                                    child: NotionLazySwitcher(
                                       child: Text(
                                         preview,
                                         key: ValueKey((preview, typing)),
@@ -232,7 +248,7 @@ class NotionInboxRow extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             if (time != null)
-                              _InboxCrossFade(
+                              NotionLazySwitcher(
                                 alignment: AlignmentDirectional.topEnd,
                                 child: Text(
                                   time!,
@@ -249,40 +265,70 @@ class NotionInboxRow extends StatelessWidget {
                             // shrinks away once read. Rows built by scrolling
                             // show it as is (a switcher never animates its first
                             // child).
-                            NotionMorphSwitcher(
+                            NotionLazySwitcher(
+                              style: NotionLazySwitch.morph,
                               bounce: true,
-                              rotate: false,
+                              alignment: AlignmentDirectional.topEnd,
                               child: unreadCount > 0
                                   ? Padding(
-                                      key: const ValueKey('count'),
+                                      key: ValueKey(('count', mentioned)),
                                       padding: const EdgeInsets.only(
                                         top: NotionSpace.xxs,
                                       ),
-                                      child: NotionPop(
-                                        trigger: unreadCount,
-                                        playOnMount: false,
-                                        child: Container(
-                                          constraints: const BoxConstraints(
-                                            minWidth: 20,
-                                            minHeight: 20,
-                                          ),
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 6,
-                                            vertical: 1,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: badgeColor,
-                                            borderRadius: NotionRadius.pillAll,
-                                          ),
-                                          alignment: Alignment.center,
-                                          child: NotionAnimatedCount(
-                                            count: unreadCount,
-                                            style: NotionType.caption.copyWith(
-                                              color: badgeText,
-                                              fontWeight: FontWeight.w600,
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (mentioned) ...[
+                                            _MentionBadge(
+                                              color: palette.accentFill,
+                                              text: palette.onAccentFill,
+                                            ),
+                                            const SizedBox(
+                                              width: NotionSpace.xxs,
+                                            ),
+                                          ],
+                                          NotionPop(
+                                            trigger: unreadCount,
+                                            playOnMount: false,
+                                            child: Container(
+                                              constraints: const BoxConstraints(
+                                                minWidth: 20,
+                                                minHeight: 20,
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 6,
+                                                    vertical: 1,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: badgeColor,
+                                                borderRadius:
+                                                    NotionRadius.pillAll,
+                                              ),
+                                              alignment: Alignment.center,
+                                              child: NotionAnimatedCount(
+                                                count: unreadCount,
+                                                style: NotionType.caption
+                                                    .copyWith(
+                                                      color: badgeText,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                              ),
                                             ),
                                           ),
-                                        ),
+                                        ],
+                                      ),
+                                    )
+                                  : mentioned
+                                  ? Padding(
+                                      key: const ValueKey('mention'),
+                                      padding: const EdgeInsets.only(
+                                        top: NotionSpace.xxs,
+                                      ),
+                                      child: _MentionBadge(
+                                        color: palette.accentFill,
+                                        text: palette.onAccentFill,
                                       ),
                                     )
                                   : unread
@@ -314,9 +360,7 @@ class NotionInboxRow extends StatelessWidget {
                                       ),
                                       child: Icon(
                                         Icons.push_pin_outlined,
-                                        key: const ValueKey(
-                                          'notion_inbox_pin',
-                                        ),
+                                        key: const ValueKey('notion_inbox_pin'),
                                         size: NotionType.body.fontSize,
                                         color: secondary,
                                       ),
@@ -341,25 +385,111 @@ class NotionInboxRow extends StatelessWidget {
   }
 }
 
-/// Short cross-fade for one line of row text (preview, time) when it
-/// changes; the first build and reduced motion show it directly.
-class _InboxCrossFade extends StatelessWidget {
-  const _InboxCrossFade({
-    required this.child,
-    this.alignment = AlignmentDirectional.topStart,
-  });
+/// "@": somebody mentioned the account. Accent even in muted chats, so a
+/// mention never drowns among grey badges (Telegram's `drawMention`).
+class _MentionBadge extends StatelessWidget {
+  const _MentionBadge({required this.color, required this.text});
 
-  final Widget child;
-  final AlignmentGeometry alignment;
+  final Color color;
+  final Color text;
 
   @override
-  Widget build(BuildContext context) => AnimatedSwitcher(
-    duration: NotionMotion.of(context, NotionMotion.short),
-    reverseDuration: NotionMotion.of(context, NotionMotion.quick),
-    switchInCurve: NotionMotion.standard,
-    switchOutCurve: NotionMotion.exitFast,
-    layoutBuilder: (current, previous) =>
-        Stack(alignment: alignment, children: [...previous, ?current]),
-    child: child,
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('notion_inbox_mention'),
+    constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+    alignment: Alignment.center,
+    decoration: BoxDecoration(color: color, borderRadius: NotionRadius.pillAll),
+    child: Text(
+      '@',
+      style: NotionType.caption.copyWith(
+        color: text,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
   );
+}
+
+/// The selected row background, tweened when the open conversation changes.
+/// No controller exists until [selected] first changes (rows built while
+/// scrolling cost no ticker; an `AnimatedContainer` creates one per mount).
+class _SelectedBackground extends StatefulWidget {
+  const _SelectedBackground({
+    required this.selected,
+    required this.color,
+    required this.child,
+  });
+
+  final bool selected;
+  final Color color;
+  final Widget child;
+
+  @override
+  State<_SelectedBackground> createState() => _SelectedBackgroundState();
+}
+
+class _SelectedBackgroundState extends State<_SelectedBackground>
+    with SingleTickerProviderStateMixin {
+  AnimationController? _controller;
+
+  @override
+  void didUpdateWidget(_SelectedBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selected == widget.selected) return;
+    final target = widget.selected ? 1.0 : 0.0;
+    if (NotionMotion.reduced(context)) {
+      // Without a controller, build paints [selected] as it is.
+      _controller?.value = target;
+      return;
+    }
+    final controller = _controller ??= AnimationController(
+      vsync: this,
+      value: 1 - target,
+      duration: NotionMotion.quick,
+    );
+    controller.animateTo(target, curve: NotionMotion.standard);
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    return CustomPaint(
+      painter: _SelectionPainter(
+        animation:
+            controller ??
+            (widget.selected
+                ? kAlwaysCompleteAnimation
+                : kAlwaysDismissedAnimation),
+        color: widget.color,
+      ),
+      child: widget.child,
+    );
+  }
+}
+
+class _SelectionPainter extends CustomPainter {
+  _SelectionPainter({required this.animation, required this.color})
+    : super(repaint: animation);
+
+  final Animation<double> animation;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final t = animation.value;
+    if (t <= 0) return;
+    canvas.drawRRect(
+      NotionRadius.rowAll.toRRect(Offset.zero & size),
+      Paint()..color = color.withValues(alpha: color.a * t),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SelectionPainter old) =>
+      old.color != color || !identical(old.animation, animation);
 }

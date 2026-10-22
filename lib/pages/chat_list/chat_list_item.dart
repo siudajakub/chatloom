@@ -70,6 +70,66 @@ Widget personalConversationAvatar(
   );
 }
 
+/// Rooms whose events make up [room]'s inbox row: a merged person's source
+/// chats, otherwise the room.
+List<Room> _rowSources(InboxProjection projection, Room room) {
+  final group = projection.groupFor(room);
+  return group == null
+      ? [room]
+      : group.members
+            .map((member) => room.client.getRoomById(member.roomId))
+            .whereType<Room>()
+            .toList();
+}
+
+/// Everything a [ChatListItem] reads that can change without a new inbox
+/// [projection] (a sync of one room reuses it; every private change builds
+/// a new one). The inbox keeps a built row while this stays equal, so a
+/// publish rebuilds only rows that changed (Telegram's per-cell update
+/// mask). Keep it in step with [_ChatListItemState.build].
+List<Object?> chatListItemSignature(
+  Room room,
+  InboxProjection projection, {
+  bool activeChat = false,
+  int flash = 0,
+}) {
+  final now = DateTime.now();
+  final own = room.client.userID;
+  return [
+    room,
+    projection,
+    activeChat,
+    flash,
+    // Day of the time labels ("12:30" becomes "Mon").
+    DateTime(now.year, now.month, now.day),
+    room.membership,
+    room.hasActiveMatrixRtcCall,
+    projection.displayName(room),
+    projection.avatarFor(room),
+    for (final source in _rowSources(projection, room)) ...[
+      source.id,
+      source.notificationCount,
+      source.highlightCount,
+      source.markedUnread,
+      source.pushRuleState,
+      source.membership,
+      source.typingUsers
+          .where((user) => user.id != own)
+          .map((user) => user.id)
+          .join(' '),
+      if (source.lastEvent case final event?) ...[
+        event,
+        event.eventId,
+        event.status,
+        event.redacted,
+        event.content['body'],
+        event.content['m.new_content'],
+      ] else
+        null,
+    ],
+  ];
+}
+
 class ChatListItem extends StatefulWidget {
   final Room room;
   final InboxProjection? projection;
@@ -144,13 +204,7 @@ class _ChatListItemState extends State<ChatListItem> {
         ? supplied
         : InboxProjection.snapshot(personal);
     final metadata = projection.metadataFor(room);
-    final group = projection.groupFor(room);
-    final sources = group == null
-        ? [room]
-        : group.members
-              .map((member) => room.client.getRoomById(member.roomId))
-              .whereType<Room>()
-              .toList();
+    final sources = _rowSources(projection, room);
     final events =
         sources.map((source) => source.lastEvent).whereType<Event>().toList()
           ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
@@ -190,8 +244,13 @@ class _ChatListItemState extends State<ChatListItem> {
         ? 'Muted on this source'
         : 'Mentions only on this source';
     String? lastPreview;
+    var failed = false;
     if (lastEvent != null) {
       final own = OwnSenderResolver.of(room.client).isOwnEvent(lastEvent);
+      // Telegram and Messenger mark a chat whose last own message failed.
+      failed =
+          lastEvent.status.isError &&
+          (own || lastEvent.senderId == room.client.userID);
       _trackIncoming(lastEvent, own);
       final showsSender = personalPreviewShowsSender(lastEvent);
       if (!own &&
@@ -210,6 +269,7 @@ class _ChatListItemState extends State<ChatListItem> {
     final invite = room.membership == Membership.invite;
     final showsTyping =
         !invite && !conflict && draft == null && typingText.isNotEmpty;
+    final showsFailed = failed && !invite && !conflict && draft == null;
     final preview = invite
         ? room
                   .getState(EventTypes.RoomMember, room.client.userID!)
@@ -234,6 +294,7 @@ class _ChatListItemState extends State<ChatListItem> {
       time: lastEvent?.originServerTs.localizedTimeShort(context),
       unreadCount: projection.unreadCount(room),
       unread: sources.any((source) => source.isUnread),
+      mentioned: !invite && sources.any((source) => source.highlightCount > 0),
       muted: metadata.muted || nativeLimited,
       notificationLabel: notificationLabel,
       selected: widget.activeChat,
@@ -241,8 +302,11 @@ class _ChatListItemState extends State<ChatListItem> {
       redacted: lastEvent?.redacted == true && draft == null && !showsTyping,
       typing: showsTyping,
       pinned: metadata.isPinned,
+      failed: showsFailed && !showsTyping,
       previewLeading: room.hasActiveMatrixRtcCall
           ? ActiveCallIndicator(room: room)
+          : showsFailed && !showsTyping
+          ? null
           : lastEvent?.status.isSending == true
           // Only a send that takes noticeably long shows a spinner.
           ? const NotionDelayedSpinner(size: 12, strokeWidth: 1.5)
