@@ -9,6 +9,7 @@ import 'dart:math';
 import 'package:async/async.dart';
 import 'package:collection/collection.dart';
 import 'package:html_unescape/html_unescape.dart';
+import 'package:meta/meta.dart'; // ChatLoom: @visibleForTesting (CB-19)
 import 'package:mime/mime.dart';
 
 import '../matrix.dart';
@@ -157,6 +158,9 @@ class Room {
 
     (states[state.type] ??= {})[stateKey] = state;
     _noteBridgeKindDeclaration(state);
+    // ChatLoom: any state may feed the bridge presentation (CB-19); drop the
+    // memo before listeners can read it.
+    _invalidateBridgePresentation();
 
     client.onRoomState.add((roomId: id, state: state));
   }
@@ -411,7 +415,32 @@ class Room {
     return _kindDeclaringBots[client]?.contains(bot) ?? false;
   }
 
+  // ChatLoom: memo of [_bridgePresentation] (CB-19). Titles, avatars and DM
+  // classification read it several times per inbox row and build. Cleared by
+  // [setState]; inputs that change elsewhere are compared on every read by
+  // [_BridgePresentationMemo.isCurrentFor].
+  _BridgePresentationMemo? _bridgePresentationMemo;
+
+  // ChatLoom: drops the memoised bridge presentation (CB-19).
+  void _invalidateBridgePresentation() => _bridgePresentationMemo = null;
+
+  /// ChatLoom: how often this room computed its bridge presentation; lets
+  /// tests prove the memo (CB-19).
+  @visibleForTesting
+  int debugBridgePresentationComputations = 0;
+
+  // ChatLoom: memoised (CB-19); recomputed when any input changed.
   _BridgePresentation? get _bridgePresentation {
+    final memo = _bridgePresentationMemo;
+    if (memo != null && memo.isCurrentFor(this)) return memo.value;
+    debugBridgePresentationComputations++;
+    final value = _computeBridgePresentation();
+    _bridgePresentationMemo = _BridgePresentationMemo(this, value);
+    return value;
+  }
+
+  // ChatLoom: the former `_bridgePresentation` getter body, unchanged (CB-19).
+  _BridgePresentation? _computeBridgePresentation() {
     final infos = <StrippedStateEvent>[];
     for (final type in _bridgeInfoTypes) {
       for (final event in states[type]?.values ?? <StrippedStateEvent>[]) {
@@ -3272,6 +3301,68 @@ class _BridgePresentation {
     required this.serviceMembers,
     required this.isDirect,
   });
+}
+
+/// ChatLoom: [Room._bridgePresentation] with the inputs it was computed from
+/// (CB-19). [Room.setState] clears the memo; this covers what changes
+/// elsewhere: `states` (or one of its read type maps) replaced, removed or
+/// resized without `setState`, the room summary (replaced by sync or edited
+/// in place), `m.direct` and invite state (via [Room.directChatMatrixID]), the
+/// own user ID and bridge bots that began declaring room kinds in another room
+/// of the client.
+class _BridgePresentationMemo {
+  /// State types the presentation reads, directly or through `isSpace`,
+  /// `getParticipants`, `directChatMatrixID` and `_bridgeDeclaresRoomKinds`.
+  static const _stateTypes = [
+    ...Room._bridgeInfoTypes,
+    'com.beeper.room_features',
+    'io.element.functional_members',
+    EventTypes.RoomCreate,
+    EventTypes.RoomMember,
+  ];
+
+  final _BridgePresentation? value;
+  final Map<String, Map<String, StrippedStateEvent>> states;
+  final List<Map<String, StrippedStateEvent>?> stateMaps;
+  final List<int> stateCounts;
+  final List<String>? heroes;
+  final int? joinedMemberCount;
+  final int? invitedMemberCount;
+  final String? directChatMatrixId;
+  final String? userId;
+  final int kindDeclaringBots;
+
+  _BridgePresentationMemo(Room room, this.value)
+    : states = room.states,
+      stateMaps = [for (final type in _stateTypes) room.states[type]],
+      stateCounts = [
+        for (final type in _stateTypes) room.states[type]?.length ?? -1,
+      ],
+      heroes = room.summary.mHeroes?.toList(),
+      joinedMemberCount = room.summary.mJoinedMemberCount,
+      invitedMemberCount = room.summary.mInvitedMemberCount,
+      directChatMatrixId = room.directChatMatrixID,
+      userId = room.client.userID,
+      kindDeclaringBots = Room._kindDeclaringBots[room.client]?.length ?? 0;
+
+  bool isCurrentFor(Room room) {
+    if (!identical(states, room.states)) return false;
+    for (var i = 0; i < _stateTypes.length; i++) {
+      final map = room.states[_stateTypes[i]];
+      if (!identical(map, stateMaps[i]) ||
+          (map?.length ?? -1) != stateCounts[i]) {
+        return false;
+      }
+    }
+    final summary = room.summary;
+    return summary.mJoinedMemberCount == joinedMemberCount &&
+        summary.mInvitedMemberCount == invitedMemberCount &&
+        const ListEquality<String>().equals(summary.mHeroes, heroes) &&
+        room.client.userID == userId &&
+        (Room._kindDeclaringBots[room.client]?.length ?? 0) ==
+            kindDeclaringBots &&
+        room.directChatMatrixID == directChatMatrixId;
+  }
 }
 
 enum EncryptionHealthState { allVerified, unverifiedDevices }

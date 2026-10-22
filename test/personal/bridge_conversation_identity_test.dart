@@ -25,6 +25,60 @@ class _Client extends Client {
   Map<String, List<String>> get directChats => direct;
 }
 
+// ChatLoom: accepts the writes of Client.handleSync for the memo tests (CB-19).
+class _SyncDatabase implements DatabaseApi {
+  static const _writes = {
+    #storeEventUpdate,
+    #storeRoomUpdate,
+    #storeAccountData,
+    #markUserProfileAsOutdated,
+  };
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      _writes.contains(invocation.memberName)
+      ? Future<void>.value()
+      : throw StateError('Unexpected database access');
+}
+
+// ChatLoom: real `m.direct` account data, delivered by Client.handleSync.
+class _SyncClient extends Client {
+  _SyncClient() : super('synthetic memo sync', database: _SyncDatabase());
+  @override
+  String get userID => _owner;
+}
+
+var _syncs = 0;
+
+// ChatLoom: one /sync response for [room] through the SDK (CB-19).
+Future<void> _sync(
+  Room room, {
+  List<MatrixEvent>? state,
+  RoomSummary? summary,
+  List<BasicEvent>? accountData,
+}) => room.client.handleSync(
+  SyncUpdate(
+    nextBatch: 'memo-${++_syncs}',
+    accountData: accountData,
+    rooms: RoomsUpdate(
+      join: {room.id: JoinedRoomUpdate(state: state, summary: summary)},
+    ),
+  ),
+);
+
+MatrixEvent _syncState(
+  String type,
+  Map<String, Object?> content, {
+  String key = '',
+  String sender = _bot,
+}) => MatrixEvent(
+  type: type,
+  content: content,
+  senderId: sender,
+  stateKey: key,
+  eventId: '\$memo-sync-${++_syncs}',
+  originServerTs: DateTime.utc(2026, 2),
+);
+
 void _state(
   Room room,
   String type,
@@ -51,8 +105,9 @@ Room _room({
   String? kind,
   bool complete = true,
   List<String> heroes = const [_bot],
+  Client? client,
 }) {
-  final client = _Client();
+  client ??= _Client();
   final room = Room(
     id: '!fixture:example.invalid',
     client: client,
@@ -247,5 +302,185 @@ void main() {
       Uri.parse('mxc://example.invalid/tg'),
     );
     expect(projection.avatarFor(whatsapp), isNull);
+  });
+  // ChatLoom: memoised bridge presentation (CB-19).
+  group('memoised bridge presentation', () {
+    const second = '@second:example.invalid';
+    void member(Room room, String id, String name) => _state(
+      room,
+      EventTypes.RoomMember,
+      {'membership': 'join', 'displayname': name},
+      key: id,
+    );
+    // Reads every presentation getter twice; none may recompute.
+    void expectMemoised(Room room) {
+      final before = room.debugBridgePresentationComputations;
+      for (var i = 0; i < 2; i++) {
+        room.getLocalizedDisplayname();
+        room.avatar;
+        room.isDirectChatForDisplay;
+        room.directChatMatrixIDForDisplay;
+      }
+      expect(room.debugBridgePresentationComputations, before);
+    }
+
+    test('repeated reads reuse one computation', () {
+      final room = _room();
+      expect(room.debugBridgePresentationComputations, 0);
+      for (var i = 0; i < 3; i++) {
+        expect(room.getLocalizedDisplayname(), 'Alicja');
+        expect(room.avatar, Uri.parse('mxc://example.invalid/alice'));
+        expect(room.isDirectChatForDisplay, isTrue);
+        expect(room.directChatMatrixIDForDisplay, _person);
+      }
+      expect(room.debugBridgePresentationComputations, 1);
+    });
+    test('setState of bridge, member and functional state invalidates', () {
+      final room = _room();
+      expect(room.isDirectChatForDisplay, isTrue);
+      _state(room, 'm.bridge', {
+        'bridgebot': _bot,
+        'protocol': {'id': 'whatsapp'},
+        'channel': {'displayname': 'Family'},
+        'com.beeper.room_type.v2': 'group',
+      }, key: 'fixture-bridge');
+      expect(room.getLocalizedDisplayname(), 'Family');
+      expect(room.isDirectChatForDisplay, isFalse);
+      expect(room.directChatMatrixIDForDisplay, isNull);
+      expect(room.debugBridgePresentationComputations, 2);
+      expectMemoised(room);
+
+      final legacy = _room();
+      expect(legacy.directChatMatrixIDForDisplay, _person);
+      member(legacy, second, 'Bartek'); // 4 loaded members, 3 joined
+      expect(legacy.isDirectChatForDisplay, isFalse);
+      expect(legacy.directChatMatrixIDForDisplay, isNull);
+      expect(legacy.getLocalizedDisplayname(), 'Group with Alicja, Bartek');
+
+      const helper = '@helper:example.invalid';
+      final dm = _room(kind: 'dm', heroes: [_bot, helper, _person]);
+      member(dm, helper, 'Helper');
+      expect(dm.getLocalizedDisplayname(), 'Group with Helper, Alicja');
+      _state(dm, 'io.element.functional_members', {
+        'service_members': [helper],
+      });
+      expect(dm.getLocalizedDisplayname(), 'Alicja');
+      expect(dm.directChatMatrixIDForDisplay, _person);
+      expectMemoised(dm);
+    });
+    test('handleSync summary, member and bridge updates invalidate', () async {
+      final room = _room(client: _SyncClient())..partial = false;
+      expect(room.getLocalizedDisplayname(), 'Alicja');
+      expect(room.isDirectChatForDisplay, isTrue);
+
+      // Summary only: replaced by the sync, no state event at all.
+      await _sync(
+        room,
+        summary: RoomSummary.fromJson({'m.joined_member_count': 20}),
+      );
+      expect(room.isDirectChatForDisplay, isFalse);
+      expect(room.getLocalizedDisplayname(), 'Group with Alicja');
+      await _sync(
+        room,
+        summary: RoomSummary.fromJson({'m.joined_member_count': 3}),
+      );
+      expect(room.directChatMatrixIDForDisplay, _person);
+      expectMemoised(room);
+
+      await _sync(
+        room,
+        state: [
+          _syncState(
+            EventTypes.RoomMember,
+            {'membership': 'join', 'displayname': 'Bartek'},
+            key: second,
+            sender: second,
+          ),
+        ],
+        summary: RoomSummary.fromJson({'m.joined_member_count': 4}),
+      );
+      expect(room.isDirectChatForDisplay, isFalse);
+      expect(room.directChatMatrixIDForDisplay, isNull);
+      expect(room.getLocalizedDisplayname(), 'Group with Alicja, Bartek');
+
+      await _sync(
+        room,
+        state: [
+          _syncState('m.bridge', {
+            'bridgebot': _bot,
+            'protocol': {'id': 'whatsapp'},
+            'channel': {'displayname': 'Family'},
+            'com.beeper.room_type.v2': 'group',
+          }, key: 'fixture-bridge'),
+        ],
+      );
+      expect(room.getLocalizedDisplayname(), 'Family');
+      expect(room.isDirectChatForDisplay, isFalse);
+      expectMemoised(room);
+    });
+    test('handleSync m.direct account data invalidates', () async {
+      final room = _room(client: _SyncClient(), complete: false)
+        ..partial = false;
+      expect(room.isDirectChatForDisplay, isFalse);
+      expect(room.getLocalizedDisplayname(), 'Group with Alicja');
+      await _sync(
+        room,
+        accountData: [
+          BasicEvent(
+            type: 'm.direct',
+            content: {
+              _person: [room.id],
+            },
+          ),
+        ],
+      );
+      expect(room.isDirectChatForDisplay, isTrue);
+      expect(room.getLocalizedDisplayname(), 'Alicja');
+      expectMemoised(room);
+      await _sync(
+        room,
+        accountData: [BasicEvent(type: 'm.direct', content: {})],
+      );
+      expect(room.isDirectChatForDisplay, isFalse);
+      expect(room.directChatMatrixIDForDisplay, isNull);
+    });
+    test('a kind declaration in another room of the client invalidates', () {
+      final room = _room();
+      expect(room.isDirectChatForDisplay, isTrue);
+      final other = Room(
+        id: '!other:example.invalid',
+        client: room.client,
+        membership: Membership.join,
+      );
+      room.client.rooms.add(other);
+      _state(other, 'm.bridge', {
+        'bridgebot': _bot,
+        'protocol': {'id': 'whatsapp'},
+        'com.beeper.room_type.v2': 'dm',
+      }, key: 'fixture-bridge');
+      expect(room.isDirectChatForDisplay, isFalse);
+      expect(room.getLocalizedDisplayname(), 'Group with Alicja');
+    });
+    test('edits outside setState invalidate', () {
+      final room = _room();
+      expect(room.isDirectChatForDisplay, isTrue);
+      room.summary.mJoinedMemberCount = 20;
+      expect(room.isDirectChatForDisplay, isFalse);
+      room.summary.mJoinedMemberCount = 3;
+      expect(room.isDirectChatForDisplay, isTrue);
+      room.summary.mHeroes!.add(second); // a hero without loaded state
+      expect(room.directChatMatrixIDForDisplay, isNull);
+      room.summary.mHeroes!.remove(second);
+      expect(room.directChatMatrixIDForDisplay, _person);
+      room.states.remove('m.bridge');
+      expect(room.directChatMatrixIDForDisplay, isNull);
+      expect(room.isDirectChatForDisplay, isFalse);
+
+      final incomplete = _room(complete: false);
+      expect(incomplete.isDirectChatForDisplay, isFalse);
+      (incomplete.client as _Client).direct[_person] = [incomplete.id];
+      expect(incomplete.isDirectChatForDisplay, isTrue);
+      expect(incomplete.getLocalizedDisplayname(), 'Alicja');
+    });
   });
 }

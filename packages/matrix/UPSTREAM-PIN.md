@@ -91,39 +91,6 @@ the server requests are unchanged. Regression: app
 `test/personal/outgoing_media_test.dart` (send order and retries through the
 app's media queue) and `test/notion/attachment_flow_test.dart`.
 
-### 2026-10-22 — stable and bridge-split image packs (MSC2545)
-
-`Room.getImagePacks` (`lib/src/utils/image_pack_extension.dart`) read only
-the unstable `im.ponies.room_emotes`, `im.ponies.emote_rooms` and
-`im.ponies.user_emotes`. It now also reads the stable `m.room.image_pack`
-room state, `m.image_pack.rooms` and `m.image_pack` account data, which is
-what mautrix bridges write when they import a pack
-(`bridgev2/provisionutil/imagepack.go`). Packs larger than ~62 KB that a
-bridge split into several state events (`fi.mau.combined_pack_key`,
-`_index`, `_count`, display name " (part N)") are joined again under the
-combined key, in part order, without the suffix; a pack whose parts have
-not all arrived yet keeps the parts that have. A state key present in both
-state types keeps the stable pack. Unparseable pack content is skipped
-instead of throwing. New public helpers: the type constants,
-`combineImagePackStates` and `roomImagePacks` (used by the app's sticker
-library). Read-only: nothing is written, slugs and the usage filter are as
-upstream. The app lists `m.room.image_pack` in `importantStateEvents`
-(`lib/utils/client_manager.dart`). Regression: app
-`test/personal/stickers/image_pack_parsing_test.dart`.
-
-### 2026-10-22 — `sendFileEvent`: no thumbnail that is the file itself
-
-The app's image resizer (`customImageResizer`, Android and web) keeps an
-animated GIF/WebP whole: it returns the original bytes at the original size.
-`MatrixImageFile.generateThumbnail` accepts that as the thumbnail when the
-image is within the thumbnail dimension, and `sendFileEvent` dropped a
-thumbnail only when it was *larger* than the file, so a small animated image
-was uploaded twice (file and identical "thumbnail"). The thumbnail is now
-also dropped when it is as large as the file. The event then carries no
-`thumbnail_file`/`thumbnail_url`, and receivers show the original, which is
-what they displayed anyway. Regression: `test/room_test.dart`
-("sendFileEvent drops a thumbnail as large as the file").
-
 ### 2026-10-22 — unsent files: no self-deleting bubble, copy kept until accepted
 
 Two one-line changes on the send path of files (wave 5, lane outbox-send):
@@ -155,3 +122,73 @@ trust check and the first encryption of a room without complete member
 counts. Members are still set in memory first; the stored rows, the request
 and encryption are unchanged. Regression: app
 `test/personal/sdk_send_file_event_test.dart`.
+
+### 2026-10-21 — memoised bridge presentation
+
+`Room._bridgePresentation` (bridge title, avatar, partner and display-only DM
+kind) was recomputed on every read: `getLocalizedDisplayname`, `avatar`,
+`isDirectChatForDisplay`, `directChatMatrixIDForDisplay` and `loadHeroUsers`
+each rebuilt the bridge info list, service-member set and, for bridges that
+do not declare kinds, the participant list, several times per inbox row and
+build (CB-19). The unchanged computation now lives in
+`_computeBridgePresentation()` and its result, including "no bridge", is kept
+in one nullable `_BridgePresentationMemo` per room. Invalidation:
+
+- `setState` drops the memo for every state event (sync state/timeline/invite
+  state, `postLoad`, `requestUser`, database loads), before `onRoomState`
+  listeners run.
+- Each read compares the inputs that change elsewhere: identity of `states`
+  and of its maps for the three bridge info types,
+  `com.beeper.room_features`, `io.element.functional_members`,
+  `m.room.create` (`isSpace`) and `m.room.member`, plus their entry counts;
+  `summary` heroes (by value) and joined/invited counts, which sync replaces
+  without `setState` and tests edit in place; the `directChatMatrixID` value
+  (`m.direct` account data, invite `is_direct`, membership); `client.userID`;
+  and the size of the grow-only per-client set of kind-declaring bridge bots,
+  which a declaration in another room changes.
+
+Not detected: replacing an existing event object in a read `states` map, or
+mutating a state event's content in place, without `setState`; the SDK does
+neither. `directChatMatrixID` still runs per read (unchanged cost). User
+display names are not memoised. Presentation only: native `m.direct`, merge
+authorization, transport and cryptography are unchanged. Regression: memo
+group in app `test/personal/bridge_conversation_identity_test.dart` (one
+computation for repeated reads; invalidation through `setState`, through
+`Client.handleSync` state, member, summary and `m.direct` updates, through a
+declaration in another room and through direct summary/`states` edits), plus
+the existing bridge presentation tests there and in
+`test/personal/conversation_kind_networks_test.dart` and
+`test/personal/merge_conversations_test.dart`.
+
+### 2026-10-22 — `sendFileEvent`: no thumbnail that is the file itself
+
+The app's image resizer (`customImageResizer`, Android and web) keeps an
+animated GIF/WebP whole: it returns the original bytes at the original size.
+`MatrixImageFile.generateThumbnail` accepts that as the thumbnail when the
+image is within the thumbnail dimension, and `sendFileEvent` dropped a
+thumbnail only when it was *larger* than the file, so a small animated image
+was uploaded twice (file and identical "thumbnail"). The thumbnail is now
+also dropped when it is as large as the file. The event then carries no
+`thumbnail_file`/`thumbnail_url`, and receivers show the original, which is
+what they displayed anyway. Regression: `test/room_test.dart`
+("sendFileEvent drops a thumbnail as large as the file").
+
+### 2026-10-22 — stable and bridge-split image packs (MSC2545)
+
+`Room.getImagePacks` (`lib/src/utils/image_pack_extension.dart`) read only
+the unstable `im.ponies.room_emotes`, `im.ponies.emote_rooms` and
+`im.ponies.user_emotes`. It now also reads the stable `m.room.image_pack`
+room state, `m.image_pack.rooms` and `m.image_pack` account data, which is
+what mautrix bridges write when they import a pack
+(`bridgev2/provisionutil/imagepack.go`). Packs larger than ~62 KB that a
+bridge split into several state events (`fi.mau.combined_pack_key`,
+`_index`, `_count`, display name " (part N)") are joined again under the
+combined key, in part order, without the suffix; a pack whose parts have
+not all arrived yet keeps the parts that have. A state key present in both
+state types keeps the stable pack. Unparseable pack content is skipped
+instead of throwing. New public helpers: the type constants,
+`combineImagePackStates` and `roomImagePacks` (used by the app's sticker
+library). Read-only: nothing is written, slugs and the usage filter are as
+upstream. The app lists `m.room.image_pack` in `importantStateEvents`
+(`lib/utils/client_manager.dart`). Regression: app
+`test/personal/stickers/image_pack_parsing_test.dart`.
