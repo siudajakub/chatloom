@@ -65,7 +65,8 @@ class ChatView extends StatelessWidget {
       onPopInvokedWithResult: (pop, _) async {
         if (pop) return;
         if (controller.showEmojiPicker) {
-          controller.emojiPickerAction();
+          // Telegram: back closes the panel without opening the keyboard.
+          controller.hideEmojiPicker();
         } else if (controller.replyEvent != null ||
             controller.editEvent != null) {
           controller.cancelReplyOrEditOnBack();
