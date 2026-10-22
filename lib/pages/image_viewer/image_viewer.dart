@@ -6,9 +6,9 @@
 import 'package:chatloom/pages/image_viewer/image_viewer_view.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
-import 'package:chatloom/utils/show_scaffold_dialog.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -233,11 +233,7 @@ class ImageViewerController extends State<ImageViewer>
       ).showForwardPicker(context, event);
       return;
     }
-    showScaffoldDialog(
-      context: context,
-      builder: (context) =>
-          ShareScaffoldDialog(items: [ContentShareItem(event.content)]),
-    );
+    showForwardSheet(context, items: [ContentShareItem(event.content.copy())]);
   }
 
   /// Save this file with a system call.

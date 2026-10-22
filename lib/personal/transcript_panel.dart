@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_transcribe_button.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -201,6 +202,12 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
   void dispose() {
     personal.removeListener(_onPersonalChanged);
     super.dispose();
+  }
+
+  Future<void> _copyTranscript(String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    await showCopiedNotice(context, 'Transcript copied');
   }
 
   void _snack(String text) {
@@ -516,8 +523,7 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
                     size: NotionSize.icon,
                   ),
                   onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: text));
-                    _snack('Transcript copied');
+                    await _copyTranscript(text);
                   },
                   child: const Text('Copy'),
                 ),

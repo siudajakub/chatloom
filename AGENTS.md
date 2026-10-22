@@ -29,7 +29,7 @@ Pełne API i przykłady: sekcja "Motion" w [`DESIGN.md`](DESIGN.md).
 - Ekrany nie importują `flutter_animate` ani `skeletonizer` (lint `motion-import`); używają prymitywów: `NotionPressable`, `NotionEntrance` + `NotionEntranceScope`, `NotionFadeThrough`, `NotionMorphSwitcher`, `NotionAnimatedCount`, `NotionSizeReveal`, `NotionPop`, `NotionRowHighlight`, `NotionSkeleton`, `NotionDelayedSpinner`, `NotionTypingDots`, `NotionPulse`, `showNotionCustomDialog`, `showNotionPopover`, `showNotionSheet`.
 - Tylko transform i opacity; bez animowanego bluru i szkła; brak animacji elementów budowanych przy przewijaniu (stagger tylko pierwszego ekranu, maks. 10).
 - Każda animacja jednorazowa kończy się tożsamością; pętle stają przy `TickerMode` off i reduced motion; reduced motion sprawdzaj wyłącznie przez `NotionMotion.reduced(context)`.
-- Sprężystość (bounce) tylko na badge'ach, reakcjach, przycisku wysyłania i ikonach pustych stanów. Haptyka tylko przez `NotionHaptics.send()`/`.longPress()`.
+- Sprężystość (bounce) tylko na badge'ach, reakcjach, przycisku wysyłania i ikonach pustych stanów. Haptyka tylko przez `NotionHaptics.send()`/`.longPress()`/`.selection()` (wybór podczas przesuwania palcem).
 - Brak timerów w animacjach (`Future.delayed`, `Timer`, `Animate(delay:)`): psują testy (pending timers).
 
 ## Przed oddaniem zmiany UI

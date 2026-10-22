@@ -387,9 +387,11 @@ dialogs and sheets never bounce.
 | `of(context, d)` | Duration | `d`, or zero under reduced motion |
 | `staggerFor(i)` | Duration | capped stagger delay |
 
-`NotionHaptics.send()` / `.longPress()` (a light impact) are the only haptics:
-on send and on a recognised long-press. Screens decide; nothing buzzes by
-default.
+`NotionHaptics.send()` / `.longPress()` (a light impact) and
+`.selection()` (a selection click) are the only haptics: on send, on a
+recognised long-press, and once per change of choice while the finger
+scrubs (the reaction bar's hovered emoji, swipe-to-reply arming). Screens
+decide; nothing buzzes by default.
 
 ### Primitives
 
@@ -460,7 +462,7 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
 | `duration: Duration(milliseconds: 250)`, `Curves.easeInOut` | `NotionMotion.short`, `NotionMotion.standard` |
 | `MediaQuery.of(context).disableAnimations` | `NotionMotion.reduced(context)` |
 | `Timer.periodic` + `setState` loops, box-shadow pulses | `NotionTypingDots`, `NotionPulse` |
-| `HapticFeedback.*` ad hoc | `NotionHaptics.send()` / `.longPress()` |
+| `HapticFeedback.*` ad hoc | `NotionHaptics.send()` / `.longPress()` / `.selection()` |
 | `child.animate()...` (flutter_animate) in a screen | a Notion primitive; add a new one in `lib/ui/notion/` if missing |
 
 ### House rules
