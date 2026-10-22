@@ -23,8 +23,13 @@ class UserDeviceListItem extends StatelessWidget {
   final void Function(Device) block;
   final void Function(Device) unblock;
 
+  /// The ChatLoom worker's session: labelled, so it is not mistaken for an
+  /// old device and signed out.
+  final bool isWorker;
+
   const UserDeviceListItem(
     this.userDevice, {
+    this.isWorker = false,
     required this.remove,
     required this.rename,
     required this.verify,
@@ -82,8 +87,8 @@ class UserDeviceListItem extends StatelessWidget {
                 if (!isOwnDevice)
                   AdaptiveModalAction(
                     value: UserDeviceListItemAction.remove,
-                    icon: const Icon(Icons.delete_outlined),
-                    label: L10n.of(context).delete,
+                    icon: const Icon(Icons.logout_outlined),
+                    label: 'Sign out',
                     isDestructive: true,
                   ),
               ],
@@ -124,11 +129,14 @@ class UserDeviceListItem extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           subtitle: Text(
-            L10n.of(context).lastActiveAgo(
-              DateTime.fromMillisecondsSinceEpoch(
-                userDevice.lastSeenTs ?? 0,
-              ).localizedTimeShort(context),
-            ),
+            [
+              if (isWorker) 'ChatLoom worker · transcription and reminders',
+              L10n.of(context).lastActiveAgo(
+                DateTime.fromMillisecondsSinceEpoch(
+                  userDevice.lastSeenTs ?? 0,
+                ).localizedTimeShort(context),
+              ),
+            ].join('\n'),
             style: const TextStyle(fontWeight: FontWeight.w300),
           ),
           trailing: keys == null

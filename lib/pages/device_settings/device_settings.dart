@@ -6,7 +6,9 @@
 import 'package:async/async.dart' show Result;
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/device_settings/device_settings_view.dart';
+import 'package:chatloom/pages/device_settings/device_signout.dart';
 import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
+import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
@@ -53,10 +55,36 @@ class DevicesSettingsController extends State<DevicesSettings> {
     });
   }
 
-  Future<void> removeDevicesAction(List<Device> devices) async {
-    final l10n = L10n.of(context);
+  /// One device from its menu. The worker asks for a typed confirmation.
+  Future<void> removeDeviceAction(Device device) async {
+    final worker = workerDeviceIds.contains(device.deviceId);
+    if (!await confirmDeviceSignOut(context, device: device, worker: worker)) {
+      return;
+    }
+    if (!mounted) return;
+    await _deleteDevices([device]);
+  }
+
+  /// "Sign out all other devices": every other session except the ChatLoom
+  /// worker, after a two-step confirmation that lists them.
+  Future<void> removeOtherDevicesAction() async {
+    final workers = workerDeviceIds;
+    final targets = bulkSignOutDevices(notThisDevice, workers);
+    if (targets.isEmpty) return;
+    if (!await confirmBulkSignOut(
+      context,
+      devices: targets,
+      workerKept: notThisDevice.any((d) => workers.contains(d.deviceId)),
+    )) {
+      return;
+    }
+    if (!mounted) return;
+    await _deleteDevices(targets);
+  }
+
+  Future<void> _deleteDevices(List<Device> devices) async {
     final matrix = Matrix.of(context);
-    final client = Matrix.of(context).client;
+    final client = matrix.client;
 
     final wellKnown = await Result.capture(client.getWellknown());
     final accountManageUrl = wellKnown.asValue?.value.additionalProperties
@@ -67,31 +95,36 @@ class DevicesSettingsController extends State<DevicesSettings> {
       return;
     }
     if (!mounted) return;
-    if (await showOkCancelAlertDialog(
-          context: context,
-          title: l10n.areYouSure,
-          okLabel: l10n.remove,
-          cancelLabel: l10n.cancel,
-          message: l10n.removeDevicesDescription,
-          isDestructive: true,
-        ) ==
-        OkCancelResult.cancel) {
-      return;
-    }
-    if (!mounted) return;
-    final deviceIds = <String>[];
-    for (final userDevice in devices) {
-      deviceIds.add(userDevice.deviceId);
-    }
+    final deviceIds = [for (final device in devices) device.deviceId];
 
     await showFutureLoadingDialog(
       context: context,
       delay: false,
-      future: () => matrix.client.uiaRequestBackground(
-        (auth) => matrix.client.deleteDevices(deviceIds, auth: auth),
+      future: () => client.uiaRequestBackground(
+        (auth) => client.deleteDevices(deviceIds, auth: auth),
       ),
     );
     reload();
+  }
+
+  /// The ChatLoom worker's devices on this account ([findWorkerDeviceIds]).
+  Set<String> get workerDeviceIds {
+    final client = Matrix.of(context).client;
+    String? heartbeatKey;
+    try {
+      heartbeatKey = PersonalClient.of(client).workerReadiness?.deviceKey;
+    } catch (_) {
+      heartbeatKey = null;
+    }
+    final keys = client.userDeviceKeys[client.userID]?.deviceKeys;
+    return findWorkerDeviceIds(
+      devices: devices ?? const [],
+      identityKeys: {
+        for (final entry in (keys ?? const <String, DeviceKeys>{}).entries)
+          entry.key: entry.value.curve25519Key,
+      },
+      heartbeatDeviceKey: heartbeatKey,
+    );
   }
 
   Future<void> renameDeviceAction(Device device) async {

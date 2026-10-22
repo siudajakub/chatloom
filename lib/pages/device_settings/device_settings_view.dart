@@ -6,6 +6,7 @@
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/device_settings/device_settings.dart';
+import 'package:chatloom/pages/device_settings/device_signout.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -47,13 +48,16 @@ class DevicesSettingsView extends StatelessWidget {
             if (!snapshot.hasData || controller.devices == null) {
               return const Center(child: NotionDelayedSpinner());
             }
+            final others = controller.notThisDevice;
+            final workers = controller.workerDeviceIds;
+            final bulk = bulkSignOutDevices(others, workers);
             // Devices rise in once when they arrive; later rebuilds do not
             // animate.
             return NotionEntranceScope(
               child: ListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: controller.notThisDevice.length + 1,
+                itemCount: others.length + 1,
                 itemBuilder: (BuildContext context, int i) {
                   if (i == 0) {
                     return NotionEntrance(
@@ -72,10 +76,10 @@ class DevicesSettingsView extends StatelessWidget {
                                 leading: const CircleAvatar(
                                   child: Icon(Icons.info_outlined),
                                 ),
-                                subtitle: Text(
-                                  L10n.of(
-                                    context,
-                                  ).noticeChatBackupDeviceVerification,
+                                subtitle: const Text(
+                                  'Devices you connect to key backup with '
+                                  'your recovery key are verified '
+                                  'automatically.',
                                 ),
                               ),
                             ),
@@ -98,41 +102,29 @@ class DevicesSettingsView extends StatelessWidget {
                             UserDeviceListItem(
                               controller.thisDevice!,
                               rename: controller.renameDeviceAction,
-                              remove: (d) =>
-                                  controller.removeDevicesAction([d]),
+                              remove: controller.removeDeviceAction,
                               verify: controller.verifyDeviceAction,
                               block: controller.blockDeviceAction,
                               unblock: controller.unblockDeviceAction,
                             ),
                           ],
-                          if (controller.notThisDevice.isNotEmpty)
+                          // Never the ChatLoom worker; the dialog lists
+                          // exactly what will be signed out.
+                          if (bulk.isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 16.0,
-                                vertical: 8.0,
+                                horizontal: NotionSpace.md,
+                                vertical: NotionSpace.xs,
                               ),
-                              child: SizedBox(
-                                width: double.infinity,
-                                child: TextButton.icon(
-                                  label: Text(
-                                    L10n.of(context).removeAllOtherDevices,
-                                  ),
-                                  style: TextButton.styleFrom(
-                                    iconColor:
-                                        theme.colorScheme.onErrorContainer,
-                                    foregroundColor:
-                                        theme.colorScheme.onErrorContainer,
-                                    backgroundColor:
-                                        theme.colorScheme.errorContainer,
-                                  ),
-                                  icon: const Icon(Icons.delete_outline),
-                                  onPressed: () =>
-                                      controller.removeDevicesAction(
-                                        controller.notThisDevice,
-                                      ),
-                                ),
+                              child: NotionButton.destructive(
+                                expand: true,
+                                icon: Icons.logout_outlined,
+                                label: 'Sign out all other devices',
+                                onPressed: controller.removeOtherDevicesAction,
                               ),
                             )
+                          else if (others.isNotEmpty)
+                            const SizedBox.shrink()
                           else
                             Center(
                               child: Padding(
@@ -147,15 +139,16 @@ class DevicesSettingsView extends StatelessWidget {
                     );
                   }
                   i--;
-                  final device = controller.notThisDevice[i];
+                  final device = others[i];
                   return NotionEntrance(
                     playKey: device.deviceId,
                     afterRoute: false,
                     rise: NotionMotion.riseList,
                     child: UserDeviceListItem(
                       device,
+                      isWorker: workers.contains(device.deviceId),
                       rename: controller.renameDeviceAction,
-                      remove: (d) => controller.removeDevicesAction([d]),
+                      remove: controller.removeDeviceAction,
                       verify: controller.verifyDeviceAction,
                       block: controller.blockDeviceAction,
                       unblock: controller.unblockDeviceAction,
