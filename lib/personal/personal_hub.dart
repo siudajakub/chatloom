@@ -13,6 +13,7 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/push_registration.dart';
 import 'package:chatloom/personal/scheduled_composer.dart';
+import 'package:chatloom/personal/send_later.dart' show runSendLater;
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
@@ -92,11 +93,16 @@ Future<DateTime?> personalDate(BuildContext context) async {
 
 /// The selected room is frozen before either picker opens. No source message is
 /// sent during preparation; only SDK-encrypted ciphertext is uploaded.
+///
+/// With [dueAt] (Send later already chose the time) the file is scheduled
+/// right after it is picked; without it a date picker and a confirmation
+/// follow. Problems the user can fix throw [SendLaterProblem].
 Future<bool> schedulePersonalAttachment(
   BuildContext context,
   PersonalClient personal,
   SendTarget target, {
   FrozenScheduledComposer? composeContext,
+  DateTime? dueAt,
 }) async {
   final room = personal.client.getRoomById(target.conversation.roomId);
   if (target.conversation.accountId != personal.client.userID ||
@@ -104,7 +110,12 @@ Future<bool> schedulePersonalAttachment(
       room.membership != Membership.join ||
       !room.canSendDefaultMessages ||
       !personal.ready) {
-    throw StateError('The selected source or private sync is unavailable.');
+    throw SendLaterProblem(
+      personal.ready
+          ? 'This chat can’t receive scheduled attachments right now.'
+          : 'Send later needs private sync. Your draft is kept.',
+      needsSync: !personal.ready,
+    );
   }
   final frozen =
       composeContext ??
@@ -116,7 +127,9 @@ Future<bool> schedulePersonalAttachment(
             identical(Matrix.of(context).client, personal.client),
       );
   if (jsonEncode(frozen.target.toJson()) != jsonEncode(target.toJson())) {
-    throw StateError('The scheduled source does not match the attachment.');
+    throw SendLaterProblem(
+      'The scheduled source does not match the attachment.',
+    );
   }
   frozen.validateCurrent();
   final file = await FilePicker.pickFile(
@@ -128,11 +141,11 @@ Future<bool> schedulePersonalAttachment(
   const maximum = 25 * 1024 * 1024;
   final size = await file.length();
   if (size == null || size <= 0 || size > maximum) {
-    throw StateError('Choose an attachment up to 25 MB.');
+    throw SendLaterProblem('Choose an attachment up to 25 MB.');
   }
   final bytes = await file.readAsBytes();
   if (bytes.length > maximum || bytes.isEmpty) {
-    throw StateError(
+    throw SendLaterProblem(
       'Could not load the attachment. Choose a file up to 25 MB.',
     );
   }
@@ -171,37 +184,39 @@ Future<bool> schedulePersonalAttachment(
     height: height,
   );
   final capability = RoomCapabilities.forFeature(feature, room, media: media);
-  if (!capability.allowed) throw StateError(capability.reason);
+  if (!capability.allowed) throw SendLaterProblem(capability.reason);
   if (!context.mounted) return false;
-  final due = await personalDate(context);
+  final due = dueAt ?? await personalDate(context);
   if (due == null || !context.mounted) return false;
   if (!due.isAfter(DateTime.now())) {
-    throw StateError('Choose a future date and time.');
+    throw SendLaterProblem('That time has passed. Choose a new time.');
   }
-  final confirmed = await showNotionCustomDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Schedule an attachment'),
-      content: Text(
-        '${file.name}\n${(bytes.length / 1024 / 1024).toStringAsFixed(1)} MB\n${target.conversation.network} · ${due.toLocal()}${frozen.contextLabel == null ? '' : '\n${frozen.contextLabel}'}',
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Schedule'),
-        ),
-      ],
-    ),
-  );
+  final confirmed = dueAt != null
+      ? true
+      : await showNotionCustomDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Schedule an attachment'),
+            content: Text(
+              '${file.name}\n${(bytes.length / 1024 / 1024).toStringAsFixed(1)} MB\n${target.conversation.network} · ${due.toLocal()}${frozen.contextLabel == null ? '' : '\n${frozen.contextLabel}'}',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Schedule'),
+              ),
+            ],
+          ),
+        );
   if (confirmed != true) return false;
   frozen.validateCurrent();
   if (personal.client.getRoomById(target.conversation.roomId) != room ||
       !RoomCapabilities.forFeature(feature, room, media: media).allowed) {
-    throw StateError('The selected source changed. Select it again.');
+    throw SendLaterProblem('The selected source changed. Select it again.');
   }
   final encrypted = await matrixFile.encrypt();
   frozen.validateCurrent();
@@ -212,7 +227,7 @@ Future<bool> schedulePersonalAttachment(
   );
   frozen.validateCurrent();
   if (!RoomCapabilities.forFeature(feature, room, media: media).allowed) {
-    throw StateError('The selected source changed. Select it again.');
+    throw SendLaterProblem('The selected source changed. Select it again.');
   }
   final id = const Uuid().v4();
   final job = ScheduledSend(
@@ -935,180 +950,139 @@ class RoomPersonalButton extends StatelessWidget {
     icon: Icon(includeChatSettings ? Icons.more_horiz : Icons.more_time),
     itemBuilder: (_) =>
         conversationQuickActions(editing: isEditing?.call() == true),
-    onSelected: (kind) async {
+    onSelected: (kind) => run(context, kind),
+  );
+
+  /// Runs one quick action ([conversationQuickActions]) for this source; the
+  /// composer's long press on Send calls it with `schedule` and `reminder`.
+  Future<void> run(BuildContext context, String kind) async {
+    if (!context.mounted ||
+        !identical(Matrix.of(context).client, room.client) ||
+        isCurrentSource?.call() == false) {
+      return;
+    }
+    if (kind == 'source.search') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => NotionConversationContentPage(
+            rooms: [room],
+            name: InboxProjection(
+              PersonalClient.of(room.client),
+            ).displayName(room),
+          ),
+        ),
+      );
+      return;
+    }
+    if (kind.startsWith('source.')) {
+      await performNotionRoomAction(context, room, kind.substring(7));
+      return;
+    }
+    final p = PersonalClient.of(room.client);
+    if (kind == 'schedule') {
+      await _sendLater(context, p);
+      return;
+    }
+    try {
+      await p.load();
       if (!context.mounted ||
+          isCurrentSource?.call() == false ||
           !identical(Matrix.of(context).client, room.client) ||
-          isCurrentSource?.call() == false)
+          !PersonalPrivacy.surfaceUnlocked) {
         return;
-      if (kind == 'source.search') {
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute(
-            builder: (_) => NotionConversationContentPage(
-              rooms: [room],
-              name: InboxProjection(
-                PersonalClient.of(room.client),
-              ).displayName(room),
+      }
+      if (kind == 'read') {
+        final id = room.lastEvent?.eventId;
+        if (id != null) {
+          await PersonalPrivacy.markRead(room, id, manual: true);
+        }
+        return;
+      }
+      if (kind == 'reminder') {
+        await requestConversationReminder(
+          context,
+          p,
+          room,
+          isCurrent: () =>
+              context.mounted &&
+              isCurrentSource?.call() != false &&
+              identical(Matrix.of(context).client, room.client),
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              kind == 'reminder'
+                  ? 'The reminder could not be saved. Check private sync and try again.'
+                  : 'This chat could not be marked as read. Try again.',
             ),
           ),
         );
-        return;
       }
-      if (kind.startsWith('source.')) {
-        await performNotionRoomAction(context, room, kind.substring(7));
-        return;
-      }
-      final p = PersonalClient.of(room.client);
-      try {
-        // Freeze relation, source and text before even the private-sync await.
-        final frozenText = composer.text;
+    }
+  }
+
+  /// Send later: relation, source and text are frozen before the first
+  /// await; the draft is emptied only if it is still the scheduled text.
+  Future<void> _sendLater(BuildContext context, PersonalClient p) {
+    final frozenText = composer.text;
+    final privacyGeneration = PersonalPrivacy.surfaceGeneration;
+    late final FrozenScheduledComposer scheduled;
+    bool sameComposerContext() =>
+        context.mounted &&
+        isCurrentSource?.call() != false &&
+        identical(Matrix.of(context).client, room.client) &&
+        scheduled.matchesContext(
+          reply: replyEvent?.call(),
+          editing: isEditing?.call() == true,
+          threadRootEventId: threadRootEventId?.call(),
+          threadLastEventId: threadLastEventId?.call(),
+        );
+    return runSendLater(
+      context,
+      personal: p,
+      text: frozenText,
+      chatName: InboxProjection(p).displayName(room),
+      freeze: () {
         final frozenReply = replyEvent?.call();
         final frozenRoot = threadRootEventId?.call();
         final frozenLast = threadLastEventId?.call();
-        final privacyGeneration = PersonalPrivacy.surfaceGeneration;
-        final scheduled = {'schedule', 'scheduleMedia'}.contains(kind)
-            ? FrozenScheduledComposer.capture(
-                room: room,
-                target: SendTarget(
-                  conversation: p.ref(room),
-                  readUpToEventId: readCutoff(),
-                ),
-                reply: frozenReply,
-                editing: isEditing?.call() == true,
-                threadRootEventId: frozenRoot,
-                threadLastEventId: frozenLast,
-                isCurrent: () =>
-                    context.mounted &&
-                    isCurrentSource?.call() != false &&
-                    PersonalPrivacy.surfaceUnlocked &&
-                    privacyGeneration == PersonalPrivacy.surfaceGeneration &&
-                    frozenReply?.eventId == replyEvent?.call()?.eventId &&
-                    frozenRoot == threadRootEventId?.call() &&
-                    frozenLast == threadLastEventId?.call() &&
-                    isEditing?.call() != true &&
-                    identical(Matrix.of(context).client, room.client),
-              )
-            : null;
-        bool sameComposerContext() =>
-            context.mounted &&
-            isCurrentSource?.call() != false &&
-            identical(Matrix.of(context).client, room.client) &&
-            scheduled!.matchesContext(
-              reply: replyEvent?.call(),
-              editing: isEditing?.call() == true,
-              threadRootEventId: threadRootEventId?.call(),
-              threadLastEventId: threadLastEventId?.call(),
-            );
-        if (kind == 'schedule') {
-          final choice = await showNotionCustomDialog<String>(
-            context: context,
-            builder: (context) => SimpleDialog(
-              title: const Text('Send later'),
-              children: [
-                SimpleDialogOption(
-                  onPressed: frozenText.trim().isEmpty
-                      ? null
-                      : () => Navigator.pop(context, 'schedule'),
-                  child: Text(
-                    frozenText.trim().isEmpty
-                        ? 'Text (write a message first)'
-                        : 'Text',
-                  ),
-                ),
-                SimpleDialogOption(
-                  onPressed: () => Navigator.pop(context, 'scheduleMedia'),
-                  child: const Text('Attachment'),
-                ),
-              ],
-            ),
-          );
-          if (choice == null || !context.mounted) return;
-          scheduled!.validateCurrent();
-          kind = choice;
+        return scheduled = FrozenScheduledComposer.capture(
+          room: room,
+          target: SendTarget(
+            conversation: p.ref(room),
+            readUpToEventId: readCutoff(),
+          ),
+          reply: frozenReply,
+          editing: isEditing?.call() == true,
+          threadRootEventId: frozenRoot,
+          threadLastEventId: frozenLast,
+          isCurrent: () =>
+              context.mounted &&
+              isCurrentSource?.call() != false &&
+              PersonalPrivacy.surfaceUnlocked &&
+              privacyGeneration == PersonalPrivacy.surfaceGeneration &&
+              frozenReply?.eventId == replyEvent?.call()?.eventId &&
+              frozenRoot == threadRootEventId?.call() &&
+              frozenLast == threadLastEventId?.call() &&
+              isEditing?.call() != true &&
+              identical(Matrix.of(context).client, room.client),
+        );
+      },
+      onTextScheduled: () async {
+        if (composer.text != frozenText || !sameComposerContext()) return;
+        await p.saveDraft(room, '');
+        if (composer.text == frozenText && sameComposerContext()) {
+          composer.clear();
+          clearScheduledReply?.call();
+        } else {
+          await p.saveDraft(room, composer.text);
         }
-        await p.load();
-        if (!context.mounted ||
-            isCurrentSource?.call() == false ||
-            !identical(Matrix.of(context).client, room.client) ||
-            !PersonalPrivacy.surfaceUnlocked)
-          return;
-        if (kind == 'read') {
-          final id = room.lastEvent?.eventId;
-          if (id != null) {
-            await PersonalPrivacy.markRead(room, id, manual: true);
-          }
-          return;
-        }
-        if (kind == 'schedule') {
-          if (frozenText.trim().isEmpty) throw StateError('Empty draft');
-          final due = await personalDate(context);
-          if (due == null || !context.mounted) return;
-          scheduled!.validateCurrent();
-          if (!due.isAfter(DateTime.now())) throw StateError('Past date');
-          final id = const Uuid().v4();
-          final job = ScheduledSend(
-            id: id,
-            target: scheduled.target,
-            dueAt: due,
-            content: scheduled.content({
-              'msgtype': 'm.text',
-              'body': frozenText,
-            }),
-            transactionId: 'schedule-$id',
-          );
-          await p.schedule(job);
-          if (composer.text == frozenText && sameComposerContext()) {
-            await p.saveDraft(room, '');
-            if (composer.text == frozenText && sameComposerContext()) {
-              composer.clear();
-              clearScheduledReply?.call();
-            } else {
-              await p.saveDraft(room, composer.text);
-            }
-          }
-        }
-        if (!context.mounted) return;
-        if (kind == 'scheduleMedia') {
-          if (!context.mounted) return;
-          await schedulePersonalAttachment(
-            context,
-            p,
-            scheduled!.target,
-            composeContext: scheduled,
-          );
-        }
-        if (kind == 'reminder') {
-          await requestConversationReminder(
-            context,
-            p,
-            room,
-            isCurrent: () =>
-                context.mounted &&
-                isCurrentSource?.call() != false &&
-                identical(Matrix.of(context).client, room.client),
-          );
-          return;
-        }
-        if (!context.mounted) return;
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Saved locally. Awaiting sync confirmation.'),
-            ),
-          );
-        }
-      } catch (_) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Could not request this action. Set up private sync and check the message and time.',
-              ),
-            ),
-          );
-        }
-      }
-    },
-  );
+      },
+    );
+  }
 }
 
 /// The same short menu is used by ordinary and merged conversations.

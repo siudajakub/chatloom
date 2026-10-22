@@ -12,6 +12,7 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/reminder_list.dart';
+import 'package:chatloom/personal/ui/due_time_picker.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
@@ -96,47 +97,11 @@ class _ReminderEditorState extends State<ReminderEditor> {
     }
   }
 
-  bool get _valid => reminderTimeValid(_at, widget.clock());
-
-  Future<void> _pickDate() async {
-    final now = widget.clock();
-    final today = DateTime(now.year, now.month, now.day);
-    final date = await showDatePicker(
-      context: context,
-      firstDate: today,
-      lastDate: today.add(const Duration(days: 365)),
-      initialDate: _at.isBefore(today) ? today : _at,
-    );
-    if (date == null || !mounted) return;
-    setState(() {
-      _at = DateTime(date.year, date.month, date.day, _at.hour, _at.minute);
-      _preset = null;
-    });
-  }
-
-  Future<void> _pickTime() async {
-    final time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(_at),
-    );
-    if (time == null || !mounted) return;
-    setState(() {
-      _at = DateTime(_at.year, _at.month, _at.day, time.hour, time.minute);
-      _preset = null;
-    });
-  }
-
-  Future<void> _custom() async {
-    await _pickDate();
-    if (mounted) await _pickTime();
-  }
+  bool get _valid => DueTimePicker.valid(_at, widget.clock());
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.notion;
-    final localizations = MaterialLocalizations.of(context);
-    final use24h = MediaQuery.alwaysUse24HourFormatOf(context);
-    final now = widget.clock();
     final valid = _valid;
     return SingleChildScrollView(
       child: Column(
@@ -150,65 +115,16 @@ class _ReminderEditorState extends State<ReminderEditor> {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: NotionSpace.md),
-          Wrap(
-            spacing: NotionSpace.xs,
-            runSpacing: NotionSpace.xs,
-            children: [
-              for (final preset in _presets)
-                NotionGlassPill(
-                  key: ValueKey('reminder-preset-${preset.label}'),
-                  label: preset.label,
-                  selected: _preset == preset.label,
-                  onPressed: () => setState(() {
-                    _at = preset.at;
-                    _preset = preset.label;
-                  }),
-                ),
-              NotionGlassPill(
-                key: const ValueKey('reminder-preset-custom'),
-                icon: Icons.edit_calendar_outlined,
-                label: 'Pick date & time',
-                selected: _preset == null,
-                onPressed: _custom,
-              ),
-            ],
-          ),
-          const SizedBox(height: NotionSpace.sm),
-          NotionPropertyRow(
-            key: const ValueKey('reminder-date'),
-            label: 'Date',
-            value: Text(
-              reminderDay(_at, now, localizations),
-              style: NotionType.body,
-            ),
-            onTap: _pickDate,
-          ),
-          NotionPropertyRow(
-            key: const ValueKey('reminder-time'),
-            label: 'Time',
-            value: Text(
-              localizations.formatTimeOfDay(
-                TimeOfDay.fromDateTime(_at),
-                alwaysUse24HourFormat: use24h,
-              ),
-              style: NotionType.body,
-            ),
-            onTap: _pickTime,
-          ),
-          NotionSizeReveal(
-            visible: !valid,
-            child: Semantics(
-              liveRegion: true,
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: NotionSpace.xs),
-                child: Text(
-                  'Choose a time in the future.',
-                  style: NotionType.footnote.copyWith(
-                    color: tokens.colors.danger,
-                  ),
-                ),
-              ),
-            ),
+          DueTimePicker(
+            at: _at,
+            preset: _preset,
+            presets: _presets,
+            clock: widget.clock,
+            keyPrefix: 'reminder',
+            onChanged: (at, preset) => setState(() {
+              _at = at;
+              _preset = preset;
+            }),
           ),
           NotionSettingsToggle(
             title: 'Only if they don’t reply',

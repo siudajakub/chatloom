@@ -22,6 +22,15 @@ String scheduledSourceSummary(Map<String, dynamic> job) {
   ].join(' · ');
 }
 
+/// A Send later step that failed for a reason the user can act on; its
+/// [message] is shown as is. A [StateError], so callers that catch state
+/// errors keep working.
+class SendLaterProblem extends StateError {
+  /// Private sync is missing: the message offers to open its settings.
+  final bool needsSync;
+  SendLaterProblem(super.message, {this.needsSync = false});
+}
+
 /// Captures the source and relation before a picker or other asynchronous work.
 /// The worker sends this complete content through the SDK with its durable txid;
 /// no new schedule schema, crypto, or transport is introduced here.
@@ -68,13 +77,13 @@ class FrozenScheduledComposer {
     bool Function()? isCurrent,
   }) {
     if (editing) {
-      throw StateError('Finish editing before scheduling a new message.');
+      throw SendLaterProblem('Finish editing before scheduling a new message.');
     }
     final account = room.client.userID;
     if (account == null ||
         target.conversation.accountId != account ||
         target.conversation.roomId != room.id) {
-      throw StateError('The scheduled source is unavailable.');
+      throw SendLaterProblem('The scheduled source is unavailable.');
     }
     if (reply != null &&
         (!identical(reply.room, room) ||
@@ -82,15 +91,15 @@ class FrozenScheduledComposer {
             !reply.eventId.startsWith(r'$') ||
             !reply.status.isSynced ||
             reply.redacted)) {
-      throw StateError('The reply source is unavailable.');
+      throw SendLaterProblem('The reply source is unavailable.');
     }
     for (final id in [threadRootEventId, threadLastEventId]) {
       if (id != null && !id.startsWith(r'$')) {
-        throw StateError('The thread source is unavailable.');
+        throw SendLaterProblem('The thread source is unavailable.');
       }
     }
     if (threadRootEventId == null && threadLastEventId != null) {
-      throw StateError('The thread source is unavailable.');
+      throw SendLaterProblem('The thread source is unavailable.');
     }
     final result = FrozenScheduledComposer._(
       room,
@@ -122,7 +131,7 @@ class FrozenScheduledComposer {
             (reply!.redacted ||
                 reply!.eventId != _replyId ||
                 reply!.senderId != _replySender))) {
-      throw StateError('The selected source changed. Select it again.');
+      throw SendLaterProblem('The selected source changed. Select it again.');
     }
     if (reply != null || threadLastEventId != null) {
       final capability = RoomCapabilities.forFeature(
@@ -130,14 +139,14 @@ class FrozenScheduledComposer {
         room,
         event: reply,
       );
-      if (!capability.allowed) throw StateError(capability.reason);
+      if (!capability.allowed) throw SendLaterProblem(capability.reason);
     }
     if (threadRootEventId != null) {
       final capability = RoomCapabilities.forFeature(
         BridgeFeature.thread,
         room,
       );
-      if (!capability.allowed) throw StateError(capability.reason);
+      if (!capability.allowed) throw SendLaterProblem(capability.reason);
     }
   }
 
@@ -158,7 +167,7 @@ class FrozenScheduledComposer {
       jsonDecode(jsonEncode(original)) as Map,
     );
     if (result.containsKey('m.relates_to')) {
-      throw StateError('The scheduled content already has a relation.');
+      throw SendLaterProblem('The scheduled content already has a relation.');
     }
     if (_replyId != null || threadRootEventId != null) {
       result['m.relates_to'] = <String, dynamic>{
