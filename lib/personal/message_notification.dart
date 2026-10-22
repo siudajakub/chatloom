@@ -72,6 +72,13 @@ abstract final class PersonalNotificationChannels {
   static const remindersName = 'Reminders';
   static const remindersDescription = 'Conversation reminders you set';
 
+  /// Bridge bots and other service chats: shown in the shade, no sound and
+  /// no pop-up (a reply the user is waiting for uses [messages]).
+  static const serviceId = 'chatloom_service';
+  static const serviceName = 'Network bots';
+  static const serviceDescription =
+      'Quiet messages from network bots, such as sign-in prompts';
+
   static const messages = AndroidNotificationChannel(
     messagesId,
     messagesName,
@@ -84,10 +91,18 @@ abstract final class PersonalNotificationChannels {
     description: remindersDescription,
     importance: Importance.high,
   );
+  static const service = AndroidNotificationChannel(
+    serviceId,
+    serviceName,
+    description: serviceDescription,
+    importance: Importance.low,
+    playSound: false,
+    enableVibration: false,
+  );
 
   static bool _ensured = false;
 
-  /// Creates both channels, or renames them in place (Android keeps the
+  /// Creates the channels, or renames them in place (Android keeps the
   /// user's importance and sound choices). Retried until it succeeds once per
   /// isolate; never throws.
   static Future<void> ensure(FlutterLocalNotificationsPlugin plugin) async {
@@ -100,6 +115,7 @@ abstract final class PersonalNotificationChannels {
       if (android == null) return;
       await android.createNotificationChannel(messages);
       await android.createNotificationChannel(reminders);
+      await android.createNotificationChannel(service);
       _ensured = true;
     } catch (_) {
       // The channel is also created with these names by the first show().
@@ -173,7 +189,9 @@ bool notificationContentAvailable(Event event) =>
     event.messageType != MessageTypes.BadEncrypted;
 
 /// Builds the MessagingStyle, keeping earlier messages of the same chat
-/// notification (newest last, bounded, without duplicates).
+/// notification (oldest first by time, bounded to the newest, without
+/// duplicates). Pushes can be handled out of order (concurrent FCM callbacks,
+/// a cold start's buffered pushes), so the history is sorted, not appended.
 ///
 /// Android does not return bitmap icons of an active notification, so earlier
 /// senders get theirs back from [knownIcons] (by person key).
@@ -208,6 +226,15 @@ MessagingStyleInformation messagingStyle({
         ),
     message,
   ];
+  // Stable: equal timestamps keep their earlier order.
+  final indexed = history.indexed.toList()
+    ..sort((a, b) {
+      final byTime = a.$2.timestamp.compareTo(b.$2.timestamp);
+      return byTime != 0 ? byTime : a.$1.compareTo(b.$1);
+    });
+  history
+    ..clear()
+    ..addAll(indexed.map((entry) => entry.$2));
   return MessagingStyleInformation(
     const Person(name: 'You'),
     conversationTitle: group ? (chatName ?? text.title) : null,

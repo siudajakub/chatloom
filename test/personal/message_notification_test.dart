@@ -179,6 +179,53 @@ void main() {
     expect(style.messages!.first.person!.name, 'Ben');
   });
 
+  test('an older message handled after a newer one is sorted into place, '
+      'not appended (concurrent pushes)', () {
+    final text = messageNotificationText(
+      previews: true,
+      chatName: 'Anna',
+      senderName: 'Anna',
+      preview: 'First',
+      group: false,
+    );
+    final at = DateTime.utc(2026, 10, 17, 12);
+    final previous = MessagingStyleInformation(
+      const Person(name: 'You'),
+      messages: [
+        Message('Second', at.add(const Duration(minutes: 1)), null),
+        Message('Third', at.add(const Duration(minutes: 2)), null),
+      ],
+    );
+    final style = messagingStyle(
+      text: text,
+      chatName: 'Anna',
+      group: false,
+      senderName: 'Anna',
+      senderKey: 'opaque',
+      timestamp: at,
+      preview: 'First',
+      previous: previous,
+      maxMessages: 2,
+    );
+    // Bounded to the newest two, in time order.
+    expect(style.messages!.map((m) => m.text), ['Second', 'Third']);
+    final unbounded = messagingStyle(
+      text: text,
+      chatName: 'Anna',
+      group: false,
+      senderName: 'Anna',
+      senderKey: 'opaque',
+      timestamp: at,
+      preview: 'First',
+      previous: previous,
+    );
+    expect(unbounded.messages!.map((m) => m.text), [
+      'First',
+      'Second',
+      'Third',
+    ]);
+  });
+
   test('summary line', () {
     expect(notificationSummaryLine(1, 1), '1 message in 1 chat');
     expect(notificationSummaryLine(5, 2), '5 messages in 2 chats');
@@ -199,6 +246,11 @@ void main() {
     expect(PersonalNotificationChannels.reminders.name, 'Reminders');
     expect(PersonalNotificationChannels.messages.importance, Importance.high);
     expect(PersonalNotificationChannels.reminders.importance, Importance.high);
+    // Bots and service chats: shown, but no sound and no pop-up.
+    expect(PersonalNotificationChannels.serviceId, 'chatloom_service');
+    expect(PersonalNotificationChannels.service.name, 'Network bots');
+    expect(PersonalNotificationChannels.service.importance, Importance.low);
+    expect(PersonalNotificationChannels.service.playSound, isFalse);
   });
 
   test('push paths contain no Polish strings or device-locale lookups', () {
