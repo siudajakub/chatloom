@@ -10,6 +10,7 @@ import 'package:chatloom/personal/bridge_start_chat.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/person_merge.dart' show personSearchText;
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_search_page.dart'
     show PersonalSearchMemo;
@@ -225,6 +226,8 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
                     ?.members
                     .map((m) => m.roomId),
             ],
+            // A merged person is found by its sources' network names.
+            extraText: personSearchText(projection, record),
           ),
     ];
   });
