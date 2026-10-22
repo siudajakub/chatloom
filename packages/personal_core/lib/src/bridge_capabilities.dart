@@ -134,6 +134,12 @@ enum BridgeFeature {
   upload,
   image,
   video,
+
+  /// `m.video` marked `info["fi.mau.gif"]` (a looping GIF as MP4): bridgev2
+  /// classifies it as its own message type and checks `file["fi.mau.gif"]`,
+  /// which many networks restrict (Messenger, Instagram and Slack accept only
+  /// `image/gif`), never `file["m.video"]`.
+  gif,
   roundVideo,
   sticker,
   poll,
@@ -236,6 +242,7 @@ class BridgeRoomCapabilities {
       BridgeFeature.upload => 'm.file',
       BridgeFeature.image => 'm.image',
       BridgeFeature.video => 'm.video',
+      BridgeFeature.gif => 'fi.mau.gif',
       BridgeFeature.roundVideo => roundVideoCapabilityKey,
       BridgeFeature.sticker => 'm.sticker',
       _ => null,

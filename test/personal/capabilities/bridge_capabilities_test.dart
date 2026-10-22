@@ -367,8 +367,67 @@ void main() {
     unknown,
     'Missing state permission allowed disappearing',
   );
+  // ST-12: bridgev2 checks a GIF-style video (`m.video` with
+  // `info["fi.mau.gif"]`) against `file["fi.mau.gif"]`, never `m.video`.
+  // Meta-style declarations (Messenger, Instagram) take only image/gif
+  // there; WhatsApp-style ones take MP4 loops.
+  const mp4Loop = BridgeMediaRequest(mimeType: 'video/mp4', sizeBytes: 10);
+  const gifFile = BridgeMediaRequest(mimeType: 'image/gif', sizeBytes: 10);
+  final metaLike = BridgeRoomCapabilities.fromState({
+    'file': {
+      'm.video': {
+        'mime_types': {'video/mp4': 2},
+        'max_size': 1000,
+      },
+      'fi.mau.gif': {
+        'mime_types': {'image/gif': 2},
+        'max_size': 1000,
+      },
+    },
+  });
+  status(
+    metaLike.evidence(BridgeFeature.video, media: mp4Loop),
+    available,
+    'Meta-style video refused',
+  );
+  status(
+    metaLike.evidence(BridgeFeature.gif, media: mp4Loop),
+    blocked,
+    'MP4 GIF allowed where only image/gif is declared',
+  );
+  status(
+    metaLike.evidence(BridgeFeature.gif, media: gifFile),
+    available,
+    'image/gif GIF refused',
+  );
+  final whatsappLike = BridgeRoomCapabilities.fromState({
+    'file': {
+      'm.video': {
+        'mime_types': {'video/mp4': 2},
+      },
+      'fi.mau.gif': {
+        'mime_types': {'video/mp4': 2},
+      },
+    },
+  });
+  status(
+    whatsappLike.evidence(BridgeFeature.gif, media: mp4Loop),
+    available,
+    'WhatsApp-style MP4 GIF refused',
+  );
+  status(
+    BridgeRoomCapabilities.fromState({
+      'file': {
+        'm.video': {
+          'mime_types': {'video/mp4': 2},
+        },
+      },
+    }).evidence(BridgeFeature.gif, media: mp4Loop),
+    blocked,
+    'Undeclared GIF type allowed through the video declaration',
+  );
   stdout.writeln(
     'PASS bridge capabilities: missing/malformed/partial state, '
-    'state keys, MIME precedence, codec evidence, limits and timers',
+    'state keys, MIME precedence, codec evidence, limits, timers and GIFs',
   );
 }
