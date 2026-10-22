@@ -38,11 +38,35 @@ class PersonalClient extends ChangeNotifier {
   @override
   void notifyListeners() {
     if (!_disposed && !_changes.isClosed) {
-      _notifiedState = _observableState();
+      final state = _observableState();
+      final content = _contentState();
+      // A notification that changed nothing observable comes from a direct
+      // call (groups being unmerged, transcription state): treat it as
+      // content. Only a pure status change keeps [contentRevision].
+      if (content != _notifiedContent || state == _notifiedState) {
+        _contentRevision++;
+      }
+      _notifiedContent = content;
+      _notifiedState = state;
       _changes.add(++_changeVersion);
       super.notifyListeners();
     }
   }
+
+  /// Changes with every notification except pure status updates (worker
+  /// heartbeat, diagnostics), so the inbox can skip rebuilding its index
+  /// for them (wave 4 R5, wave 5 PF-07).
+  int get contentRevision => _contentRevision;
+  int _contentRevision = 0;
+  Object? _notifiedContent;
+  Object _contentState() => (
+    _replicaRevision,
+    _alertRevision,
+    ready,
+    problem,
+    syncFailure,
+    journal?.id,
+  );
 
   // Everything listeners render. Inbox, chats and settings rebuild on every
   // notification, so journal activity which changes none of it stays silent.

@@ -9,6 +9,7 @@ import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
+import 'package:chatloom/personal/worker_readiness.dart';
 import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -384,4 +385,124 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+
+  testWidgets(
+    'PF-07: receipts, heartbeats and other rooms rebuild no inbox row',
+    (tester) async {
+      final client = _Client();
+      final a = _Room(client, '!a:example.invalid')..message(r'$a1', 'First A');
+      final b = _Room(client, '!b:example.invalid')
+        ..message(r'$b1', 'First B', minute: 30);
+      final personal = PersonalClient.of(client);
+      addTearDown(personal.dispose);
+      final controller = await mountInbox(tester, client);
+      final inbox = controller.inbox;
+      Future<void> settle() async {
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump();
+      }
+
+      // A content notification first, so the next one can be status-only.
+      personal.notifyListeners();
+      await settle();
+      final built = controller.rowMemo.debugBuilt;
+      final full = inbox.debugFullBuilds;
+      final generation = inbox.generation;
+
+      // Other users' read receipts: nothing is published.
+      client.onSync.add(
+        SyncUpdate(
+          nextBatch: 'fixture-receipts',
+          rooms: RoomsUpdate(
+            join: {
+              a.id: JoinedRoomUpdate(
+                unreadNotifications: UnreadNotificationCounts(
+                  notificationCount: 0,
+                  highlightCount: 0,
+                ),
+                ephemeral: [
+                  BasicEvent(
+                    type: 'm.receipt',
+                    content: {
+                      r'$a1': {
+                        'm.read': {
+                          '@anna:example.invalid': {'ts': 1},
+                        },
+                      },
+                    },
+                  ),
+                ],
+              ),
+            },
+          ),
+        ),
+      );
+      await settle();
+      expect(inbox.generation, generation);
+      expect(controller.rowMemo.debugBuilt, built);
+
+      // A worker heartbeat changes only private sync status.
+      personal.workerReadiness = WorkerReadiness(receivedAt: DateTime.now());
+      personal.notifyListeners();
+      await settle();
+      expect(inbox.debugFullBuilds, full);
+      expect(inbox.generation, generation);
+
+      // Republishing without changes reuses every row.
+      inbox
+        ..markChanged(touch: true)
+        ..refresh();
+      await settle();
+      expect(controller.rowMemo.debugBuilt, built);
+
+      // A new message in A rebuilds A only.
+      a.message(r'$a2', 'Second A', minute: 45);
+      sync(client, [a.id]);
+      await settle();
+      expect(controller.rowMemo.debugBuilt, built + 1);
+      expect(find.textContaining('Second A'), findsOneWidget);
+      expect(find.textContaining('First B'), findsOneWidget);
+      expect(b.notificationCount, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
+
+  testWidgets('a mention and a failed send mark the inbox row', (tester) async {
+    final client = _Client();
+    final room = _MentionRoom(client, '!m:example.invalid')
+      ..message(r'$m1', 'Hello @owner', status: EventStatus.synced);
+    room.count = 2;
+    room.highlights = 1;
+    addTearDown(PersonalClient.of(client).dispose);
+    await mountInbox(tester, client);
+    NotionInboxRow row() =>
+        tester.widget<NotionInboxRow>(find.byType(NotionInboxRow));
+    expect(row().mentioned, isTrue);
+    expect(find.byKey(const ValueKey('notion_inbox_mention')), findsOneWidget);
+    expect(row().failed, isFalse);
+    room.message(
+      r'$m2',
+      'Not delivered',
+      outgoing: true,
+      minute: 50,
+      status: EventStatus.error,
+    );
+    sync(client, [room.id]);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    expect(row().failed, isTrue);
+    expect(find.byKey(const ValueKey('notion_inbox_failed')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+}
+
+class _MentionRoom extends _Room {
+  _MentionRoom(super.client, super.id);
+  int highlights = 0;
+  @override
+  int get highlightCount => highlights;
 }

@@ -38,9 +38,19 @@ class InboxController extends ChangeNotifier {
     _subscriptions.addAll([
       client.onSync.stream.listen(_onSync, onError: (_) {}),
       client.onSyncStatus.stream.listen(_onStatus, onError: (_) {}),
-      personal.changes.listen((_) => _mark(all: true), onError: (_) {}),
+      personal.changes.listen(_onPersonalChange, onError: (_) {}),
       client.onRoomState.stream.listen(_onRoomState, onError: (_) {}),
     ]);
+  }
+
+  int? _seenContent;
+
+  /// A worker heartbeat or diagnostic changes no inbox row: skip it.
+  void _onPersonalChange(int _) {
+    final revision = personal.contentRevision;
+    if (revision == _seenContent) return;
+    _seenContent = revision;
+    _mark(all: true);
   }
 
   /// A DM's name and avatar come from the partner's member event, which is
@@ -73,16 +83,42 @@ class InboxController extends ChangeNotifier {
   /// Index (re)builds, incremental updates; performance tests.
   int debugFullBuilds = 0, debugIncrementalUpdates = 0;
 
-  bool _active = true;
-  bool get active => _active;
+  bool _visible = true;
+  int _holds = 0;
+
+  /// The inbox route is visible ([active] set by the inbox) or a page that
+  /// shows inbox data holds it ([holdActive], e.g. the full-screen search).
+  bool get active => _visible || _holds > 0;
   set active(bool value) {
-    if (_active == value) return;
-    _active = value;
-    if (value && _pending) {
+    final was = active;
+    _visible = value;
+    _activeChanged(was);
+  }
+
+  /// Keeps publishing while the inbox route itself is covered; call the
+  /// returned function to release (idempotent).
+  VoidCallback holdActive() {
+    final was = active;
+    _holds++;
+    _activeChanged(was);
+    var released = false;
+    return () {
+      if (released) return;
+      released = true;
+      final was = active;
+      _holds--;
+      _activeChanged(was);
+    };
+  }
+
+  void _activeChanged(bool was) {
+    final now = active;
+    if (was == now || _detached) return;
+    if (now && _pending) {
       _leading = true;
       _schedule(Duration.zero);
     }
-    if (!value) {
+    if (!now) {
       _timer?.cancel();
       _timer = null;
       _leading = false;
@@ -115,10 +151,43 @@ class InboxController extends ChangeNotifier {
     return _networks;
   }
 
+  /// Other users' read receipts change nothing an inbox row shows: unread
+  /// counts move only with new events or the account's own receipts (some
+  /// servers repeat `unread_notifications` in every room entry, so it is no
+  /// signal by itself).
+  bool _othersReceiptsOnly(JoinedRoomUpdate update) {
+    final ephemeral = update.ephemeral;
+    final own = client.userID;
+    return own != null &&
+        ephemeral != null &&
+        ephemeral.isNotEmpty &&
+        ephemeral.every(
+          (event) =>
+              event.type == 'm.receipt' && !_mentions(event.content, own),
+        ) &&
+        (update.timeline?.events?.isEmpty ?? true) &&
+        (update.state?.isEmpty ?? true) &&
+        (update.accountData?.isEmpty ?? true) &&
+        update.summary == null;
+  }
+
+  /// Whether a receipt content (`{event: {type: {user: …}}}`) names [user].
+  static bool _mentions(Map<String, Object?> content, String user) {
+    for (final types in content.values) {
+      if (types is! Map) return true;
+      for (final users in types.values) {
+        if (users is! Map || users.containsKey(user)) return true;
+      }
+    }
+    return false;
+  }
+
   void _onSync(SyncUpdate sync) {
     final rooms = sync.rooms;
     final ids = <String>{
-      ...?rooms?.join?.keys,
+      for (final entry
+          in rooms?.join?.entries ?? <MapEntry<String, JoinedRoomUpdate>>[])
+        if (!_othersReceiptsOnly(entry.value)) entry.key,
       ...?rooms?.invite?.keys,
       ...?rooms?.leave?.keys,
       ...?rooms?.knock?.keys,
@@ -159,7 +228,7 @@ class InboxController extends ChangeNotifier {
     _changed.addAll(rooms);
     _all |= all;
     _touched |= touch;
-    if (!_pending || !_active || _leading) return;
+    if (!_pending || !active || _leading) return;
     if (_timer == null && _cooldown == null) {
       // Quiet inbox: publish this change in the next event-loop turn (which
       // still merges updates of the same sync) instead of after [debounce].
@@ -212,6 +281,33 @@ class InboxController extends ChangeNotifier {
     final index = InboxProjection.snapshot(personal).buildIndex(client.rooms);
     _index = index;
     _networks = _computeNetworks(index);
+    _scheduleMuteExpiry();
+  }
+
+  // A timed mute ends without any sync: rebuild once at the earliest end so
+  // the bell and badge colour follow (no timer while nothing is muted).
+  Timer? _muteExpiry;
+
+  void _scheduleMuteExpiry() {
+    _muteExpiry?.cancel();
+    _muteExpiry = null;
+    if (_detached) return;
+    final now = DateTime.now();
+    DateTime? next;
+    for (final entry in personal.values.entries) {
+      if (!entry.key.startsWith('org:') || entry.value['muted'] != true) {
+        continue;
+      }
+      final raw = entry.value['mutedUntil'];
+      final until = raw is String ? DateTime.tryParse(raw) : null;
+      if (until == null || !until.isAfter(now)) continue;
+      if (next == null || until.isBefore(next)) next = until;
+    }
+    if (next == null) return;
+    _muteExpiry = Timer(next.difference(now) + const Duration(seconds: 1), () {
+      _muteExpiry = null;
+      _mark(all: true);
+    });
   }
 
   static List<String> _computeNetworks(InboxIndex index) {
@@ -234,6 +330,8 @@ class InboxController extends ChangeNotifier {
     _timer = null;
     _cooldown?.cancel();
     _cooldown = null;
+    _muteExpiry?.cancel();
+    _muteExpiry = null;
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }

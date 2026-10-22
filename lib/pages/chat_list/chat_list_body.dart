@@ -9,6 +9,7 @@ import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/widgets/matrix.dart';
+import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -49,25 +50,40 @@ class ChatListViewBody extends StatelessWidget {
         final positions = <String, int>{
           for (final (index, room) in rooms.indexed) room.id: index,
         };
+        controller.rowMemo.retain(rooms.length);
         return NotionInboxPage(
           scrollController: controller.scrollController,
           rowCount: rooms.length,
           rowBuilder: (context, index) {
             final room = rooms[index];
             final entity = projection.entityFor(room);
-            return ChatListItem(
-              room,
-              projection: projection,
-              flash: controller.rowFlash(entity),
-              flashOnMount: controller.takeFreshFlash(entity),
-              key: ValueKey(chatListItemKey(room.id)),
-              onTap: () => controller.onChatTap(room),
-              onLongPress: (posContext) =>
-                  controller.chatContextAction(room, posContext),
-              activeChat:
-                  controller.activeChat == room.id ||
-                  (controller.activeGroup != null &&
-                      projection.groupFor(room)?.id == controller.activeGroup),
+            final flash = controller.rowFlash(entity);
+            final active =
+                controller.activeChat == room.id ||
+                (controller.activeGroup != null &&
+                    projection.groupFor(room)?.id == controller.activeGroup);
+            // An unchanged row returns the same widget, so a publish
+            // (another room's message, a typing change) rebuilds only the
+            // rows whose inputs changed.
+            return controller.rowMemo.resolve(
+              entity,
+              chatListItemSignature(
+                room,
+                projection,
+                activeChat: active,
+                flash: flash,
+              ),
+              () => ChatListItem(
+                room,
+                projection: projection,
+                flash: flash,
+                flashOnMount: controller.takeFreshFlash(entity),
+                key: ValueKey(chatListItemKey(room.id)),
+                onTap: () => controller.onChatTap(room),
+                onLongPress: (posContext) =>
+                    controller.chatContextAction(room, posContext),
+                activeChat: active,
+              ),
             );
           },
           rowIndexOf: (key) {
@@ -107,3 +123,33 @@ const _rowKeyPrefix = 'chat_list_item_';
 
 /// Stable inbox row key (also used by tests and captures).
 String chatListItemKey(String roomId) => '$_rowKeyPrefix$roomId';
+
+/// Built inbox rows by entity, reused while their signature
+/// ([chatListItemSignature]) stays equal. Bounded: cleared when it holds
+/// far more rows than the list shows.
+class InboxRowMemo {
+  final _rows = <String, (List<Object?>, Widget)>{};
+
+  /// Rows built (not reused) since creation; performance tests.
+  @visibleForTesting
+  int debugBuilt = 0;
+
+  Widget resolve(
+    String entity,
+    List<Object?> signature,
+    Widget Function() build,
+  ) {
+    final cached = _rows[entity];
+    if (cached != null && listEquals(cached.$1, signature)) return cached.$2;
+    debugBuilt++;
+    final row = build();
+    _rows[entity] = (signature, row);
+    return row;
+  }
+
+  void retain(int visible) {
+    if (_rows.length > visible * 2 + 64) _rows.clear();
+  }
+
+  void clear() => _rows.clear();
+}
