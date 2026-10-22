@@ -180,7 +180,7 @@ void main() {
     final matrix = _ActiveMatrix(first);
     final key = GlobalKey<SettingsController>();
     await _mount(tester, matrix, key);
-    final label = L10n.of(key.currentState!.context).logout;
+    const label = 'Log out';
     final action = key.currentState!.logoutAction();
     await tester.pumpAndSettle();
     matrix.active = second;

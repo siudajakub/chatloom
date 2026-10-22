@@ -11,7 +11,6 @@ import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.da
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -74,13 +73,18 @@ class SettingsSecurityController extends State<SettingsSecurity> {
     if (!mounted) return;
 
     if (!oldState) {
-      final localAuth = LocalAuthentication();
-      final unlocked = await localAuth.authenticate(
-        localizedReason: actionStr,
-        biometricOnly: true,
-      );
-      if (!unlocked) return;
+      // Every non-success of the prompt is a result, never an exception.
+      final result = await AppLock.of(context).confirmBiometrics();
       if (!mounted) return;
+      if (!result.unlocked) {
+        final message = result.enableMessage;
+        if (message != null) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(message)));
+        }
+        return;
+      }
     }
     await AppLock.of(context).changeUseBiometrics(!oldState);
     setState(() {});

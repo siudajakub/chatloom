@@ -6,11 +6,12 @@
 import 'dart:async';
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/encryption/recovery_settings.dart';
+import 'package:chatloom/personal/encryption/recovery_unlock.dart';
 import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_modal_action_popup.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:collection/collection.dart';
@@ -93,28 +94,66 @@ class SettingsController extends State<Settings> {
     }
   }
 
+  /// The recovery state right now: the cached value when known, else one
+  /// short check (offline it stays unknown and the dialog warns).
+  Future<LogoutRecovery> _recoveryForLogout(Client client, int revision) async {
+    if (!client.encryptionEnabled) return LogoutRecovery.noEncryption;
+    if (cryptoIdentityConnected == null) {
+      try {
+        await checkBootstrap(
+          account: client,
+          accountRevision: revision,
+        ).timeout(const Duration(seconds: 3));
+      } catch (_) {}
+    }
+    return switch (cryptoIdentityConnected) {
+      true => LogoutRecovery.connected,
+      false => LogoutRecovery.notConnected,
+      null => LogoutRecovery.unknown,
+    };
+  }
+
   Future<void> logoutAction() async {
-    final l10n = L10n.of(context);
     final client = Matrix.of(context).client;
     final revision = _accountRevision;
     if (!_isCurrentClient(client, revision)) return;
-    final consent = await showOkCancelAlertDialog(
-      useRootNavigator: false,
-      context: context,
-      title: l10n.areYouSureYouWantToLogout,
-      message: l10n.noBackupWarning,
-      isDestructive: cryptoIdentityConnected == false,
-      okLabel: l10n.logout,
-      cancelLabel: l10n.cancel,
-    );
-    if (consent != OkCancelResult.ok) return;
-    if (!_isCurrentClient(client, revision)) return;
+    final recovery = await _recoveryForLogout(client, revision);
+    if (!mounted || !_isCurrentClient(client, revision)) return;
+    final choice = await showLogoutConfirmDialog(context, recovery);
+    if (!mounted || !_isCurrentClient(client, revision)) return;
+    if (choice == LogoutChoice.setUpRecovery) {
+      await firstRunBootstrapAction();
+      return;
+    }
+    if (choice != LogoutChoice.logOut) return;
     final result = await showFutureLoadingDialog(
       context: context,
-      future: client.logout,
+      future: () async {
+        if (recovery == LogoutRecovery.connected) {
+          await _flushKeyBackup(client);
+        }
+        await client.logout();
+      },
     );
-    if (result.error != null || !_isCurrentClient(client, revision)) return;
+    if (!mounted ||
+        result.error != null ||
+        !_isCurrentClient(client, revision)) {
+      return;
+    }
     context.go('/');
+  }
+
+  /// Uploads message keys that arrived since the last backup run, so the
+  /// recovery key restores the newest messages too. Best effort: the SDK
+  /// logs its own failures, and logging out is never blocked by it.
+  Future<void> _flushKeyBackup(Client client) async {
+    try {
+      await client.encryption?.keyManager.uploadInboundGroupSessions().timeout(
+        const Duration(seconds: 10),
+      );
+    } catch (_) {
+      Logs().w('logout_key_backup_flush_failed');
+    }
   }
 
   Future<void> setAvatarAction() async {
@@ -220,39 +259,76 @@ class SettingsController extends State<Settings> {
       if (!_isCurrentClient(client, revision)) return;
       final connected = state.initialized && state.connected;
       SettingsAccountCache.of(client).rememberRecovery(connected);
-      setState(() => cryptoIdentityConnected = connected);
+      setState(() {
+        cryptoIdentityConnected = connected;
+        recoveryInitialized = state.initialized;
+      });
     } catch (_) {
       if (_isCurrentClient(client, revision)) {
         SettingsAccountCache.of(client).rememberRecovery(null);
-        setState(() => cryptoIdentityConnected = null);
+        setState(() {
+          cryptoIdentityConnected = null;
+          recoveryInitialized = null;
+        });
       }
     }
   }
 
   bool? cryptoIdentityConnected;
 
+  /// Whether the account has a recovery key at all; null until checked on
+  /// this page (only [cryptoIdentityConnected] is cached).
+  bool? recoveryInitialized;
+
+  RecoveryStatus get recoveryStatus => recoveryStatusOf(
+    connected: cryptoIdentityConnected,
+    initialized: recoveryInitialized,
+  );
+
+  /// Checks a recovery key against the account's secret storage key. Local
+  /// only: nothing is unlocked, cached or changed (`postUnlock: false`).
+  Future<RecoveryUnlockFailure?> checkRecoveryKey(
+    String keyOrPassphrase,
+  ) async {
+    final encryption = Matrix.of(context).client.encryption;
+    if (encryption == null) return RecoveryUnlockFailure.other;
+    try {
+      await encryption.ssss.open().unlock(
+        keyOrPassphrase: keyOrPassphrase,
+        postUnlock: false,
+      );
+      return null;
+    } catch (error) {
+      return classifyRecoveryUnlockError(error);
+    }
+  }
+
+  Future<void> verifyRecoveryKeyAction() =>
+      showVerifyRecoveryKeyDialog(context, check: checkRecoveryKey);
+
+  /// Guarded: confirm, then the unchanged reset flow of the recovery page.
+  Future<void> resetRecoveryKeyAction() async {
+    final client = Matrix.of(context).client;
+    final revision = _accountRevision;
+    if (!await confirmRecoveryReset(context)) return;
+    if (!mounted || !_isCurrentClient(client, revision)) return;
+    await context.push('/backup?reset=true');
+    if (_isCurrentClient(client, revision)) {
+      await checkBootstrap(account: client, accountRevision: revision);
+    }
+  }
+
+  /// The recovery key page: set up a key, or connect this device to it.
+  /// When recovery is already connected, Settings offers verify and reset
+  /// instead ([verifyRecoveryKeyAction], [resetRecoveryKeyAction]).
   Future<void> firstRunBootstrapAction([_]) async {
     final client = Matrix.of(context).client;
     final revision = _accountRevision;
     if (!_isCurrentClient(client, revision)) return;
     if (cryptoIdentityConnected == true) {
-      final action = await showOkCancelAlertDialog(
-        context: context,
-        title: L10n.of(context).chatBackup,
-        message: L10n.of(context).onlineKeyBackupEnabled,
-        okLabel: L10n.of(context).resetRecoveryKey,
-        cancelLabel: L10n.of(context).close,
-        isDestructive: true,
-      );
-      if (action != OkCancelResult.ok) return;
-      if (!_isCurrentClient(client, revision)) return;
-      await context.push('/backup?reset=true');
-      if (_isCurrentClient(client, revision)) {
-        await checkBootstrap(account: client, accountRevision: revision);
-      }
+      await resetRecoveryKeyAction();
       return;
     }
-    if (!_isCurrentClient(client, revision)) return;
     await context.push('/backup');
     if (_isCurrentClient(client, revision)) {
       await checkBootstrap(account: client, accountRevision: revision);
@@ -272,6 +348,7 @@ class SettingsController extends State<Settings> {
       // Show the last known recovery state at once; re-check it only when it
       // is stale, and only after the page finished sliding in.
       cryptoIdentityConnected = cache.recoveryConnected;
+      recoveryInitialized = cache.recoveryConnected == true ? true : null;
       if (!cache.recoveryFresh) {
         final revision = _accountRevision;
         NotionMotion.afterRouteSettled(context, () {

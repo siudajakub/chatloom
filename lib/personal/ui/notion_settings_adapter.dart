@@ -2,6 +2,7 @@
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/pages/settings/settings.dart';
+import 'package:chatloom/personal/encryption/recovery_settings.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/sync_changes.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
@@ -119,35 +120,13 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
       );
     }
     if (surface == SettingsSurface.recovery) {
-      final connected = widget.controller.cryptoIdentityConnected;
-      return NotionSettingsScaffold(
-        title: 'Encryption & recovery',
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            NotionListRow(
-              leading: const Icon(Icons.backup_outlined),
-              title: 'Key backup',
-              subtitle: connected == null
-                  ? 'Recovery status is not confirmed. Check it when connected.'
-                  : connected
-                  ? 'Recovery connected'
-                  : 'Recovery is not set up',
-            ),
-            NotionSizeReveal(
-              visible: connected == null,
-              child: NotionListRow(
-                title: 'Check recovery status',
-                onTap: widget.controller.checkBootstrap,
-              ),
-            ),
-            NotionListRow(
-              title: connected == true ? 'Manage recovery' : 'Set up recovery',
-              subtitle: 'Uses the existing encrypted key backup flow.',
-              onTap: widget.controller.firstRunBootstrapAction,
-            ),
-          ],
-        ),
+      final controller = widget.controller;
+      return RecoverySettingsBody(
+        status: controller.recoveryStatus,
+        onCheck: controller.checkBootstrap,
+        onOpenRecovery: controller.firstRunBootstrapAction,
+        onVerify: controller.verifyRecoveryKeyAction,
+        onReset: controller.resetRecoveryKeyAction,
       );
     }
     return FutureBuilder<Profile>(
