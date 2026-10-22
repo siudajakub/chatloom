@@ -50,8 +50,9 @@ abstract class AppConfig {
   static const String upstreamSourceCodeUrl =
       'https://github.com/krille-chan/fluffychat';
   static const String upstreamCredit =
-      'ChatLoom is based on FluffyChat by Christian Kußowski and the '
-      'FluffyChat contributors, licensed under the GNU Affero General Public '
+      'ChatLoom is a modified version of FluffyChat v2.10.0 (modified since '
+      'October 2026). FluffyChat © 2019-Present Christian Kußowski and the '
+      'FluffyChat contributors. Licensed under the GNU Affero General Public '
       'License v3.0 or later.';
 
   static const Set<String> defaultReactions = {'👍', '❤️', '😂', '😮', '😢'};

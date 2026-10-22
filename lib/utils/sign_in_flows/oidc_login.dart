@@ -15,6 +15,25 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Dynamic client registration metadata. `logo_uri`, `tos_uri` and
+/// `policy_uri` are optional (RFC 7591 §2) and are omitted when empty.
+OidcClientInformation oidcClientInformation({
+  required String clientName,
+  required Uri clientUri,
+  required String logoUrl,
+  required String tosUrl,
+  required String policyUrl,
+}) {
+  Uri? optional(String value) => value.isEmpty ? null : Uri.parse(value);
+  return OidcClientInformation(
+    clientName: clientName,
+    clientUri: clientUri,
+    logoUri: optional(logoUrl),
+    tosUri: optional(tosUrl),
+    policyUri: optional(policyUrl),
+  );
+}
+
 Future<void> oidcLoginFlow(
   Client client,
   BuildContext context,
@@ -41,12 +60,12 @@ Future<void> oidcLoginFlow(
     applicationType: supportWebPlatform
         ? OidcApplicationType.web
         : OidcApplicationType.native,
-    clientInformation: OidcClientInformation(
+    clientInformation: oidcClientInformation(
       clientName: AppSettings.applicationName.value,
       clientUri: clientUri,
-      logoUri: Uri.parse(AppSettings.logoUrl.value),
-      tosUri: Uri.parse(AppSettings.tos.value),
-      policyUri: Uri.parse(AppSettings.privacyPolicy.value),
+      logoUrl: AppSettings.logoUrl.value,
+      tosUrl: AppSettings.tos.value,
+      policyUrl: AppSettings.privacyPolicy.value,
     ),
   );
 
