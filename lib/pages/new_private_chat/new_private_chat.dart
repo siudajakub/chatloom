@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/new_private_chat/new_private_chat_view.dart';
 import 'package:chatloom/pages/new_private_chat/qr_scanner_modal.dart';
+import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/utils/chatloom_share.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -108,15 +109,12 @@ class NewPrivateChatController extends State<NewPrivateChat> {
   }
 
   Future<void> copyUserId() async {
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
     final l10n = L10n.of(context);
     await Clipboard.setData(
       ClipboardData(text: Matrix.of(context).client.userID!),
     );
     if (!mounted) return;
-    scaffoldMessenger.showSnackBar(
-      SnackBar(content: Text(l10n.copiedToClipboard)),
-    );
+    await showCopiedNotice(context, l10n.copiedToClipboard);
   }
 
   void openUserModal(Profile profile) =>

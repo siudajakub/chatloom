@@ -24,6 +24,7 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_search_page.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
+import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
@@ -36,7 +37,6 @@ import 'package:chatloom/utils/localized_exception_extension.dart'
 import 'package:chatloom/utils/macos_desktop.dart';
 import 'package:chatloom/utils/owned_async_wait.dart';
 import 'package:chatloom/utils/platform_infos.dart';
-import 'package:chatloom/utils/show_scaffold_dialog.dart';
 import 'package:chatloom/utils/show_update_snackbar.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
@@ -396,21 +396,17 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     );
     if (files.isEmpty) return;
 
-    showScaffoldDialog(
-      context: context,
-      builder: (context) => ShareScaffoldDialog(
-        items: files.map((file) {
-          if ({SharedMediaType.text, SharedMediaType.url}.contains(file.type)) {
-            return TextShareItem(file.path);
-          }
-          return FileShareItem(
-            XFile(
-              file.path.replaceFirst('file://', ''),
-              mimeType: file.mimeType,
-            ),
-          );
-        }).toList(),
-      ),
+    showForwardSheet(
+      context,
+      title: 'Share',
+      items: files.map((file) {
+        if ({SharedMediaType.text, SharedMediaType.url}.contains(file.type)) {
+          return TextShareItem(file.path);
+        }
+        return FileShareItem(
+          XFile(file.path.replaceFirst('file://', ''), mimeType: file.mimeType),
+        );
+      }).toList(),
     );
   }
 
