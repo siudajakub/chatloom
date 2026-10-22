@@ -25,6 +25,7 @@ import 'package:chatloom/pages/chat/utils/web_file_to_x_file.dart';
 import 'package:chatloom/pages/chat/voice_message_sender.dart';
 import 'package:chatloom/pages/chat_details/chat_details.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/composer_commands.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -193,9 +194,10 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   /// Media and files can be saved from the message menu (voice and audio
-  /// included).
+  /// included) once sent; an unsent file is still on this device.
   bool canSaveEvent(Event event) =>
       !event.redacted &&
+      event.status.isSent &&
       {
         MessageTypes.Video,
         MessageTypes.Image,
@@ -543,8 +545,9 @@ class ChatController extends State<ChatPageWithRoom>
       // The bubble shows the send; a refusal the SDK rethrows is explained.
       if (item is TextShareItem) {
         unawaited(
+          // Shared text is a message, never a command.
           frozen.room
-              .sendTextEvent(item.value)
+              .sendTextEvent(item.value, parseCommands: false)
               .then<void>((_) {}, onError: _reportSendFailure),
         );
       }
@@ -642,8 +645,9 @@ class ChatController extends State<ChatPageWithRoom>
       if (!mounted) return;
       _shareItems();
       _checkMatrixRtcCallSupport();
-      // The first send must not wait for the member list (trust check).
-      warmUpSendPath(room);
+      // The first send must not wait for the member list (trust check);
+      // loaded once the opening slide has finished.
+      warmUpSendPath(room, route: ModalRoute.of(context)?.animation);
       if (widget.action == 'call') {
         Matrix.of(context).activeCallRoomId.value = room.id;
       }
@@ -1255,23 +1259,10 @@ class ChatController extends State<ChatPageWithRoom>
     }
     _storeInputTimeoutTimer?.cancel();
 
-    var parseCommands = true;
-
-    final commandMatch = RegExp(r'^\/(\w+)').firstMatch(frozenText);
-    if (commandMatch != null &&
-        !sendingClient.commands.keys.contains(commandMatch[1]!.toLowerCase())) {
-      final l10n = L10n.of(context);
-      final dialogResult = await showOkCancelAlertDialog(
-        context: context,
-        title: l10n.commandInvalid,
-        message: l10n.commandMissing(commandMatch[0]!),
-        okLabel: l10n.sendAsText,
-        cancelLabel: l10n.cancel,
-      );
-      if (dialogResult != OkCancelResult.ok) return;
-      if (!sameContext() || sendController.text != frozenText) return;
-      parseCommands = false;
-    }
+    // Only formatting commands (/me, /plain, /html) run as commands. Any
+    // other `/word` is a message (Telegram bot commands such as /start), and
+    // nothing typed here can sign out, leave a chat or clear data.
+    final command = composerCommandOf(frozenRoom.client, frozenText);
 
     if (currentlyTyping) {
       typingCoolDown?.cancel();
@@ -1286,8 +1277,8 @@ class ChatController extends State<ChatPageWithRoom>
       edit: frozenEdit,
       pendingText: frozenPendingText,
     );
-    if (parseCommands && RegExp(r'^/\w+').hasMatch(frozenText)) {
-      // Commands (/me, /shrug, …) are not outbox messages: the SDK runs them.
+    if (command != null) {
+      // Formatting commands are not outbox messages: the SDK runs them.
       final draft = _consumeSent(sent);
       try {
         await frozenRoom.sendTextEvent(
@@ -1313,8 +1304,15 @@ class ChatController extends State<ChatPageWithRoom>
       replyTo: frozenReply,
       editEventId: frozenEdit?.eventId,
       threadId: frozenThread,
-      onDurable: (_) {
-        draft = _consumeSent(sent);
+      onDurable: (attempt) {
+        final saved = draft = _consumeSent(sent);
+        // Once the draft no longer holds the text, an identical message
+        // typed later is a new one, never this attempt resumed.
+        unawaited(
+          saved.then((stored) async {
+            if (stored) await personal.markImmediateConsumed(attempt.actionId);
+          }),
+        );
         if (!durable.isCompleted) durable.complete();
       },
     );
@@ -1429,6 +1427,8 @@ class ChatController extends State<ChatPageWithRoom>
       try {
         await personal.completeImmediate(result.actionId);
       } catch (_) {
+        // Still never resumed by an identical later message.
+        await personal.markImmediateConsumed(result.actionId);
         _notify(
           'Message sent. Its send state is retained until local storage is ready.',
         );
@@ -2019,7 +2019,12 @@ class ChatController extends State<ChatPageWithRoom>
         .aggregatedEvents(timeline!, RelationshipTypes.edit)
         .where((e) => e.status.isError);
     for (final e in allEditEvents) {
-      unawaited(e.sendAgain().then<void>((_) {}, onError: _reportSendFailure));
+      // Outbox edits retry in the outbox (their attempt is completed).
+      unawaited(
+        MessageDeliveryActions.sendAgain(
+          e,
+        ).then<void>((_) {}, onError: _reportSendFailure),
+      );
     }
     setState(() {});
   }

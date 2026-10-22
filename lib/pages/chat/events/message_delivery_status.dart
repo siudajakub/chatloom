@@ -93,8 +93,11 @@ enum _DeliveryChoice { retry, delete }
 /// the original Matrix transaction ID, so it can never duplicate a message.
 abstract final class MessageDeliveryActions {
   /// The failed events of a row: the message itself and/or its own edits.
+  /// A file whose send this process still owns (queued, or waiting out a
+  /// rate limit) is not failed: it ends as sent or "Not sent" by itself, so
+  /// neither Retry (a second job) nor Delete (sent anyway) applies to it.
   static List<Event> failedEvents(Event event, Timeline timeline) => [
-    if (event.status.isError) event,
+    if (event.status.isError && !OutgoingMedia.isActive(event)) event,
     if (event.status.isSent)
       for (final edit in event.aggregatedEvents(
         timeline,
@@ -229,12 +232,9 @@ abstract final class MessageDeliveryActions {
                 .then<void>((_) {}, onError: (Object _) {}),
           );
         } else if (immediate != null) {
-          // The result updates the bubble through the local echo.
-          unawaited(
-            PersonalClient.of(e.room.client)
-                .retryImmediate(immediate)
-                .then<void>((_) {}, onError: (Object _) {}),
-          );
+          // The result updates the bubble through the local echo; a retry
+          // that could not start says why instead of doing nothing.
+          unawaited(_retryText(context, e, immediate));
         } else {
           unawaited(
             sendAgain(e).then<void>(
@@ -278,6 +278,9 @@ abstract final class MessageDeliveryActions {
         // its bubble is gone.
         if (round != null && _isRound(e)) {
           await TelegramRoundService.of(e.room.client).discard(round);
+        } else if (_isFile(e)) {
+          // Never sent after its bubble is gone; this device's copy goes.
+          await OutgoingMedia.discard(e);
         }
         await e.cancelSend();
         if (immediate != null) {
@@ -295,18 +298,87 @@ abstract final class MessageDeliveryActions {
   static bool _isRound(Event event) =>
       RoundVideoDescriptor.fromContent(event.content) != null;
 
+  static bool _isFile(Event event) => {
+    MessageTypes.Image,
+    MessageTypes.Video,
+    MessageTypes.Audio,
+    MessageTypes.File,
+  }.contains(event.messageType);
+
+  /// Retries the text attempt [actionId] and explains a retry that could
+  /// not start (the bubble itself shows an accepted or unconfirmed result).
+  static Future<void> _retryText(
+    BuildContext context,
+    Event event,
+    String actionId,
+  ) async {
+    ImmediateSendResult? result;
+    try {
+      result = await _retryOutboxText(event, actionId);
+    } catch (_) {}
+    if (result != null && result.state != ImmediateSendState.failed) return;
+    if (!context.mounted) return;
+    _notify(context, retryFailureText(result?.errorCode));
+  }
+
+  /// Retries an outbox text. An echo whose attempt is not in this device's
+  /// outbox any more is sent again by the SDK with its own transaction ID
+  /// (the server deduplicates it), as before the outbox existed.
+  static Future<ImmediateSendResult> _retryOutboxText(
+    Event event,
+    String actionId,
+  ) async {
+    final result = await PersonalClient.of(
+      event.room.client,
+    ).retryImmediate(actionId);
+    if (result.state != ImmediateSendState.failed ||
+        result.errorCode != 'actionUnavailable' ||
+        !event.status.isError) {
+      return result;
+    }
+    final eventId = await event.sendAgain();
+    return ImmediateSendResult(
+      state: eventId == null
+          ? ImmediateSendState.unknown
+          : ImmediateSendState.accepted,
+      actionId: actionId,
+      transactionId: event.transactionId ?? event.eventId,
+      eventId: eventId,
+    );
+  }
+
+  /// Why a text Retry did not send, in plain words (never the code).
+  static String retryFailureText(String? code) => switch (code) {
+    'bridge_unavailable' =>
+      'Not sent: this network does not accept this message right now.',
+    'replyUnavailable' =>
+      'Not sent: the message you replied to is no longer available.',
+    'sourceUnavailable' => 'Not sent: this chat is no longer available.',
+    'actionUnavailable' || 'requestMismatch' || 'actionCompleted' =>
+      'This message can no longer be sent again. Delete it and send it as a new message.',
+    'differentDeviceNeedsReconciliation' =>
+      'This message was started on another device. Send it again as a new message.',
+    'storageUnavailable' || null =>
+      'ChatLoom could not read its outbox. Try again in a moment.',
+    _ => 'The server did not accept this message.',
+  };
+
   /// Sends one failed event again with its original transaction: files
   /// (photos, videos, voice) through [OutgoingMedia], so the bubble shows
   /// the upload again; everything else through the SDK.
   static Future<void> sendAgain(Event event) async {
-    if (!_isRound(event) &&
-        {
-          MessageTypes.Image,
-          MessageTypes.Video,
-          MessageTypes.Audio,
-          MessageTypes.File,
-        }.contains(event.messageType)) {
+    if (!_isRound(event) && _isFile(event)) {
       await OutgoingMedia.retry(event);
+      return;
+    }
+    // A text or edit of the encrypted outbox is retried there, so its
+    // attempt is completed instead of left behind.
+    final immediate = PersonalClient.immediateActionOf(event);
+    if (immediate != null && !_isRound(event)) {
+      final result = await _retryOutboxText(event, immediate);
+      if (result.state == ImmediateSendState.failed) {
+        throw ImmediateOutboxFailure(result.errorCode ?? 'failed');
+      }
       return;
     }
     await event.sendAgain();
@@ -334,9 +406,16 @@ abstract final class MessageDeliveryActions {
       final reply = replyId == null
           ? null
           : await timeline.getEventById(replyId);
-      final result = await PersonalClient.of(
-        room.client,
-      ).sendImmediate(room, text, replyTo: reply, threadId: thread);
+      final personal = PersonalClient.of(room.client);
+      final result = await personal.sendImmediate(
+        room,
+        text,
+        replyTo: reply,
+        threadId: thread,
+        // No draft holds a copy: an identical later message is a new one.
+        onDurable: (attempt) =>
+            unawaited(personal.markImmediateConsumed(attempt.actionId)),
+      );
       if (result.state == ImmediateSendState.accepted) {
         await PersonalClient.of(room.client).completeImmediate(result.actionId);
       }

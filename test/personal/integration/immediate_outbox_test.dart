@@ -326,9 +326,59 @@ Future<void> main() async {
     (await outbox.lookup('missing-action')) == null,
     'Lookup invented a record',
   );
+
+  // CC-02: once no draft holds a text (markConsumed: the composer cleared
+  // and saved its draft), an identical send after a restart is a new
+  // message, never the old attempt resumed, whatever state it is in. The
+  // old bubble still retries its own attempt.
+  timeoutAfterAccept = true;
+  final unconfirmed = await outbox.send({
+    ...payload,
+    'text': 'consumed',
+  }, fresh: true);
+  check(unconfirmed.state == ImmediateSendState.unknown, 'Unknown not kept');
+  await outbox.markConsumed(unconfirmed.actionId);
+  await outbox.markConsumed(unconfirmed.actionId);
+  final acceptedConsumed = await outbox.send({
+    ...payload,
+    'text': 'consumed-accepted',
+  }, fresh: true);
+  check(
+    acceptedConsumed.state == ImmediateSendState.accepted,
+    'Fixture send failed',
+  );
+  await outbox.markConsumed(acceptedConsumed.actionId);
+  outbox = instance();
+  final beforeConsumed = requests;
+  final newUnknownText = await outbox.send({
+    ...payload,
+    'text': 'consumed',
+  }, fresh: true);
+  check(
+    newUnknownText.actionId != unconfirmed.actionId &&
+        newUnknownText.transactionId != unconfirmed.transactionId &&
+        requests == beforeConsumed + 1,
+    'A consumed unknown attempt swallowed a new message',
+  );
+  final newAcceptedText = await outbox.send({
+    ...payload,
+    'text': 'consumed-accepted',
+  }, fresh: true);
+  check(
+    newAcceptedText.actionId != acceptedConsumed.actionId &&
+        newAcceptedText.state == ImmediateSendState.accepted &&
+        requests == beforeConsumed + 2,
+    'A consumed accepted attempt swallowed a new message',
+  );
+  final ownRetry = await outbox.retry(unconfirmed.actionId);
+  check(
+    ownRetry.transactionId == unconfirmed.transactionId,
+    'A consumed attempt lost its own retry',
+  );
+  await outbox.markConsumed('missing-action');
   stdout.writeln(
     'PASS immediate outbox acceptance retention, crash/retry, '
     'concurrency, device isolation, immutable target, storage fault, '
-    'durable callback, fresh repeat, retry and delete tests',
+    'durable callback, fresh repeat, retry, delete and consumed tests',
   );
 }

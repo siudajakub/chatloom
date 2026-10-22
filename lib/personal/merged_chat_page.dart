@@ -291,9 +291,12 @@ class _MergedChatPageState extends State<_MergedChatView>
     _pendingEvent = widget.initialEventId;
     _load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // The first send must not wait for the member list (trust check).
+      // The first send must not wait for the member list (trust check);
+      // loaded once the opening slide has finished.
       final room = mounted ? _targetRoom : null;
-      if (room != null) warmUpSendPath(room);
+      if (room != null) {
+        warmUpSendPath(room, route: ModalRoute.of(context)?.animation);
+      }
     });
   }
 
@@ -1223,8 +1226,10 @@ class _MergedChatPageState extends State<_MergedChatView>
                 event: event,
               ).allowed));
 
+  /// Sent media only: an unsent file is still on this device.
   bool _canSave(Event event) =>
       !event.redacted &&
+      event.status.isSent &&
       {
         MessageTypes.Video,
         MessageTypes.Image,
@@ -1365,9 +1370,10 @@ class _MergedChatPageState extends State<_MergedChatView>
           in event
               .aggregatedEvents(timeline, RelationshipTypes.edit)
               .where((e) => e.status.isError)) {
-        // The SDK rethrows only a refusal; explain it.
+        // Outbox edits retry in the outbox; the SDK rethrows only a
+        // refusal. Explain it.
         unawaited(
-          edit.sendAgain().then<void>(
+          MessageDeliveryActions.sendAgain(edit).then<void>(
             (_) {},
             onError: (Object error, StackTrace stack) => ErrorReporter.action(
               mounted ? context : null,
@@ -1803,8 +1809,17 @@ class _MergedChatPageState extends State<_MergedChatView>
         text,
         replyTo: replyAtSend,
         editEventId: editAtSend?.eventId,
-        onDurable: (_) {
-          draft = _consumeSent(sent);
+        onDurable: (attempt) {
+          final saved = draft = _consumeSent(sent);
+          // The draft no longer holds the text: an identical message typed
+          // later is a new one, never this attempt resumed.
+          unawaited(
+            saved.then((stored) async {
+              if (stored) {
+                await personal.markImmediateConsumed(attempt.actionId);
+              }
+            }),
+          );
           if (!durable.isCompleted) durable.complete();
         },
       );
@@ -1922,6 +1937,8 @@ class _MergedChatPageState extends State<_MergedChatView>
       try {
         await personal.completeImmediate(result.actionId);
       } catch (_) {
+        // Still never resumed by an identical later message.
+        await personal.markImmediateConsumed(result.actionId);
         _notify(
           'Message accepted. Its send state is retained until local storage is ready.',
         );

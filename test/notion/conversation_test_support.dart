@@ -42,6 +42,8 @@ class ConversationRoom extends Room {
   Object? reactionFailure;
   ConversationRoom(Client client, String id, {String network = 'whatsapp'})
     : super(id: id, client: client, membership: Membership.join) {
+    // An opened chat: every state the fixture sets is loaded.
+    partial = false;
     client.rooms.add(this);
     state(EventTypes.RoomName, {'name': 'Fictional conversation'});
     state('m.bridge', {

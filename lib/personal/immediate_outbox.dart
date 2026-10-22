@@ -79,6 +79,13 @@ typedef ImmediateTransport =
 /// transaction ID instead of duplicating. A `fresh` send is a new user intent:
 /// it never joins a live record this instance created (the same "ok" typed
 /// twice is two messages) and takes the next free slot of that content.
+///
+/// Only a record whose text may still be in a draft is resumed that way.
+/// Once no draft holds it ([markConsumed]: the composer cleared and saved
+/// the draft, or the text never came from one), the record is reachable
+/// through its action ID alone (bubble Retry and Delete), so an identical
+/// message typed later is a new message and is never swallowed by an old
+/// attempt that is accepted, unknown or still in flight.
 class ImmediateOutbox {
   final String deviceId;
   final ImmediateGet get;
@@ -257,6 +264,11 @@ class ImmediateOutbox {
           final existing = record['actionId'] as String;
           // The same text sent again in this process is another message.
           if (fresh && _created.contains(existing)) continue;
+          // No draft holds that attempt's text any more: this is a new
+          // message, never a resume of the old attempt.
+          if ((await get('immediate:action:$existing'))?['consumed'] == true) {
+            continue;
+          }
           if (record['deviceId'] != deviceId) {
             return _failure(existing, 'differentDeviceNeedsReconciliation');
           }
@@ -383,6 +395,25 @@ class ImmediateOutbox {
       _created.remove(actionId);
     } on ImmediateOutboxFailure {
       rethrow;
+    } catch (_) {
+      throw const ImmediateOutboxFailure('storageUnavailable');
+    }
+  }
+
+  /// Records that no draft holds [actionId]'s text any more (the composer
+  /// was cleared and its draft saved, or the text never came from a draft).
+  /// From then on only its action ID reaches the attempt; an identical send
+  /// is a new message. Idempotent; writes only the attempt's pointer, so it
+  /// never waits for a transport that is still running.
+  Future<void> markConsumed(String actionId) async {
+    final pointerKey = 'immediate:action:$actionId';
+    try {
+      await _serialize(pointerKey, () async {
+        final pointer = await get(pointerKey);
+        final indexKey = pointer?['indexKey'];
+        if (indexKey is! String || pointer!['consumed'] == true) return;
+        await put(pointerKey, {...pointer, 'consumed': true});
+      });
     } catch (_) {
       throw const ImmediateOutboxFailure('storageUnavailable');
     }

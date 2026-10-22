@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/diagnostics.dart';
+import 'package:chatloom/personal/disappearing_state.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/journal_replay_batch.dart';
 import 'package:chatloom/personal/journal_trust.dart';
@@ -1320,11 +1321,37 @@ class PersonalClient extends ChangeNotifier {
         return;
       }
       try {
-        if (_ownMessage(event)) autoTranscriptPending(event);
+        if (!_ownMessage(event)) return;
+        if (event.room.partial) {
+          // The chat's disappearing setting is not loaded yet (a chat not
+          // opened in this session): read it first, fail closed until then.
+          unawaited(
+            loadRoomState(event.room)
+                .then((_) {
+                  if (!_disposed) autoTranscriptPending(event);
+                })
+                .catchError((Object _) {}),
+          );
+          return;
+        }
+        autoTranscriptPending(event);
       } catch (_) {
         // A room or identity that cannot be read yet: the bubble asks later.
       }
     }, onError: (_) {});
+  }
+
+  /// Rooms whose stored state an automatic-transcription check asked for.
+  final _stateLoads = <String>{};
+
+  /// Loads [room]'s stored state once, then lets panels decide again.
+  void _loadRoomStateThenNotify(Room room) {
+    if (!_stateLoads.add(room.id)) return;
+    unawaited(
+      loadRoomState(room).then((_) {
+        if (!_disposed && !room.partial) notifyListeners();
+      }),
+    );
   }
 
   /// Sent by this account, here or from a bridged app (its ghost).
@@ -1452,10 +1479,10 @@ class PersonalClient extends ChangeNotifier {
     }
     final room = e.room;
     // Room state is the chat's current setting; fail closed on any value
-    // other than an explicit "off".
-    if (disappearingTimerLimits(
-      room.getState(beeperDisappearingTimerKey)?.content,
-    )) {
+    // other than an explicit "off", and while it is not loaded (a chat not
+    // opened in this session), until its stored state has been read.
+    if (roomMayDisappear(room)) {
+      if (room.partial) _loadRoomStateThenNotify(room);
       return 'disappearing';
     }
     final policy = transcriptionPolicy;
@@ -1802,6 +1829,18 @@ class PersonalClient extends ChangeNotifier {
   Future<void> completeImmediate(String actionId) async =>
       _immediate?.complete(actionId);
 
+  /// No draft holds [actionId]'s text any more (the composer cleared it and
+  /// saved the draft, or it was sent from a bubble): an identical message
+  /// sent later is a new one, never this attempt resumed. Best effort; the
+  /// attempt itself is unchanged.
+  Future<void> markImmediateConsumed(String actionId) async {
+    try {
+      await _immediate?.markConsumed(actionId);
+    } catch (_) {
+      // Storage unavailable: the attempt stays resumable, as before.
+    }
+  }
+
   /// The outbox action of a text local echo (`immediate-<id>`), or null.
   static String? immediateActionOf(Event event) {
     final txid = event.transactionId ?? event.eventId;
@@ -1813,8 +1852,22 @@ class PersonalClient extends ChangeNotifier {
 
   /// Explicit retry of a failed or unconfirmed text send from its bubble:
   /// same payload, same Matrix transaction ID, so it is never duplicated.
-  Future<ImmediateSendResult> retryImmediate(String actionId) async =>
-      (await _immediateOutbox()).retry(actionId);
+  /// An accepted retry is completed here (no draft is involved), so the
+  /// attempt can never swallow an identical message sent later.
+  Future<ImmediateSendResult> retryImmediate(String actionId) async {
+    final outbox = await _immediateOutbox();
+    final result = await outbox.retry(actionId);
+    if (result.state == ImmediateSendState.accepted) {
+      try {
+        await outbox.complete(actionId);
+      } catch (_) {
+        // Kept accepted: the bubble is sent either way, and the attempt
+        // was consumed when its composer cleared.
+        await markImmediateConsumed(actionId);
+      }
+    }
+    return result;
+  }
 
   /// Retires an unsent attempt deleted from its bubble.
   Future<void> discardImmediate(String actionId) async =>
