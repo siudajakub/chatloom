@@ -28,7 +28,7 @@ Prywatny fork FluffyChat v2.10.0 dla Androida i macOS, z zachowanym transportem 
 
 Flutter 3.47.4 / Dart3.13.3. `flutter pub get`, następnie build według instrukcji [Androida](android/README.personal.md) lub [macOS](macos/README.personal.md). Własne application/bundle ID: `pl.personal.chat`. SDK vendored w `packages/matrix`, pin i poprawki w `UPSTREAM-PIN.md`; nie aktualizować do `main` bez ponowienia bramek E2EE/storage/read/send.
 
-Android release ma własny podpis, bez upstream dummykeystore. Lokalny klucz i hasło są poza Git w `~/.local/share/personal-chat/signing/`, uprawnienia700/600; lokalny `android/key.properties` jest ignorowany. Zrób niezależny prywatny backup klucza przed regularnym użyciem; utrata klucza uniemożliwi upgrade tej instalacji. APKdebug i release są podpisane różnymi kluczami. Nie usuwać instalacji z danymi w celu obejścia signaturemismatch.
+Android release ma własny podpis, bez upstream dummykeystore. Klucz i hasło są poza Git (lokalizacja: [środowiska deweloperskie](docs/personal/development-environments.md)); lokalny `android/key.properties` jest ignorowany. Zrób niezależny prywatny backup klucza przed regularnym użyciem; utrata klucza uniemożliwi upgrade tej instalacji. APKdebug i release są podpisane różnymi kluczami. Nie usuwać instalacji z danymi w celu obejścia signaturemismatch.
 
 macOS wymaga pełnego Xcode, wybranej wersji SDK i własnego signing. CommandLineTools nie wystarczają do buildu Flutter macOS. Web służy do transportu/publiccompile; personal native SQLCipher nie używa web plaintextfallback.
 
@@ -46,7 +46,7 @@ Przed używaniem sync/zadań: połącz prywatny E2EEjournal, zweryfikuj własne 
 
 ## Konfiguracja push
 
-Stan 2026-10-17: brama automatycznej rejestracji jest wdrożona dla własnego konta; rzeczywisty OpenID i 64 testy serwera PASS. Telefon podczas wdrożenia był odłączony, więc rejestracja urządzenia i dostawa nadal NOT RUN. [Raport wdrożenia i krok na telefonie](../docs/personal-push-deployment-2026-10-17.md).
+Stan wdrożenia bramy u właściciela: [środowiska deweloperskie](docs/personal/development-environments.md#push-gateway-deployment-state).
 
 Android po zalogowaniu automatycznie konfiguruje własną bramę `push.example.org`: generuje klucz urządzenia w secure storage, pobiera krótkotrwałe potwierdzenie OpenID z Matrix, rejestruje telefon w bramie, a następnie ustawia pusher `event_id_only`. Użytkownik akceptuje wyłącznie systemową zgodę na powiadomienia. Główny token sesji Matrix nie trafia do bramy. Puste ustawienie ze starszej instalacji również wybiera konfigurację automatyczną; własne inne adresy i wcześniej wybrany UnifiedPush pozostają zachowane.
 
@@ -80,6 +80,6 @@ Powtarzalny personal release: `rtk python3 scripts/build-personal-release.py --p
 
 Analyzer plugin pinned `dart_code_linter`4.4.0: upstream value `latest` is not a valid SemVer constraint in Dart3.13. [Plugin configuration](https://pub.dev/packages/dart_code_linter).
 
-Pełne lokalne testy aplikacji na Macu z CommandLineTools: `rtk python3 scripts/run-personal-app-tests.py --flutter $PERSONAL_CHAT_ROOT/spikes/toolchains/flutter-3.47.4/bin/flutter --cmake $PERSONAL_CHAT_ROOT/spikes/toolchains/native-tools/bin/cmake`. Runner przekazuje rzeczywisty SDK wyłącznie lokalnemu CMake; zachowuje native hooks i assertions. Końcowe startup/controller/details/inbox widgets: 39 PASS. Nie jest to build ani odbiór aplikacji macOS. [Dowody i granice odbioru](docs/personal/logged-in-wave-2026-10-15.md).
+Pełne lokalne testy aplikacji na Macu z CommandLineTools: [środowiska deweloperskie](docs/personal/development-environments.md#mac-app-tests-with-command-line-tools).
 
 Web assets: `scripts/verify-personal-web-assets.py` sprawdza przypięte binaria oraz źródłowy manifest workera. `scripts/build-personal-web-worker.py` kompiluje worker dwukrotnie z ustalonymi flagami; publikacja po backupie wymaga `--publish`. [Procedura powtarzalnego web builda](docs/personal/test-graph-web-assets-2026-10-15.md). Nowy signed APK i web build nie zamykają przerwanego odbioru zalogowanej sesji.

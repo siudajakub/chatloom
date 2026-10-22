@@ -45,19 +45,37 @@ ChatLoom is text-first: warm charcoal backgrounds, neutral surfaces and clear ty
 
 The implementation is documented in [DESIGN.md](DESIGN.md). Its internal `Notion*` tokens and primitives define the shared ChatLoom design system.
 
-## Development
+## Build from source
 
-Use Flutter **3.47.4** and the pinned dependencies. Android and macOS are developed together on `main`.
-
-On the Linux devbox, from this directory:
+Requirements: Flutter **3.47.4** (Dart 3.13), the pinned `pubspec.lock`, and for
+Android a JDK 17 and an Android SDK/NDK as selected by Flutter. macOS builds need
+a Mac with full Xcode (Command Line Tools are not enough).
 
 ```sh
-source scripts/devbox-env.sh
-rtk python3 scripts/flutter-queue.py flutter pub get --enforce-lockfile
-rtk python3 scripts/flutter-queue.py analyze lib
+flutter pub get --enforce-lockfile
+flutter analyze lib
+flutter test test/personal
 ```
 
-Use the queue for Flutter jobs so analysis, tests and builds do not overlap. Keep private configuration and signing material outside Git.
+Android release (arm64 only). Build with pub enabled; do not pass `--no-pub`:
+
+```sh
+flutter build apk --release --target-platform android-arm64
+```
+
+Files that are never committed and that you provide yourself:
+
+| File | Purpose |
+|---|---|
+| `android/key.properties` | Release signing: `storeFile`, `storePassword`, `keyAlias`, `keyPassword` |
+| `android/app/google-services.json` | Your own Firebase project for FCM push. Without it a release build stops; add `-Pchatloom.allowNoFirebase=true` for a deliberate build without push |
+| `assets/vodozemac/0.8.1/*` | Web-only crypto bindings, built by `scripts/prepare-web.sh` (needed only for `flutter build web`) |
+
+Push delivery also needs your own push gateway ([push-gateway/README.md](push-gateway/README.md));
+the default gateway URL belongs to the maintainer's deployment and must be changed
+in your build. Sync, reminders and transcription need the optional
+[worker](worker/README.md). The owner's devbox and Mac workflow (queue, signing
+wrapper, pinned toolchains) is in [docs/personal/development-environments.md](docs/personal/development-environments.md).
 
 | Area | Guide |
 |---|---|
@@ -72,4 +90,4 @@ macOS requires a Mac with full Xcode. System notifications, notification sounds 
 
 ## License and acknowledgements
 
-ChatLoom is derived from [FluffyChat](https://github.com/krille-chan/fluffychat), with the Matrix SDK retained. The application is licensed under **AGPL-3.0-or-later**; see [LICENSE](LICENSE). Original copyright notices and third-party licenses remain with their sources, including bundled fonts and Matrix emoji verification data. Thanks to the upstream contributors, translators and testers.
+ChatLoom is a modified version of [FluffyChat](https://github.com/krille-chan/fluffychat) v2.10.0, © 2019-Present Christian Kußowski and the FluffyChat contributors, AGPL-3.0-or-later. ChatLoom's changes started in October 2026; [NOTICE.md](NOTICE.md) describes what was modified. The vendored Famedly Matrix Dart SDK is retained in `packages/matrix`. The application is licensed under **AGPL-3.0-or-later**; see [LICENSE](LICENSE). Original copyright notices and third-party licenses remain with their sources, including bundled fonts and Matrix emoji verification data. Thanks to the upstream contributors, translators and testers.

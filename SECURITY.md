@@ -1,22 +1,23 @@
 <!--
-SPDX-FileCopyrightText: 2019-Present Christian Kußowski
-SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
-
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
-# Security Policy
+# Security policy
 
-If you believe you have discovered a security vulnerability in this project, **do not open a public issue**.
+ChatLoom is a private, single-maintainer Matrix/Beeper client. Releases are
+built for the maintainer's own devices; there is no supported public release
+channel.
 
-To report a security issue responsibly, please go to the Security tab or visit:
+If you find a vulnerability, **do not open a public issue**. Report it
+privately to the repository owner through GitHub's private vulnerability
+reporting for this repository (Security tab → "Report a vulnerability"), or
+contact the owner through their GitHub profile.
 
-https://github.com/krille-chan/fluffychat/security/advisories/new
+Helpful details: steps to reproduce, the commit or build you tested, the
+platform (Android or macOS) and whether the worker or push gateway is involved.
+Do not include real tokens, recovery keys or message content.
 
-The following information can help us address the issue:
-
-- Clear steps to reproduce the vulnerability
-- The software version you are using
-- The affected platforms
-
-We appreciate your report and will respond as quickly as possible. Please note that this project is maintained by volunteers and is provided without guarantees.
+Vulnerabilities in upstream components should also be reported to their
+projects: [FluffyChat](https://github.com/krille-chan/fluffychat/security) and
+the [Matrix Dart SDK](https://github.com/famedly/matrix-dart-sdk/security).
+Reports are handled on a best-effort basis, without guarantees.
