@@ -231,6 +231,8 @@ class MessageDelivery {
         label: 'Not delivered$where · Tap for details',
         detail: bridgeFailureText(bridge, network: network),
         canRetry: bridge.retriable,
+        // Never delivered: removing it from the chat is always possible.
+        canDelete: true,
       );
     }
     return none;

@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
@@ -113,7 +114,6 @@ abstract final class MessageDeliveryActions {
     MessageDelivery delivery,
   ) async {
     final l10n = L10n.of(context);
-    final copyable = _copyText(event, timeline, l10n) != null;
     var message = delivery.detail;
     if (delivery.kind == MessageDeliveryKind.notSent) {
       message = await _notSentReason(event, timeline);
@@ -130,7 +130,7 @@ abstract final class MessageDeliveryActions {
       message: message,
       cancelLabel: l10n.cancel,
       actions: [
-        if (delivery.canRetry && (!bridge || copyable))
+        if (delivery.canRetry && (!bridge || canSendCopy(event, timeline)))
           AdaptiveModalAction(
             value: _DeliveryChoice.retry,
             label: bridge ? 'Send again' : 'Retry',
@@ -155,7 +155,11 @@ abstract final class MessageDeliveryActions {
           await retry(context, event, timeline);
         }
       case _DeliveryChoice.delete:
-        await delete(context, event, timeline);
+        if (bridge) {
+          await deleteUndelivered(context, event);
+        } else {
+          await delete(context, event, timeline);
+        }
     }
   }
 
@@ -272,26 +276,32 @@ abstract final class MessageDeliveryActions {
     var ok = true;
     for (final e in failedEvents(event, timeline)) {
       try {
-        final immediate = PersonalClient.immediateActionOf(e);
-        final round = TelegramRoundService.actionOf(e);
-        // A round's attempt is retired first: it must never be sent after
-        // its bubble is gone.
-        if (round != null && _isRound(e)) {
-          await TelegramRoundService.of(e.room.client).discard(round);
-        } else if (_isFile(e)) {
-          // Never sent after its bubble is gone; this device's copy goes.
-          await OutgoingMedia.discard(e);
-        }
-        await e.cancelSend();
-        if (immediate != null) {
-          await PersonalClient.of(e.room.client).discardImmediate(immediate);
-        }
+        await discard(e);
       } catch (_) {
         ok = false;
       }
     }
     if (!ok && context.mounted) {
       _notify(context, 'The unsent message could not be removed.');
+    }
+  }
+
+  /// Removes one unsent local echo and retires its outbox attempt (text,
+  /// round). Throws when it could not be removed.
+  static Future<void> discard(Event e) async {
+    final immediate = PersonalClient.immediateActionOf(e);
+    final round = TelegramRoundService.actionOf(e);
+    // A round's attempt is retired first: it must never be sent after its
+    // bubble is gone.
+    if (round != null && _isRound(e)) {
+      await TelegramRoundService.of(e.room.client).discard(round);
+    } else if (_isFile(e)) {
+      // Never sent after its bubble is gone; this device's copy goes.
+      await OutgoingMedia.discard(e);
+    }
+    await e.cancelSend();
+    if (immediate != null) {
+      await PersonalClient.of(e.room.client).discardImmediate(immediate);
     }
   }
 
@@ -384,8 +394,27 @@ abstract final class MessageDeliveryActions {
     await event.sendAgain();
   }
 
-  /// A bridge rejected the message: send its text again as a new message
-  /// (the original stays, marked "Not delivered").
+  /// Whether a rejected message can be sent again as a new copy: text,
+  /// media (its uploaded file is reused), anything but a round video,
+  /// whose retry belongs to the round service.
+  static bool canSendCopy(Event event, Timeline timeline) {
+    final display = event.getDisplayEvent(timeline);
+    return !display.redacted &&
+        !_isRound(event) &&
+        (_copyText(event, timeline, null) != null ||
+            const {
+              MessageTypes.Image,
+              MessageTypes.Video,
+              MessageTypes.Audio,
+              MessageTypes.File,
+              MessageTypes.Location,
+            }.contains(display.messageType));
+  }
+
+  /// A bridge rejected the message: send it again as a new message (text
+  /// through the outbox; media with its uploaded file, reply kept), then
+  /// remove the rejected original, which never reached the other person.
+  /// The chat ends with one message, as after Messenger's retry.
   static Future<void> sendCopy(
     BuildContext context,
     Event event,
@@ -393,7 +422,6 @@ abstract final class MessageDeliveryActions {
   ) async {
     final l10n = L10n.of(context);
     final text = _copyText(event, timeline, l10n);
-    if (text == null) return;
     final room = event.room;
     final proceed = await showTrustUserInRoomDialog(context, room);
     if (!context.mounted || !proceed) return;
@@ -406,26 +434,78 @@ abstract final class MessageDeliveryActions {
       final reply = replyId == null
           ? null
           : await timeline.getEventById(replyId);
-      final personal = PersonalClient.of(room.client);
-      final result = await personal.sendImmediate(
-        room,
-        text,
-        replyTo: reply,
-        threadId: thread,
-        // No draft holds a copy: an identical later message is a new one.
-        onDurable: (attempt) =>
-            unawaited(personal.markImmediateConsumed(attempt.actionId)),
-      );
-      if (result.state == ImmediateSendState.accepted) {
-        await PersonalClient.of(room.client).completeImmediate(result.actionId);
+      var accepted = false;
+      if (text != null) {
+        final result = await PersonalClient.of(
+          room.client,
+        ).sendImmediate(
+          room,
+          text,
+          replyTo: reply,
+          threadId: thread,
+          // No draft holds a copy: an identical later message is a new one.
+          onDurable: (attempt) => unawaited(
+            PersonalClient.of(room.client).markImmediateConsumed(attempt.actionId),
+          ),
+        );
+        if (result.state == ImmediateSendState.accepted) {
+          await PersonalClient.of(
+            room.client,
+          ).completeImmediate(result.actionId);
+          accepted = true;
+        }
+      } else {
+        final content = event.getDisplayEvent(timeline).content.copy()
+          ..remove('m.new_content')
+          ..remove('m.relates_to');
+        final id = await room.sendEvent(
+          content,
+          inReplyTo: reply,
+          threadRootEventId: thread,
+        );
+        accepted = id != null;
       }
+      if (accepted) await _removeUndelivered(event);
     } catch (_) {
       if (context.mounted) _notify(context, 'The message was not sent again.');
     }
   }
 
+  /// Redacts a message the network never got; the bridge's report about
+  /// that redaction means nothing to the user.
+  static Future<void> _removeUndelivered(Event event) async {
+    final id = await event.redactEvent();
+    if (id != null) MessageDeletions.markQuiet(event.room, id);
+  }
+
+  /// Delete of a message the network rejected: it only leaves this chat.
+  static Future<void> deleteUndelivered(
+    BuildContext context,
+    Event event,
+  ) async {
+    final network = bridgedNetworkLabel(event.room);
+    final ok = await showNotionConfirmDialog(
+      context: context,
+      title: 'Delete message?',
+      message: network == null
+          ? 'It was not delivered and will be removed from this chat.'
+          : 'It was not delivered to $network and will be removed from '
+                'this chat.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    );
+    if (!ok || !context.mounted) return;
+    try {
+      await _removeUndelivered(event);
+    } catch (_) {
+      if (context.mounted) {
+        _notify(context, 'Couldn’t delete the message. Try again.');
+      }
+    }
+  }
+
   /// Plain text of a text message (reply fallback removed), or null.
-  static String? _copyText(Event event, Timeline timeline, L10n l10n) {
+  static String? _copyText(Event event, Timeline timeline, L10n? l10n) {
     final display = event.getDisplayEvent(timeline);
     if (display.redacted ||
         !{
@@ -435,6 +515,7 @@ abstract final class MessageDeliveryActions {
         }.contains(display.messageType)) {
       return null;
     }
+    if (l10n == null) return display.body.trim().isEmpty ? null : display.body;
     final text = display.calcLocalizedBodyFallback(
       MatrixLocals(l10n),
       withSenderNamePrefix: false,
