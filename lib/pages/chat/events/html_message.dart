@@ -34,6 +34,9 @@ class HtmlMessage extends StatefulWidget {
   final Room room;
   final Color textColor;
   final double fontSize;
+
+  /// Side of a custom emoji (`data-mx-emoticon`) in text of [fontSize].
+  static double emoticonSize(double fontSize) => fontSize * 1.25;
   final TextStyle linkStyle;
   final void Function(LinkableElement) onOpen;
   final String? eventId;
@@ -445,6 +448,27 @@ class _HtmlMessageState extends State<HtmlMessage> {
           return TextSpan(text: node.attributes['alt']);
         }
 
+        // Custom emoji (Telegram, Slack) flow at text size like an emoji;
+        // the bridges' 32 px attributes would stretch the line.
+        if (node.attributes.containsKey('data-mx-emoticon')) {
+          final size = HtmlMessage.emoticonSize(fontSize);
+          return WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: SizedBox.square(
+              dimension: size,
+              child: MxcImage(
+                uri: mxcUrl,
+                width: size,
+                height: size,
+                fit: BoxFit.contain,
+                isThumbnail: false,
+                // Static while it loads or if it fails: alt text size box.
+                placeholder: (_) => SizedBox.square(dimension: size),
+                usePlaceholderOnError: true,
+              ),
+            ),
+          );
+        }
         final width = double.tryParse(node.attributes['width'] ?? '');
         final height = double.tryParse(node.attributes['height'] ?? '');
         const defaultDimension = 64.0;

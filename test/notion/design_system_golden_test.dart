@@ -345,6 +345,55 @@ Widget _fields() => _page([
   const NotionTextField(hint: 'Search messages', prefixIcon: Icons.search),
 ]);
 
+/// Bridged link previews inside own and incoming bubbles, with and without
+/// an image (the image slot is a flat stand-in: goldens load no media).
+Widget _linkPreviews() => Builder(
+  builder: (context) {
+    final bubbles = ConversationBubbleColors.of(context);
+    Widget bubble({required bool own, required bool image}) {
+      final text = own ? bubbles.outgoingText : bubbles.text;
+      return Align(
+        alignment: own ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConversationBubble(
+          outgoing: own,
+          groupPosition: ConversationGroupPosition.single,
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            spacing: NotionSpace.xxs,
+            children: [
+              Text(
+                'https://example.org/article',
+                style: TextStyle(color: text),
+              ),
+              NotionLinkPreviewCard(
+                site: 'example.org',
+                title: 'A fictional article with a long title that wraps',
+                description: 'Nothing here is real; the card only shows it.',
+                image: image
+                    ? ColoredBox(color: context.notion.colors.cover)
+                    : null,
+                imageAspectRatio: 1.91,
+                fill: text.withValues(alpha: .1),
+                textColor: text,
+                mutedColor: text.withValues(alpha: .72),
+                onTap: _noop,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return _page([
+      const SizedBox(height: NotionSpace.md),
+      bubble(own: false, image: true),
+      const SizedBox(height: NotionSpace.md),
+      bubble(own: true, image: false),
+    ]);
+  },
+);
+
 Widget _callouts() => _page([
   const SizedBox(height: NotionSpace.md),
   const NotionCallout(
@@ -751,6 +800,15 @@ void main() {
   testWidgets(
     'text fields',
     (tester) => _golden(tester, 'text-fields-dark', _fields()),
+  );
+  testWidgets(
+    'link previews',
+    (tester) => _golden(
+      tester,
+      'link-preview-dark',
+      _linkPreviews(),
+      size: const Size(390, 640),
+    ),
   );
   testWidgets(
     'callouts',
