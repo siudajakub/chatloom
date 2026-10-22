@@ -123,32 +123,144 @@ class WorkerReadiness {
     deviceKey,
   );
 
+  /// Short status of the background service for a settings row: a pill
+  /// label, one plain line and a health level. [describe] keeps the full
+  /// details for the tap-through sheet.
+  WorkerStatus status(DateTime now) {
+    if (!freshAt(now)) return WorkerStatus.offlineSince(receivedAt, now);
+    if (healthy != true || verified != true) {
+      return const WorkerStatus(
+        'Needs attention',
+        'The background service reported a problem.',
+        WorkerHealth.attention,
+      );
+    }
+    final waiting = pending ?? 0;
+    return WorkerStatus(
+      'Ready',
+      waiting > 0
+          ? '$waiting ${waiting == 1 ? 'task' : 'tasks'} waiting'
+          : 'Running normally',
+      WorkerHealth.ok,
+    );
+  }
+
+  /// [status] for transcription: also says when transcription itself is
+  /// not set up or blocked on the server.
+  WorkerStatus transcriptionStatus(DateTime now) {
+    final overall = status(now);
+    if (overall.health != WorkerHealth.ok) return overall;
+    return switch (transcription) {
+      'ready' => const WorkerStatus(
+        'Ready',
+        'Transcription is available',
+        WorkerHealth.ok,
+      ),
+      'not_configured' => const WorkerStatus(
+        'Not set up',
+        'Transcription is not set up on the server.',
+        WorkerHealth.attention,
+      ),
+      'blocked_codec_sandbox' => const WorkerStatus(
+        'Needs update',
+        'Transcription is blocked on the server until it is updated.',
+        WorkerHealth.attention,
+      ),
+      _ => const WorkerStatus(
+        'Unknown',
+        'The background service did not report transcription.',
+        WorkerHealth.unknown,
+      ),
+    };
+  }
+
   String describe(DateTime now) {
     if (!freshAt(now)) {
-      return 'Worker heartbeat is stale or has an invalid time. Service readiness is unknown.';
+      return 'No recent check-in from the background service, so its status is unknown.';
     }
     final connection = healthy == true && verified == true
-        ? 'Worker connection reported healthy and verified.'
-        : 'Worker connection readiness is unknown or unavailable.';
+        ? 'Background service connected and verified.'
+        : 'Background service connection is unknown or unavailable.';
     final transcriptionStatus = switch (transcription) {
-      'ready' => 'Transcription reported ready.',
-      'not_configured' => 'Transcription is not configured.',
+      'ready' => 'Transcription ready.',
+      'not_configured' => 'Transcription not set up.',
       'blocked_codec_sandbox' =>
-        'Transcription is blocked: codec sandbox required.',
-      _ => 'Transcription readiness is unknown.',
+        'Transcription blocked: the server needs an update (codec sandbox).',
+      _ => 'Transcription status unknown.',
     };
     final reminders = switch (reminderPush) {
-      'configured' => 'Reminder relay configured; delivery unverified.',
-      'not_configured' => 'Reminder relay is not configured.',
-      _ => 'Reminder relay readiness is unknown.',
+      'configured' => 'Reminder notifications set up; delivery not checked.',
+      'not_configured' => 'Reminder notifications not set up.',
+      _ => 'Reminder notification status unknown.',
     };
     return [
       connection,
       transcriptionStatus,
       reminders,
-      if (pending != null) 'Pending tasks: $pending.',
+      if (pending != null) 'Waiting tasks: $pending.',
       if (pendingReminderHints != null)
-        'Pending reminder hints: $pendingReminderHints.',
-    ].join(' ');
+        'Waiting reminders: $pendingReminderHints.',
+    ].join('\n');
   }
+}
+
+/// How a [WorkerStatus] reads at a glance (the pill's dot colour).
+enum WorkerHealth { ok, attention, offline, unknown }
+
+/// A short, human status of the background service (the worker).
+class WorkerStatus {
+  final String label;
+  final String line;
+  final WorkerHealth health;
+  const WorkerStatus(this.label, this.line, this.health);
+
+  /// Private sync is not available, so nothing is known.
+  static const unavailable = WorkerStatus(
+    'Unknown',
+    'Shown once private sync is connected.',
+    WorkerHealth.unknown,
+  );
+
+  /// No authenticated check-in has ever arrived.
+  static const notPaired = WorkerStatus(
+    'Not connected',
+    'The background service has not checked in yet.',
+    WorkerHealth.attention,
+  );
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  /// The last check-in is too old (or in the future).
+  factory WorkerStatus.offlineSince(DateTime at, DateTime now) {
+    final local = at.toLocal();
+    final today = now.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final time = '${two(local.hour)}:${two(local.minute)}';
+    final sameDay =
+        local.year == today.year &&
+        local.month == today.month &&
+        local.day == today.day;
+    return WorkerStatus(
+      'Offline',
+      at.isAfter(now)
+          ? 'The background service clock looks wrong.'
+          : sameDay
+          ? 'Last seen at $time'
+          : 'Last seen ${local.day} ${_months[local.month - 1]} at $time',
+      WorkerHealth.offline,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is WorkerStatus &&
+      other.label == label &&
+      other.line == line &&
+      other.health == health;
+
+  @override
+  int get hashCode => Object.hash(label, line, health);
 }
