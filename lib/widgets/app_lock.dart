@@ -10,65 +10,106 @@ import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
+import 'package:chatloom/widgets/app_lock_biometrics.dart';
 import 'package:chatloom/widgets/lock_screen.dart';
-import 'package:local_auth/local_auth.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart' show Logs;
 import 'package:provider/provider.dart';
 
-class AppLockWidget extends StatefulWidget {
-  const AppLockWidget({
-    required this.child,
-    required this.pincode,
-    required this.useBiometrics,
-    required this.isLoggedIn,
-    super.key,
-  });
+export 'package:chatloom/widgets/app_lock_biometrics.dart';
 
-  final bool isLoggedIn, useBiometrics;
-  final String? pincode;
-  final Widget child;
+/// The app lock's single source of truth: the PIN, biometrics, whether the
+/// app is locked, and the global privacy gate
+/// ([PersonalPrivacy.surfaceUnlocked]) that read markers, push suppression,
+/// round autoplay and played receipts check.
+///
+/// One controller lives for the whole GUI. The startup surface and the app
+/// each mount an [AppLockWidget] over it, so the hand-off between them keeps
+/// the lock state and an in-flight biometric prompt; only this object writes
+/// the privacy gate, and never on behalf of a disposed widget.
+class AppLockController extends ChangeNotifier with WidgetsBindingObserver {
+  AppLockController({
+    String? pincode,
+    bool useBiometrics = false,
+    AppLockBiometrics biometrics = const AppLockBiometrics(),
+  }) : this._(pincode, useBiometrics, biometrics, attached: true);
 
-  @override
-  State<AppLockWidget> createState() => AppLock();
-}
+  /// Inert stand-in for an [AppLock] that was never mounted (tests).
+  AppLockController._detached()
+    : this._(null, false, const AppLockBiometrics(), attached: false);
 
-class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
-  String? _pincode;
-  bool _isLocked = false;
-  bool _useBiometrics = false;
-  bool _triedAutoBiometrics = false;
-  bool _paused = false;
-  bool get isActive =>
-      _pincode != null &&
-      int.tryParse(_pincode!) != null &&
-      _pincode!.length >= 4 &&
-      !_paused;
-  bool get useBiometrics => _useBiometrics;
-
-  @override
-  void initState() {
-    _useBiometrics = widget.useBiometrics;
-    _pincode = widget.pincode;
+  AppLockController._(
+    this._pincode,
+    this._useBiometrics,
+    this._biometrics, {
+    required bool attached,
+  }) : _observes = attached {
     _isLocked = isActive;
+    if (!attached) return;
     PersonalPrivacy.surfaceUnlocked = !_isLocked;
     if (!_isLocked &&
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
       RoundPlaybackCoordinator.shared.resume();
     }
-    super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback(_checkLoggedIn);
-    if (isActive && useBiometrics) unlockWithBiometrics();
   }
 
-  Future<void> _checkLoggedIn(_) async {
-    if (widget.isLoggedIn) return;
+  final AppLockBiometrics _biometrics;
+  final bool _observes;
+  String? _pincode;
+  bool _useBiometrics;
+  bool _isLocked = false;
+  bool _triedAutoBiometrics = false;
+  bool _biometricsUnavailable = false;
+  bool _autoPromptScheduled = false;
+  bool _disposed = false;
+  int _pauses = 0;
 
-    await changePincode(null);
-    setState(() {
-      _isLocked = false;
-      PersonalPrivacy.surfaceUnlocked = true;
-    });
+  /// Bumped on every lock: a prompt that started in an earlier lock session
+  /// must not unlock a later one.
+  int _lockGeneration = 0;
+  Future<AppLockBiometricResult>? _attempt;
+  AppLockBiometricResult? _lastBiometric;
+
+  static const _reason = 'Unlock ChatLoom';
+
+  bool get isActive =>
+      _pincode != null &&
+      int.tryParse(_pincode!) != null &&
+      _pincode!.length >= 4 &&
+      _pauses == 0;
+  bool get isLocked => _isLocked;
+  bool get useBiometrics => _useBiometrics;
+
+  /// Biometrics are on and have not proved impossible on this device.
+  bool get biometricsAvailable => _useBiometrics && !_biometricsUnavailable;
+
+  /// Why the last prompt of this lock did not unlock, for the lock screen
+  /// (also after the automatic prompt); null when nothing needs saying.
+  String? get biometricMessage => _lastBiometric?.message;
+
+  /// A PIN attempt replaces the biometric advice.
+  void clearBiometricMessage() {
+    if (_lastBiometric == null) return;
+    _lastBiometric = null;
+    _notify();
+  }
+
+  /// Whether the enrolled biometric is a face (glyph only).
+  late final Future<bool> usesFace = _biometrics.usesFace();
+
+  /// Called by each mounted [AppLockWidget]. The automatic prompt runs once
+  /// per controller, after the first frame (never twice for two surfaces).
+  void attach() {
+    if (_autoPromptScheduled || !_observes) return;
+    _autoPromptScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoPrompt());
+  }
+
+  void _autoPrompt() {
+    if (_disposed || !_isLocked || !biometricsAvailable) return;
+    if (_triedAutoBiometrics) return;
+    unawaited(unlockWithBiometrics());
   }
 
   @override
@@ -104,13 +145,11 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
     }
     if (_isLocked &&
         state == AppLifecycleState.resumed &&
-        useBiometrics &&
+        biometricsAvailable &&
         !_triedAutoBiometrics) {
-      unlockWithBiometrics();
+      unawaited(unlockWithBiometrics());
     }
   }
-
-  bool get isLocked => _isLocked;
 
   Future<void> changeUseBiometrics(bool useBiometrics) async {
     await personalSecureStorage.write(
@@ -118,7 +157,8 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
       value: useBiometrics.toString(),
     );
     _useBiometrics = useBiometrics;
-    return;
+    if (useBiometrics) _biometricsUnavailable = false;
+    _notify();
   }
 
   Future<void> changePincode(String? pincode) async {
@@ -127,41 +167,91 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
       value: pincode,
     );
     _pincode = pincode;
-    return;
+    _notify();
   }
 
-  Future<bool> unlockWithBiometrics() async {
-    _triedAutoBiometrics = true;
-    final localAuth = LocalAuthentication();
-    final unlocked = await localAuth.authenticate(
-      localizedReason: 'Please authenticate to unlock the app.',
-      persistAcrossBackgrounding: true,
-      biometricOnly: true,
-    );
-    if (unlocked) {
-      setState(() {
-        _isLocked = false;
-        PersonalPrivacy.surfaceUnlocked = true;
-        RoundPlaybackCoordinator.shared.resume();
-        _triedAutoBiometrics = false;
-      });
+  /// No account is signed in: the lock is cleared (FluffyChat behaviour).
+  /// If the PIN cannot be cleared from storage the app stays locked; the PIN
+  /// still unlocks it.
+  Future<void> clearForSignedOut() async {
+    try {
+      await changePincode(null);
+    } catch (_) {
+      Logs().w('app_lock_clear_failed');
+      return;
     }
-    return unlocked;
+    if (_disposed) return;
+    _setUnlocked();
+  }
+
+  /// One biometric prompt at a time; a second call joins the first. Never
+  /// throws: every failure is a result, and the app stays locked.
+  Future<AppLockBiometricResult> unlockWithBiometrics() {
+    final pending = _attempt;
+    if (pending != null) return pending;
+    if (!_isLocked) return Future.value(AppLockBiometricResult.success);
+    _triedAutoBiometrics = true;
+    final generation = _lockGeneration;
+    return _single(
+      _prompt().then((result) {
+        if (_disposed || generation != _lockGeneration) return result;
+        if (result.unlocked) {
+          if (_isLocked) _setUnlocked();
+          return result;
+        }
+        if (result.disablesAutoPrompt) _biometricsUnavailable = true;
+        _lastBiometric = result;
+        _notify();
+        return result;
+      }),
+    );
+  }
+
+  /// A prompt that only confirms the person (turning biometrics on in
+  /// settings); it never changes the lock.
+  Future<AppLockBiometricResult> confirmBiometrics() =>
+      _attempt ?? _single(_prompt());
+
+  Future<AppLockBiometricResult> _single(
+    Future<AppLockBiometricResult> attempt,
+  ) {
+    _attempt = attempt;
+    attempt.whenComplete(() {
+      if (identical(_attempt, attempt)) _attempt = null;
+    }).ignore();
+    return attempt;
+  }
+
+  Future<AppLockBiometricResult> _prompt() async {
+    try {
+      final ok = await _biometrics.authenticate(_reason);
+      return ok
+          ? AppLockBiometricResult.success
+          : const AppLockBiometricResult(AppLockBiometricOutcome.notRecognised);
+    } catch (error) {
+      final result = AppLockBiometricResult.fromError(error);
+      Logs().w('app_lock_biometrics ${result.outcome.name}');
+      return result;
+    }
   }
 
   bool unlock(String pincode) {
     final isCorrect = pincode == _pincode;
-    if (isCorrect) {
-      setState(() {
-        _isLocked = false;
-        PersonalPrivacy.surfaceUnlocked = true;
-        RoundPlaybackCoordinator.shared.resume();
-      });
-    }
+    if (isCorrect && _isLocked) _setUnlocked();
     return isCorrect;
   }
 
-  void showLockScreen() => setState(() {
+  void _setUnlocked() {
+    _isLocked = false;
+    _lastBiometric = null;
+    // The next lock gets its own automatic prompt again.
+    _triedAutoBiometrics = false;
+    PersonalPrivacy.surfaceUnlocked = true;
+    RoundPlaybackCoordinator.shared.resume();
+    _notify();
+  }
+
+  void showLockScreen() {
     PersonalPrivacy.surfaceUnlocked = false;
     unawaited(
       RoundPlaybackCoordinator.shared.stopAll().catchError((Object _) {}),
@@ -170,28 +260,138 @@ class AppLock extends State<AppLockWidget> with WidgetsBindingObserver {
       RoundCaptureController.interruptActive().catchError((Object _) {}),
     );
     _isLocked = true;
-  });
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
+    _lockGeneration++;
+    _triedAutoBiometrics = false;
+    _lastBiometric = null;
+    _notify();
   }
 
   Future<T> pauseWhile<T>(Future<T> future) async {
-    _paused = true;
+    _pauses++;
     try {
       return await future;
     } finally {
-      _paused = false;
+      _pauses--;
     }
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    if (_observes) WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+}
+
+class AppLockWidget extends StatefulWidget {
+  const AppLockWidget({
+    required this.child,
+    this.pincode,
+    this.useBiometrics = false,
+    required this.isLoggedIn,
+    this.controller,
+    super.key,
+  });
+
+  final bool isLoggedIn, useBiometrics;
+  final String? pincode;
+  final Widget child;
+
+  /// The shared lock (startup surface → app). Without one, the widget owns a
+  /// lock built from [pincode] and [useBiometrics].
+  final AppLockController? controller;
+
+  @override
+  State<AppLockWidget> createState() => AppLock();
+}
+
+/// The lock as widgets see it ([AppLock.of]); forwards to the
+/// [AppLockController].
+class AppLock extends State<AppLockWidget> {
+  AppLockController? _controller;
+  bool _ownsController = false;
+
+  AppLockController get controller =>
+      _controller ??= AppLockController._detached();
+
+  bool get isActive => controller.isActive;
+  bool get isLocked => controller.isLocked;
+  bool get useBiometrics => controller.useBiometrics;
+  bool get biometricsAvailable => controller.biometricsAvailable;
+  Future<bool> get usesFace => controller.usesFace;
+
+  Future<void> changeUseBiometrics(bool useBiometrics) =>
+      controller.changeUseBiometrics(useBiometrics);
+  Future<void> changePincode(String? pincode) =>
+      controller.changePincode(pincode);
+  Future<AppLockBiometricResult> unlockWithBiometrics() =>
+      controller.unlockWithBiometrics();
+  Future<AppLockBiometricResult> confirmBiometrics() =>
+      controller.confirmBiometrics();
+  bool unlock(String pincode) => controller.unlock(pincode);
+  void showLockScreen() => controller.showLockScreen();
+  Future<T> pauseWhile<T>(Future<T> future) => controller.pauseWhile(future);
+
+  @override
+  void initState() {
+    super.initState();
+    _bind(widget.controller);
+    WidgetsBinding.instance.addPostFrameCallback(_checkLoggedIn);
+  }
+
+  void _bind(AppLockController? shared) {
+    _ownsController = shared == null;
+    final controller = _controller =
+        shared ??
+        AppLockController(
+          pincode: widget.pincode,
+          useBiometrics: widget.useBiometrics,
+        );
+    controller.addListener(_changed);
+    controller.attach();
+  }
+
+  @override
+  void didUpdateWidget(AppLockWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.controller, widget.controller)) return;
+    _unbind();
+    _bind(widget.controller);
+  }
+
+  void _unbind() {
+    final controller = _controller;
+    if (controller == null) return;
+    controller.removeListener(_changed);
+    if (_ownsController) controller.dispose();
+    _controller = null;
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _checkLoggedIn(_) async {
+    if (!mounted || widget.isLoggedIn) return;
+    await controller.clearForSignedOut();
+  }
+
+  @override
+  void dispose() {
+    _unbind();
+    super.dispose();
   }
 
   static AppLock of(BuildContext context) =>
       Provider.of<AppLock>(context, listen: false);
 
   @override
-  Widget build(BuildContext context) => Provider<AppLock>(
-    create: (_) => this,
+  Widget build(BuildContext context) => Provider<AppLock>.value(
+    value: this,
     child: Stack(
       fit: StackFit.expand,
       children: [

@@ -321,6 +321,7 @@ Future<void> startGui(
   // their existing screens, independently of failed account restoration.
 
   PersonalPerformanceProbe.startupPhase('run_app');
+  ErrorReporter.guiStarted = true;
   runApp(
     startup != null
         ? ClientStartupView(

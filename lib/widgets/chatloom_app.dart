@@ -31,6 +31,10 @@ class ChatLoomApp extends StatelessWidget {
   final SharedPreferences store;
   final ClientStartup? startup;
 
+  /// The app lock shared with the startup surface; without it the app's
+  /// [AppLockWidget] builds its own from [appLockSettings].
+  final AppLockController? appLock;
+
   const ChatLoomApp({
     super.key,
     this.testWidget,
@@ -38,6 +42,7 @@ class ChatLoomApp extends StatelessWidget {
     required this.store,
     required this.appLockSettings,
     this.startup,
+    this.appLock,
   });
 
   /// getInitialLink may rereturn the value multiple times if this view is
@@ -91,6 +96,7 @@ class ChatLoomApp extends StatelessWidget {
         supportedLocales: const [AppConfig.appLocale],
         routerConfig: router,
         builder: (context, child) => AppLockWidget(
+          controller: appLock,
           pincode: appLockSettings.pincode,
           useBiometrics: appLockSettings.useBiometrics,
           isLoggedIn: clients.any((client) => client.isLogged()),

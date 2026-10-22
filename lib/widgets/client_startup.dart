@@ -78,7 +78,12 @@ class _StartupLockFailureViewState extends State<StartupLockFailureView> {
   );
 }
 
-class ClientStartupView extends StatelessWidget {
+/// The startup surface (skeleton or failure) and then the app, under one
+/// app lock: the [AppLockController] is created here once, so the lock state,
+/// the privacy gate and an in-flight biometric prompt survive the hand-off
+/// to [ChatLoomApp] (two separate locks used to prompt twice and could open
+/// the privacy gate while the second lock was still shown).
+class ClientStartupView extends StatefulWidget {
   final ClientStartup startup;
   final ({String? pincode, bool useBiometrics}) appLockSettings;
   const ClientStartupView({
@@ -88,14 +93,32 @@ class ClientStartupView extends StatelessWidget {
   });
 
   @override
+  State<ClientStartupView> createState() => _ClientStartupViewState();
+}
+
+class _ClientStartupViewState extends State<ClientStartupView> {
+  late final AppLockController _appLock = AppLockController(
+    pincode: widget.appLockSettings.pincode,
+    useBiometrics: widget.appLockSettings.useBiometrics,
+  );
+
+  @override
+  void dispose() {
+    _appLock.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: startup,
+    listenable: widget.startup,
     builder: (context, _) {
+      final startup = widget.startup;
       if (startup.clients.isNotEmpty) {
         return ChatLoomApp(
           clients: startup.clients,
           store: startup.store,
-          appLockSettings: appLockSettings,
+          appLockSettings: widget.appLockSettings,
+          appLock: _appLock,
           startup: startup,
         );
       }
@@ -103,8 +126,7 @@ class ClientStartupView extends StatelessWidget {
       return _StartupApp(
         store: startup.store,
         home: AppLockWidget(
-          pincode: appLockSettings.pincode,
-          useBiometrics: appLockSettings.useBiometrics,
+          controller: _appLock,
           // A failed restore must not bypass an existing app lock.
           isLoggedIn: true,
           // Skeleton → failure surface fade through; never a hard cut.
