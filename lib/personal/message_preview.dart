@@ -24,6 +24,7 @@
 library;
 
 import 'package:chatloom/personal/own_sender.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show RoundVideoDescriptor;
 
@@ -40,14 +41,7 @@ String? _caption(Event event) {
   if (body is! String || body.trim().isEmpty) return null;
   // MSC2530: body is a caption only when a separate filename exists.
   if (filename is! String || filename.isEmpty || filename == body) return null;
-  return _oneLine(
-    event.calcUnlocalizedBody(
-      hideReply: true,
-      hideEdit: true,
-      plaintextBody: true,
-      removeMarkdown: true,
-    ),
-  );
+  return _oneLine(_plainBody(event));
 }
 
 String _withCaption(String label, Event event) {
@@ -125,14 +119,95 @@ String? _label(Event event) {
   }
 }
 
-String _body(Event event) => _oneLine(
-  event.calcUnlocalizedBody(
+String _body(Event event) => _oneLine(_plainBody(event));
+
+/// Calls of the full markdown → HTML → text path; tests check the cache and
+/// the plain-text fast path with it.
+@visibleForTesting
+int debugPreviewSlowPaths = 0;
+
+/// Previews are rebuilt for every visible inbox row, reply quote and pinned
+/// bar on each rebuild; the SDK's markdown → HTML → DOM pass costs ~70 µs a
+/// message. The result is cached per event instance and validated by the
+/// content it depends on (redaction and local echo updates mutate
+/// [Event.content] in place).
+final _plainCache = Expando<_PlainBody>('personal preview');
+
+class _PlainBody {
+  _PlainBody(
+    this.body,
+    this.formatted,
+    this.format,
+    this.edit,
+    this.redacted,
+    this.value,
+  );
+  final Object? body, formatted, format, edit;
+  final bool redacted;
+  final String value;
+
+  bool matches(Event event) {
+    final content = event.content;
+    return redacted == event.redacted &&
+        body == content['body'] &&
+        formatted == content['formatted_body'] &&
+        format == content['format'] &&
+        identical(edit, content['m.new_content']);
+  }
+}
+
+String _plainBody(Event event) {
+  final cached = _plainCache[event];
+  if (cached != null && cached.matches(event)) return cached.value;
+  final content = event.content;
+  final value = personalPlainFastPath(event) ?? _slowPlainBody(event);
+  _plainCache[event] = _PlainBody(
+    content['body'],
+    content['formatted_body'],
+    content['format'],
+    content['m.new_content'],
+    event.redacted,
+    value,
+  );
+  return value;
+}
+
+String _slowPlainBody(Event event) {
+  debugPreviewSlowPaths++;
+  return event.calcUnlocalizedBody(
     hideReply: true,
     hideEdit: true,
     plaintextBody: true,
     removeMarkdown: true,
-  ),
-);
+  );
+}
+
+// Characters that can start markdown, HTML, entities, emotes, pills,
+// mentions, spoilers, tables or LaTeX; the line start of lists, headings,
+// quotes and rules.
+final _markupChars = RegExp(r'[\\`*_~\[\]<>&|#!:$@\r\n]');
+final _blockStart = RegExp(r'^\s*(\d+[.)]|[-+=>#])');
+
+/// The body itself when markdown could not change it: a single line of
+/// plain text, no HTML body, no edit and not redacted. Null otherwise (the
+/// full SDK path runs). Equal to the full path's output for every input it
+/// accepts (`test/personal/message_preview_test.dart`).
+@visibleForTesting
+String? personalPlainFastPath(Event event) {
+  if (event.redacted) return null;
+  final content = event.content;
+  final formatted = content['formatted_body'];
+  if (formatted is String &&
+      formatted.isNotEmpty &&
+      content['format'] == 'org.matrix.custom.html') {
+    return null;
+  }
+  if (content['m.new_content'] != null) return null;
+  final body = content['body'];
+  if (body is! String || body.isEmpty) return null;
+  if (_markupChars.hasMatch(body) || _blockStart.hasMatch(body)) return null;
+  return body.trim();
+}
 
 String _fallback(Event event, MatrixLocalizations i18n) => _oneLine(
   event.calcLocalizedBodyFallback(

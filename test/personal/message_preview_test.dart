@@ -245,4 +245,117 @@ void main() {
     expect(personalEventPreview(name), isNot(startsWith('You: ')));
     expect(personalPreviewLabel(name), isNotEmpty);
   });
+
+  test('plain-text fast path equals the markdown path over a corpus', () {
+    const corpus = [
+      'Hello there',
+      '  padded words  ',
+      'Numbers 123 and 4.5 are fine',
+      'Question? Yes, really (maybe) - ok',
+      'Zażółć gęślą jaźń',
+      '👍 emoji only',
+      'www.example.invalid site',
+      'Ends with a dot.',
+      'a.b@example.invalid writes',
+      '1. list item',
+      '2) other list',
+      '- dash item',
+      '+ plus item',
+      '> quote',
+      '# heading',
+      'Setext\n===',
+      'line one\nline two',
+      'Tom &amp; Jerry',
+      'R&D',
+      ':smile: emote',
+      '@anna:example.invalid pill',
+      '#room:example.invalid',
+      '[link](https://example.invalid)',
+      '**bold** and _it_',
+      '~~strike~~',
+      '||spoiler||',
+      '`code`',
+      r'$x^2$ latex',
+      '<b>tag</b>',
+      'a | b | c',
+      r'escaped \* star',
+      '---',
+    ];
+    for (final body in corpus) {
+      final event = _event(dm, _partner, {
+        'msgtype': MessageTypes.Text,
+        'body': body,
+      });
+      final slow = event
+          .calcUnlocalizedBody(
+            hideReply: true,
+            hideEdit: true,
+            plaintextBody: true,
+            removeMarkdown: true,
+          )
+          .replaceAll(RegExp(r'\s*\n\s*'), ' ')
+          .trim();
+      final fast = personalPlainFastPath(event);
+      if (fast != null) {
+        expect(fast, slow, reason: 'fast path differs for "$body"');
+      }
+      expect(personalPreviewLabel(event), slow, reason: body);
+    }
+    // Ordinary chat lines take the fast path.
+    for (final body in corpus.take(8)) {
+      expect(
+        personalPlainFastPath(
+          _event(dm, _partner, {'msgtype': MessageTypes.Text, 'body': body}),
+        ),
+        isNotNull,
+        reason: body,
+      );
+    }
+    // HTML bodies, edits and redactions take the full path.
+    expect(
+      personalPlainFastPath(
+        _event(dm, _partner, {
+          'msgtype': MessageTypes.Text,
+          'body': 'plain',
+          'format': 'org.matrix.custom.html',
+          'formatted_body': '<b>plain</b>',
+        }),
+      ),
+      isNull,
+    );
+    expect(
+      personalPlainFastPath(
+        _event(dm, _partner, {
+          'msgtype': MessageTypes.Text,
+          'body': 'plain',
+        }, redacted: true),
+      ),
+      isNull,
+    );
+  });
+
+  test('a preview is computed once per event until its content changes', () {
+    final event = _event(dm, _partner, {
+      'msgtype': MessageTypes.Text,
+      'body': '**Bold** news',
+    });
+    final before = debugPreviewSlowPaths;
+    expect(personalPreviewLabel(event), 'Bold news');
+    expect(debugPreviewSlowPaths, before + 1);
+    for (var i = 0; i < 5; i++) {
+      expect(personalPreviewLabel(event), 'Bold news');
+    }
+    expect(debugPreviewSlowPaths, before + 1);
+    // A local edit of the same instance (or a redaction) is seen.
+    event.content['body'] = '**Other** news';
+    expect(personalPreviewLabel(event), 'Other news');
+    expect(debugPreviewSlowPaths, before + 2);
+    // Plain text never needs the markdown path.
+    final plain = _event(dm, _partner, {
+      'msgtype': MessageTypes.Text,
+      'body': 'See you at five',
+    });
+    expect(personalPreviewLabel(plain), 'See you at five');
+    expect(debugPreviewSlowPaths, before + 2);
+  });
 }
