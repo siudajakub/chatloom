@@ -36,6 +36,13 @@ class SettingsChatView extends StatelessWidget {
             onTap: () => context.push('/rooms/settings/chat/media'),
           ),
           NotionListRow(
+            key: const Key('settings_stickers_row'),
+            leading: const Icon(Icons.sticky_note_2_outlined),
+            title: 'Stickers',
+            subtitle: 'Sticker packs, favourites, import from Telegram',
+            onTap: () => context.push('/rooms/settings/chat/stickers'),
+          ),
+          NotionListRow(
             leading: const Icon(Icons.people_outline),
             title: 'People & merged conversations',
             subtitle: 'Keep one timeline across a person’s networks',

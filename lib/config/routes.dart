@@ -33,6 +33,7 @@ import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/person_route.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_hub.dart';
+import 'package:chatloom/personal/stickers/sticker_settings_page.dart';
 import 'package:chatloom/personal/ui/networks_page.dart';
 import 'package:chatloom/personal/ui/push_diagnostics_page.dart';
 import 'package:chatloom/personal/ui/reminders_page.dart';
@@ -391,6 +392,17 @@ abstract class AppRoutes {
                             context,
                             state,
                             const SettingsMediaPage(),
+                          ),
+                        ),
+                        GoRoute(
+                          path: 'stickers',
+                          pageBuilder: (context, state) => defaultPageBuilder(
+                            context,
+                            state,
+                            StickerSettingsPage(
+                              key: ValueKey(Matrix.of(context).client),
+                              client: Matrix.of(context).client,
+                            ),
                           ),
                         ),
                       ],
