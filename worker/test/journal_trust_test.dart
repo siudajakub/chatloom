@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:convert';
+
 import 'package:matrix/encryption.dart';
 import 'package:matrix/encryption/utils/session_key.dart';
 import 'package:matrix/matrix.dart';
+// ignore: implementation_imports
+import 'package:matrix/src/utils/cached_stream_controller.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:personal_worker/src/engine.dart';
 import 'package:personal_worker/src/journal.dart';
@@ -85,11 +89,16 @@ class _Session implements SessionKey {
 
 class _KeyManager implements KeyManager {
   final sessions = <String, _Session>{};
+  int loads = 0;
   @override
   Future<SessionKey?> loadInboundGroupSession(
     String roomId,
     String sessionId,
-  ) async => sessions[sessionId];
+  ) async {
+    loads++;
+    return sessions[sessionId];
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -137,6 +146,22 @@ class _Client implements Client {
   late final _Room room = _Room(this);
   @override
   Room? getRoomById(String id) => id == _roomId ? room : null;
+  @override
+  final CachedStreamController<Event> onTimelineEvent =
+      CachedStreamController();
+  @override
+  final CachedStreamController<SyncUpdate> onSync = CachedStreamController();
+  final redactions = <String>[];
+  @override
+  Future<String?> redactEvent(
+    String roomId,
+    String eventId,
+    String txnId, {
+    String? reason,
+  }) async {
+    redactions.add(eventId);
+    return r'$redaction';
+  }
 
   void device(String id, {bool verified = true}) =>
       userDeviceKeys[_owner]!.deviceKeys[id] = _Device(
@@ -180,6 +205,39 @@ class _Room implements Room {
   @override
   Membership get membership => Membership.join;
   late final timeline = _Timeline(this);
+  @override
+  final CachedStreamController<String> onSessionKeyReceived =
+      CachedStreamController();
+  final stored = <String, Event>{};
+  @override
+  Future<Event?> getEventById(String eventID) async => stored[eventID];
+
+  /// Bodies the homeserver accepted, by transaction id.
+  final sent = <String, Map<String, dynamic>>{};
+
+  /// Thrown instead of sending the body of this op id (failure injection).
+  final failures = <String, Object>{};
+  final attempts = <String>[];
+  @override
+  Future<String?> sendEvent(
+    Map<String, dynamic> content, {
+    String type = EventTypes.Message,
+    String? txid,
+    Event? inReplyTo,
+    String? editEventId,
+    String? threadRootEventId,
+    String? threadLastEventId,
+    bool displayPendingEvent = true,
+    bool retryOnTransportFailure = true,
+  }) async {
+    final opId = content['opId'] as String;
+    attempts.add(opId);
+    final failure = failures[opId];
+    if (failure != null) throw failure;
+    sent[txid!] = content;
+    return '\$sent-$opId';
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) {
     switch (invocation.memberName) {
@@ -407,5 +465,276 @@ void main() {
     );
     await expectLater(journal.start(), throwsA(isA<WorkerFailure>()));
     expect(store.hasCommand('forged'), isFalse);
+  });
+
+  group('incremental journal (wave 5)', () {
+    late WorkerStore store;
+    late WorkerJournal journal;
+    setUp(() {
+      store = WorkerStore(sqlite3.openInMemory());
+      journal = WorkerJournal(
+        client,
+        _roomId,
+        {'PHONE', 'WORKER'},
+        store,
+        WorkerEngine(store, _NoTransport(), _NoTranscriber()),
+      );
+    });
+    tearDown(() => journal.dispose());
+
+    test(
+      'sync events are processed once, not replayed on every pass',
+      () async {
+        client.room.timeline.events.add(
+          _command(
+            client.room,
+            'first',
+            envelopeDevice: 'PHONE',
+            session: phone,
+          ),
+        );
+        await journal.start();
+        expect(store.hasCommand('first'), isTrue);
+        final loads = client.encryption.keyManager.loads;
+        // Idle passes touch neither trust nor the engine.
+        await journal.reconcile();
+        await journal.reconcile();
+        expect(client.encryption.keyManager.loads, loads);
+        client.onTimelineEvent.add(
+          _command(
+            client.room,
+            'second',
+            envelopeDevice: 'PHONE',
+            session: phone,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        await journal.reconcile();
+        expect(store.hasCommand('second'), isTrue);
+        expect(store.checkpoint(WorkerJournal.checkpointKey), r'$second');
+        final after = client.encryption.keyManager.loads;
+        await journal.reconcile();
+        expect(client.encryption.keyManager.loads, after);
+      },
+    );
+
+    test('an undecryptable command is held instead of pinning the '
+        'checkpoint, and applied once its key arrives', () async {
+      final late = _command(
+        client.room,
+        'late',
+        envelopeDevice: 'PHONE',
+        session: null,
+        sessionId: 'session-late',
+      );
+      final encrypted = Event(
+        room: client.room,
+        eventId: late.eventId,
+        type: EventTypes.Encrypted,
+        senderId: _owner,
+        originServerTs: _t0,
+        content: Map<String, dynamic>.from(late.originalSource!.content),
+      );
+      // Newest first, as in an SDK timeline.
+      client.room.timeline.events.addAll([
+        _command(client.room, 'after', envelopeDevice: 'PHONE', session: phone),
+        encrypted,
+        _command(
+          client.room,
+          'genuine',
+          envelopeDevice: 'PHONE',
+          session: phone,
+        ),
+      ]);
+      await journal.start();
+      expect(store.hasCommand('genuine'), isTrue);
+      expect(store.hasCommand('after'), isTrue);
+      expect(store.hasCommand('late'), isFalse);
+      expect(journal.heldEvents, 1);
+      // Before, the checkpoint stayed before every undecrypted event.
+      expect(store.checkpoint(WorkerJournal.checkpointKey), r'$after');
+      expect(jsonDecode(store.checkpoint(WorkerJournal.heldKey)!), [
+        late.eventId,
+      ]);
+      // The key arrives (direct share from the phone).
+      final session = _Session('session-late', 'curve-PHONE', 'ed-PHONE');
+      session.plaintexts[late.eventId] = Map.of(late.content);
+      client.encryption.keyManager.sessions[session.sessionId] = session;
+      client.room.onSessionKeyReceived.add('session-late');
+      await Future<void>.delayed(Duration.zero);
+      await journal.reconcile();
+      expect(store.hasCommand('late'), isTrue);
+      expect(journal.heldEvents, 0);
+      expect(store.checkpoint(WorkerJournal.checkpointKey), r'$after');
+      expect(jsonDecode(store.checkpoint(WorkerJournal.heldKey)!), isEmpty);
+    });
+
+    test('held events survive a restart and are read again by id', () async {
+      final late = _command(
+        client.room,
+        'late',
+        envelopeDevice: 'PHONE',
+        session: null,
+        sessionId: 'session-late',
+      );
+      final encrypted = Event(
+        room: client.room,
+        eventId: late.eventId,
+        type: EventTypes.Encrypted,
+        senderId: _owner,
+        originServerTs: _t0,
+        content: Map<String, dynamic>.from(late.originalSource!.content),
+      );
+      client.room.timeline.events.addAll([
+        encrypted,
+        _command(
+          client.room,
+          'genuine',
+          envelopeDevice: 'PHONE',
+          session: phone,
+        ),
+      ]);
+      await journal.start();
+      journal.dispose();
+      // Restart: the timeline only holds events after the checkpoint.
+      client.room.timeline.events.clear();
+      client.room.stored[late.eventId] = encrypted;
+      final session = _Session('session-late', 'curve-PHONE', 'ed-PHONE');
+      session.plaintexts[late.eventId] = Map.of(late.content);
+      client.encryption.keyManager.sessions[session.sessionId] = session;
+      final restarted = WorkerJournal(
+        client,
+        _roomId,
+        {'PHONE', 'WORKER'},
+        store,
+        WorkerEngine(store, _NoTransport(), _NoTranscriber()),
+      );
+      addTearDown(restarted.dispose);
+      client.room.timeline.events.add(
+        _command(client.room, 'fresh', envelopeDevice: 'PHONE', session: phone),
+      );
+      await restarted.start();
+      expect(store.hasCommand('late'), isTrue);
+      expect(store.hasCommand('fresh'), isTrue);
+    });
+  });
+
+  group('journal publication (CB-01 hardening)', () {
+    late WorkerStore store;
+    late WorkerJournal journal;
+    var now = DateTime.utc(2026, 10, 21, 12);
+    void enqueue(String id) => store.enqueue(
+      id,
+      PersonalOperation(
+        opId: id,
+        kind: 'worker.heartbeat',
+        entityId: 'worker',
+        createdAt: now,
+        payload: {'healthy': true},
+      ).toJson(),
+    );
+    setUp(() {
+      now = DateTime.utc(2026, 10, 21, 12);
+      client.room.timeline.events.add(
+        _command(
+          client.room,
+          'genuine',
+          envelopeDevice: 'PHONE',
+          session: phone,
+        ),
+      );
+      store = WorkerStore(sqlite3.openInMemory());
+      journal = WorkerJournal(
+        client,
+        _roomId,
+        {'PHONE', 'WORKER'},
+        store,
+        WorkerEngine(store, _NoTransport(), _NoTranscriber()),
+        clock: () => now,
+      );
+    });
+    tearDown(() => journal.dispose());
+
+    test(
+      'an entry refused as too large is parked; the queue continues',
+      () async {
+        for (final id in ['a', 'b', 'c']) {
+          enqueue(id);
+        }
+        client.room.failures['b'] = EventTooLarge(60000, 70000);
+        await journal.flush();
+        expect(client.room.sent.values.map((body) => body['opId']), ['a', 'c']);
+        expect(store.outboxIds, isEmpty);
+        expect(store.parkedCount, 1);
+        final parked = store.db.select('SELECT id, error FROM outbox_parked');
+        expect(parked.single['id'], 'b');
+        expect(parked.single['error'], 'result_too_large');
+        // The homeserver's own refusal counts the same.
+        enqueue('d');
+        client.room.failures['d'] = MatrixException.fromJson({
+          'errcode': 'M_TOO_LARGE',
+          'error': 'synthetic',
+        });
+        enqueue('e');
+        await journal.flush();
+        expect(store.parkedCount, 2);
+        expect(client.room.sent.values.last['opId'], 'e');
+      },
+    );
+
+    test('one entry failing does not block the others; a connection '
+        'failure ends the pass', () async {
+      for (final id in ['a', 'b', 'c', 'd']) {
+        enqueue(id);
+      }
+      client.room.failures['b'] = Exception('synthetic transport failure');
+      await journal.flush();
+      expect(client.room.sent.values.map((body) => body['opId']), [
+        'a',
+        'c',
+        'd',
+      ]);
+      expect(store.outboxIds, ['b']);
+      // Keeps failing while others go through: parked, then queued again
+      // after a while.
+      for (var pass = 0; pass < WorkerJournal.maxEntryFailures; pass++) {
+        enqueue('ok$pass');
+        await journal.flush();
+      }
+      expect(store.outboxIds, isEmpty);
+      expect(store.parkedCount, 1);
+      client.room.failures.remove('b');
+      now = now.add(WorkerJournal.parkedRetry);
+      await journal.flush();
+      expect(store.parkedCount, 0);
+      expect(client.room.sent.values.last['opId'], 'b');
+      // Everything failing (no connection): two attempts, then the pass ends.
+      for (final id in ['x', 'y', 'z']) {
+        enqueue(id);
+        client.room.failures[id] = Exception('offline');
+      }
+      client.room.attempts.clear();
+      await journal.flush();
+      expect(client.room.attempts, ['x', 'y']);
+      expect(store.outboxIds, ['x', 'y', 'z']);
+    });
+
+    test('rate limiting defers the next pass', () async {
+      enqueue('a');
+      enqueue('b');
+      client.room.failures['a'] = MatrixException.fromJson({
+        'errcode': 'M_LIMIT_EXCEEDED',
+        'error': 'synthetic',
+        'retry_after_ms': 30000,
+      });
+      await journal.flush();
+      expect(client.room.attempts, ['a']);
+      client.room.failures.clear();
+      await journal.flush();
+      expect(client.room.attempts, ['a'], reason: 'not before retry_after');
+      now = now.add(const Duration(seconds: 31));
+      await journal.flush();
+      expect(store.outboxIds, isEmpty);
+    });
   });
 }

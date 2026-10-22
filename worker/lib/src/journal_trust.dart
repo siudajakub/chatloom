@@ -35,6 +35,12 @@ class WorkerJournalTrust {
   final Client _client;
   final String? userId;
   final List<VerifiedDeviceKeys> devices;
+
+  /// Identifies the set of [devices]: equal while the same devices are
+  /// pinned, verified and unblocked.
+  String get fingerprint => ([
+    for (final d in devices) '${d.curve25519}|${d.ed25519}',
+  ]..sort()).join(',');
   String? _roomId;
   bool _captured = false;
   final _sessions = <String, MegolmSessionFacts?>{};
