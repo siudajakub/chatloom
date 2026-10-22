@@ -13,4 +13,4 @@ PRODUCT_NAME = Personal Chat
 PRODUCT_BUNDLE_IDENTIFIER = pl.personal.chat
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = ChatLoom, based on FluffyChat. Copyright © 2019-Present FluffyChat authors. AGPL-3.0-or-later.
+PRODUCT_COPYRIGHT = ChatLoom, a modified version of FluffyChat. FluffyChat © 2019-Present FluffyChat authors. AGPL-3.0-or-later.
