@@ -149,9 +149,17 @@ HealthIssue e2eeHealthIssue(E2eeIssue issue) {
   );
 }
 
+/// The network page of [network], where its problem is explained and fixed
+/// (sign in, open the bridge chat).
+String networkRoute(String network) =>
+    '/rooms/settings/networks/${Uri.encodeComponent(network)}';
+
 HealthIssue? bridgeHealthIssue(BridgeHealth health, DateTime now) {
   if (!health.state.isProblem) return null;
-  final room = health.managementRoomId;
+  // The user signed out on purpose: the network page says so, the inbox
+  // does not nag.
+  if (health.userInitiated) return null;
+  final signIn = health.state == BridgeHealthState.loggedOut;
   return HealthIssue(
     source: HealthSource.bridge,
     priority: switch (health.state) {
@@ -161,13 +169,16 @@ HealthIssue? bridgeHealthIssue(BridgeHealth health, DateTime now) {
     },
     title: health.title,
     message: health.describe(now),
-    actionLabel: room == null ? 'Details' : 'Open bridge',
-    action: room == null ? HealthAction.details : HealthAction.openBridgeChat,
+    // The network page, not the raw bot chat (BR-08): it explains the
+    // problem and offers the one fix.
+    actionLabel: signIn ? 'Sign in' : 'Details',
+    action: HealthAction.openRoute,
+    route: networkRoute(health.network),
     severity: health.state == BridgeHealthState.degraded
         ? HealthSeverity.warning
         : HealthSeverity.danger,
     signature: health.signature,
-    roomId: room,
+    roomId: health.managementRoomId,
     network: health.network,
     bridgeState: health.state,
   );

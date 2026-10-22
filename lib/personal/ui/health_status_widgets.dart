@@ -3,6 +3,7 @@ import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/connection_status.dart';
+import 'package:chatloom/personal/inbox_health.dart' show networkRoute;
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -42,10 +43,9 @@ class ChatBridgeNotice extends StatefulWidget {
 
   /// Banner text for [health]; pure, shared with tests.
   static (String title, String message) textFor(BridgeHealth health) {
-    final label = health.label;
     return switch (health.state) {
       BridgeHealthState.loggedOut => (
-        '$label is signed out',
+        health.title,
         'Messages won’t arrive or be delivered until you sign in again.',
       ),
       BridgeHealthState.disconnected => (
@@ -71,11 +71,8 @@ class _ChatBridgeNoticeState extends State<ChatBridgeNotice> {
 
   String _key(BridgeHealth health) => '${widget.room.id}|${health.signature}';
 
-  void _open(BridgeHealth health) {
-    final room = _monitor.managementRoom(health.network);
-    if (room == null) return;
-    context.push('/rooms/${room.id}');
-  }
+  /// The network page explains the problem and offers its fix (BR-08).
+  void _open(BridgeHealth health) => context.push(networkRoute(health.network));
 
   @override
   Widget build(BuildContext context) {
@@ -95,7 +92,6 @@ class _ChatBridgeNoticeState extends State<ChatBridgeNotice> {
             final shown = _last;
             if (shown == null) return const SizedBox.shrink();
             final (title, message) = ChatBridgeNotice.textFor(shown);
-            final canOpen = _monitor.managementRoom(shown.network) != null;
             return Align(
               alignment: Alignment.topCenter,
               child: ConstrainedBox(
@@ -116,8 +112,10 @@ class _ChatBridgeNoticeState extends State<ChatBridgeNotice> {
                             : NotionCalloutTone.danger,
                         title: title,
                         message: message,
-                        actionLabel: canOpen ? 'Open bridge' : null,
-                        onAction: canOpen ? () => _open(shown) : null,
+                        actionLabel: shown.state == BridgeHealthState.loggedOut
+                            ? 'Sign in'
+                            : 'Details',
+                        onAction: () => _open(shown),
                         onDismiss: () =>
                             setState(() => _dismissed.add(_key(shown))),
                         dismissLabel: 'Hide until something changes',

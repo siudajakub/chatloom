@@ -38,7 +38,7 @@ BridgeHealth _bridge(
   final signals = BridgeSignals();
   final event = switch (state) {
     BridgeHealthState.loggedOut => 'BAD_CREDENTIALS',
-    BridgeHealthState.disconnected => 'TRANSIENT_DISCONNECT',
+    BridgeHealthState.disconnected => 'UNKNOWN_ERROR',
     _ => 'CONNECTING',
   };
   signals.addReport(
@@ -121,8 +121,20 @@ void main() {
         'Background worker is offline',
         '1 chat has a message that couldn’t be decrypted',
       ]);
-      expect(issues.first.action, HealthAction.openBridgeChat);
+      // The network page, not the raw bot chat (BR-08).
+      expect(issues.first.action, HealthAction.openRoute);
+      expect(issues.first.route, '/rooms/settings/networks/whatsapp');
+      expect(issues.first.actionLabel, 'Sign in');
       expect(issues[3].message, contains('2 h ago'));
+    });
+
+    test('a sign-out the user made here never nags in the inbox', () {
+      final signals = BridgeSignals()
+        ..signedOutAt = _now.subtract(const Duration(minutes: 1));
+      final health = evaluateBridgeHealth('whatsapp', signals, _now);
+      expect(health.state, BridgeHealthState.loggedOut);
+      expect(health.userInitiated, isTrue);
+      expect(bridgeHealthIssue(health, _now), isNull);
     });
 
     test('while offline only the connection and local problems show', () {
@@ -174,7 +186,10 @@ void main() {
           entry(PushOutcome.error, 9),
         ],
       );
-      expect(pushDeliveryIssue(failing, _now)?.title, 'Notifications are failing');
+      expect(
+        pushDeliveryIssue(failing, _now)?.title,
+        'Notifications are failing',
+      );
       final recovered = PushDiagnosticsSnapshot(
         recent: [entry(PushOutcome.shown, 0), ...failing.recent],
       );
@@ -189,14 +204,20 @@ void main() {
       expect(workerIssue(null, _now), isNull);
       expect(
         workerIssue(
-          WorkerReadiness(receivedAt: _now, healthy: true, transcriptionMedia: 2),
+          WorkerReadiness(
+            receivedAt: _now,
+            healthy: true,
+            transcriptionMedia: 2,
+          ),
           _now,
         ),
         isNull,
       );
       expect(
-        workerIssue(WorkerReadiness(receivedAt: _now, healthy: false), _now)
-            ?.signature,
+        workerIssue(
+          WorkerReadiness(receivedAt: _now, healthy: false),
+          _now,
+        )?.signature,
         'worker:unhealthy',
       );
       expect(
@@ -287,7 +308,14 @@ void main() {
         ),
         GoRoute(
           path: '/rooms/:roomid',
-          builder: (context, state) => const Scaffold(body: Text('Bridge chat')),
+          builder: (context, state) =>
+              const Scaffold(body: Text('Bridge chat')),
+        ),
+        GoRoute(
+          path: '/rooms/settings/networks/:network',
+          builder: (context, state) => Scaffold(
+            body: Text('Network page ${state.pathParameters['network']}'),
+          ),
         ),
       ],
     );
@@ -300,7 +328,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('WhatsApp is signed out'), findsOneWidget);
-    expect(find.text('Open bridge'), findsOneWidget);
+    expect(find.text('Sign in'), findsOneWidget);
     expect(find.text('2 more'), findsOneWidget);
 
     // Offline outranks everything and hides the (stale) bridge problem.
@@ -322,10 +350,10 @@ void main() {
     await tester.tapAt(const Offset(10, 10));
     await tester.pumpAndSettle();
 
-    // The bridge action opens the management room.
-    await tester.tap(find.text('Open bridge'));
+    // The bridge action opens the network page (sign in there).
+    await tester.tap(find.text('Sign in'));
     await tester.pumpAndSettle();
-    expect(find.text('Bridge chat'), findsOneWidget);
+    expect(find.text('Network page whatsapp'), findsOneWidget);
     router.pop();
     await tester.pumpAndSettle();
 
@@ -411,8 +439,9 @@ void main() {
       find.text('Messages won’t be delivered until it reconnects.'),
       findsOneWidget,
     );
-    // No management room known: no dead action.
+    // The action opens the network page, known room or not (BR-08).
     expect(find.text('Open bridge'), findsNothing);
+    expect(find.text('Details'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Hide until something changes'));
     await tester.pumpAndSettle();

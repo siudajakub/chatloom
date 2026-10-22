@@ -44,6 +44,7 @@ class BridgeStateReport {
     this.userAction,
     this.roomId,
     this.remoteName,
+    this.live = false,
   });
 
   /// Canonical network (`whatsapp`, `instagram`, ...).
@@ -67,6 +68,11 @@ class BridgeStateReport {
   /// the account's own phone number or username). Shown only to the account
   /// owner on the Networks page; never logged.
   final String? remoteName;
+
+  /// Read from the bridge's provisioning `whoami` (the login's current
+  /// state) rather than from a notice in the management room. [at] is when
+  /// this device first saw the login in this state.
+  final bool live;
 
   static const _states = {
     'STARTING',
@@ -122,6 +128,60 @@ class BridgeStateReport {
     );
   }
 
+  /// One login of a provisioning `whoami` answer (`logins[]`: `id`, `name`
+  /// and the full bridge `state`), fetched at [fetchedAt]. A login without a
+  /// readable state is null (nothing known about it).
+  static BridgeStateReport? fromLogin({
+    required String network,
+    required String loginId,
+    required String loginName,
+    required Object? state,
+    required DateTime fetchedAt,
+  }) {
+    final parsed = parse(state, network: network, fallback: fetchedAt);
+    if (parsed == null) return null;
+    String? name(String value) =>
+        value.isNotEmpty && value.length <= 64 ? value : null;
+    return BridgeStateReport(
+      network: network,
+      stateEvent: parsed.stateEvent,
+      at: parsed.at,
+      login: loginId.length <= 256 ? loginId : '',
+      error: parsed.error,
+      userAction: parsed.userAction,
+      remoteName: parsed.remoteName ?? name(loginName),
+      live: true,
+    );
+  }
+
+  /// A copy first seen at [since] (the state began before this answer).
+  BridgeStateReport seenSince(DateTime since) => BridgeStateReport(
+    network: network,
+    stateEvent: stateEvent,
+    at: since,
+    login: login,
+    error: error,
+    userAction: userAction,
+    roomId: roomId,
+    remoteName: remoteName,
+    live: live,
+  );
+
+  /// The same state as [other] (an answer that only repeats it).
+  bool sameStateAs(BridgeStateReport other) =>
+      other.stateEvent == stateEvent &&
+      other.error == error &&
+      other.userAction == userAction;
+
+  /// A passing state bridgev2 itself hides for 3 minutes
+  /// (`TransientDisconnectNoticeDelay`): the bridge reconnects on its own.
+  bool get transient => const {
+    'STARTING',
+    'CONNECTING',
+    'TRANSIENT_DISCONNECT',
+    'UNKNOWN_ERROR',
+  }.contains(stateEvent);
+
   BridgeHealthState get state {
     if (userAction == 'RELOGIN') return BridgeHealthState.loggedOut;
     return switch (stateEvent) {
@@ -129,10 +189,11 @@ class BridgeStateReport {
         userAction == 'OPEN_NATIVE'
             ? BridgeHealthState.degraded
             : BridgeHealthState.ok,
-      'CONNECTING' || 'STARTING' => BridgeHealthState.degraded,
-      'TRANSIENT_DISCONNECT' ||
-      'UNKNOWN_ERROR' ||
-      'BRIDGE_UNREACHABLE' => BridgeHealthState.disconnected,
+      // The bridge reconnects by itself: amber, not red.
+      'CONNECTING' ||
+      'STARTING' ||
+      'TRANSIENT_DISCONNECT' => BridgeHealthState.degraded,
+      'UNKNOWN_ERROR' || 'BRIDGE_UNREACHABLE' => BridgeHealthState.disconnected,
       'BAD_CREDENTIALS' ||
       'LOGGED_OUT' ||
       'UNCONFIGURED' => BridgeHealthState.loggedOut,
@@ -182,6 +243,33 @@ class BridgeSignals {
   /// Management room (DM with the bridge bot), if known.
   String? managementRoomId;
 
+  /// Current login states from the provisioning `whoami`, by login id
+  /// (replaced with every answer; empty when the bridge has no login).
+  Map<String, BridgeStateReport> live = const {};
+
+  /// When `whoami` last answered (null: never on this device).
+  DateTime? liveAt;
+
+  /// Since when `whoami` lists no login at all.
+  DateTime? noLoginSince;
+
+  /// A `whoami` request is in flight.
+  bool liveChecking = false;
+
+  /// This device can't ask the bridge (no provisioning route, not a Beeper
+  /// bridge, or the route answered something else).
+  bool liveUnavailable = false;
+
+  /// `whoami` failed repeatedly while other bridges answered: the bridge
+  /// process itself seems down (set by the monitor).
+  DateTime? unreachableSince;
+
+  /// The user signed out of this network from this device (CC-25).
+  DateTime? signedOutAt;
+
+  /// The management room `whoami` reported.
+  String? liveManagementRoomId;
+
   static const maxDeliveries = 8;
 
   bool addReport(BridgeStateReport report) {
@@ -204,6 +292,50 @@ class BridgeSignals {
     deliveries.sort((a, b) => a.at.compareTo(b.at));
     if (deliveries.length > maxDeliveries) deliveries.removeAt(0);
   }
+
+  /// Stores one `whoami` answer fetched at [at]. A login that keeps its
+  /// state keeps the time it was first seen in it, so the 3-minute delay of
+  /// passing states counts from the start, not from the latest answer.
+  void setLive(
+    Iterable<BridgeStateReport> logins,
+    DateTime at, {
+    String? managementRoomId,
+  }) {
+    final previous = live;
+    live = {
+      for (final report in logins)
+        report.login: switch (previous[report.login]) {
+          final old?
+              when old.sameStateAs(report) && old.at.isBefore(report.at) =>
+            report.seenSince(old.at),
+          _ => report,
+        },
+    };
+    liveAt = at;
+    liveUnavailable = false;
+    unreachableSince = null;
+    if (live.isEmpty) {
+      noLoginSince ??= at;
+    } else {
+      noLoginSince = null;
+    }
+    if (managementRoomId != null) liveManagementRoomId = managementRoomId;
+    // Signed in again after a sign-out from this device.
+    final signedOut = signedOutAt;
+    if (signedOut != null &&
+        at.isAfter(signedOut.add(BridgeHealthRules.signOutSettle)) &&
+        live.values.any((report) => report.state == BridgeHealthState.ok)) {
+      signedOutAt = null;
+    }
+  }
+
+  /// [now] is within the time a `whoami` answer stays current (or a newer
+  /// one is on its way, so the last one still stands).
+  bool liveFresh(DateTime now) {
+    final at = liveAt;
+    if (at == null) return false;
+    return liveChecking || now.difference(at) < BridgeHealthRules.liveTtl;
+  }
 }
 
 /// The verdict for one network, with a human reason.
@@ -218,10 +350,34 @@ class BridgeHealth {
     this.since,
     this.managementRoomId,
     this.summary = '',
+    this.stateEvent,
+    this.signedIn = false,
+    this.userInitiated = false,
+    this.checking = false,
+    this.unavailable = false,
   });
 
   final String network;
   final BridgeHealthState state;
+
+  /// The bridge state behind a problem (`BAD_CREDENTIALS`,
+  /// `TRANSIENT_DISCONNECT`, …); null for delivery failures and healthy or
+  /// unknown networks.
+  final String? stateEvent;
+
+  /// A signed-in login is known (from `whoami`, or a bridge notice when the
+  /// bridge can't be asked): the only basis for offering "Sign out".
+  final bool signedIn;
+
+  /// Signed out by the user from this device: shown on the network page and
+  /// in its chats, never as an inbox alert.
+  final bool userInitiated;
+
+  /// Nothing known yet and the bridge is being asked right now.
+  final bool checking;
+
+  /// This device can't ask the bridge for its status.
+  final bool unavailable;
 
   /// "WhatsApp is signed out".
   final String title;
@@ -258,7 +414,12 @@ class BridgeHealth {
       other.signature == signature &&
       other.since == since &&
       other.managementRoomId == managementRoomId &&
-      other.summary == summary;
+      other.summary == summary &&
+      other.stateEvent == stateEvent &&
+      other.signedIn == signedIn &&
+      other.userInitiated == userInitiated &&
+      other.checking == checking &&
+      other.unavailable == unavailable;
 
   @override
   int get hashCode => Object.hash(
@@ -270,6 +431,11 @@ class BridgeHealth {
     since,
     managementRoomId,
     summary,
+    stateEvent,
+    signedIn,
+    userInitiated,
+    checking,
+    unavailable,
   );
 }
 
@@ -285,6 +451,36 @@ abstract final class BridgeHealthRules {
   /// Failures in [failureWindow] (with no delivery or remote message after
   /// them) before the network counts as degraded.
   static const failureThreshold = 2;
+
+  /// How long a `whoami` answer stays current.
+  static const liveTtl = Duration(minutes: 15);
+
+  /// Passing states (reconnecting, an unknown error the bridge retries) show
+  /// only once they last this long, as bridgev2 does for its notices.
+  static const transientDelay = Duration(minutes: 3);
+
+  /// A remote message this recent proves the bridge delivers (when nothing
+  /// fresher is known).
+  static const inboundFresh = Duration(minutes: 30);
+
+  /// After "Sign out of a network", answers this soon may still list the
+  /// login (the bridge has not processed the command yet).
+  static const signOutSettle = Duration(minutes: 2);
+
+  /// While the app is in the foreground, `whoami` is asked this often.
+  static const liveInterval = Duration(minutes: 5);
+
+  /// Retry after a failed `whoami`: doubles from [retryBase] up to
+  /// [retryMax].
+  static const retryBase = Duration(minutes: 1);
+  static const retryMax = Duration(minutes: 30);
+
+  /// A bridge that can't be asked at all is tried again this late.
+  static const unavailableRetry = Duration(minutes: 30);
+
+  /// Consecutive failed `whoami` answers (over at least [transientDelay],
+  /// while other bridges answer) before a bridge counts as not responding.
+  static const unreachableFailures = 3;
 }
 
 /// Compact "for 5 min" / "for 3 h" / "for 2 days".
@@ -300,12 +496,20 @@ String bridgeHealthAge(DateTime since, DateTime now) {
 /// Reduces every signal of [network] to one verdict. Pure: the same signals
 /// and [now] always give the same answer.
 ///
-/// * The worst current login notice wins, unless remote messages arrived
-///   after it (then the bridge evidently works again: a bridge that
-///   restarts does not repeat CONNECTED after an error it forgot).
-/// * Without a problem notice, [BridgeHealthRules.failureThreshold] recent
+/// * A current `whoami` answer is the truth about each login: passing states
+///   ([BridgeStateReport.transient]) count only after
+///   [BridgeHealthRules.transientDelay]; signed-out states count at once; no
+///   login at all is "Not signed in". Without one, the worst login notice
+///   wins, unless remote messages arrived after it (a bridge that restarts
+///   does not repeat CONNECTED after an error it forgot).
+/// * "Sign out" from this device reads as signed out until the bridge
+///   confirms, or [BridgeHealthRules.signOutSettle] has passed.
+/// * Without a problem, [BridgeHealthRules.failureThreshold] recent
 ///   delivery failures with nothing delivered or received since make the
 ///   network degraded.
+/// * Healthy needs evidence: a current `whoami` login that is connected, a
+///   CONNECTED notice, or a recent remote message. Anything else is
+///   [BridgeHealthState.unknown] ("Status unknown"), never "Connected".
 /// * Silence alone never raises an alarm: quiet chats are normal.
 BridgeHealth evaluateBridgeHealth(
   String network,
@@ -314,15 +518,69 @@ BridgeHealth evaluateBridgeHealth(
 ) {
   final label = notionNetworkLabel(network);
   final inbound = signals.lastInbound;
+  final room = signals.managementRoomId ?? signals.liveManagementRoomId;
+  final fresh = signals.liveFresh(now);
+  final liveAt = signals.liveAt;
+  final signedOutAt = signals.signedOutAt;
+  // A sign-out the bridge has not confirmed yet still counts.
+  final pendingSignOut =
+      signedOutAt != null &&
+      (liveAt == null ||
+          !liveAt.isAfter(signedOutAt.add(BridgeHealthRules.signOutSettle)));
+  final candidates = <BridgeStateReport>[
+    if (fresh) ...[
+      ...signals.live.values,
+      // Notices newer than the answer (bridges that send them).
+      for (final report in signals.reports.values)
+        if (report.at.isAfter(liveAt!)) report,
+      if (signals.live.isEmpty)
+        BridgeStateReport(
+          network: network,
+          stateEvent: 'UNCONFIGURED',
+          at: signals.noLoginSince ?? liveAt!,
+          live: true,
+        ),
+    ] else
+      ...signals.reports.values,
+    if (pendingSignOut)
+      BridgeStateReport(
+        network: network,
+        stateEvent: 'LOGGED_OUT',
+        at: signedOutAt,
+        live: true,
+      ),
+    if (signals.unreachableSince case final since? when !pendingSignOut)
+      BridgeStateReport(
+        network: network,
+        stateEvent: 'BRIDGE_UNREACHABLE',
+        at: since,
+        live: true,
+      ),
+  ];
   BridgeStateReport? worst;
-  var anyReport = false;
-  for (final report in signals.reports.values) {
-    anyReport = true;
+  var positive = false;
+  var signedIn = false;
+  for (final report in candidates) {
     final state = report.state;
-    if (!state.isProblem) continue;
+    final passing =
+        report.live &&
+        report.transient &&
+        now.difference(report.at) < BridgeHealthRules.transientDelay;
+    if (state != BridgeHealthState.loggedOut &&
+        report.stateEvent != 'BRIDGE_UNREACHABLE') {
+      signedIn = true;
+    }
+    if (!state.isProblem || passing) {
+      // A login that works, or reconnects within the delay.
+      if (state == BridgeHealthState.ok || passing) positive = true;
+      continue;
+    }
+    // Remote messages after a problem prove the bridge works again; a
+    // current "signed out" answer stands (they may come from another login).
     final healed =
         inbound != null &&
-        inbound.isAfter(report.at.add(BridgeHealthRules.healMargin));
+        inbound.isAfter(report.at.add(BridgeHealthRules.healMargin)) &&
+        !(report.live && state == BridgeHealthState.loggedOut);
     if (healed) continue;
     if (worst == null ||
         state.severity > worst.state.severity ||
@@ -331,27 +589,46 @@ BridgeHealth evaluateBridgeHealth(
       worst = report;
     }
   }
-  final room = signals.managementRoomId;
+  if (pendingSignOut) signedIn = false;
+  final userInitiated = signedOutAt != null;
   if (worst != null) {
     final state = worst.state;
+    final unconfigured = worst.stateEvent == 'UNCONFIGURED';
+    final unreachable = worst.stateEvent == 'BRIDGE_UNREACHABLE';
+    final outdated = worst.error == 'wa-client-outdated';
     final (title, reason, summary) = switch (state) {
+      BridgeHealthState.loggedOut when userInitiated => (
+        'You signed out of $label',
+        'Sign in again to get $label messages here.',
+        'Signed out',
+      ),
       BridgeHealthState.loggedOut => (
-        '$label is signed out',
-        worst.stateEvent == 'UNCONFIGURED'
+        unconfigured ? '$label isn’t signed in' : '$label is signed out',
+        unconfigured
             ? 'No $label account is signed in to the bridge. Messages won’t '
-                  'arrive until you sign in in the bridge chat.'
-            : 'Messages won’t arrive until you sign in again in the bridge '
-                  'chat.',
-        worst.stateEvent == 'UNCONFIGURED' ? 'Not signed in' : 'Signed out',
+                  'arrive until you sign in.'
+            : 'Messages won’t arrive until you sign in again.',
+        unconfigured ? 'Not signed in' : 'Signed out',
+      ),
+      BridgeHealthState.disconnected when outdated => (
+        '$label bridge needs an update',
+        '$label stopped accepting this bridge version. Messages won’t arrive '
+            'until the bridge is updated.',
+        'Bridge needs an update',
+      ),
+      // Our own guess from failing requests says "not responding"; the
+      // server's BRIDGE_UNREACHABLE says the process isn't running.
+      BridgeHealthState.disconnected when unreachable => (
+        worst.live
+            ? '$label bridge isn’t responding'
+            : '$label bridge isn’t running',
+        'Messages may not arrive or be delivered until it reconnects.',
+        worst.live ? 'Bridge isn’t responding' : 'Bridge isn’t running',
       ),
       BridgeHealthState.disconnected => (
-        worst.stateEvent == 'BRIDGE_UNREACHABLE'
-            ? '$label bridge isn’t running'
-            : '$label is disconnected',
+        '$label is disconnected',
         'Messages may not arrive or be delivered until it reconnects.',
-        worst.stateEvent == 'BRIDGE_UNREACHABLE'
-            ? 'Bridge isn’t running'
-            : 'Disconnected',
+        'Disconnected',
       ),
       _ =>
         worst.userAction == 'OPEN_NATIVE'
@@ -374,9 +651,15 @@ BridgeHealth evaluateBridgeHealth(
       summary: summary,
       since: worst.at,
       managementRoomId: room,
-      signature:
-          'bridge:$network:${worst.stateEvent}:'
-          '${worst.error ?? ''}:${worst.at.millisecondsSinceEpoch ~/ 1000}',
+      stateEvent: worst.stateEvent,
+      signedIn: signedIn,
+      userInitiated: userInitiated && state == BridgeHealthState.loggedOut,
+      // Live states repeat with every answer: their identity is the state,
+      // not a timestamp, so "hide until something changes" holds.
+      signature: worst.live
+          ? 'bridge:$network:${worst.stateEvent}:${worst.error ?? ''}'
+          : 'bridge:$network:${worst.stateEvent}:'
+                '${worst.error ?? ''}:${worst.at.millisecondsSinceEpoch ~/ 1000}',
     );
   }
   final recentFailures = <BridgeDelivery>[];
@@ -398,21 +681,76 @@ BridgeHealth evaluateBridgeHealth(
           'bridge may be disconnected.',
       since: first,
       managementRoomId: room,
+      signedIn: signedIn,
       signature:
           'bridge:$network:delivery:${first.millisecondsSinceEpoch ~/ 1000}',
     );
   }
+  if (inbound != null &&
+      now.difference(inbound) < BridgeHealthRules.inboundFresh) {
+    positive = true;
+  }
+  if (positive) {
+    return BridgeHealth(
+      network: network,
+      state: BridgeHealthState.ok,
+      title: '$label is connected',
+      summary: 'Connected',
+      reason: '',
+      managementRoomId: room,
+      signedIn: signedIn,
+      signature: 'bridge:$network:ok',
+    );
+  }
+  final checking = signals.liveChecking && liveAt == null;
+  final unavailable = signals.liveUnavailable && !fresh;
   return BridgeHealth(
     network: network,
-    state: anyReport || inbound != null
-        ? BridgeHealthState.ok
-        : BridgeHealthState.unknown,
-    title: '$label is connected',
-    summary: 'Connected',
-    reason: '',
+    state: BridgeHealthState.unknown,
+    title: checking ? 'Checking $label…' : '$label status unknown',
+    summary: checking ? 'Checking…' : 'Status unknown',
+    reason: unavailable
+        ? 'ChatLoom can’t check this bridge from this device.'
+        : checking
+        ? ''
+        : 'The bridge hasn’t reported its status recently.',
     managementRoomId: room,
-    signature: 'bridge:$network:ok',
+    signedIn: signedIn,
+    checking: checking,
+    unavailable: unavailable,
+    signature: 'bridge:$network:unknown',
   );
+}
+
+/// When [evaluateBridgeHealth] of [signals] next changes without a new
+/// signal (a passing state reaches its delay, a remote message or an answer
+/// stops being recent, a failure leaves the window), or null. The monitor
+/// re-evaluates once at that moment instead of polling.
+DateTime? nextBridgeHealthChange(BridgeSignals signals, DateTime now) {
+  DateTime? next;
+  void consider(DateTime at) {
+    if (!at.isAfter(now)) return;
+    if (next == null || at.isBefore(next!)) next = at;
+  }
+
+  for (final report in signals.live.values) {
+    if (report.transient)
+      consider(report.at.add(BridgeHealthRules.transientDelay));
+  }
+  final inbound = signals.lastInbound;
+  if (inbound != null) consider(inbound.add(BridgeHealthRules.inboundFresh));
+  final liveAt = signals.liveAt;
+  if (liveAt != null) consider(liveAt.add(BridgeHealthRules.liveTtl));
+  final signedOut = signals.signedOutAt;
+  if (signedOut != null) {
+    consider(signedOut.add(BridgeHealthRules.signOutSettle));
+  }
+  for (final delivery in signals.deliveries) {
+    if (delivery.failed) {
+      consider(delivery.at.add(BridgeHealthRules.failureWindow));
+    }
+  }
+  return next;
 }
 
 /// Network of a bridge bot from its user id when no room declares it, e.g.
