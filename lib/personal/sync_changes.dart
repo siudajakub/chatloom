@@ -264,7 +264,7 @@ String syncEntityTitle(
         '${notionNetworkLabel(entity.substring('network-policy:'.length))}';
   }
   if (entity.startsWith('draft-copy:')) return 'Saved draft copy';
-  if (entity.startsWith('bookmark:')) return 'Saved transcript';
+  if (entity.startsWith('bookmark:')) return 'Bookmark';
   return 'Private setting';
 }
 
