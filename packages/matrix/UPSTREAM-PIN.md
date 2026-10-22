@@ -91,6 +91,26 @@ the server requests are unchanged. Regression: app
 `test/personal/outgoing_media_test.dart` (send order and retries through the
 app's media queue) and `test/notion/attachment_flow_test.dart`.
 
+### 2026-10-22 — stable and bridge-split image packs (MSC2545)
+
+`Room.getImagePacks` (`lib/src/utils/image_pack_extension.dart`) read only
+the unstable `im.ponies.room_emotes`, `im.ponies.emote_rooms` and
+`im.ponies.user_emotes`. It now also reads the stable `m.room.image_pack`
+room state, `m.image_pack.rooms` and `m.image_pack` account data, which is
+what mautrix bridges write when they import a pack
+(`bridgev2/provisionutil/imagepack.go`). Packs larger than ~62 KB that a
+bridge split into several state events (`fi.mau.combined_pack_key`,
+`_index`, `_count`, display name " (part N)") are joined again under the
+combined key, in part order, without the suffix; a pack whose parts have
+not all arrived yet keeps the parts that have. A state key present in both
+state types keeps the stable pack. Unparseable pack content is skipped
+instead of throwing. New public helpers: the type constants,
+`combineImagePackStates` and `roomImagePacks` (used by the app's sticker
+library). Read-only: nothing is written, slugs and the usage filter are as
+upstream. The app lists `m.room.image_pack` in `importantStateEvents`
+(`lib/utils/client_manager.dart`). Regression: app
+`test/personal/stickers/image_pack_parsing_test.dart`.
+
 ### 2026-10-22 — `sendFileEvent`: no thumbnail that is the file itself
 
 The app's image resizer (`customImageResizer`, Android and web) keeps an
