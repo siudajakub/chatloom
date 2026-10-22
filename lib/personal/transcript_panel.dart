@@ -368,7 +368,12 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
               children: [
                 Flexible(
                   child: ExcludeSemantics(
-                    child: NotionShimmerLines(color: foreground),
+                    child: TranscriptBusyLines(
+                      color: foreground,
+                      // A delay already explains itself below.
+                      explainLongWait: delay == null,
+                      caption: (text) => _caption(text, foreground),
+                    ),
                   ),
                 ),
                 if (manual)
@@ -649,4 +654,47 @@ class _ExpandableTranscriptState extends State<_ExpandableTranscript> {
       },
     );
   }
+}
+
+/// The transcript placeholder: shimmering lines for at most
+/// [NotionMotion.loopCap]; a wait longer than that (a queued job while the
+/// worker is offline) rests on static lines with a calm "Transcribing…"
+/// caption, so no frame is drawn while nothing changes.
+class TranscriptBusyLines extends StatefulWidget {
+  const TranscriptBusyLines({
+    super.key,
+    required this.color,
+    required this.caption,
+    this.explainLongWait = true,
+  });
+
+  final Color color;
+  final Widget Function(String text) caption;
+  final bool explainLongWait;
+
+  /// Caption of a long wait.
+  static const longWaitText = 'Transcribing…';
+
+  @override
+  State<TranscriptBusyLines> createState() => _TranscriptBusyLinesState();
+}
+
+class _TranscriptBusyLinesState extends State<TranscriptBusyLines> {
+  bool _rested = false;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      NotionShimmerLines(
+        color: widget.color,
+        onRest: () {
+          if (mounted) setState(() => _rested = true);
+        },
+      ),
+      if (_rested && widget.explainLongWait)
+        widget.caption(TranscriptBusyLines.longWaitText),
+    ],
+  );
 }

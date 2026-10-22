@@ -14,7 +14,8 @@ import 'notion_tokens.dart';
 ///
 /// Each line is as tall as one line of [style], so the text that replaces
 /// the placeholder grows the slot as little as possible. Static bars under
-/// reduced motion; the loop stops under `TickerMode` off.
+/// reduced motion and after [maxDuration]; the loop stops under `TickerMode`
+/// off.
 ///
 /// ```dart
 /// NotionShimmerLines(color: bubbleText, lines: 2)
@@ -26,7 +27,16 @@ class NotionShimmerLines extends StatefulWidget {
     this.lines = 2,
     this.style = NotionType.callout,
     this.width = defaultWidth,
+    this.maxDuration = NotionMotion.loopCap,
+    this.onRest,
   }) : assert(lines > 0);
+
+  /// The sweep rests on static bars after this long (null: never).
+  final Duration? maxDuration;
+
+  /// Called once when the sweep rested after [maxDuration], so the owner
+  /// can explain a wait that takes unusually long.
+  final VoidCallback? onRest;
 
   /// Defaults to `context.notion.colors.text`.
   final Color? color;
@@ -59,9 +69,28 @@ class _NotionShimmerLinesState extends State<NotionShimmerLines>
     duration: NotionShimmerLines.period,
   );
 
+  bool _rested = false;
+
   void _sync() {
-    if (!NotionMotion.reduced(context)) {
-      if (!_loop.isAnimating) _loop.repeat();
+    if (!NotionMotion.reduced(context) && !_rested) {
+      if (!_loop.isAnimating) {
+        final cap = widget.maxDuration;
+        _loop
+            .repeat(
+              count: cap == null
+                  ? null
+                  : NotionMotion.loopCount(NotionShimmerLines.period, cap: cap),
+            )
+            // Completes only at the cap; a stopped loop never completes.
+            .then((_) {
+              if (!mounted) return;
+              setState(() {
+                _rested = true;
+                _loop.value = 0;
+              });
+              widget.onRest?.call();
+            });
+      }
     } else if (_loop.isAnimating || _loop.value != 0) {
       _loop
         ..stop()
@@ -133,7 +162,11 @@ class _ShimmerLinesPainter extends CustomPainter {
       final t = rtl ? 1 - animation.value : animation.value;
       final centre = -.35 + t * 1.7;
       paint.shader = LinearGradient(
-        colors: [base, color.withValues(alpha: color.a * .42), base],
+        colors: [
+          base,
+          color.withValues(alpha: color.a * .42),
+          base,
+        ],
         stops: [
           (centre - .18).clamp(0.0, 1.0),
           centre.clamp(0.0, 1.0),

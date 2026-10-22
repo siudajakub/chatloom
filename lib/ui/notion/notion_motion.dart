@@ -44,6 +44,21 @@ abstract final class NotionMotion {
   /// How long a loader stays invisible, so fast operations never flash one.
   static const Duration loaderGrace = Duration(milliseconds: 250);
 
+  /// Longest time a spinner or a content loop (shimmer, typing dots) keeps
+  /// animating; then it rests on a static frame, so a wait that never ends
+  /// (failed media, an offline worker) stops drawing frames.
+  static const Duration loopCap = Duration(seconds: 30);
+
+  /// Longest time a live-state loop ([NotionPulse]: recording, a ringing
+  /// call) keeps animating before it rests.
+  static const Duration liveLoopCap = Duration(minutes: 2);
+
+  /// Repetitions of a loop of [period] that fit in [cap] (at least one).
+  static int loopCount(Duration period, {Duration cap = loopCap}) =>
+      period <= Duration.zero
+      ? 1
+      : (cap.inMicroseconds / period.inMicroseconds).ceil().clamp(1, 1 << 20);
+
   /// Total length of a [NotionRowHighlight] flash.
   static const Duration highlight = Duration(milliseconds: 900);
 

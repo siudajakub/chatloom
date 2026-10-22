@@ -665,18 +665,20 @@ class _NotionDelayedRevealState extends State<NotionDelayedReveal>
 
 /// A spinner that appears only when the wait is long enough to notice
 /// ([NotionMotion.loaderGrace]); its square is reserved from the start, so
-/// nothing shifts when it shows up.
+/// nothing shifts when it shows up. After [maxSpin] it freezes on its last
+/// frame (a static ring): a wait that never ends draws no more frames.
 ///
 /// ```dart
 /// if (loading) const NotionDelayedSpinner()
 /// ```
-class NotionDelayedSpinner extends StatelessWidget {
+class NotionDelayedSpinner extends StatefulWidget {
   const NotionDelayedSpinner({
     super.key,
     this.size = NotionSize.icon,
     this.strokeWidth = 2,
     this.color,
     this.delay = NotionMotion.loaderGrace,
+    this.maxSpin = NotionMotion.loopCap,
   });
 
   final double size;
@@ -686,14 +688,51 @@ class NotionDelayedSpinner extends StatelessWidget {
   final Color? color;
   final Duration delay;
 
+  /// How long the ring spins once shown; null spins until removed.
+  final Duration? maxSpin;
+
+  @override
+  State<NotionDelayedSpinner> createState() => _NotionDelayedSpinnerState();
+}
+
+class _NotionDelayedSpinnerState extends State<NotionDelayedSpinner>
+    with SingleTickerProviderStateMixin {
+  AnimationController? _cap;
+  bool _rested = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final maxSpin = widget.maxSpin;
+    if (maxSpin == null) return;
+    // Ticker-driven (no timer): it also waits while `TickerMode` is off.
+    _cap = AnimationController(
+      vsync: this,
+      duration: widget.delay + NotionMotion.short + maxSpin,
+    );
+    _cap!.forward().then((_) {
+      if (mounted) setState(() => _rested = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _cap?.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) => SizedBox.square(
-    dimension: size,
-    child: NotionDelayedReveal(
-      delay: delay,
-      child: CircularProgressIndicator(
-        strokeWidth: strokeWidth,
-        color: color ?? context.notion.colors.textSecondary,
+    dimension: widget.size,
+    child: TickerMode(
+      // Muting the indicator's own ticker keeps its last frame on screen.
+      enabled: !_rested,
+      child: NotionDelayedReveal(
+        delay: widget.delay,
+        child: CircularProgressIndicator(
+          strokeWidth: widget.strokeWidth,
+          color: widget.color ?? context.notion.colors.textSecondary,
+        ),
       ),
     ),
   );
