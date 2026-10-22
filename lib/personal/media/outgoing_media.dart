@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
-import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
@@ -115,6 +115,16 @@ abstract final class OutgoingEcho {
 
   static Future<Uint8List?> getFile(Room room, Uri key) =>
       debugWriter?.getFile(room, key) ?? room.client.database.getFile(key);
+
+  /// Drops this device's copy once its file is sent or its bubble deleted.
+  static Future<void> deleteFile(Room room, Uri key) =>
+      debugWriter?.deleteFile(room, key) ??
+      room.client.database.deleteFile(key).then<void>((_) {});
+
+  /// The largest copy [storeFile] keeps (the encrypted cache skips bigger
+  /// files silently).
+  static int maxFileSize(Room room) =>
+      debugWriter?.maxFileSize ?? room.client.database.maxFileSize;
 }
 
 /// See [OutgoingEcho.debugWriter].
@@ -123,6 +133,8 @@ abstract class OutgoingEchoWriter {
   Future<Event?> read(Room room, String transactionId);
   Future<void> storeFile(Room room, Uri key, Uint8List bytes);
   Future<Uint8List?> getFile(Room room, Uri key);
+  Future<void> deleteFile(Room room, Uri key);
+  int get maxFileSize;
 }
 
 /// [file] with its pixel size when it is an image without one: read from
@@ -183,20 +195,47 @@ typedef OutgoingMediaPrepare =
 ///   with the upload progress in the bubble;
 /// - the sends of one chat leave in the order they were made;
 /// - a failure stays in its bubble ("Not sent · Tap to retry"); nothing
-///   blocks the composer, and no dialog waits for the server.
+///   blocks the composer, and no dialog waits for the server;
+/// - one job per file: while it runs (queued, preparing, uploading, waiting
+///   out a rate limit) the bubble says "Sending…" and offers neither Retry
+///   nor Delete, and a Retry of a file already uploaded resends only its
+///   event, without the bytes.
 ///
 /// Encryption, transaction IDs and retries are the SDK's own
 /// (`Room.sendFileEvent`); this class only orders the work and shows it.
 abstract final class OutgoingMedia {
   static final _tails = <String, Future<void>>{};
   static final _failures = <String, String>{};
+
+  /// The job of each file this process is sending, by [_jobKey].
+  static final _jobs = <String, Future<String>>{};
+
+  /// Files whose bubble was deleted while their job was queued or waiting:
+  /// the job never starts (or restarts) their upload.
+  static final _discarded = <String>{};
+
+  /// Files too large for the encrypted cache ([OutgoingEcho.maxFileSize]),
+  /// kept in memory until sent or deleted so that Retry works in this
+  /// session (after a restart such a file has to be picked again). Oldest
+  /// first, at most [maxHeldBytes] beyond the files a job still sends.
+  static final _held = <String, (MatrixFile, MatrixImageFile?)>{};
+  static const maxHeldBytes = 256 * 1024 * 1024;
   static int _running = 0;
 
   static String _roomKey(Room room) =>
       '${identityHashCode(room.client)}|${room.id}';
+  static String _jobKey(Room room, String id) => '${_roomKey(room)}|$id';
+  static String _idOf(Event event) => event.transactionId ?? event.eventId;
 
   /// Why the send of [transactionId] failed (plain language), if known.
   static String? failureOf(String transactionId) => _failures[transactionId];
+
+  /// Whether this process still sends [event]'s file (queued, preparing,
+  /// uploading or waiting out a rate limit). It then ends as sent or as
+  /// "Not sent" by itself: Retry would start a second job, and Delete could
+  /// not stop an upload already on its way.
+  static bool isActive(Event event) =>
+      _jobs.containsKey(_jobKey(event.room, _idOf(event)));
 
   /// Shows [file] in [room] at once and sends it in the background.
   /// Returns when the bubble is visible; throws (and shows nothing) only
@@ -215,6 +254,10 @@ abstract final class OutgoingMedia {
   }) async {
     final client = room.client;
     final id = txid ?? client.generateUniqueTransactionId();
+    final key = _jobKey(room, id);
+    // The same attempt twice (a repeated tap) is one job and one bubble.
+    final running = _jobs[key];
+    if (running != null) return OutgoingMediaTicket(id, running);
     final relation = _relation(
       inReplyTo: inReplyTo,
       threadRootEventId: threadRootEventId,
@@ -229,6 +272,7 @@ abstract final class OutgoingMedia {
     };
     final at = DateTime.now();
     _failures.remove(id);
+    _discarded.remove(key);
     await OutgoingEcho.storeFile(room, _fileKey(id), file.bytes);
     if (thumbnail != null) {
       await OutgoingEcho.storeFile(room, _thumbnailKey(id), thumbnail.bytes);
@@ -258,16 +302,23 @@ abstract final class OutgoingMedia {
       OutgoingEcho.release(room, id);
       rethrow;
     }
+    _hold(room, key, file, thumbnail);
     final accepted = _enqueue(room, id, () async {
       var upload = file;
       var preview = thumbnail;
       if (prepare != null) {
         try {
           (upload, preview) = await prepare();
+        } on MatrixException {
+          // A deliberate refusal (e.g. the video is still too large) is
+          // told as such, not as "could not be prepared".
+          rethrow;
         } catch (_) {
           throw const _PrepareFailed();
         }
         preview ??= thumbnail;
+        // Retry sends what was prepared (the SDK caches the same bytes).
+        _hold(room, key, upload, preview);
       }
       return room.sendFileEvent(
         upload,
@@ -283,48 +334,201 @@ abstract final class OutgoingMedia {
     return OutgoingMediaTicket(id, accepted);
   }
 
-  /// Sends the failed file of [event] again from this device's copy, with
-  /// its original transaction ID (never a second message).
+  /// Sends the failed file of [event] again with its original transaction
+  /// ID (never a second message): only its event when the file is already
+  /// on the server (the final send failed), otherwise this device's copy
+  /// with the original metadata, reply and thread. While its job still runs
+  /// this returns that job instead of starting another one.
   static Future<OutgoingMediaTicket> retry(Event event) async {
     final room = event.room;
-    final id = event.transactionId ?? event.eventId;
-    final bytes = await OutgoingEcho.getFile(room, _fileKey(id));
-    if (bytes == null || bytes.isEmpty) throw const OutgoingMediaUnavailable();
-    final thumbnailBytes = await OutgoingEcho.getFile(room, _thumbnailKey(id));
-    final info = event.infoMap;
-    final file = MatrixFile(
-      bytes: bytes,
-      name: event.content.tryGet<String>('filename') ?? event.body,
-      mimeType: info.tryGet<String>('mimetype'),
-    ).detectFileType;
-    final thumbnail = thumbnailBytes == null
-        ? null
-        : MatrixImageFile(
-            bytes: thumbnailBytes,
-            name: '${file.name}.thumbnail',
-            mimeType: event.thumbnailInfoMap.tryGet<String>('mimetype'),
-          );
+    final id = _idOf(event);
+    final key = _jobKey(room, id);
+    final running = _jobs[key];
+    if (running != null) return OutgoingMediaTicket(id, running);
+    // Reserved before the first await: a second tap joins this retry, and
+    // a Delete from now on stops it.
+    final reserved = Completer<String>();
+    _jobs[key] = reserved.future..ignore();
+    _discarded.remove(key);
+    var owned = false;
+    try {
+      final transport = await _retryTransport(event, id, key);
+      _failures.remove(id);
+      OutgoingEcho.own(room, id);
+      owned = true;
+      await OutgoingEcho.setStatus(room, id, EventStatus.sending);
+      final job = _enqueue(room, id, transport);
+      reserved.complete(job);
+      return OutgoingMediaTicket(id, job);
+    } catch (error, stack) {
+      if (identical(_jobs[key], reserved.future)) {
+        _jobs.remove(key);
+        if (owned) OutgoingEcho.release(room, id);
+      }
+      if (!reserved.isCompleted) reserved.completeError(error, stack);
+      rethrow;
+    }
+  }
+
+  static Future<Future<String?> Function()> _retryTransport(
+    Event event,
+    String id,
+    String key,
+  ) async {
+    final room = event.room;
+    if (_uploaded(event.content)) {
+      // Upload done, final send failed: the stored event is complete (URL,
+      // keys, reply and thread), so the same event goes again.
+      final content = Map<String, dynamic>.from(
+        jsonDecode(jsonEncode(event.content)) as Map,
+      );
+      return () => room.sendEvent(content, txid: id);
+    }
+    final held = _held[key];
+    final MatrixFile file;
+    final MatrixImageFile? thumbnail;
+    if (held != null) {
+      (file, thumbnail) = held;
+    } else {
+      final bytes = await OutgoingEcho.getFile(room, _fileKey(id));
+      if (bytes == null || bytes.isEmpty) {
+        throw const OutgoingMediaUnavailable();
+      }
+      final thumbnailBytes = await OutgoingEcho.getFile(
+        room,
+        _thumbnailKey(id),
+      );
+      file = _typedFile(event, bytes);
+      final preview = event.thumbnailInfoMap;
+      thumbnail = thumbnailBytes == null
+          ? null
+          : MatrixImageFile(
+              bytes: thumbnailBytes,
+              name: '${file.name}.thumbnail',
+              mimeType: preview.tryGet<String>('mimetype'),
+              width: preview.tryGet<int>('w'),
+              height: preview.tryGet<int>('h'),
+            );
+    }
     final unsigned = event.unsigned ?? const <String, dynamic>{};
     final replyId = unsigned['in_reply_to'];
     final reply = replyId is String ? await room.getEventById(replyId) : null;
     final extra = unsigned['extra_content'];
     final shrink = unsigned['shrink_image_max_dimension'];
-    _failures.remove(id);
-    OutgoingEcho.own(room, id);
-    await OutgoingEcho.setStatus(room, id, EventStatus.sending);
-    final accepted = _enqueue(
-      room,
-      id,
-      () => room.sendFileEvent(
-        file,
-        txid: id,
-        inReplyTo: reply,
-        thumbnail: thumbnail,
-        shrinkImageMaxDimension: shrink is int ? shrink : null,
-        extraContent: extra is Map ? extra.cast<String, dynamic>() : null,
-      ),
+    final thread = _thread(event.content);
+    return () => room.sendFileEvent(
+      file,
+      txid: id,
+      inReplyTo: reply,
+      thumbnail: thumbnail,
+      shrinkImageMaxDimension: shrink is int ? shrink : null,
+      extraContent: extra is Map ? extra.cast<String, dynamic>() : null,
+      threadRootEventId: thread?.$1,
+      threadLastEventId: thread?.$2,
     );
-    return OutgoingMediaTicket(id, accepted);
+  }
+
+  /// The user deleted the unsent bubble of [event]: a job that has not
+  /// started its upload yet (queued, or waiting out a rate limit) never
+  /// sends it, and this device's copies of the file are dropped.
+  static Future<void> discard(Event event) async {
+    final room = event.room;
+    final id = _idOf(event);
+    final key = _jobKey(room, id);
+    _failures.remove(id);
+    if (_jobs.containsKey(key)) {
+      // The job drops the copies when it ends.
+      _discarded.add(key);
+      return;
+    }
+    _held.remove(key);
+    await _forgetCopies(room, id);
+  }
+
+  /// Whether the file of [content] is on the server already (the SDK wrote
+  /// the final content into the echo before its last send failed).
+  static bool _uploaded(Map<String, dynamic> content) {
+    final file = content['file'];
+    return content['url'] is String || (file is Map && file['url'] is String);
+  }
+
+  /// The file of a failed echo with the metadata it was sent with (size,
+  /// duration, blurhash), as the SDK's own `Event.sendAgain` rebuilds it.
+  static MatrixFile _typedFile(Event event, Uint8List bytes) {
+    final info = event.infoMap;
+    final name = event.content.tryGet<String>('filename') ?? event.body;
+    final mimeType = info.tryGet<String>('mimetype');
+    return switch (event.messageType) {
+      MessageTypes.Image => MatrixImageFile(
+        bytes: bytes,
+        name: name,
+        mimeType: mimeType,
+        width: info.tryGet<int>('w'),
+        height: info.tryGet<int>('h'),
+        blurhash: info.tryGet<String>('xyz.amorgan.blurhash'),
+      ),
+      MessageTypes.Video => MatrixVideoFile(
+        bytes: bytes,
+        name: name,
+        mimeType: mimeType,
+        width: info.tryGet<int>('w'),
+        height: info.tryGet<int>('h'),
+        duration: info.tryGet<int>('duration'),
+      ),
+      MessageTypes.Audio => MatrixAudioFile(
+        bytes: bytes,
+        name: name,
+        mimeType: mimeType,
+        duration: info.tryGet<int>('duration'),
+      ),
+      _ => MatrixFile(bytes: bytes, name: name, mimeType: mimeType),
+    };
+  }
+
+  /// The thread root (and the event a falling-back reply points to) of a
+  /// threaded echo, so a retried file stays in its thread.
+  static (String, String?)? _thread(Map<String, dynamic> content) {
+    final relation = content['m.relates_to'];
+    if (relation is! Map || relation['rel_type'] != RelationshipTypes.thread) {
+      return null;
+    }
+    final root = relation['event_id'];
+    if (root is! String) return null;
+    final reply = relation['m.in_reply_to'];
+    final last = relation['is_falling_back'] == true && reply is Map
+        ? reply['event_id']
+        : null;
+    return (root, last is String ? last : null);
+  }
+
+  /// Keeps [file] in memory when the encrypted cache cannot hold it.
+  static void _hold(
+    Room room,
+    String key,
+    MatrixFile file,
+    MatrixImageFile? thumbnail,
+  ) {
+    _held.remove(key);
+    if (file.bytes.length <= OutgoingEcho.maxFileSize(room)) return;
+    _held[key] = (file, thumbnail);
+    var total = 0;
+    for (final held in _held.values) {
+      total += held.$1.bytes.length;
+    }
+    for (final other in _held.keys.toList()) {
+      if (total <= maxHeldBytes) break;
+      if (other == key || _jobs.containsKey(other)) continue;
+      total -= _held.remove(other)!.$1.bytes.length;
+    }
+  }
+
+  static Future<void> _forgetCopies(Room room, String id) async {
+    try {
+      await OutgoingEcho.deleteFile(room, _fileKey(id));
+      await OutgoingEcho.deleteFile(room, _thumbnailKey(id));
+    } catch (_) {
+      // The cache's own expiry removes it later.
+    }
   }
 
   static Uri _fileKey(String id) =>
@@ -357,13 +561,16 @@ abstract final class OutgoingMedia {
     String id,
     Future<String?> Function() transport,
   ) {
-    final key = _roomKey(room);
-    final previous = _tails[key] ?? Future<void>.value();
-    final job = previous.then((_) async {
+    final roomKey = _roomKey(room);
+    final key = _jobKey(room, id);
+    final previous = _tails[roomKey] ?? Future<void>.value();
+    late final Future<String> job;
+    job = previous.then((_) async {
       _started();
       try {
         String? eventId;
         try {
+          _checkDiscarded(key);
           eventId = await UploadProgress.track(id, transport);
         } on MatrixException catch (error) {
           // One automatic retry after a rate limit, with the same txid.
@@ -371,15 +578,26 @@ abstract final class OutgoingMedia {
           if (error.error != MatrixError.M_LIMIT_EXCEEDED || wait == null) {
             rethrow;
           }
-          await Future<void>.delayed(Duration(milliseconds: wait + 1000));
+          // Still this job's file: the bubble stays "Sending…" while it
+          // waits (the SDK marked it "Not sent"), without Retry or Delete.
           await OutgoingEcho.setStatus(room, id, EventStatus.sending);
+          await Future<void>.delayed(Duration(milliseconds: wait + 1000));
+          _checkDiscarded(key);
           eventId = await UploadProgress.track(id, transport);
         }
         if (eventId == null || !eventId.startsWith(r'$')) {
           throw const _NotConfirmed();
         }
+        _held.remove(key);
+        // The SDK drops its copy after a full send; a resent event alone
+        // leaves it.
+        await _forgetCopies(room, id);
         return eventId;
+      } on _Discarded {
+        rethrow;
       } catch (error) {
+        // From here on the bubble offers Retry.
+        if (identical(_jobs[key], job)) _jobs.remove(key);
         _failures[id] = describeFailure(error);
         while (_failures.length > 64) {
           _failures.remove(_failures.keys.first);
@@ -392,19 +610,33 @@ abstract final class OutgoingMedia {
         } catch (_) {}
         rethrow;
       } finally {
-        OutgoingEcho.release(room, id);
-        UploadProgress.reset(id);
+        // A Retry started meanwhile owns the echo and its progress now.
+        final current = !_jobs.containsKey(key) || identical(_jobs[key], job);
+        if (identical(_jobs[key], job)) _jobs.remove(key);
+        if (current) {
+          OutgoingEcho.release(room, id);
+          UploadProgress.reset(id);
+        }
         _stopped();
+        if (_discarded.remove(key)) {
+          _held.remove(key);
+          await _forgetCopies(room, id);
+        }
       }
     });
+    _jobs[key] = job..ignore();
     final tail = job.then<void>((_) {}, onError: (Object _) {});
-    _tails[key] = tail;
+    _tails[roomKey] = tail;
     unawaited(
       tail.whenComplete(() {
-        if (identical(_tails[key], tail)) _tails.remove(key);
+        if (identical(_tails[roomKey], tail)) _tails.remove(roomKey);
       }),
     );
     return job;
+  }
+
+  static void _checkDiscarded(String key) {
+    if (_discarded.contains(key)) throw const _Discarded();
   }
 
   /// A plain-language reason for the failure sheet. Server and network
@@ -437,4 +669,9 @@ class _PrepareFailed implements Exception {
 
 class _NotConfirmed implements Exception {
   const _NotConfirmed();
+}
+
+/// The bubble was deleted before the job sent the file.
+class _Discarded implements Exception {
+  const _Discarded();
 }

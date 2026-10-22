@@ -204,7 +204,8 @@ void main() {
         return http.Response('{}', 404);
       }),
     );
-    room = Room(id: '!room:example.invalid', client: client);
+    // An opened chat: its state is loaded (see roomMayDisappear).
+    room = Room(id: '!room:example.invalid', client: client)..partial = false;
     ports = _Ports();
     prefetcher = MediaPrefetcher.test(client, ports);
   });
@@ -366,6 +367,7 @@ void main() {
       {'type': 7},
     ]) {
       final timedRoom = Room(id: '!timed:example.invalid', client: client)
+        ..partial = false
         ..setState(
           StrippedStateEvent(
             type: beeperDisappearingTimerKey,
@@ -382,6 +384,16 @@ void main() {
       expect(ports.authorized, isNot(contains(r'$in-after_send:false')));
       scope.dispose();
     }
+
+    // A chat whose state is not loaded (never opened in this session) may
+    // have a timer the SDK has not read: nothing is fetched from it.
+    final unloaded = Room(id: '!unloaded:example.invalid', client: client);
+    final hidden = [_voice(unloaded, 'unloaded')];
+    scope = prefetcher.attach(roomIds: {unloaded.id}, events: () => hidden);
+    scope.noteBuilt(0);
+    await _settle();
+    expect(ports.downloads, ['mxc://example.invalid/off']);
+    scope.dispose();
   });
 
   test('production attachment gate denies when none is installed', () async {
@@ -588,7 +600,7 @@ void main() {
     final networkRoom = Room(
       id: '!room:example.invalid',
       client: networkClient,
-    );
+    )..partial = false;
     final ports = _NetworkPorts(networkClient);
     final networkPrefetcher = MediaPrefetcher.test(networkClient, ports);
     final events = [_voice(networkRoom, 'net', size: ciphertext.length)];
@@ -654,7 +666,7 @@ void main() {
       final cachedRoom = Room(
         id: '!room:example.invalid',
         client: cachedClient,
-      );
+      )..partial = false;
       final thumbnail = Uint8List.fromList([7, 7, 7]);
       database.files['mxc://example.invalid/cached-thumb'] = thumbnail;
       final bytes = await RoundMediaLoader().thumbnail(

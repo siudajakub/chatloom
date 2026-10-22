@@ -46,6 +46,11 @@ class EncryptedMediaCache {
   /// file, so `@visibleForTesting` is not available.
   int debugEvictionScans = 0, debugTouches = 0, debugPrunes = 0;
 
+  /// Key prefix of the SDK's copies of unsent files (`cache://file/<txid>`,
+  /// `cache://thumbnail/<txid>`), kept out of the least-recently-used
+  /// eviction. They still expire after [retention].
+  static const outgoingPrefix = 'cache://';
+
   EncryptedMediaCache(
     this._cacheDatabase, {
     this.maxFileSize = 10 * 1000 * 1000,
@@ -110,10 +115,19 @@ class EncryptedMediaCache {
             _cachedBytesBound = total;
             return;
           }
+          // This device's copies of unsent files ([outgoingPrefix]) are
+          // never evicted: they are the only source for Retry, and the send
+          // (or a Delete) removes them.
           var retained = 0;
+          for (final row in sizes) {
+            if ((row['media_key']! as String).startsWith(outgoingPrefix)) {
+              retained += row['size']! as int;
+            }
+          }
           for (final row in sizes) {
             final size = row['size']! as int;
             final rowKey = row['media_key']! as String;
+            if (rowKey.startsWith(outgoingPrefix)) continue;
             // The file just stored is never evicted to make room for itself.
             if (rowKey == key || retained + size <= evictToBytes) {
               retained += size;

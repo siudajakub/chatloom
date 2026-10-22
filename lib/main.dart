@@ -10,6 +10,7 @@ import 'dart:ui';
 
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/media/stale_recordings.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/utils/background_startup_recovery.dart';
@@ -185,6 +186,8 @@ void main(List<String> args) => runZonedGuarded(() async {
 Future<void> _cleanupPrivateMedia() async {
   try {
     final temporary = await getTemporaryDirectory();
+    // Voice recordings a killed or crashed process left behind (plaintext).
+    await removeStaleVoiceRecordings(temporary);
     for (final folder in [
       'personal_audio',
       'personal_video',

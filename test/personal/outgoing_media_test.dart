@@ -9,6 +9,7 @@ import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/send_error_text.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/send_warmup.dart';
+import 'package:flutter/animation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
@@ -23,6 +24,10 @@ typedef SentFile = ({
   Event? reply,
   Map<String, dynamic>? extra,
   int? shrink,
+  MatrixFile file,
+  MatrixImageFile? thumbnail,
+  String? threadRoot,
+  String? threadLast,
 });
 
 class MediaRoom extends ConversationRoom {
@@ -32,7 +37,28 @@ class MediaRoom extends ConversationRoom {
   bool holdSends = false;
   Object? failure;
   final failures = <Object>[];
+
+  /// Like the SDK: a failed upload marks its echo "Not sent" itself.
+  bool markErrors = false;
+  final events = <({Map<String, dynamic> content, String? txid})>[];
   MediaRoom(Client client) : super(client, '!fictional-media:example.invalid');
+
+  @override
+  Future<String?> sendEvent(
+    Map<String, dynamic> content, {
+    String type = EventTypes.Message,
+    String? txid,
+    Event? inReplyTo,
+    String? editEventId,
+    String? threadRootEventId,
+    String? threadLastEventId,
+    bool displayPendingEvent = true,
+    bool retryOnTransportFailure = true,
+  }) async {
+    log.add('event:$txid');
+    events.add((content: content, txid: txid));
+    return r'$resent';
+  }
 
   @override
   Future<Event?> getEventById(String eventID) async {
@@ -62,9 +88,18 @@ class MediaRoom extends ConversationRoom {
       reply: inReplyTo,
       extra: extraContent,
       shrink: shrinkImageMaxDimension,
+      file: file,
+      thumbnail: thumbnail,
+      threadRoot: threadRootEventId,
+      threadLast: threadLastEventId,
     ));
-    if (failures.isNotEmpty) throw failures.removeAt(0);
-    if (failure != null) throw failure!;
+    final error = failures.isNotEmpty ? failures.removeAt(0) : failure;
+    if (error != null) {
+      if (markErrors) {
+        await OutgoingEcho.setStatus(this, txid!, EventStatus.error);
+      }
+      throw error;
+    }
     if (holdSends) {
       final gate = Completer<String?>();
       gates.add(gate);
@@ -298,6 +333,181 @@ void main() {
     },
   );
 
+  test(
+    'Retry of a file already uploaded resends only its event (CC-04)',
+    () async {
+      final room = MediaRoom(ConversationClient());
+      // The final send failed after the upload: the SDK left the complete
+      // event (URL, keys, relation) in the echo, and now also the copy.
+      final content = <String, dynamic>{
+        'msgtype': MessageTypes.Image,
+        'body': 'photo.jpg',
+        'filename': 'photo.jpg',
+        'info': {'mimetype': 'image/jpeg', 'size': 3, 'w': 4, 'h': 3},
+        'file': {
+          'url': 'mxc://example.invalid/uploaded',
+          'v': 'v2',
+          'iv': 'fixture',
+        },
+        'm.relates_to': {
+          'm.in_reply_to': {'event_id': r'$quoted'},
+        },
+      };
+      final copy = Uri(scheme: 'cache', host: 'file', path: 'put-1');
+      echoes.files[copy] = Uint8List.fromList([1, 2, 3]);
+      echoes.events['put-1'] = MatrixEvent(
+        type: EventTypes.Message,
+        content: content,
+        eventId: 'put-1',
+        senderId: room.client.userID!,
+        originServerTs: DateTime.now(),
+        unsigned: {
+          messageSendingStatusKey: EventStatus.error.intValue,
+          'transaction_id': 'put-1',
+        },
+      );
+      final failed = Event.fromMatrixEvent(echoes.events['put-1']!, room);
+      final again = await OutgoingMedia.retry(failed);
+      expect(echoes.statusOf('put-1'), EventStatus.sending.intValue);
+      expect(await again.accepted, r'$resent');
+      expect(room.sent, isEmpty, reason: 'no second upload');
+      expect(room.events.single.txid, 'put-1');
+      expect(room.events.single.content, content);
+      expect(echoes.files, isNot(contains(copy)), reason: 'copy dropped');
+    },
+  );
+
+  test('Retry keeps the size, duration, reply and thread (CC-16)', () async {
+    final room = MediaRoom(ConversationClient())
+      ..failures.add(StateError('fictional connection loss'));
+    final reply = room.message(r'$quoted', 'Fictional quoted');
+    final first = await OutgoingMedia.send(
+      room,
+      MatrixVideoFile(
+        bytes: Uint8List.fromList([1, 2, 3]),
+        name: 'clip.mp4',
+        mimeType: 'video/mp4',
+        width: 640,
+        height: 360,
+        duration: 4000,
+      ),
+      txid: 'clip-1',
+      inReplyTo: reply,
+      threadRootEventId: r'$root',
+      thumbnail: MatrixImageFile(
+        bytes: Uint8List.fromList([9]),
+        name: 'clip.jpg',
+        mimeType: 'image/jpeg',
+        width: 64,
+        height: 36,
+      ),
+    );
+    await expectLater(first.accepted, throwsA(anything));
+    final failed = Event.fromMatrixEvent(echoes.events['clip-1']!, room);
+    final again = await OutgoingMedia.retry(failed);
+    expect(await again.accepted, r'$accepted');
+    final resent = room.sent.last;
+    expect(resent.file, isA<MatrixVideoFile>());
+    final video = resent.file as MatrixVideoFile;
+    expect((video.width, video.height, video.duration), (640, 360, 4000));
+    expect(resent.thumbnail?.bytes, [9], reason: 'the stored thumbnail');
+    expect(resent.reply?.eventId, r'$quoted');
+    expect(resent.threadRoot, r'$root', reason: 'stays in its thread');
+  });
+
+  test('a file still too large after preparing says so (CC-16)', () async {
+    final room = MediaRoom(ConversationClient());
+    final ticket = await OutgoingMedia.send(
+      room,
+      _file('long.mp4'),
+      txid: 'long',
+      prepare: () async => throw FileTooBigMatrixException(30, 10),
+    );
+    await expectLater(ticket.accepted, throwsA(anything));
+    expect(OutgoingMedia.failureOf('long'), contains('too large'));
+    expect(room.sent, isEmpty);
+  });
+
+  test('Retry while the file still sends joins its job (CC-17)', () async {
+    final room = MediaRoom(ConversationClient())..holdSends = true;
+    final ticket = await OutgoingMedia.send(room, _file('a.pdf'), txid: 'j');
+    await pumpEventQueue();
+    final echo = Event.fromMatrixEvent(echoes.events['j']!, room);
+    expect(OutgoingMedia.isActive(echo), isTrue);
+    final again = await OutgoingMedia.retry(echo);
+    final twice = await OutgoingMedia.retry(echo);
+    expect(identical(again.accepted, ticket.accepted), isTrue);
+    expect(identical(twice.accepted, ticket.accepted), isTrue);
+    room.gates.single.complete(r'$j');
+    expect(await ticket.accepted, r'$j');
+    expect(room.sent, hasLength(1), reason: 'never a second job');
+    expect(OutgoingMedia.isActive(echo), isFalse);
+  });
+
+  testWidgets('a rate-limit wait keeps the bubble "Sending" (CC-17)', (
+    tester,
+  ) async {
+    final room = MediaRoom(ConversationClient())
+      ..markErrors = true
+      ..failures.add(
+        MatrixException(
+          http.Response(
+            '{"errcode":"M_LIMIT_EXCEEDED","error":"fixture",'
+            '"retry_after_ms":0}',
+            429,
+          ),
+        ),
+      );
+    final ticket = await OutgoingMedia.send(room, _file('r.pdf'), txid: 'r');
+    await tester.pump();
+    await tester.pump();
+    // The SDK said "Not sent"; the job still owns the file and waits.
+    expect(echoes.statusOf('r'), EventStatus.sending.intValue);
+    final echo = Event.fromMatrixEvent(echoes.events['r']!, room);
+    expect(OutgoingMedia.isActive(echo), isTrue);
+    await tester.pump(const Duration(seconds: 2));
+    expect(await ticket.accepted, r'$accepted');
+  });
+
+  test('a file deleted while queued is never sent (CC-17)', () async {
+    final room = MediaRoom(ConversationClient())..holdSends = true;
+    final first = await OutgoingMedia.send(room, _file('a.pdf'), txid: 'q1');
+    final second = await OutgoingMedia.send(room, _file('b.pdf'), txid: 'q2');
+    await pumpEventQueue();
+    final queued = Event.fromMatrixEvent(echoes.events['q2']!, room);
+    await OutgoingMedia.discard(queued);
+    room.gates.single.complete(r'$q1');
+    expect(await first.accepted, r'$q1');
+    await expectLater(second.accepted, throwsA(anything));
+    expect(room.log, ['send:q1'], reason: 'the deleted file never left');
+    expect(echoes.statusOf('q2'), EventStatus.sending.intValue);
+    expect(OutgoingMedia.failureOf('q2'), isNull);
+    expect(
+      echoes.files,
+      isNot(contains(Uri(scheme: 'cache', host: 'file', path: 'q2'))),
+    );
+  });
+
+  test(
+    'a file too large for the cache can still be retried this session',
+    () async {
+      echoes.maxFileSize = 2;
+      final room = MediaRoom(ConversationClient())
+        ..failures.add(StateError('fictional connection loss'));
+      final first = await OutgoingMedia.send(room, _file('big.pdf'), txid: 'b');
+      await expectLater(first.accepted, throwsA(anything));
+      expect(
+        echoes.files,
+        isEmpty,
+        reason: 'the encrypted cache skipped it, like real large files',
+      );
+      final failed = Event.fromMatrixEvent(echoes.events['b']!, room);
+      final again = await OutgoingMedia.retry(failed);
+      expect(await again.accepted, r'$accepted');
+      expect(room.sent.last.file.bytes, [1, 2, 3]);
+    },
+  );
+
   test('the member list is loaded when a chat opens, not on send', () async {
     final room = _MembersRoom(ConversationClient());
     warmUpSendPath(room);
@@ -314,6 +524,30 @@ void main() {
       ..summary.mJoinedMemberCount = 500;
     warmUpSendPath(room);
     expect(room.requests, 1, reason: 'large groups load on demand');
+  });
+
+  testWidgets('the member list waits for the chat-open slide (PF-04)', (
+    tester,
+  ) async {
+    final room = _MembersRoom(ConversationClient());
+    final slide = AnimationController(
+      vsync: const TestVSync(),
+      duration: const Duration(milliseconds: 200),
+    );
+    addTearDown(slide.dispose);
+    unawaited(slide.forward());
+    warmUpSendPath(room, route: slide);
+    expect(room.requests, 0, reason: 'not during the slide');
+    // The first frame starts the slide; it ends 200 ms later, before the
+    // 500 ms bound.
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(room.requests, 0);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(slide.status, AnimationStatus.completed);
+    expect(room.requests, 1);
+    // A route that is not moving starts at once.
+    warmUpSendPath(room, route: slide);
+    expect(room.requests, 2);
   });
 
   test('failures are told in plain words, never the exception text', () {

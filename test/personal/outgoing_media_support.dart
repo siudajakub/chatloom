@@ -42,11 +42,22 @@ class FakeEchoes implements OutgoingEchoWriter {
   @override
   Future<void> storeFile(Room room, Uri key, Uint8List bytes) async {
     log.add('file:$key');
+    if (bytes.length > maxFileSize) return;
     files[key] = bytes;
   }
 
   @override
   Future<Uint8List?> getFile(Room room, Uri key) async => files[key];
+
+  @override
+  Future<void> deleteFile(Room room, Uri key) async {
+    if (files.remove(key) != null) log.add('delete:$key');
+  }
+
+  /// Largest copy the fake cache keeps; bigger files are skipped, like the
+  /// encrypted media cache does.
+  @override
+  int maxFileSize = 10 * 1000 * 1000;
 
   int? statusOf(String id) =>
       events[id]?.unsigned?[messageSendingStatusKey] as int?;

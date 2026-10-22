@@ -50,6 +50,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/disappearing_state.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -331,12 +332,9 @@ class MediaPrefetcher {
     if (!round && type != MessageTypes.Audio) return null;
     if (!RoundMediaPolicy.fromContent(event.content).canPersist) return null;
     // Chats with a disappearing-message timer (mautrix bridgev2 room state)
-    // are never prefetched; anything but an explicit "off" counts as on.
-    if (disappearingTimerLimits(
-      event.room.getState(beeperDisappearingTimerKey)?.content,
-    )) {
-      return null;
-    }
+    // are never prefetched; anything but an explicit "off" counts as on,
+    // and so does a state not loaded yet (see roomMayDisappear).
+    if (roomMayDisappear(event.room)) return null;
     final mxc = event.attachmentMxcUrl;
     final size = event.infoMap['size'];
     final storable = ports.maxCacheableBytes;

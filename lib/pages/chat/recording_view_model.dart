@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/media/stale_recordings.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -216,9 +217,10 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       if (!kIsWeb) {
         final tempDir = await getTemporaryDirectory();
         if (!_current(generation, session)) return;
+        // Named after this process: a crash's leftover is swept at start.
         path = path_lib.join(
           tempDir.path,
-          'voice_${const Uuid().v4()}.${codec.fileExtension}',
+          voiceRecordingName(const Uuid().v4(), codec.fileExtension),
         );
         session.ownedNativePath = path;
       }

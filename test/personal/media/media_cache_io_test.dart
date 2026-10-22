@@ -192,4 +192,25 @@ void main() {
     await media.storeFile(mxc('c'), Uint8List(10), 0);
     expect(await media.getFile(mxc('c')), hasLength(10));
   });
+
+  test('copies of unsent files are never evicted for other media', () async {
+    // CC-03: the copy is the only source for Retry of an unsent file.
+    final media = cache();
+    await media.initialize();
+    final unsent = Uri(scheme: 'cache', host: 'file', path: 'fixture-txid');
+    await media.storeFile(unsent, Uint8List(300), 0);
+    for (var i = 0; i < 12; i++) {
+      now = now.add(const Duration(minutes: 1));
+      await media.storeFile(mxc('m$i'), Uint8List(100), 0);
+    }
+    expect(media.debugEvictionScans, greaterThan(1));
+    expect(await media.getFile(unsent), hasLength(300));
+    final total = (await database.rawQuery(
+      'SELECT SUM(length(bytes)) AS size FROM personal_media_cache',
+    )).single['size']! as int;
+    expect(total, lessThanOrEqualTo(1000), reason: 'other media make room');
+    // It still expires like everything else.
+    now = now.add(const Duration(days: 31));
+    expect(await media.getFile(unsent), isNull);
+  });
 }
