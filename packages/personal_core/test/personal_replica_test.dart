@@ -21,6 +21,11 @@ class MemoryStore {
 
   Map<String, dynamic> copy(Map<String, dynamic> value) =>
       Map<String, dynamic>.from(jsonDecode(jsonEncode(value)) as Map);
+
+  /// Whether [opId] carries a durable seen marker.
+  bool seen(String opId) =>
+      (data[PersonalReplica.seenKeyOf(opId)]?['ids'] as List? ?? const [])
+          .contains(opId);
 }
 
 const conversation = ConversationRef(
@@ -343,7 +348,7 @@ void main() {
         await r.markPublishing(op.opId);
         await r.cancelTranscript(op.entityId);
         final acknowledged = ack(op);
-        store.failNextKey = 'seen:${acknowledged.opId}';
+        store.failNextKey = PersonalReplica.seenKeyOf(acknowledged.opId);
         await expectLater(r.acceptResult(acknowledged), throwsStateError);
         final cancel = r.pending.values.single;
         final restarted = replica(store);
@@ -610,7 +615,7 @@ void main() {
         r.acceptResult(metadataAck(command, 1)),
         throwsStateError,
       );
-      expect(store.data.containsKey('seen:ack:${command.opId}'), isFalse);
+      expect(store.seen('ack:${command.opId}'), isFalse);
       expect(r.pending.containsKey(command.opId), isTrue);
       await r.acceptResult(metadataAck(command, 1));
       expect(r.pending, isEmpty);
@@ -630,7 +635,7 @@ void main() {
         'existingValue': {'text': 'remote'},
         'proposedValue': {'text': 'mine'},
       });
-      store.failNextKey = 'seen:conflict';
+      store.failNextKey = PersonalReplica.seenKeyOf('conflict');
       await expectLater(r.acceptResult(conflict), throwsStateError);
       final restored = replica(store);
       expect(restored.revisions['draft:fixture'], 9);
@@ -638,10 +643,12 @@ void main() {
         'text': 'mine',
       });
       await restored.acceptResult(conflict);
-      expect(store.data.containsKey('seen:conflict'), isTrue);
+      expect(store.seen('conflict'), isTrue);
       expect(
         store.writes.indexOf('replica:draft:fixture'),
-        lessThan(store.writes.indexOf('seen:conflict')),
+        lessThan(
+          store.writes.indexOf(PersonalReplica.seenKeyOf('conflict')),
+        ),
       );
     },
   );
@@ -1327,7 +1334,7 @@ void main() {
       await Future.wait([applying, saving]);
       expect(store.writes, [
         'replica:reminder:fixture',
-        'seen:fixture-result',
+        PersonalReplica.seenKeyOf('fixture-result'),
         JournalWatermark.storageKey,
       ]);
     });
@@ -1353,7 +1360,7 @@ void main() {
       );
       // The client advances only after every acceptResult succeeded.
       expect((await r.journalWatermark(room))?.sameAs(previous), isTrue);
-      expect(store.data.containsKey('seen:fixture-result'), isFalse);
+      expect(store.seen('fixture-result'), isFalse);
     });
 
     test('advances over settled events from the journal start', () {

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'contracts.dart';
+import 'transcript_parts.dart';
 import 'transcription.dart' show sha256Hex;
 
 typedef ReplicaRead = Future<Map<String, dynamic>?> Function(String key);
@@ -206,7 +207,30 @@ class PersonalReplica {
   /// Digests of the last values this device sent per entity.
   static const _sentHistory = 4;
   final _records = <String, Map<String, dynamic>>{};
+
+  /// Applied result ids, newest last, bounded by [maxSeenInMemory].
   final _seen = <String>{};
+
+  /// Durable seen markers live in [seenBuckets] records of at most
+  /// [seenBucketSize] result ids each (chosen by a hash of the id, oldest
+  /// dropped first), so they stay bounded however many results the journal
+  /// carries. Before, every applied result left its own `seen:<opId>` record
+  /// on every device, forever. Such older markers are still honoured. A
+  /// result that fell out of its bucket is re-applied at most once more on a
+  /// full replay, which is idempotent: revisions, `appliedResults` and
+  /// command acknowledgement already make it a no-op.
+  static const seenBuckets = 64;
+  static const seenBucketSize = 64;
+  static const maxSeenInMemory = 4096;
+  static String seenKeyOf(String opId) => 'seen:ring:${_seenBucket(opId)}';
+  static int _seenBucket(String opId) {
+    var hash = 0;
+    for (final unit in opId.codeUnits) {
+      hash = (hash * 31 + unit) & 0x3fffffff;
+    }
+    return hash % seenBuckets;
+  }
+
   Future<void> _tail = Future.value();
   bool get hasUnattemptedCommands => pending.values.any(
     (op) => !((_records[op.entityId]?['attempted'] as List? ?? const [])
@@ -785,19 +809,46 @@ class PersonalReplica {
     );
   }
 
+  /// Whether [opId] was applied: its bucket, or a marker from before buckets.
+  Future<bool> _seenDurably(String opId) async {
+    final ids = (await read(seenKeyOf(opId)))?['ids'];
+    if (ids is List && ids.contains(opId)) return true;
+    return await read('seen:$opId') != null;
+  }
+
+  Future<void> _markSeen(String opId) async {
+    final key = seenKeyOf(opId);
+    final ids = <String>[
+      for (final id in (await read(key))?['ids'] as List? ?? const [])
+        if (id is String && id != opId) id,
+      opId,
+    ];
+    await write(key, {
+      'ids': ids.length > seenBucketSize
+          ? ids.sublist(ids.length - seenBucketSize)
+          : ids,
+    });
+    _rememberSeen(opId);
+  }
+
+  void _rememberSeen(String opId) {
+    _seen
+      ..remove(opId)
+      ..add(opId);
+    if (_seen.length > maxSeenInMemory) _seen.remove(_seen.first);
+  }
+
   Future<void> acceptResult(PersonalOperation result) => _serial(() async {
-    final seenKey = 'seen:${result.opId}';
     if (_seen.contains(result.opId)) return;
-    if (await read(seenKey) != null) {
-      _seen.add(result.opId);
+    if (await _seenDurably(result.opId)) {
+      _rememberSeen(result.opId);
       return;
     }
     final entity = result.entityId;
     final record = _record(entity);
     final applied = (record['appliedResults'] as List? ?? []).cast<String>();
     if (applied.contains(result.opId)) {
-      await write(seenKey, {'seen': true});
-      _seen.add(result.opId);
+      await _markSeen(result.opId);
       return;
     }
     final payload = result.payload;
@@ -828,7 +879,10 @@ class PersonalReplica {
     if (record['metadataInFlight'] == accepted)
       record.remove('metadataInFlight');
     final latest = revision >= (record['revision'] as int);
-    if (result.kind == 'metadata.result') {
+    if (result.kind == transcriptTextPartKind) {
+      // One slice of a long transcript: never a state change of its own.
+      _acceptTextPart(record, payload, revision);
+    } else if (result.kind == 'metadata.result') {
       _metadataResult(
         entity,
         record,
@@ -863,6 +917,9 @@ class PersonalReplica {
           record['job'] = {...previous, ..._copy(payload)};
           record.remove('conflict');
         }
+        if (result.kind == 'transcript.result') {
+          _settleTranscriptText(record, payload, previous['text']);
+        }
       }
     }
     if (result.kind == 'transcript.result') {
@@ -884,9 +941,93 @@ class PersonalReplica {
     // Commit the result and conflict copies BEFORE its seen marker, including
     // outbox removal/next-coalesced operation in the same durable record.
     await _commit(entity, record);
-    await write(seenKey, {'seen': true});
-    _seen.add(result.opId);
+    await _markSeen(result.opId);
   });
+
+  /// Stores one slice of a long transcript (see [transcriptTextPartKind])
+  /// until the whole text can be assembled. Slices of another version of the
+  /// text than the job announces are ignored; erased slices (`text: null`)
+  /// carry nothing.
+  void _acceptTextPart(
+    Map<String, dynamic> record,
+    Map<String, dynamic> payload,
+    int revision,
+  ) {
+    final part = TranscriptTextPart.tryParse(payload);
+    if (part == null) return;
+    final job = record['job'];
+    final meta = job is Map
+        ? TranscriptTextParts.tryParse(job['textParts'])
+        : null;
+    if (meta != null && meta.digest != part.digest) return;
+    final stored = record['transcriptText'];
+    var parts = <String, dynamic>{};
+    if (stored is Map) {
+      if (stored['sha256'] == part.digest) {
+        parts = Map<String, dynamic>.from(stored['parts'] as Map? ?? {});
+      } else if ((stored['revision'] as int? ?? 0) > revision) {
+        return; // A slice of an older version than the one being collected.
+      }
+    }
+    parts['${part.index}'] = part.text;
+    record['transcriptText'] = {
+      'sha256': part.digest,
+      'count': part.count,
+      'revision': revision,
+      'parts': parts,
+    };
+    _settleTranscriptText(record, null, null);
+  }
+
+  /// After a transcript result or slice: replaces the preview of a long
+  /// transcript with the whole text once every slice matches its digest,
+  /// keeps an already assembled text when the same result is applied again,
+  /// and drops slices superseded by a complete text, a tombstone or a newer
+  /// job. [payload] is the applied `transcript.result` (null for a slice).
+  void _settleTranscriptText(
+    Map<String, dynamic> record,
+    Map<String, dynamic>? payload,
+    Object? previousText,
+  ) {
+    final job = record['job'] is Map
+        ? Map<String, dynamic>.from(record['job'] as Map)
+        : null;
+    // A result without the record announces no slices (whole text, erased
+    // text or another state): an older announcement no longer applies.
+    if (job != null && payload != null && !payload.containsKey('textParts')) {
+      job.remove('textParts');
+    }
+    final meta = TranscriptTextParts.tryParse(job?['textParts']);
+    final stored = record['transcriptText'];
+    if (job != null) record['job'] = job;
+    if (meta == null) {
+      final jobRevision = job?['revision'];
+      if (stored is Map &&
+          jobRevision is int &&
+          jobRevision > (stored['revision'] as int? ?? 0)) {
+        record.remove('transcriptText');
+      }
+      if (job != null) job.remove('textParts');
+      return;
+    }
+    if (meta.matches(previousText) && !meta.matches(job!['text'])) {
+      job['text'] = previousText; // Applied again: keep the whole text.
+    }
+    if (meta.matches(job!['text'])) {
+      record.remove('transcriptText');
+      return;
+    }
+    if (stored is! Map || stored['sha256'] != meta.digest) return;
+    final slices = <int, String>{
+      for (final entry in (stored['parts'] as Map? ?? {}).entries)
+        if (int.tryParse('${entry.key}') case final index?)
+          if (entry.value is String) index: entry.value as String,
+    };
+    final text = assembleTranscriptText(meta, slices);
+    if (text == null) return;
+    job['text'] = text;
+    record.remove('transcriptText');
+  }
 
   /// Applies a `metadata.result`. The worker serializes writes per entity by
   /// revision; a refusal (`state: conflict`) carries its current value.
