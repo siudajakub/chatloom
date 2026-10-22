@@ -642,4 +642,278 @@ void main() {
     await tester.pumpAndSettle();
     expect(chosen, ChatMenuAction.merge);
   });
+
+  // ---------------------------------------------------------------------
+  // Wave 5: merges survive, can be managed, and resolve overlaps.
+
+  PersonGroup save(String id, List<Room> rooms, {Room? defaultRoom}) {
+    final group = PersonGroup(
+      id: id,
+      name: 'Fictional person',
+      members: [for (final room in rooms) personal.ref(room)],
+      defaultRoomId: (defaultRoom ?? rooms.first).id,
+    );
+    personal.values['person:$id'] = group.toJson().cast<String, dynamic>();
+    return group;
+  }
+
+  test('a left or deleted source keeps the person merged (FT-01)', () {
+    final person = save('p', [whatsapp, telegram, signal]);
+    client.rooms.remove(telegram); // left: the SDK drops the room
+    var projection = InboxProjection(personal);
+    expect(projection.groupFor(whatsapp)?.id, 'p');
+    expect(projection.groupFor(signal)?.id, 'p');
+    final rows = projection.rooms(client.rooms);
+    expect(rows.where((r) => r == whatsapp || r == signal), [whatsapp]);
+    expect(projection.displayName(signal), 'Fictional person');
+    final statuses = {
+      for (final source in projection.sourcesOf(person))
+        source.member.roomId: source.status,
+    };
+    expect(statuses[telegram.id], PersonSourceStatus.inactive);
+    expect(statuses[whatsapp.id], PersonSourceStatus.active);
+    expect(notionRoomNetworks(projection, whatsapp), {'whatsapp', 'signal'});
+
+    // Two chats, one gone: still the person (pins, name, notifications).
+    personal.values.remove('person:p');
+    save('two', [whatsapp, signal]);
+    client.rooms.remove(signal);
+    projection = InboxProjection(personal);
+    expect(projection.entityFor(whatsapp), 'person:two');
+    expect(projection.unreadCount(whatsapp), whatsapp.notificationCount);
+
+    // An invitation is not a joined chat either.
+    client.rooms.add(signal);
+    signal.membership = Membership.invite;
+    expect(InboxProjection(personal).groupFor(whatsapp)?.id, 'two');
+    expect(InboxProjection(personal).groupFor(signal), isNull);
+  });
+
+  test('a source that became a group chat still never merges', () {
+    save('p', [whatsapp, telegram]);
+    _state(
+      telegram,
+      'm.bridge',
+      {
+        'bridgebot': _bot,
+        'protocol': {'id': 'telegram'},
+        'com.beeper.room_type.v2': 'group',
+      },
+      key: 'later',
+    );
+    final projection = InboxProjection(personal);
+    expect(projection.groupFor(whatsapp), isNull);
+    expect(projection.groupFor(telegram), isNull);
+    expect(projection.resolution.unsafe.single.id, 'p');
+    // Merging again drops the group chat and repairs the person.
+    final plan = planMerge(personal, [whatsapp, signal], anchor: whatsapp);
+    expect(plan.group.id, 'p');
+    expect(plan.group.members.map((m) => m.roomId), [whatsapp.id, signal.id]);
+  });
+
+  test('overlapping merges resolve the same way, none vanishes (FT-10)', () {
+    // Two devices merged WhatsApp into two persons before the worker
+    // confirmed either.
+    save('b-pixel', [whatsapp, telegram]);
+    save('a-mac', [whatsapp, signal]);
+    final projection = InboxProjection(personal);
+    expect(projection.groupFor(whatsapp)?.id, 'a-mac');
+    expect(projection.groupFor(signal)?.id, 'a-mac');
+    expect(projection.groupFor(telegram)?.id, 'b-pixel');
+    final pixel = projection.groupById('b-pixel')!;
+    final whatsappSource = projection
+        .sourcesOf(pixel)
+        .singleWhere((s) => s.member.roomId == whatsapp.id);
+    expect(whatsappSource.status, PersonSourceStatus.elsewhere);
+    expect(whatsappSource.owner?.id, 'a-mac');
+    expect(projection.unreadCount(telegram), telegram.notificationCount);
+    final rows = projection.rooms(client.rooms);
+    expect(rows, contains(whatsapp)); // a-mac
+    expect(rows, contains(telegram)); // b-pixel, its remaining chat
+    expect(rows, isNot(contains(signal)));
+  });
+
+  test(
+    'a failed absorb leaves one merged person, not four chats (CC-14)',
+    () async {
+      PersonalClient.unmergeAcknowledgementWait = const Duration(
+        milliseconds: 20,
+      );
+      final extra = _room(client, 'ig', network: 'instagram');
+      final a = planMerge(personal, [whatsapp, telegram], anchor: whatsapp);
+      await applyMerge(personal, a);
+      final b = planMerge(personal, [signal, extra], anchor: signal);
+      await applyMerge(personal, b);
+      // The worker is offline: nothing is acknowledged.
+      final both = planMerge(personal, [whatsapp, signal], anchor: whatsapp);
+      expect(both.absorbed.single.id, b.group.id);
+      await applyMerge(personal, both);
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+      // The absorbed person could not be removed and is back in the store.
+      expect(personal.groups.map((g) => g.id), contains(b.group.id));
+      final projection = InboxProjection(personal);
+      for (final room in [whatsapp, telegram, signal, extra]) {
+        expect(projection.groupFor(room)?.id, a.group.id);
+      }
+      expect(projection.resolution.covered.single.id, b.group.id);
+      expect(
+        projection
+            .rooms(client.rooms)
+            .where((r) => [whatsapp, telegram, signal, extra].contains(r)),
+        hasLength(1),
+      );
+    },
+  );
+
+  test('remove, add and default source keep the person (FT-02)', () async {
+    final person = save('p', [whatsapp, telegram, signal]);
+    personal.ack('person:p');
+    var next = await removePersonSource(personal, person, whatsapp.id);
+    expect(next!.members.map((m) => m.roomId), [telegram.id, signal.id]);
+    // The default left with WhatsApp: an active chat takes over.
+    expect(next.defaultRoomId, telegram.id);
+    expect(InboxProjection(personal).groupFor(whatsapp), isNull);
+    expect(InboxProjection(personal).groupFor(signal)?.id, 'p');
+
+    next = await setPersonDefaultSource(personal, next, signal.id);
+    expect(personal.groups.single.defaultRoomId, signal.id);
+
+    final add = planAddToPerson(personal, next, [whatsapp]);
+    expect(add.group.id, 'p');
+    await applyMerge(personal, add);
+    expect(InboxProjection(personal).groupFor(whatsapp)?.id, 'p');
+    expect(personal.groups.single.defaultRoomId, signal.id);
+
+    // Down to one chat: the person is unmerged; the chats stay.
+    personal.ack('person:p');
+    final two = await removePersonSource(
+      personal,
+      personal.groups.single,
+      whatsapp.id,
+    );
+    personal.ack('person:p');
+    final last = await removePersonSource(personal, two!, telegram.id);
+    expect(last, isNull);
+    expect(personal.writes, contains('delete person:p'));
+    expect(InboxProjection(personal).groupFor(signal), isNull);
+  });
+
+  test('an all-left person gets a replacement chat', () {
+    final person = save('p', [whatsapp, telegram]);
+    client.rooms
+      ..remove(whatsapp)
+      ..remove(telegram);
+    final plan = planAddToPerson(personal, person, [signal]);
+    expect(plan.group.id, 'p');
+    expect(plan.group.members.map((m) => m.roomId), [
+      whatsapp.id,
+      telegram.id,
+      signal.id,
+    ]);
+    expect(plan.group.defaultRoomId, signal.id);
+  });
+
+  test('routing, name and photo live outside the group JSON (sync)', () async {
+    final person = save('p', [whatsapp, telegram]);
+    personal.ack('person:p');
+    _state(telegram, EventTypes.RoomAvatar, {
+      'url': 'mxc://example.invalid/telegram-photo',
+    });
+    await setPersonRouting(
+      personal,
+      person,
+      PersonRouting.fixed,
+      defaultRoomId: telegram.id,
+    );
+    await usePersonSourceName(personal, personal.groups.single, telegram.id);
+    await setPersonAvatarSource(personal, person, telegram.id);
+    var projection = InboxProjection(personal);
+    expect(projection.preferencesFor('p').routing, PersonRouting.fixed);
+    expect(personal.groups.single.defaultRoomId, telegram.id);
+    expect(projection.personName(person), 'Fictional tg');
+    expect(projection.displayName(whatsapp), 'Fictional tg');
+    expect(
+      projection.avatarFor(whatsapp).toString(),
+      'mxc://example.invalid/telegram-photo',
+    );
+
+    // An older build rewrites the group from its known fields only.
+    final old = PersonGroup.fromJson(
+      Map<String, dynamic>.from(personal.values['person:p']!),
+    );
+    personal.values['person:p'] = old.toJson().cast<String, dynamic>();
+    projection = InboxProjection(personal);
+    expect(projection.preferencesFor('p').routing, PersonRouting.fixed);
+    expect(projection.personName(old), 'Fictional tg');
+    expect(personal.invalidGroupCount, 0);
+
+    // The contact renames on Telegram: the name follows.
+    _state(telegram, EventTypes.RoomName, {'name': 'Renamed'});
+    expect(InboxProjection(personal).displayName(signal), 'Fictional sig');
+    expect(InboxProjection(personal).displayName(whatsapp), 'Renamed');
+
+    // A custom name wins everywhere, the record included.
+    await setPersonNickname(personal, old, 'Mum');
+    projection = InboxProjection.snapshot(personal);
+    expect(projection.displayName(telegram), 'Mum');
+    final record = projection.buildIndex(client.rooms).recordFor(whatsapp)!;
+    expect(record.displayName, 'Mum');
+    // Search finds her by a network name.
+    expect(personSearchText(projection, record), contains('Renamed'));
+    expect(personSearchText(projection, record), contains('Telegram'));
+  });
+
+  test('person notification mode is what push reads (FT-05)', () async {
+    final person = save('p', [whatsapp, telegram]);
+    await setPersonNotificationMode(
+      personal,
+      person,
+      PersonalNotificationMode.muted,
+    );
+    var projection = InboxProjection(personal);
+    expect(
+      projection.notificationModeFor(telegram),
+      PersonalNotificationMode.muted,
+    );
+    // An override for one network wins over the person.
+    await setPersonSourceNotificationMode(
+      personal,
+      telegram.id,
+      PersonalNotificationMode.all,
+    );
+    projection = InboxProjection(personal);
+    expect(projection.notificationModeFor(telegram), PersonalNotificationMode.all);
+    expect(
+      projection.notificationModeFor(whatsapp),
+      PersonalNotificationMode.muted,
+    );
+  });
+
+  test('merge suggestions: same name or phone, dismissible (FT-09)', () async {
+    _state(whatsapp, EventTypes.RoomName, {'name': 'Anna Nowak'});
+    _state(signal, EventTypes.RoomName, {'name': 'Anna Maria Nowak'});
+    var suggestions = personMergeSuggestions(personal);
+    expect(suggestions, hasLength(1));
+    expect({
+      suggestions.single.first.entityId,
+      suggestions.single.second.entityId,
+    }, {whatsapp.id, signal.id});
+    expect(personMergeSuggestions(personal, anchor: telegram), isEmpty);
+    await dismissMergeSuggestion(personal, suggestions.single);
+    expect(personMergeSuggestions(personal), isEmpty);
+
+    // A phone number the bridge exposes in the member state.
+    for (final room in [telegram, signal]) {
+      _state(room, EventTypes.RoomMember, {
+        'membership': 'join',
+        'com.beeper.bridge.identifiers': ['tel:+48 600 100 200'],
+      }, key: _peer);
+    }
+    suggestions = personMergeSuggestions(personal, anchor: telegram);
+    expect(suggestions.single.reason, MergeSuggestionReason.phone);
+    // Never merged by itself.
+    expect(personal.groups, isEmpty);
+  });
 }

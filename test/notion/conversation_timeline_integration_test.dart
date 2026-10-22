@@ -186,8 +186,9 @@ void main() {
       await tester.pumpAndSettle();
       // Same-network rooms remain two distinct full-identity choices.
       expect(find.text('Fictional conversation'), findsNWidgets(2));
-      expect(find.text('Current account · Source 1'), findsOneWidget);
-      expect(find.text('Current account · Source 2'), findsOneWidget);
+      // The default chat is marked; no "Source 1 / Source 2" numbering.
+      expect(find.text('Default'), findsOneWidget);
+      expect(find.textContaining('Source 1'), findsNothing);
       await tester.tap(find.text('Fictional conversation').last);
       await tester.pumpAndSettle();
       expect(editable.controller.value, value);
