@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Exact app-owned copy translation; protected behavior and data keys unchanged."""
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]

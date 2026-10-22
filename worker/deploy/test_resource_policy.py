@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Regression checks for the cgroup boundary of deployed worker tools.
 
 These validate templates only; Linux systemd acceptance remains a runtime gate.

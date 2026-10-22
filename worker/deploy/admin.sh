@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 set -eu
 action=${1:-inspect}
 case "$action" in inspect|pair|enqueue|verify) ;; *) exit 64 ;; esac

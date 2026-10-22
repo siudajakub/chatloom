@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 import copy
 from contextlib import closing
 from datetime import datetime, timezone

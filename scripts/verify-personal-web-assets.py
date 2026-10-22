@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Verify pinned web binaries; optionally restore missing files from a local archive.
 
 No downloads, dependency resolution, account access or build are performed. Existing

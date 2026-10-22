@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Run the real Flutter application graph with a command-scoped Apple SDK.
 
 hooks_runner filters SDK environment variables. On macOS a temporary CMake

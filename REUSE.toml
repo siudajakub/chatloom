@@ -62,3 +62,28 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026-Present ChatLoom authors"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+# Bundled Roboto font (Apache-2.0, licence text in assets/notion/fonts/Roboto_LICENSE.txt)
+[[annotations]]
+path = [
+    "assets/notion/fonts/Roboto-*.ttf",
+    "assets/notion/fonts/Roboto_LICENSE.txt"
+]
+SPDX-FileCopyrightText = "2011 Google Inc."
+SPDX-License-Identifier = "Apache-2.0"
+
+# ChatLoom's own illustrations, documentation, services and test data. Files
+# with their own SPDX header keep it (closest precedence).
+[[annotations]]
+path = [
+    "assets/notion/pinned/**",
+    "docs/**",
+    "worker/**",
+    "push-gateway/**",
+    "packages/personal_core/**",
+    "test/**/goldens/**",
+    "NOTICE.md"
+]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026-Present ChatLoom authors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"

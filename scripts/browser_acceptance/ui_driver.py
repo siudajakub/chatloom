@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Root-only, long-lived aggregate UI driver for an existing guarded browser.
 
 JSON-lines stdin, one fixed action per line. Never launches/closes Chrome, creates

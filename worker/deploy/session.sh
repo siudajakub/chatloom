@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Interactive secrets stay in this private systemd PTY, never in argv or logs.
 set -eu
 action=${1:-enroll}

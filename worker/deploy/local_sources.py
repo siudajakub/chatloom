@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Read-only, account-bound local Beeper sources over a private Unix socket.
 
 No OpenAI key or new Matrix session is configured here. The existing Beeper

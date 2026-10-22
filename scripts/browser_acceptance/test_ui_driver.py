@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Account-free publisher-cadence regressions. No Playwright import or browser."""
 import datetime
 import collections

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Synthetic child process: no native crypto, account, credentials or provider.
 import 'dart:async';
 import 'dart:io';

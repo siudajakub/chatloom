@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:matrix/matrix.dart';
 import 'package:personal_worker/src/journal_ready.dart';
 import 'package:personal_worker/src/ports.dart';

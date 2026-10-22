@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """One-time, exact-copy migration of app-owned Personal presentation strings.
 
 Only literal copy is changed. No persisted keys, source identifiers or content.

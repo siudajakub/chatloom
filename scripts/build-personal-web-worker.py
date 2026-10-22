@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Compile a reproducible current-source worker; optionally publish after backup.
 
 Run only in the coordinator's sequential Dart/Flutter queue. No pub resolution,

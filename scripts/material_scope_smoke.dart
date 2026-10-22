@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Synthetic web-only smoke: no login, provider calls or real account data.
 import 'dart:async';
 import 'package:chatloom/config/setting_keys.dart';
