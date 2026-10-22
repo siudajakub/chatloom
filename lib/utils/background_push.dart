@@ -472,7 +472,8 @@ class BackgroundPush {
     String? gatewayUrl,
     String? token,
   }) async {
-    if (gatewayUrl == null || token == null || token.isEmpty) return;
+    if (gatewayUrl == null || gatewayUrl.isEmpty) return;
+    if (token == null || token.isEmpty) return;
     if (!clients.contains(client) || !client.isLogged()) return;
     final owner = client.userID;
     final device = client.deviceID;

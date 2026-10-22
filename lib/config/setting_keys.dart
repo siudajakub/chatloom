@@ -24,10 +24,8 @@ enum AppSettings<T> {
   showNoGoogle<bool>('chat.fluffy.show_no_google', false),
   unifiedPushRegistered<bool>('chat.fluffy.unifiedpush.registered', false),
   unifiedPushEndpoint<String>('chat.fluffy.unifiedpush.endpoint', ''),
-  pushNotificationsGatewayUrl<String>(
-    'pushNotificationsGatewayUrl',
-    'https://push.example.org/_matrix/push/v1/notify',
-  ),
+  // Empty: the gateway set at build time (CHATLOOM_PUSH_GATEWAY), if any.
+  pushNotificationsGatewayUrl<String>('pushNotificationsGatewayUrl', ''),
   pushNotificationsPusherFormat<String>(
     'pushNotificationsPusherFormat',
     'event_id_only',

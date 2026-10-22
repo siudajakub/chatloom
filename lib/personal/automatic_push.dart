@@ -5,16 +5,45 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
 
-const personalPushGateway = 'https://push.example.org/_matrix/push/v1/notify';
-const personalPushRegistration =
-    'https://push.example.org/_personal/push/v1/register';
+/// Origin of the ChatLoom push gateway (`push-gateway/`), fixed at build
+/// time with `--dart-define=CHATLOOM_PUSH_GATEWAY=https://push.example.org`.
+/// There is no default: a build without it has no automatic push setup, and
+/// a gateway can still be entered by hand under Settings › Developer.
+const pushGatewayOriginDefine = String.fromEnvironment('CHATLOOM_PUSH_GATEWAY');
+
+String _pushGatewayOrigin = pushGatewayOriginDefine;
+
+/// Lets tests run as a build with a configured gateway.
+@visibleForTesting
+set debugPushGatewayOrigin(String origin) => _pushGatewayOrigin = origin;
+
+/// Whether this build knows a push gateway for automatic setup.
+bool get automaticPushAvailable => _pushGatewayOrigin.trim().isNotEmpty;
+
+String _pushGatewayUrl(String path) {
+  if (!automaticPushAvailable) return '';
+  var origin = _pushGatewayOrigin.trim();
+  while (origin.endsWith('/')) {
+    origin = origin.substring(0, origin.length - 1);
+  }
+  return '$origin$path';
+}
+
+/// Notify URL of the build-time gateway; empty when none is configured.
+String get personalPushGateway => _pushGatewayUrl('/_matrix/push/v1/notify');
+
+/// Registration URL of the build-time gateway; empty when none is configured.
+String get personalPushRegistration =>
+    _pushGatewayUrl('/_personal/push/v1/register');
 
 bool usesAutomaticPush(String gateway) =>
-    gateway.isEmpty || gateway == personalPushGateway;
+    automaticPushAvailable &&
+    (gateway.isEmpty || gateway == personalPushGateway);
 
 String pushAccountDigest(String user) =>
     sha256.convert(utf8.encode(user)).toString();
@@ -126,7 +155,7 @@ Future<bool> enrollAutomaticPush({
   required Future<Map<String, Object?>> Function() openId,
   required bool Function() current,
 }) async {
-  if (!current()) return false;
+  if (!automaticPushAvailable || !current()) return false;
   final proof = await openId().timeout(const Duration(seconds: 15));
   if (!current()) return false;
   final request = http.Request('POST', Uri.parse(personalPushRegistration))

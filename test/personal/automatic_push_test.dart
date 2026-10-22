@@ -35,6 +35,28 @@ void main() {
     current: current ?? () => true,
   );
 
+  test('a build without CHATLOOM_PUSH_GATEWAY has no automatic setup', () {
+    debugPushGatewayOrigin = '';
+    addTearDown(() => debugPushGatewayOrigin = 'https://push.example.invalid');
+    expect(automaticPushAvailable, isFalse);
+    expect(personalPushGateway, isEmpty);
+    expect(personalPushRegistration, isEmpty);
+    expect(usesAutomaticPush(''), isFalse);
+  });
+
+  test('the build-time origin names both gateway endpoints', () {
+    debugPushGatewayOrigin = 'https://push.example.invalid/';
+    addTearDown(() => debugPushGatewayOrigin = 'https://push.example.invalid');
+    expect(
+      personalPushGateway,
+      'https://push.example.invalid/_matrix/push/v1/notify',
+    );
+    expect(
+      personalPushRegistration,
+      'https://push.example.invalid/_personal/push/v1/register',
+    );
+  });
+
   test('default and legacy empty configuration use automatic setup', () {
     expect(usesAutomaticPush(''), isTrue);
     expect(usesAutomaticPush(personalPushGateway), isTrue);

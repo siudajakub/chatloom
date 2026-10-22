@@ -71,11 +71,12 @@ Files that are never committed and that you provide yourself:
 | `android/app/google-services.json` | Your own Firebase project for FCM push. Without it a release build stops; add `-Pchatloom.allowNoFirebase=true` for a deliberate build without push |
 | `assets/vodozemac/0.8.1/*` | Web-only crypto bindings, built by `scripts/prepare-web.sh` (needed only for `flutter build web`) |
 
-Push delivery also needs your own push gateway ([push-gateway/README.md](push-gateway/README.md));
-the default gateway URL belongs to the maintainer's deployment and must be changed
-in your build. Sync, reminders and transcription need the optional
-[worker](worker/README.md). The owner's devbox and Mac workflow (queue, signing
-wrapper, pinned toolchains) is in [docs/personal/development-environments.md](docs/personal/development-environments.md).
+Push delivery also needs your own push gateway ([push-gateway/README.md](push-gateway/README.md)).
+Its origin is set at build time with
+`--dart-define=CHATLOOM_PUSH_GATEWAY=https://push.example.org`; there is no default,
+so a build without it has no automatic push setup. Sync, reminders and transcription
+need the optional [worker](worker/README.md). Development environment notes (toolchain,
+job queue, signing, Firebase) are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 | Area | Guide |
 |---|---|
