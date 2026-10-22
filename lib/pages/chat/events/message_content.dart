@@ -17,6 +17,7 @@ import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
+import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
@@ -195,7 +196,15 @@ class MessageContent extends StatelessWidget {
               borderRadius: borderRadius,
               timeline: timeline,
               textColor: textColor,
-              onTap: () => showImageViewer(context, event, timeline: timeline),
+              onTap: sticker
+                  // A pack sticker opens its pack (Telegram).
+                  ? () => openStickerFromEvent(
+                      context,
+                      event,
+                      fallback: () =>
+                          showImageViewer(context, event, timeline: timeline),
+                    )
+                  : () => showImageViewer(context, event, timeline: timeline),
             );
           case CuteEventContent.eventType:
             return CuteContent(event);

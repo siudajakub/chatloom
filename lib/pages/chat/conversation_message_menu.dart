@@ -5,9 +5,8 @@ import 'dart:ui' as ui;
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
-import 'package:chatloom/pages/chat/sticker_picker_dialog.dart';
+import 'package:chatloom/personal/stickers/notion_emoji_picker.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/gestures.dart' show PointerScrollEvent, kTouchSlop;
 import 'package:flutter/rendering.dart';
@@ -849,80 +848,27 @@ class _MenuCard extends StatelessWidget {
   }
 }
 
-/// The full emoji (and emoticon) picker behind the bar's "+": the custom
-/// reaction sheet of the ordinary chat. Resolves to the chosen key.
+/// The full emoji picker behind the bar's "+": the custom reaction sheet
+/// of the ordinary chat. Resolves to the chosen emoji. Reactions are emoji
+/// only: an image reaction (an `mxc://` key) reaches the network only on
+/// Telegram and Slack, and only for images the bridge itself created.
 Future<String?> showConversationReactionPicker(
   BuildContext context,
   Room room,
-) {
-  final theme = Theme.of(context);
-  return showAdaptiveBottomSheet<String>(
-    context: context,
-    builder: (context) => Scaffold(
-      appBar: AppBar(
-        title: Text(L10n.of(context).customReaction),
-        leading: CloseButton(onPressed: () => Navigator.of(context).pop(null)),
-      ),
-      body: SizedBox(
-        height: double.infinity,
-        child: DefaultTabController(
-          length: 2,
-          child: Column(
-            children: [
-              TabBar(
-                tabs: [
-                  Tab(text: L10n.of(context).emojis),
-                  Tab(text: L10n.of(context).stickers),
-                ],
-              ),
-              Expanded(
-                child: TabBarView(
-                  children: [
-                    EmojiPicker(
-                      onEmojiSelected: (_, emoji) =>
-                          Navigator.of(context).pop(emoji.emoji),
-                      config: Config(
-                        locale: Localizations.localeOf(context),
-                        emojiViewConfig: const EmojiViewConfig(
-                          backgroundColor: Colors.transparent,
-                        ),
-                        bottomActionBarConfig: const BottomActionBarConfig(
-                          enabled: false,
-                        ),
-                        categoryViewConfig: CategoryViewConfig(
-                          initCategory: Category.SMILEYS,
-                          backspaceColor: theme.colorScheme.primary,
-                          iconColor: theme.colorScheme.primary.withAlpha(128),
-                          iconColorSelected: theme.colorScheme.primary,
-                          indicatorColor: theme.colorScheme.primary,
-                          backgroundColor: theme.colorScheme.surface,
-                        ),
-                        skinToneConfig: SkinToneConfig(
-                          dialogBackgroundColor: Color.lerp(
-                            theme.colorScheme.surface,
-                            theme.colorScheme.primaryContainer,
-                            0.75,
-                          )!,
-                          indicatorColor: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                    ),
-                    StickerPickerDialog(
-                      room: room,
-                      usage: ImagePackUsage.emoticon,
-                      onSelected: (sticker) =>
-                          Navigator.of(context).pop(sticker.url.toString()),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+) => showNotionSheet<String>(
+  context: context,
+  title: L10n.of(context).customReaction,
+  builder: (context) => SizedBox(
+    height: math.min(420.0, MediaQuery.sizeOf(context).height * .55),
+    child: EmojiPicker(
+      onEmojiSelected: (_, emoji) => Navigator.of(context).pop(emoji.emoji),
+      config: notionEmojiPickerConfig(
+        context,
+        initCategory: Category.SMILEYS,
       ),
     ),
-  );
-}
+  ),
+);
 
 /// "Select text": the message body in a sheet, freely selectable, so a part
 /// can be copied on touch screens (the timeline's long-press opens the menu).
