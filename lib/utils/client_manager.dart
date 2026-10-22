@@ -6,6 +6,7 @@
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/composer_commands.dart';
 import 'package:chatloom/personal/diagnostics.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -146,6 +147,8 @@ abstract class ClientManager {
       ),
     );
     client.syncErrorMaxTimeoutSec = 60;
+    // No typed `/logout`, `/leave`, `/clearcache`…: formatting commands only.
+    restrictComposerCommands(client);
     if (!PersonalPrivacy.policy.allowOnlinePresence) {
       client.syncPresence = PresenceType.offline;
     }

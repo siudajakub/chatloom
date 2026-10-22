@@ -21,6 +21,18 @@ extension LocalizedBody on Event {
       RoundMediaPolicy.fromContent(content).canExport;
 
   Future<bool> _guardMediaExport(BuildContext context) async {
+    if (!status.isSent) {
+      // An unsent file is saved or shared once the server has it (the
+      // download would find no file yet, never delete the bubble).
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This file is not sent yet. Save or share it once it is sent.'),
+          ),
+        );
+      }
+      return false;
+    }
     var allowed = personalMediaExportAllowed;
     if (allowed && RoundVideoDescriptor.fromContent(content) != null) {
       try {

@@ -287,8 +287,14 @@ abstract final class PersonalPrivacy {
           BridgeFeature.thread,
         ...switch (content['msgtype']) {
           'm.image' => {BridgeFeature.image},
+          // bridgev2 checks a GIF-style loop against `fi.mau.gif`, not
+          // `m.video` (mautrix-go `GetCapMsgType`).
           'm.video' => {
-            round == null ? BridgeFeature.video : BridgeFeature.roundVideo,
+            round != null
+                ? BridgeFeature.roundVideo
+                : fileInfo is Map && fileInfo['fi.mau.gif'] == true
+                ? BridgeFeature.gif
+                : BridgeFeature.video,
           },
           'm.audio' => {
             content.containsKey('org.matrix.msc3245.voice')

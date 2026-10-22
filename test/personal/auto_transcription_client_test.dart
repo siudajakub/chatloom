@@ -39,6 +39,27 @@ class _Store implements PersonalStore {
   Future<void> close() async {}
 }
 
+/// Stored room state the SDK reads when a room is post-loaded.
+class _StateDatabase extends ConversationDatabase {
+  final stored = <String, List<Event>>{};
+  int reads = 0;
+  @override
+  Future<List<Event>> getUnimportantRoomEventStatesForRoom(
+    List<String> events,
+    Room room,
+  ) async {
+    reads++;
+    return stored[room.id] ?? const [];
+  }
+}
+
+class _StateClient extends Client {
+  _StateClient(_StateDatabase database)
+    : super('offline state fixture', database: database);
+  @override
+  String get userID => '@owner:example.invalid';
+}
+
 /// Real replica and policy logic; only journal readiness is simulated.
 class _Personal extends PersonalClient {
   _Personal(super.client, _Store store)
@@ -395,6 +416,97 @@ void main() {
       );
     },
   );
+
+  test(
+    'a chat not opened yet counts as disappearing until its state is read',
+    () async {
+      // The SDK keeps the timer state out of memory until a room is
+      // post-loaded; "not loaded" must never read as "off".
+      final database = _StateDatabase();
+      final stateClient = _StateClient(database);
+      final stateStore = _Store()
+        ..records[baselineKey(stateClient)] = {
+          'since': DateTime.now()
+              .subtract(const Duration(hours: 1))
+              .toUtc()
+              .toIso8601String(),
+        };
+      final statePersonal = _Personal(stateClient, stateStore)
+        ..workerReadiness = heartbeat('scan');
+      await statePersonal.loadLocal();
+      await statePersonal.loadAutoTranscriptionBaseline();
+      addTearDown(() {
+        statePersonal.fakeReady = false;
+        statePersonal.cancelAutoTranscriptionTimers();
+      });
+      final timed = ConversationRoom(stateClient, '!timed:example.invalid')
+        ..partial = true;
+      database.stored[timed.id] = [
+        Event(
+          room: timed,
+          type: beeperDisappearingTimerKey,
+          stateKey: '',
+          eventId: r'$timer',
+          senderId: '@bridge:example.invalid',
+          originServerTs: DateTime.utc(2026),
+          content: {'type': 'after_send', 'timer': 3600000},
+        ),
+      ];
+      final plain = ConversationRoom(stateClient, '!plain:example.invalid')
+        ..partial = true;
+      final hidden = voice(timed, r'$hidden');
+      final open = voice(plain, r'$open');
+      expect(
+        statePersonal.autoTranscriptionBlockFor(hidden, DateTime.now()),
+        'disappearing',
+      );
+      expect(
+        statePersonal.autoTranscriptionBlockFor(open, DateTime.now()),
+        'disappearing',
+        reason: 'unknown until read, even without a stored timer',
+      );
+      expect(statePersonal.autoTranscriptPending(open), isFalse);
+      final before = statePersonal.notifications;
+      await pumpEventQueue();
+      expect(timed.partial, isFalse);
+      expect(plain.partial, isFalse);
+      expect(database.reads, 2, reason: 'one local read per room');
+      expect(
+        statePersonal.notifications,
+        greaterThan(before),
+        reason: 'panels decide again',
+      );
+      expect(
+        statePersonal.autoTranscriptionBlockFor(hidden, DateTime.now()),
+        'disappearing',
+        reason: 'the stored timer',
+      );
+      expect(
+        statePersonal.autoTranscriptionBlockFor(open, DateTime.now()),
+        isNull,
+      );
+      await flushTimers();
+      expect(statePersonal.requests, isEmpty, reason: 'never the timed one');
+    },
+  );
+
+  test('a chat whose state cannot be read stays blocked', () async {
+    // The fixture database refuses every read: fail closed, no loop.
+    cloud.partial = true;
+    final event = voice(cloud, r'$unreadable');
+    expect(
+      personal.autoTranscriptionBlockFor(event, DateTime.now()),
+      'disappearing',
+    );
+    await pumpEventQueue();
+    expect(cloud.partial, isTrue);
+    expect(
+      personal.autoTranscriptionBlockFor(event, DateTime.now()),
+      'disappearing',
+    );
+    await flushTimers();
+    expect(personal.requests, isEmpty);
+  });
 
   test('videos wait for a worker that transcribes them', () async {
     // The current worker (no capability field) refuses videos.
