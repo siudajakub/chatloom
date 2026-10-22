@@ -354,17 +354,23 @@ Future<void> main(List<String> args) async {
             pins,
           );
           final payload = event.content['payload'] as Map?;
+          // A long transcript is published as a preview plus text slices;
+          // its result names the whole text by length and digest.
+          final parts = TranscriptTextParts.tryParse(payload?['textParts']);
+          final textMatches = parts != null
+              ? parts.matches(job['text'])
+              : (payload?['text'] == job['text']);
           if (event.content['entityId'] != id ||
               event.content['kind'] != 'transcript.result' ||
               payload?['state'] != 'done' ||
               payload?['revision'] != job['revision'] ||
-              payload?['text'] != job['text']) {
+              !textMatches) {
             stderr.writeln(
               jsonEncode({
                 'entityMatches': event.content['entityId'] == id,
                 'doneStateMatches': payload?['state'] == 'done',
                 'revisionMatches': payload?['revision'] == job['revision'],
-                'textMatches': payload?['text'] == job['text'],
+                'textMatches': textMatches,
               }),
             );
             throw const WorkerFailure('transcript_readback_mismatch');

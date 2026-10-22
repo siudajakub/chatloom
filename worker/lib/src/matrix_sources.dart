@@ -38,7 +38,7 @@ class MatrixLiveSources implements LiveSourceFeed {
   /// Decrypts a stored, still encrypted event with the keys held now
   /// ([decryptStoredEvent]); a test seam.
   final Future<Event> Function(Event event) decrypt;
-  final _queue = Queue<RecentSourceItem>();
+  final _queue = Queue<({Event event, AutoTranscriptionKind kind})>();
   final _seen = <String>{};
   final _seenOrder = Queue<String>();
   final _pending = <String, ({String roomId, DateTime since})>{};
@@ -107,6 +107,8 @@ class MatrixLiveSources implements LiveSourceFeed {
     if (_accept(event)) _signal();
   }
 
+  /// Queues a speech media message; its room's state is consulted when
+  /// the feed is drained ([drain] loads it for rooms never opened).
   bool _accept(Event event) {
     if (event.redacted ||
         event.type != EventTypes.Message ||
@@ -116,32 +118,42 @@ class MatrixLiveSources implements LiveSourceFeed {
     }
     final kind = transcribableMediaKind(event.content);
     if (kind == null) return false;
+    _remember(event.eventId);
+    if (_queue.length >= maxQueued) _queue.removeFirst();
+    _queue.add((event: event, kind: kind));
+    return true;
+  }
+
+  /// The item for a queued message, or null when its room rules it out.
+  Future<RecentSourceItem?> _item(
+    Event event,
+    AutoTranscriptionKind kind,
+  ) async {
     final room = event.room;
+    // Bridge declarations and the disappearing setting of a room the worker
+    // never opened are only in the SDK database until loaded.
+    await ensureRoomState(client, room);
     // The chat's disappearing setting; the transport re-checks before any
     // download, this only avoids creating jobs that would be refused.
     if (disappearingTimerLimits(
       room.getState(beeperDisappearingTimerKey)?.content,
     )) {
-      return false;
-    }
-    // Own messages sent from the bridged network arrive as the user's ghost.
-    if (ownRemoteIdentity(client).isOwn(event.senderId, roomId: room.id)) {
-      return false;
+      return null;
     }
     final duration = event.infoMap['duration'];
-    _remember(event.eventId);
-    if (_queue.length >= maxQueued) _queue.removeFirst();
-    _queue.add(
-      RecentSourceItem(
-        roomId: room.id,
-        eventId: event.eventId,
-        kind: kind,
-        network: networkOf(room),
-        durationMs: duration is int && duration >= 0 ? duration : null,
-        timestamp: event.originServerTs.toUtc(),
-      ),
+    return RecentSourceItem(
+      roomId: room.id,
+      eventId: event.eventId,
+      kind: kind,
+      network: networkOf(room),
+      durationMs: duration is int && duration >= 0 ? duration : null,
+      timestamp: event.originServerTs.toUtc(),
+      // Sent from the native app, the owner's message arrives as the
+      // owner's bridge ghost: the own-message rules of the policy apply.
+      outgoing: cachedOwnRemoteIdentity(
+        client,
+      ).isOwn(event.senderId, roomId: room.id),
     );
-    return true;
   }
 
   void _remember(String eventId) {
@@ -154,8 +166,13 @@ class MatrixLiveSources implements LiveSourceFeed {
   @override
   Future<List<RecentSourceItem>> drain() async {
     await _retryPending();
-    final items = _queue.toList();
+    final queued = _queue.toList();
     _queue.clear();
+    final items = <RecentSourceItem>[];
+    for (final entry in queued) {
+      final item = await _item(entry.event, entry.kind);
+      if (item != null) items.add(item);
+    }
     return items;
   }
 

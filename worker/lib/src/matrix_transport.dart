@@ -78,11 +78,179 @@ Future<Event> decryptStoredEvent(Client client, Event event) async {
   }
 }
 
+/// Room state the worker reads for rooms it never opened. The SDK keeps
+/// other state of a not yet loaded ("partial") room only in its database, so
+/// the bridge declarations (network label, own ghosts, bridge bots) and the
+/// chat's disappearing-message setting used to be invisible to the live feed
+/// and the transcription guard. These types are now "important" (kept in
+/// memory from sync); states stored before that are read once per room from
+/// the database by [ensureRoomState].
+const workerRoomStateTypes = {
+  'm.bridge',
+  'uk.half-shot.bridge',
+  'com.beeper.bridge',
+  'io.element.functional_members',
+  beeperDisappearingTimerKey,
+};
+
+final _roomStateLoaded = Expando<Set<String>>('worker room state');
+final _roomStateGeneration = Expando<List<int>>('worker room state gen');
+
+/// Puts the [workerRoomStateTypes] state of a partial [room] that the SDK
+/// stored before they were important into memory (once per room and
+/// process). Newer in-memory state from sync is never replaced.
+Future<void> ensureRoomState(Client client, Room room) async {
+  if (!room.partial) return;
+  final loaded = _roomStateLoaded[client] ??= <String>{};
+  if (!loaded.add(room.id)) return;
+  try {
+    final states = await client.database.getUnimportantRoomEventStatesForRoom(
+      client.importantStateEvents.difference(workerRoomStateTypes).toList(),
+      room,
+    );
+    var changed = false;
+    for (final state in states) {
+      if (!workerRoomStateTypes.contains(state.type) ||
+          room.getState(state.type, state.stateKey ?? '') != null) {
+        continue;
+      }
+      room.setState(state);
+      changed = true;
+    }
+    // A bridge declaration counts only while its bot is a joined member
+    // (personal_core own_identity); member state of a partial room is in
+    // the database as well.
+    for (final type in ownIdentityBridgeStateTypes) {
+      for (final state in room.states[type]?.values ?? <StrippedStateEvent>[]) {
+        final bot = state.content['bridgebot'];
+        if (bot is! String ||
+            bot.isEmpty ||
+            room.getState(EventTypes.RoomMember, bot) != null) {
+          continue;
+        }
+        final member = await client.database.getUser(bot, room);
+        if (member != null) {
+          room.setState(member);
+          changed = true;
+        }
+      }
+    }
+    if (changed) (_roomStateGeneration[client] ??= [0])[0]++;
+  } catch (_) {
+    loaded.remove(room.id); // Read again next time.
+  }
+}
+
+final _identityCache = Expando<({String key, OwnRemoteIdentity identity})>(
+  'own remote identity',
+);
+
+/// [ownRemoteIdentity], computed again only after a sync or a change of
+/// loaded room state, instead of walking every room and member for each
+/// incoming message and reminder check.
+OwnRemoteIdentity cachedOwnRemoteIdentity(Client client) {
+  var loaded = 0;
+  for (final room in client.rooms) {
+    if (!room.partial) loaded++;
+  }
+  final key =
+      '${client.prevBatch}|${client.rooms.length}|$loaded|'
+      '${_roomStateGeneration[client]?[0] ?? 0}';
+  final cached = _identityCache[client];
+  if (cached != null && cached.key == key) return cached.identity;
+  final identity = ownRemoteIdentity(client);
+  _identityCache[client] = (key: key, identity: identity);
+  return identity;
+}
+
+/// The chat's disappearing-message setting for the transcription guard.
+/// State in memory (kept current by sync once loaded, see
+/// [ensureRoomState]) decides; a room without it in memory or in the SDK
+/// database is asked on the server, because missing used to read as "off".
+/// Server answers are cached per room for [ttl], at most [maxRooms] rooms.
+/// Fail closed: an unreadable setting throws `source_policy_unknown` (the
+/// job retries later, nothing is fetched).
+class DisappearingTimerLookup {
+  static const ttl = Duration(seconds: 60);
+  static const maxRooms = 512;
+  final Client client;
+  final DateTime Function() clock;
+
+  /// Reads the state content from the server; a test seam. Null or an
+  /// `M_NOT_FOUND` error mean never set.
+  final Future<Object?> Function(Room room) readState;
+  final _cache = <String, ({bool limits, DateTime at})>{};
+  DisappearingTimerLookup(
+    this.client, {
+    DateTime Function()? clock,
+    Future<Object?> Function(Room room)? readState,
+  }) : clock = clock ?? DateTime.now,
+       readState =
+           readState ??
+           ((room) => client
+               .getRoomStateWithKey(room.id, beeperDisappearingTimerKey, '')
+               .timeout(const Duration(seconds: 5)));
+
+  Future<bool> limits(Room room) async {
+    await ensureRoomState(client, room);
+    final local = room.getState(beeperDisappearingTimerKey);
+    if (local != null) return disappearingTimerLimits(local.content);
+    final now = clock();
+    final cached = _cache[room.id];
+    if (cached != null && now.difference(cached.at) < ttl) return cached.limits;
+    bool limits;
+    try {
+      limits = disappearingTimerLimits(await readState(room));
+    } on MatrixException catch (e) {
+      if (e.error != MatrixError.M_NOT_FOUND) {
+        throw const WorkerFailure('source_policy_unknown');
+      }
+      limits = false; // Never set in this room.
+    } catch (_) {
+      throw const WorkerFailure('source_policy_unknown');
+    }
+    _cache.remove(room.id);
+    _cache[room.id] = (limits: limits, at: now);
+    if (_cache.length > maxRooms) _cache.remove(_cache.keys.first);
+    return limits;
+  }
+}
+
 class MatrixFeatureTransport
     implements FeatureTransport, MediaPreflight, BoundedAudioLoader {
   final Client client;
   final bool allowConversationSends;
-  MatrixFeatureTransport(this.client, {this.allowConversationSends = true});
+  final DisappearingTimerLookup disappearing;
+
+  /// A room key is requested at most this often per session: each request
+  /// asks the key backup and every participant's devices, and the SDK keeps
+  /// it until a key arrives.
+  static const keyRequestInterval = Duration(hours: 6);
+  final _keyRequests = <String, DateTime>{};
+  MatrixFeatureTransport(
+    this.client, {
+    this.allowConversationSends = true,
+    DisappearingTimerLookup? disappearing,
+  }) : disappearing = disappearing ?? DisappearingTimerLookup(client);
+
+  void _requestRoomKey(Room room, Event event) {
+    final session = event.content['session_id'];
+    final sender = event.content['sender_key'];
+    if (session is! String || sender is! String) return;
+    final now = DateTime.now();
+    final last = _keyRequests[session];
+    if (last != null && now.difference(last) < keyRequestInterval) return;
+    _keyRequests
+      ..remove(session)
+      ..[session] = now;
+    if (_keyRequests.length > 512) _keyRequests.remove(_keyRequests.keys.first);
+    unawaited(
+      Future<void>(
+        () => room.requestSessionKey(session, sender),
+      ).catchError((Object _) {}),
+    );
+  }
+
   @override
   String get accountId => client.userID!;
   @override
@@ -151,15 +319,9 @@ class MatrixFeatureTransport
     // without this a job waited for keys it already had, forever.
     final event = await decryptStoredEvent(client, stored);
     if (event.type == EventTypes.Encrypted) {
-      try {
-        await event.requestKey();
-      } catch (_) {}
-      final timeline = await selected.getTimeline();
-      try {
-        timeline.requestKeys(onlineKeyBackupOnly: false);
-      } finally {
-        timeline.cancelSubscriptions();
-      }
+      // Deduplicated per session; no timeline (which would load the whole
+      // room for good) and no new request on every retry.
+      _requestRoomKey(selected, event);
       throw const WorkerFailure('waiting_keys');
     }
     final rejection = transcriptionSourceRejection(
@@ -168,6 +330,10 @@ class MatrixFeatureTransport
       requireDeclaredSize: requireDeclaredSize,
     );
     if (rejection != null) throw WorkerFailure(rejection);
+    // The chat's setting, also for a room the worker never loaded.
+    if (await disappearing.limits(selected)) {
+      throw const WorkerFailure('protected_media');
+    }
     cancel.check();
     // The SDK would buffer any size; the bounded callback aborts the
     // transfer at maxBytes (the decrypted copy is the same size).
@@ -188,6 +354,9 @@ class MatrixFeatureTransport
       maxBytes: maxBytes,
     );
     if (afterDownload != null) throw WorkerFailure(afterDownload);
+    if (await disappearing.limits(selected)) {
+      throw const WorkerFailure('protected_media');
+    }
     if (file.bytes.lengthInBytes > maxBytes) {
       throw const WorkerFailure('source_too_large');
     }
@@ -226,6 +395,8 @@ class MatrixFeatureTransport
   /// provider never receives video. A declared size above [maxBytes] is
   /// refused; automatic jobs ([requireDeclaredSize]) also refuse media whose
   /// size is not declared, since nothing would bound the download upfront.
+  /// The room state in memory is checked here; [loadAudioBounded] also
+  /// asks [DisappearingTimerLookup] for rooms without it.
   static String? transcriptionSourceRejection(
     Event event, {
     int maxBytes = transcriptionSourceMaxBytes,
@@ -323,7 +494,7 @@ class MatrixFeatureTransport
     final selected = await room(conversation);
     final timeline = await selected.getTimeline();
     try {
-      final identity = ownRemoteIdentity(client);
+      final identity = cachedOwnRemoteIdentity(client);
       return await receivedReplySince(
         SdkReminderReplyHistory(timeline),
         client.userID!,

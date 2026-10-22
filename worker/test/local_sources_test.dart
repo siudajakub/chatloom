@@ -438,47 +438,6 @@ void main() {
 
   for (final (name, body) in [
     ('cursor moving backwards', {'cursor': 9, 'items': []}),
-    (
-      'cloud room',
-      {
-        'cursor': 11,
-        'items': [
-          {'roomId': '!a:example.org', 'eventId': r'$a', 'kind': 'voice'},
-        ],
-      },
-    ),
-    (
-      'unknown kind',
-      {
-        'cursor': 11,
-        'items': [
-          {'roomId': '!a:beeper.local', 'eventId': r'$a', 'kind': 'image'},
-        ],
-      },
-    ),
-    (
-      'bad event id',
-      {
-        'cursor': 11,
-        'items': [
-          {'roomId': '!a:beeper.local', 'eventId': 'a', 'kind': 'voice'},
-        ],
-      },
-    ),
-    (
-      'negative duration',
-      {
-        'cursor': 11,
-        'items': [
-          {
-            'roomId': '!a:beeper.local',
-            'eventId': r'$a',
-            'kind': 'voice',
-            'durationMs': -1,
-          },
-        ],
-      },
-    ),
     ('not an object', [1, 2]),
   ]) {
     test('recent scan rejects $name', () async {
@@ -497,6 +456,47 @@ void main() {
       );
     });
   }
+
+  test('one malformed item is skipped; the page and its cursor still count '
+      '(CB-12)', () async {
+    final fixture = await FixtureSource.start(roundMetadata);
+    fixture.recent = (_) => {
+      'cursor': 11,
+      'items': [
+        {'roomId': '!a:example.org', 'eventId': r'$cloud', 'kind': 'voice'},
+        {'roomId': '!a:beeper.local', 'eventId': r'$img', 'kind': 'image'},
+        {'roomId': '!a:beeper.local', 'eventId': 'bad', 'kind': 'voice'},
+        'not an item',
+        {
+          'roomId': '!a:beeper.local',
+          'eventId': r'$long',
+          'kind': 'voice',
+          // Above 24 h or negative: unknown, measured before any upload.
+          'durationMs': 90000000,
+          'timestampMs': -5,
+        },
+        {
+          'roomId': '!a:beeper.local',
+          'eventId': r'$negative',
+          'kind': 'voice',
+          'durationMs': -1,
+        },
+        {'roomId': '!a:beeper.local', 'eventId': r'$ok', 'kind': 'round'},
+      ],
+    };
+    final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
+    final page = await transport.recent(cursor: 10);
+    expect(page!.cursor, 11, reason: 'the cursor always advances');
+    expect(page.items.map((item) => item.eventId), [
+      r'$long',
+      r'$negative',
+      r'$ok',
+    ]);
+    expect(page.items.first.durationMs, isNull);
+    expect(page.items.first.timestamp, isNull);
+    expect(page.items[1].durationMs, isNull);
+    expect(transport.skippedRecentItems, 4);
+  });
 
   test(
     'scan and audit never collide with a running export on the 1-slot adapter',

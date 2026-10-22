@@ -165,6 +165,10 @@ class RecentSourceItem {
   final String network;
   final int? durationMs;
   final DateTime? timestamp;
+
+  /// Sent by the owner (for example from the native app, as the owner's
+  /// bridge ghost): the policy's own-message rules apply.
+  final bool outgoing;
   const RecentSourceItem({
     required this.roomId,
     required this.eventId,
@@ -172,6 +176,7 @@ class RecentSourceItem {
     this.network = 'unknown',
     this.durationMs,
     this.timestamp,
+    this.outgoing = false,
   });
   @override
   String toString() => 'RecentSourceItem(${kind.name}, redacted)';

@@ -33,6 +33,9 @@ class WorkerEngine {
     'openai_rate_limited',
     'openai_unavailable',
     'openai_unreachable',
+    // The chat's disappearing setting could not be read: never transcribed
+    // while unknown, tried again later (CB-02).
+    'source_policy_unknown',
   };
   final WorkerStore store;
   final FeatureTransport transport;
@@ -54,6 +57,7 @@ class WorkerEngine {
   /// Private operator switch (`autoTranscription` in the worker config).
   /// Off by default: the synced user policy alone never starts a scan.
   final bool autoTranscription;
+
   /// Round-robin source audit over every transcript job (redaction
   /// detection): [sourceAuditBatch] probes at most this often.
   static const sourceAuditInterval = Duration(seconds: 30);
@@ -67,7 +71,51 @@ class WorkerEngine {
   /// with a few hundred jobs a fresh voice note's transcript could wait the
   /// better part of an hour after a single slow check.
   static const parkedSourceRetry = Duration(seconds: 5);
+
+  /// A parked job whose source still cannot be checked is probed again
+  /// after a growing delay (5 s, doubling, at most this), so a source that
+  /// is gone for good costs a probe every half hour instead of every 5 s.
+  static const parkedSourceRetryMax = Duration(minutes: 30);
+
+  /// A transcript waiting for room keys this long ends `keys_unavailable`;
+  /// a later key for its room queues it once more.
+  static const keysWaitLimit = Duration(hours: 24);
+
+  /// A key arrival retries a room's key-waiting job at most this often.
+  static const keysWakeInterval = Duration(minutes: 5);
+
+  /// "Only if no reply" checks run beside the loop, at most this many at a
+  /// time, each bounded in time, so they never delay journal publication.
+  static const maxConcurrentReminderChecks = 2;
+  static const reminderReplyCheckTimeout = Duration(seconds: 15);
+
+  /// Automatic jobs refused by a rule rather than failing (a disappearing
+  /// chat, media that is not speech, limits, keys that never arrived): the
+  /// user never asked, so no error is shown; they end `cancelled`.
+  static const silentAutoRefusals = {
+    'protected_media',
+    'not_audio',
+    'invalid_round_format',
+    'invalid_media_format',
+    'invalid_media_metadata',
+    'source_too_large',
+    'no_audio_track',
+    'keys_unavailable',
+    'source_policy_unknown',
+  };
+
+  /// Worker bookkeeping in job bodies that clients never need.
+  static const _internalJobKeys = {
+    'pendingResult',
+    'providerAttemptAt',
+    'auditAt',
+    'audits',
+    'waitingKeysSince',
+    'keysWokenAt',
+    'keysRequeued',
+  };
   final Map<String, Cancellation> _cancellations = {};
+  final Map<String, Future<void>> _activeReminders = {};
   bool _running = false;
   bool _sourceAuditBusy = false;
   DateTime? _sourceAuditAt;
@@ -113,12 +161,20 @@ class WorkerEngine {
 
   void recover() {
     store.transaction(() {
-      for (final job in store.jobs()) {
-        if (job['state'] != 'processing') continue;
-        // Paid request outcomes cannot be inferred after a crash.
-        job['state'] = job['kind'] == 'transcript' ? 'unknown' : 'queued';
+      for (final job in [
+        for (final kind in ['transcript', 'schedule', 'reminder'])
+          ...store.jobsWhere(kind, ['processing']),
+      ]) {
+        // Paid request outcomes cannot be inferred after a crash; a job that
+        // never reached the provider (still downloading, measuring or
+        // converting) is simply queued again.
+        final paid = job['providerAttemptAt'] != null;
+        job['state'] = job['kind'] == 'transcript' && paid
+            ? 'unknown'
+            : 'queued';
         if (job['kind'] == 'transcript') {
-          job['errorCode'] = 'paid_request_unknown';
+          job['errorCode'] = paid ? 'paid_request_unknown' : null;
+          job.remove('providerAttemptAt');
         }
         store.saveJob(job);
         _result(job, 'recovery');
@@ -271,6 +327,14 @@ class WorkerEngine {
         _validateConversation(job.source.conversation);
         if (job.id != op.entityId || !job.source.eventId.startsWith(r'$')) {
           throw const WorkerFailure('invalid_source');
+        }
+        // Automatic work never replaces an existing job (the rule of the
+        // worker's own scans): a lagging or second device asking after the
+        // job finished must not pay again or erase its budget record. Only
+        // an explicit request re-runs a finished job.
+        if (job.automatic && previous != null) {
+          _reject(op, previous, 'already_exists');
+          return;
         }
         // Automatic work needs the operator switch as well as the synced
         // policy, also when a client asks on the policy's behalf.
@@ -438,14 +502,18 @@ class WorkerEngine {
         ? 'reminder.result'
         : 'schedule.result',
     {
-      ...?previous,
-      'id': op.entityId,
-      'state': 'conflict',
-      'actualState': previous?['state'],
-      'errorCode': code,
-      'revision': previous?['revision'] ?? 0,
-      'acceptedOpId': op.opId,
-    }..remove('pendingResult'),
+        ...?previous,
+        'id': op.entityId,
+        'state': 'conflict',
+        'actualState': previous?['state'],
+        'errorCode': code,
+        'revision': previous?['revision'] ?? 0,
+        'acceptedOpId': op.opId,
+      }
+      ..removeWhere((key, _) => _internalJobKeys.contains(key))
+      // The text was published with the job's done transition; echoing it
+      // in every refusal duplicated it and could exceed the event limit.
+      ..remove('text'),
   );
   void _result(Map<String, dynamic> body, String cause) {
     final kind = '${body['kind']}.result';
@@ -459,7 +527,8 @@ class WorkerEngine {
       entityId: body['id'] as String,
       baseRevision: body['revision'] as int,
       createdAt: clock(),
-      payload: Map<String, dynamic>.from(body)..remove('pendingResult'),
+      payload: Map<String, dynamic>.from(body)
+        ..removeWhere((key, _) => _internalJobKeys.contains(key)),
     );
     store.enqueue(id, result.toJson());
   }
@@ -482,33 +551,34 @@ class WorkerEngine {
         _mediaPrunedAt = clock();
         pruneMediaCheckpoints();
       }
-      // Schedules take priority over paid audio jobs; each is independently durable.
-      for (final job in store.jobs().where((j) => j['kind'] == 'schedule')) {
+      // Schedules take priority over paid audio jobs; each is independently
+      // durable. Only queued schedules have anything left to do.
+      for (final job in store.jobsWhere('schedule', ['queued'])) {
         await _schedule(job);
       }
-      for (final job in store.jobs().where(
-        (j) =>
-            j['kind'] == 'reminder' &&
-            {'queued', 'waitingKeys', 'waitingSync'}.contains(j['state']),
-      )) {
-        await _reminder(job);
+      for (final job in store.jobsWhere('reminder', [
+        'queued',
+        'waitingKeys',
+        'waitingSync',
+      ])) {
+        _startReminder(job);
       }
       final free = maxConcurrentTranscripts - _activeTranscripts.length;
       if (free > 0) {
         final now = clock();
         final candidates = store
-            .jobs()
+            .jobsWhere('transcript', ['queued', 'waitingKeys'])
             .where(
               (j) =>
-                  j['kind'] == 'transcript' &&
-                  {'queued', 'waitingKeys'}.contains(j['state']) &&
-                  !_activeTranscripts.containsKey(j['id']) &&
-                  _retryDue(j, now),
+                  !_activeTranscripts.containsKey(j['id']) && _retryDue(j, now),
             )
             .toList();
         for (final next in _byPriority(candidates).take(free)) {
           final id = next['id'] as String;
-          final run = _transcript(next);
+          // A storage failure inside a job must never become an uncaught
+          // asynchronous error that ends the process; the job stays as
+          // stored and is picked up again.
+          final run = _transcript(next).then<void>((_) {}, onError: (_) {});
           _activeTranscripts[id] = run;
           unawaited(
             run.whenComplete(() {
@@ -557,7 +627,7 @@ class WorkerEngine {
   }
 
   /// Exponential backoff for transient failures: 15 s, 1 min, 4 min, 16 min
-  /// (keys: up to 30 min apart, without a limit on attempts).
+  /// (keys: up to 30 min apart, for at most [keysWaitLimit]).
   Duration _backoff(int attempt) {
     final seconds = 15 * (1 << (2 * (attempt - 1)).clamp(0, 8));
     return Duration(seconds: seconds.clamp(15, 1800));
@@ -615,6 +685,48 @@ class WorkerEngine {
   /// before it fires anyway (`replyCheck: skipped`).
   static const reminderReplyCheckGrace = Duration(minutes: 5);
 
+  /// Fires a plain reminder at once; starts the reply check of an "only if
+  /// no reply" reminder beside the loop (see [maxConcurrentReminderChecks]).
+  /// Before, checks ran one after another inside [tick], up to 10 s each,
+  /// and delayed the publication of finished transcripts and reminders.
+  void _startReminder(Map<String, dynamic> job) {
+    final id = job['id'] as String;
+    if (_activeReminders.containsKey(id)) return;
+    final now = clock();
+    final due = DateTime.parse(job['dueAt'] as String);
+    if (job['untilReply'] != true) {
+      // Nothing to wait for: fired within this tick once due.
+      if (!now.isBefore(due)) {
+        unawaited(_reminder(job).then<void>((_) {}, onError: (_) {}));
+      }
+      return;
+    }
+    final next = job['nextReplyCheckAt'];
+    if (now.isBefore(due.add(reminderReplyCheckGrace)) &&
+        next is String &&
+        now.isBefore(DateTime.parse(next))) {
+      return; // Not due for a check yet.
+    }
+    if (_activeReminders.length >= maxConcurrentReminderChecks) {
+      return; // The next tick starts it.
+    }
+    final run = _reminder(job).then<void>((_) {}, onError: (_) {});
+    _activeReminders[id] = run;
+    unawaited(
+      run.whenComplete(() {
+        if (identical(_activeReminders[id], run)) _activeReminders.remove(id);
+        _signal();
+      }),
+    );
+  }
+
+  /// Completes when no reminder check is running (tests, shutdown).
+  Future<void> reminderChecksIdle() async {
+    while (_activeReminders.isNotEmpty) {
+      await Future.wait(_activeReminders.values.toList());
+    }
+  }
+
   /// A due reminder is fired. With "only if no reply" (`untilReply`) it is
   /// first checked for a real reply since it was set; a reply cancels it
   /// (`replied`). While the history cannot be read (missing keys, gaps), the
@@ -637,19 +749,33 @@ class WorkerEngine {
         Map<String, dynamic>.from(job['conversation'] as Map),
       );
       String? unresolved;
+      var replied = false;
       try {
-        if (await transport.hasRepliedSince(
-          ref,
-          DateTime.parse(job['createdAt'] as String),
-        )) {
-          job.remove('nextReplyCheckAt');
-          _setState(job, 'cancelled', 'replied');
-          return;
-        }
+        replied = await transport
+            .hasRepliedSince(ref, DateTime.parse(job['createdAt'] as String))
+            .timeout(reminderReplyCheckTimeout);
       } on WorkerFailure catch (e) {
         unresolved = e.code;
       } catch (_) {
         unresolved = 'history_unavailable';
+      }
+      // The journal may have changed the reminder while the check ran (for
+      // example cancelled it): apply the outcome only to the same version.
+      final current = store.job(job['id'] as String);
+      if (current == null ||
+          current['revision'] != job['revision'] ||
+          !{
+            'queued',
+            'waitingKeys',
+            'waitingSync',
+          }.contains(current['state'])) {
+        return;
+      }
+      job = current;
+      if (replied) {
+        job.remove('nextReplyCheckAt');
+        _setState(job, 'cancelled', 'replied');
+        return;
       }
       final now = clock();
       if (unresolved != null) {
@@ -722,6 +848,29 @@ class WorkerEngine {
       job['state'] == 'waitingSync' &&
       job['errorCode'] == 'source_status_unknown';
 
+  static bool _auditDue(Map<String, dynamic> job, DateTime now) {
+    final at = DateTime.tryParse(job['auditAt'] as String? ?? '');
+    return at == null || !now.isBefore(at);
+  }
+
+  /// Parks [job] on an unknown source status (saved by the caller's
+  /// transition) with its first probe [parkedSourceRetry] from now.
+  void _parkOnSource(Map<String, dynamic> job) {
+    job['audits'] = 0;
+    job['auditAt'] = clock().add(parkedSourceRetry).toUtc().toIso8601String();
+    _setState(job, 'waitingSync', 'source_status_unknown');
+  }
+
+  /// A parked job's probe failed again: next one after a doubled delay.
+  void _deferAudit(Map<String, dynamic> job) {
+    final audits = (job['audits'] as int? ?? 0) + 1;
+    var delay = parkedSourceRetry * (1 << audits.clamp(0, 16));
+    if (delay > parkedSourceRetryMax) delay = parkedSourceRetryMax;
+    job['audits'] = audits;
+    job['auditAt'] = clock().add(delay).toUtc().toIso8601String();
+    store.saveJob(job);
+  }
+
   /// Invoked after sync reconciliation; only explicit jobs, no history scan.
   /// Parked jobs (see [parkedSourceRetry]) first, then the bounded
   /// round-robin over every job.
@@ -740,7 +889,14 @@ class WorkerEngine {
     _sourceAuditBusy = true;
     try {
       if (parkedDue) {
-        final parked = store.jobs().where(_parkedOnSource).toList();
+        final parked = store
+            .jobsWithError('transcript', [
+              'waitingSync',
+            ], 'source_status_unknown')
+            .where(
+              (job) => _parkedOnSource(job) && (force || _auditDue(job, now)),
+            )
+            .toList();
         if (parked.isNotEmpty) {
           _parkedAuditAt = now;
           // Rotate, so more parked jobs than one batch all get their turn.
@@ -756,19 +912,14 @@ class WorkerEngine {
       }
       if (!roundRobinDue) return;
       _sourceAuditAt = now;
-      final jobs = store
-          .jobs()
-          .where(
-            (job) =>
-                job['kind'] == 'transcript' &&
-                job['errorCode'] != 'source_redacted',
-          )
-          .toList();
-      if (jobs.isEmpty) return;
-      final cursor = store.checkpoint('source-audit');
-      final prior = jobs.indexWhere((job) => job['id'] == cursor);
-      for (var n = 0; n < jobs.length && n < sourceAuditBatch; n++) {
-        final snapshot = jobs[(prior + 1 + n) % jobs.length];
+      // Only jobs whose source still matters: live ones, and finished ones
+      // holding text (to erase it when the message is deleted). Skips,
+      // failures and empty results have nothing to protect.
+      final batch = store.sourceAuditBatch(
+        store.checkpoint('source-audit'),
+        limit: sourceAuditBatch,
+      );
+      for (final snapshot in batch) {
         await _auditSource(snapshot);
         store.setCheckpoint('source-audit', snapshot['id'] as String);
       }
@@ -792,10 +943,15 @@ class WorkerEngine {
     }
     if (redacted == true) {
       _invalidateSource(current);
+    } else if (redacted == null) {
+      if (_parkedOnSource(current)) _deferAudit(current);
     } else if (redacted == false &&
         current['state'] == 'waitingSync' &&
         current['pendingResult'] == null &&
         current['errorCode'] == 'source_status_unknown') {
+      current
+        ..remove('auditAt')
+        ..remove('audits');
       _setState(current, 'queued', null);
     } else if (redacted == false &&
         current['pendingResult'] is Map &&
@@ -803,30 +959,77 @@ class WorkerEngine {
       final pending = Map<String, dynamic>.from(
         current.remove('pendingResult') as Map,
       );
-      current.addAll(pending);
+      current
+        ..addAll(pending)
+        ..remove('auditAt')
+        ..remove('audits');
       _setState(current, 'done', null);
     }
   }
 
-  /// New room keys arrived (to-device): jobs waiting for keys try again now
-  /// instead of after their backoff (up to 30 min apart). Nothing is paid
-  /// for a retry that still finds no key.
-  int retryWaitingKeys() {
+  /// New room keys arrived (to-device) for [rooms] (every room when null):
+  /// their key-waiting jobs try again now instead of after their backoff,
+  /// each at most once per [keysWakeInterval]; a job that gave up waiting
+  /// (`keys_unavailable`) is queued once more. Jobs of other rooms are not
+  /// touched: a Beeper account receives room keys many times a day. Nothing
+  /// is paid or published for a retry that still finds no key.
+  int retryWaitingKeys({Set<String>? rooms}) {
+    if (rooms != null && rooms.isEmpty) return 0;
+    final now = clock();
+    bool inRooms(Map<String, dynamic> job) {
+      if (rooms == null) return true;
+      final source = job['source'];
+      final conversation = source is Map ? source['conversation'] : null;
+      return conversation is Map && rooms.contains(conversation['roomId']);
+    }
+
     var woken = 0;
     store.transaction(() {
-      for (final job in store.jobs()) {
-        if (job['kind'] != 'transcript' ||
-            job['state'] != 'waitingKeys' ||
-            !job.containsKey('retryAt')) {
-          continue;
-        }
-        job.remove('retryAt');
+      for (final job in store.jobsWhere('transcript', ['waitingKeys'])) {
+        if (!job.containsKey('retryAt') || !inRooms(job)) continue;
+        final last = DateTime.tryParse(job['keysWokenAt'] as String? ?? '');
+        if (last != null && now.difference(last) < keysWakeInterval) continue;
+        job
+          ..remove('retryAt')
+          ..['keysWokenAt'] = now.toUtc().toIso8601String();
         store.saveJob(job);
         woken++;
       }
     });
+    for (final job in _gaveUpOnKeys().where(inRooms)) {
+      job
+        ..remove('retries')
+        ..remove('retryAt')
+        ..remove('waitingKeysSince')
+        ..['keysRequeued'] = true;
+      _setState(job, 'queued', null);
+      woken++;
+    }
     if (woken > 0) _signal();
     return woken;
+  }
+
+  /// Jobs that ended `keys_unavailable` and were not queued again yet.
+  List<Map<String, dynamic>> _gaveUpOnKeys() => [
+    for (final job in store.jobsWithError('transcript', [
+      'failed',
+      'cancelled',
+    ], 'keys_unavailable'))
+      if (job['errorCode'] == 'keys_unavailable' && job['keysRequeued'] != true)
+        job,
+  ];
+
+  /// Whether a job of [roomId] could use new room keys (the daemon wakes
+  /// only for keys that can help).
+  bool waitsForKeys(String roomId) {
+    bool inRoom(Map<String, dynamic> job) {
+      final source = job['source'];
+      final conversation = source is Map ? source['conversation'] : null;
+      return conversation is Map && conversation['roomId'] == roomId;
+    }
+
+    return store.jobsWhere('transcript', ['waitingKeys']).any(inRoom) ||
+        _gaveUpOnKeys().any(inRoom);
   }
 
   Future<bool?> _probeSource(SourceEventRef source) async {
@@ -861,13 +1064,6 @@ class WorkerEngine {
     final id = job['id'] as String;
     final requestId = job['acceptedOpId'];
     final automatic = job['origin'] == TranscriptionOrigin.auto.name;
-    // The user (policy) or the operator (switch, after a restart) may have
-    // turned automatic transcription off while this job waited. Nothing has
-    // been downloaded or paid for yet.
-    if (automatic && (!autoTranscription || !autoPolicy().auto)) {
-      _setState(job, 'cancelled', 'auto_disabled');
-      return;
-    }
     // A cancelled request may be replaced by an explicitly requested retry
     // while this attempt is still awaiting transport/provider cleanup.
     Map<String, dynamic>? currentAttempt() {
@@ -881,11 +1077,39 @@ class WorkerEngine {
       return current;
     }
 
-    final cancel = _cancellations[id] = Cancellation();
+    // A retry of a job waiting for keys or backing off publishes only when
+    // what clients see changes, not "processing" and the same wait again on
+    // every attempt (two journal events per attempt, on every device).
+    final quiet = job['state'] == 'waitingKeys' || job['retries'] != null;
+    final shown = (job['state'] as String?, job['errorCode'] as String?);
+    void finish(Map<String, dynamic> current, String state, String? error) {
+      if (quiet && shown.$1 == state && shown.$2 == error) {
+        current['state'] = state;
+        current['errorCode'] = error;
+        store.saveJob(current);
+      } else {
+        _setState(current, state, error);
+      }
+    }
+
+    final cancel = Cancellation();
     void Function()? releaseLarge;
-    job.remove('retryAt');
-    _setState(job, 'processing', null);
     try {
+      // The user (policy) or the operator (switch, after a restart) may have
+      // turned automatic transcription off while this job waited. Nothing
+      // has been downloaded or paid for yet.
+      if (automatic && (!autoTranscription || !autoPolicy().auto)) {
+        _setState(job, 'cancelled', 'auto_disabled');
+        return;
+      }
+      _cancellations[id] = cancel;
+      job.remove('retryAt');
+      if (quiet) {
+        job['state'] = 'processing';
+        store.saveJob(job);
+      } else {
+        _setState(job, 'processing', null);
+      }
       final source = SourceEventRef.fromJson(
         Map<String, dynamic>.from(job['source'] as Map),
       );
@@ -912,7 +1136,7 @@ class WorkerEngine {
       final initial = currentAttempt();
       if (initial == null) return;
       if (initialStatus == null) {
-        _setState(initial, 'waitingSync', 'source_status_unknown');
+        _parkOnSource(initial);
         return;
       }
       if (initialStatus == true) {
@@ -994,13 +1218,18 @@ class WorkerEngine {
                 }
                 // Keep the estimate durable for budget accounting, but skip the
                 // separate journal publication; the final result carries it.
+                // From here on the provider may be paid (see [recover]).
                 current['durationSeconds'] = duration;
                 current['estimatedCostUsd'] = cost;
+                current['providerAttemptAt'] = clock()
+                    .toUtc()
+                    .toIso8601String();
                 store.saveJob(current);
                 return;
               }
               current['durationSeconds'] = duration;
               current['estimatedCostUsd'] = cost;
+              current['providerAttemptAt'] = clock().toUtc().toIso8601String();
               _setState(current, 'processing', null);
             },
           );
@@ -1019,10 +1248,13 @@ class WorkerEngine {
         'durationSeconds': result.durationSeconds,
         'estimatedCostUsd': result.estimatedCostUsd,
       };
-      latest.remove('retries');
+      latest
+        ..remove('retries')
+        ..remove('waitingKeysSince')
+        ..remove('providerAttemptAt');
       if (redacted == null) {
         latest['pendingResult'] = values;
-        _setState(latest, 'waitingSync', 'source_status_unknown');
+        _parkOnSource(latest);
       } else {
         latest.addAll(values);
         _setState(latest, 'done', null);
@@ -1039,40 +1271,58 @@ class WorkerEngine {
         return;
       }
       final retries = (current['retries'] as int? ?? 0) + 1;
-      if (e.code == 'waiting_keys' ||
-          (transientRetryCodes.contains(e.code) &&
-              retries <= transientRetryLimit)) {
+      var code = e.code;
+      if (code == 'waiting_keys') {
+        final now = clock();
+        final since =
+            DateTime.tryParse(current['waitingKeysSince'] as String? ?? '') ??
+            now;
+        current['waitingKeysSince'] = since.toUtc().toIso8601String();
+        if (now.difference(since) < keysWaitLimit) {
+          // Nothing was charged: wait, then try again without busy-looping.
+          current['retries'] = retries;
+          current['retryAt'] = now
+              .add(_backoff(retries))
+              .toUtc()
+              .toIso8601String();
+          finish(current, 'waitingKeys', code);
+          return;
+        }
+        // Waited a day: stop retrying. A later key for this room queues it
+        // once more (retryWaitingKeys).
+        code = 'keys_unavailable';
+        current.remove('waitingKeysSince');
+      } else if (transientRetryCodes.contains(code) &&
+          retries <= transientRetryLimit) {
         // Nothing was charged: wait, then try again without busy-looping.
         current['retries'] = retries;
         current['retryAt'] = clock()
             .add(_backoff(retries))
             .toUtc()
             .toIso8601String();
-        _setState(
-          current,
-          e.code == 'waiting_keys' ? 'waitingKeys' : 'queued',
-          e.code,
-        );
+        finish(current, 'queued', code);
         return;
       }
-      current.remove('retryAt');
-      // A video without an audio stream has nothing to transcribe; an
-      // automatic job is simply dropped (no error shown, nothing charged).
-      final silentSkip = e.code == 'no_audio_track' && automatic;
+      current
+        ..remove('retryAt')
+        ..remove('providerAttemptAt');
+      // What an automatic job's rules refuse (a video without sound, a
+      // disappearing chat, limits) is dropped without an error on a message
+      // the user never asked about; nothing was charged.
+      final silentSkip = automatic && silentAutoRefusals.contains(code);
       _setState(
         current,
         e is PaidRequestUnknown
             ? 'unknown'
-            : e.code == 'waiting_keys'
-            ? 'waitingKeys'
-            : e.code == 'cancelled' || e.code.startsWith('auto_') || silentSkip
+            : code == 'cancelled' || code.startsWith('auto_') || silentSkip
             ? 'cancelled'
             : 'failed',
-        e.code,
+        code,
       );
     } catch (_) {
       final current = currentAttempt();
       if (current != null) {
+        current.remove('providerAttemptAt');
         _setState(current, 'failed', 'transcription_failed');
       }
     } finally {
@@ -1228,25 +1478,10 @@ class WorkerEngine {
 
   /// Estimated cost of automatic jobs created within the rolling window,
   /// including uncertain paid attempts.
-  double autoSpent({String? excluding}) {
-    final from = clock().subtract(autoBudgetWindow);
-    var total = 0.0;
-    for (final job in store.jobs()) {
-      if (job['kind'] != 'transcript' ||
-          job['origin'] != TranscriptionOrigin.auto.name ||
-          job['id'] == excluding) {
-        continue;
-      }
-      final created = DateTime.tryParse(job['createdAt'] as String? ?? '');
-      if (created == null || created.isBefore(from)) continue;
-      final pending = job['pendingResult'];
-      final cost =
-          job['estimatedCostUsd'] ??
-          (pending is Map ? pending['estimatedCostUsd'] : null);
-      if (cost is num && cost.isFinite && cost > 0) total += cost;
-    }
-    return total;
-  }
+  double autoSpent({String? excluding}) => store.autoSpentSince(
+    clock().subtract(autoBudgetWindow),
+    excluding: excluding,
+  );
 
   Map<String, dynamic>? _metadataValue(String id) {
     final stored = store.metadata(id);
@@ -1395,7 +1630,9 @@ class WorkerEngine {
           kind: item.kind,
           network: item.network,
           roomId: item.roomId,
-          outgoing: false,
+          // The owner's own message (a bridge ghost): the policy's own-
+          // message switch decides, not incoming rules.
+          outgoing: item.outgoing,
           timestamp: timestamp,
           durationMs: item.durationMs,
           chatMetadata: _metadataValue('org:${item.roomId}'),
@@ -1468,6 +1705,7 @@ class WorkerEngine {
   Future<void> shutdown() async {
     cancelAll();
     await waitForIdle();
+    await reminderChecksIdle();
   }
 
   Future<void> waitForIdle() async {

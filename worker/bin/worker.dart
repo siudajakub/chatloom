@@ -164,6 +164,16 @@ Future<void> main(List<String> arguments) async {
           return;
         }
         engine.recover();
+        // The SDK keeps the id of the sync filter it defined first; a changed
+        // worker filter (no typing, receipts or presence) is defined once.
+        if (store.checkpoint('sync-filter') != workerSyncFilterVersion) {
+          try {
+            await client.redefineSyncFilter();
+            store.setCheckpoint('sync-filter', workerSyncFilterVersion);
+          } catch (_) {
+            stderr.writeln('Sync filter update deferred');
+          }
+        }
         var stopping = false;
         final subscriptions = <StreamSubscription<ProcessSignal>>[];
         for (final signal in [ProcessSignal.sigint, ProcessSignal.sigterm]) {
@@ -177,21 +187,55 @@ Future<void> main(List<String> arguments) async {
             }),
           );
         }
-        // New room keys (to-device) let jobs waiting for keys try again at
-        // once, and end the loop's wait like a received message does.
-        var newKeys = false;
-        Completer<void>? keysWake;
+        // One wait per loop iteration, ended by whichever source has news.
+        // Each source future gets one listener for its whole life (before,
+        // every 2-second wait added another to futures that complete only
+        // on activity, tens of thousands a day).
+        Completer<void>? currentWait;
+        var wokenDuringCycle = false;
+        void wakeLoop() {
+          final wait = currentWait;
+          currentWait = null;
+          if (wait == null) {
+            wokenDuringCycle = true;
+          } else if (!wait.isCompleted) {
+            wait.complete();
+          }
+        }
+
+        Future<void>? watchedEngine, watchedLive;
+        void watchSources() {
+          final engineWake = engine.wakeup;
+          if (!identical(engineWake, watchedEngine)) {
+            watchedEngine = engineWake;
+            unawaited(engineWake.then((_) => wakeLoop()));
+          }
+          final liveWake = liveSources?.wakeup;
+          if (liveWake != null && !identical(liveWake, watchedLive)) {
+            watchedLive = liveWake;
+            unawaited(liveWake.then((_) => wakeLoop()));
+          }
+        }
+
+        // New room keys (to-device) let jobs of that room waiting for keys
+        // try again at once; keys for other rooms wake nothing.
+        final keyRooms = <String>{};
         final keyWatch = client.onToDeviceEvent.stream
             .where(
               (event) =>
                   event.type == EventTypes.RoomKey ||
                   event.type == EventTypes.ForwardedRoomKey,
             )
-            .listen((_) {
-              newKeys = true;
-              final wake = keysWake;
-              keysWake = null;
-              if (wake != null && !wake.isCompleted) wake.complete();
+            .listen((event) {
+              final room = event.content['room_id'];
+              if (room is! String || keyRooms.contains(room)) return;
+              try {
+                if (!engine.waitsForKeys(room)) return;
+              } catch (_) {
+                return;
+              }
+              keyRooms.add(room);
+              wakeLoop();
             });
         final heartbeats = HeartbeatSchedule();
         // A fresh journal session at start and daily, so app devices added
@@ -199,22 +243,49 @@ Future<void> main(List<String> arguments) async {
         final sessionRotation = JournalSessionRotation(
           SdkOutboundSession(client, config.journalRoomId),
         );
+        DateTime? rotationFailingSince;
+
+        /// Runs one loop step; a failure is logged (code only) and never
+        /// skips the steps after it. Journal loss is fatal as before.
+        Future<void> step(Future<void> Function() action) async {
+          try {
+            await action();
+          } on WorkerFailure catch (e) {
+            if (stopping) return;
+            if (e.code == 'journal_membership_changed' ||
+                e.code == 'journal_marker_missing' ||
+                e.code == 'journal_unavailable') {
+              rethrow;
+            }
+            stderr.writeln('Worker cycle deferred: ${e.code}');
+          } catch (_) {
+            if (stopping) return;
+            stderr.writeln(
+              'Worker cycle deferred: connection_or_storage_error',
+            );
+          }
+        }
+
         try {
           while (!stopping) {
-            try {
+            await step(() async {
               await journal.reconcile();
-              if (stopping) break;
+              if (stopping) return;
               await engine.auditTranscriptSources();
-              if (stopping) break;
+              if (stopping) return;
               await engine.autoScan();
-              if (stopping) break;
-              if (newKeys) {
-                newKeys = false;
-                engine.retryWaitingKeys();
+              if (stopping) return;
+              if (keyRooms.isNotEmpty) {
+                final rooms = {...keyRooms};
+                keyRooms.clear();
+                engine.retryWaitingKeys(rooms: rooms);
               }
               await engine.tick();
-              if (stopping) break;
+            });
+            if (stopping) break;
+            await step(() async {
               final at = DateTime.now().toUtc();
+              final parked = store.parkedCount;
               final heartbeatPayload = <String, dynamic>{
                 'healthy': true,
                 'verified': transport.verified,
@@ -231,13 +302,9 @@ Future<void> main(List<String> arguments) async {
                     ? 'configured'
                     : 'not_configured',
                 'pendingReminderHints': store.reminderHints.length,
-                'pending': store
-                    .jobs()
-                    .where(
-                      (j) =>
-                          !{'done', 'cancelled', 'failed'}.contains(j['state']),
-                    )
-                    .length,
+                'pending': store.pendingJobCount,
+                // Results the homeserver refused for good (content-free).
+                if (parked > 0) 'parkedResults': parked,
               };
               if (heartbeats.due(at, heartbeatPayload)) {
                 final heartbeat = PersonalOperation(
@@ -250,36 +317,44 @@ Future<void> main(List<String> arguments) async {
                 store.enqueue(heartbeat.opId, heartbeat.toJson());
                 heartbeats.sent(at, heartbeatPayload);
               }
-              final rotated = await sessionRotation.rotateIfDue();
-              if (rotated != null) {
-                stderr.writeln('Journal session rotated: ${rotated.name}');
+            });
+            if (stopping) break;
+            // Publication runs on every cycle, whatever failed above.
+            await step(() async {
+              try {
+                final rotated = await sessionRotation.rotateIfDue();
+                rotationFailingSince = null;
+                if (rotated != null) {
+                  stderr.writeln('Journal session rotated: ${rotated.name}');
+                }
+              } on WorkerFailure {
+                // Results published under an old session cannot be trusted
+                // by devices added since, so publication waits for the
+                // rotation, but not forever.
+                final since = rotationFailingSince ??= DateTime.now();
+                if (DateTime.now().difference(since) <
+                    const Duration(minutes: 10)) {
+                  rethrow;
+                }
               }
               await journal.flush();
-              if (stopping) break;
-              await reminderDelivery.flush();
-            } on WorkerFailure catch (e) {
-              if (stopping) break;
-              if (e.code == 'journal_membership_changed' ||
-                  e.code == 'journal_marker_missing' ||
-                  e.code == 'journal_unavailable') {
-                rethrow;
-              }
-              stderr.writeln('Worker cycle deferred: ${e.code}');
-            } catch (_) {
-              if (stopping) break;
-              stderr.writeln(
-                'Worker cycle deferred: connection_or_storage_error',
-              );
-            }
+            });
+            if (stopping) break;
+            await step(reminderDelivery.flush);
             if (!stopping) {
-              // Event driven: a received message (live feed) or a finished
-              // transcript (result to publish) ends the wait at once.
-              await Future.any<void>([
-                Future<void>.delayed(const Duration(seconds: 2)),
-                engine.wakeup,
-                ?liveSources?.wakeup,
-                (keysWake ??= Completer<void>()).future,
-              ]);
+              // Event driven: a received message (live feed), a finished
+              // transcript or reminder check (result to publish) or a
+              // useful room key ends the wait at once.
+              watchSources();
+              if (wokenDuringCycle) {
+                wokenDuringCycle = false;
+                continue;
+              }
+              final wait = currentWait = Completer<void>();
+              final timer = Timer(const Duration(seconds: 2), wakeLoop);
+              await wait.future;
+              timer.cancel();
+              wokenDuringCycle = false;
             }
           }
         } finally {

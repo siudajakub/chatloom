@@ -8,6 +8,7 @@ import 'package:vodozemac/vodozemac.dart' as vod;
 import 'package:http/http.dart' as http;
 import 'config.dart';
 import 'ports.dart';
+import 'matrix_transport.dart' show workerRoomStateTypes;
 import 'session_client.dart';
 
 Future<void> privateDirectory(String directory) async {
@@ -96,7 +97,8 @@ Future<WorkerSessionClient> openSession(
     shareKeysWith: ShareKeysWith.crossVerified,
     sendTimelineEventTimeout: const Duration(seconds: 30),
     onSoftLogout: (c) => c.refreshAccessToken(),
-    importantStateEvents: {personalJournalMarker},
+    importantStateEvents: workerImportantStateEvents,
+    syncFilter: workerSyncFilter(),
   );
   client.syncPresence = PresenceType.offline;
   // Subscribers attached here also see the catch-up sync after a restart.
@@ -118,6 +120,26 @@ Future<WorkerSessionClient> openSession(
 
 // Used only for preserving the room marker in SDK sync; wire value is frozen.
 const personalJournalMarker = 'pl.personal.client.journal.v1';
+
+Set<String> get workerImportantStateEvents => {
+  personalJournalMarker,
+  ...workerRoomStateTypes,
+};
+
+/// Bump when [workerSyncFilter] changes: the SDK keeps the id of the filter
+/// it defined first, so a changed filter is registered again once.
+const workerSyncFilterVersion = 'worker-sync-filter-2';
+
+/// Typing, receipts and presence of every bridged room are of no use to the
+/// worker, yet each delivery ran a database transaction and woke the loop.
+/// To-device messages (room keys) and timelines are unaffected.
+Filter workerSyncFilter() => Filter(
+  presence: EventFilter(notTypes: ['*']),
+  room: RoomFilter(
+    ephemeral: StateFilter(notTypes: ['*']),
+    state: StateFilter(lazyLoadMembers: true),
+  ),
+);
 
 Future<void> writePrivateJson(
   String filename,

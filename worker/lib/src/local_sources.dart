@@ -394,14 +394,13 @@ class LocalSourceTransport
         (data['items'] as List).length > limit) {
       throw const WorkerFailure('invalid_recent_response');
     }
+    // One bad item no longer rejects the page: before, the cursor never
+    // moved past it and the same page was refused every 3 s, forever.
     final items = <RecentSourceItem>[];
     for (final raw in data['items'] as List) {
-      if (raw is! Map) throw const WorkerFailure('invalid_recent_response');
-      final room = raw['roomId'], event = raw['eventId'];
-      final kind = _kind(raw['kind']);
-      final duration = raw['durationMs'];
-      final timestamp = raw['timestampMs'];
-      final network = raw['network'];
+      final room = raw is Map ? raw['roomId'] : null;
+      final event = raw is Map ? raw['eventId'] : null;
+      final kind = raw is Map ? _kind(raw['kind']) : null;
       if (room is! String ||
           !room.startsWith('!') ||
           !room.endsWith(':beeper.local') ||
@@ -409,12 +408,16 @@ class LocalSourceTransport
           event is! String ||
           !event.startsWith(r'$') ||
           event.length > 255 ||
-          kind == null ||
-          (duration != null &&
-              (duration is! int || duration < 0 || duration > 86400000)) ||
-          (timestamp != null && (timestamp is! int || timestamp <= 0))) {
-        throw const WorkerFailure('invalid_recent_response');
+          kind == null) {
+        skippedRecentItems++;
+        continue;
       }
+      raw as Map;
+      // Implausible metadata is dropped, not the message: an unknown
+      // duration is measured before any upload, an unknown time is too old.
+      final duration = raw['durationMs'];
+      final timestamp = raw['timestampMs'];
+      final network = raw['network'];
       items.add(
         RecentSourceItem(
           roomId: room,
@@ -423,18 +426,20 @@ class LocalSourceTransport
           network: network is String && _network.hasMatch(network)
               ? network
               : 'unknown',
-          durationMs: duration as int?,
-          timestamp: timestamp == null
-              ? null
-              : DateTime.fromMillisecondsSinceEpoch(
-                  timestamp as int,
-                  isUtc: true,
-                ),
+          durationMs: duration is int && duration >= 0 && duration <= 86400000
+              ? duration
+              : null,
+          timestamp: timestamp is int && timestamp > 0
+              ? DateTime.fromMillisecondsSinceEpoch(timestamp, isUtc: true)
+              : null,
         ),
       );
     }
     return RecentSourcePage(data['cursor'] as int, items);
   }
+
+  /// Items of recent pages skipped as malformed (diagnostics and tests).
+  int skippedRecentItems = 0;
 
   @override
   Future<String> send(

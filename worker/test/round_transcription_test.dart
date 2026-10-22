@@ -28,7 +28,15 @@ class _SourceRoom extends Room {
 
 class _Transport extends MatrixFeatureTransport {
   final _SourceRoom selected;
-  _Transport(super.client, this.selected);
+  // No homeserver here: the chat setting is never set unless the room's
+  // state says so (room_state_test covers the server read).
+  _Transport(super.client, this.selected)
+    : super(
+        disappearing: DisappearingTimerLookup(
+          client,
+          readState: (_) async => null,
+        ),
+      );
   @override
   Future<Room> room(ConversationRef ref) async => selected;
 }

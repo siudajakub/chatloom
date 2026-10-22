@@ -135,6 +135,13 @@ Map<String, dynamic> schedule(String id, DateTime due, {bool read = false}) =>
       ).toJson(),
     );
 
+/// One engine tick and the reply checks it started (they run beside the
+/// daemon loop since wave 5).
+Future<void> settle(WorkerEngine engine) async {
+  await engine.tick();
+  await engine.reminderChecksIdle();
+}
+
 void main() {
   late WorkerStore store;
   late FakeTransport transport;
@@ -170,18 +177,18 @@ void main() {
         }),
       );
       transport.replyHistoryFailure = 'waiting_keys';
-      await engine.tick();
+      await settle(engine);
       expect(store.job('r')!['state'], 'waitingKeys');
       expect(store.job('r')!['due'], isNot(true));
       transport.replyHistoryFailure = 'history_unavailable';
       reminderClock = now.add(const Duration(seconds: 31));
-      await engine.tick();
+      await settle(engine);
       expect(store.job('r')!['state'], 'waitingSync');
       expect(store.job('r')!['due'], isNot(true));
       transport.replyHistoryFailure = null;
       transport.receivedReply = true;
       reminderClock = now.add(const Duration(seconds: 62));
-      await engine.tick();
+      await settle(engine);
       expect(store.job('r')!['state'], 'cancelled');
       expect(store.job('r')!['errorCode'], 'replied');
       expect(transport.sent, isEmpty);
@@ -207,12 +214,12 @@ void main() {
         }),
       );
       transport.replyHistoryFailure = 'waiting_keys';
-      await engine.tick();
+      await settle(engine);
       transport.replyHistoryFailure = null;
-      await engine.tick();
+      await settle(engine);
       expect(store.job('r')!['state'], 'waitingKeys');
       reminderClock = now.add(const Duration(seconds: 31));
-      await engine.tick();
+      await settle(engine);
       expect(store.job('r')!['state'], 'done');
       expect(store.job('r')!['due'], true);
       expect(transport.reads, isEmpty);
@@ -247,22 +254,22 @@ void main() {
         final graceEnd = due.add(WorkerEngine.reminderReplyCheckGrace);
         create(due);
         transport.replyHistoryFailure = 'waiting_keys';
-        await engine.tick();
+        await settle(engine);
         expect(store.job('r')!['state'], 'waitingKeys');
         // The retry is pulled forward to the due time instead of +30 s.
         expect(store.job('r')!['nextReplyCheckAt'], due.toIso8601String());
         reminderClock = due;
-        await engine.tick();
+        await settle(engine);
         expect(store.job('r')!['state'], 'waitingKeys');
         expect(store.job('r')!['due'], isNot(true));
         transport.replyHistoryFailure = 'history_unavailable';
         reminderClock = graceEnd.subtract(const Duration(seconds: 1));
-        await engine.tick();
+        await settle(engine);
         expect(store.job('r')!['state'], 'waitingSync');
         expect(store.job('r')!['due'], isNot(true));
         expect(store.job('r')!['nextReplyCheckAt'], graceEnd.toIso8601String());
         reminderClock = graceEnd;
-        await engine.tick();
+        await settle(engine);
         final job = store.job('r')!;
         expect(job['state'], 'done');
         expect(job['due'], true);
@@ -286,11 +293,11 @@ void main() {
     test('keys arriving within the grace still cancel on a reply', () async {
       create(now);
       transport.replyHistoryFailure = 'waiting_keys';
-      await engine.tick();
+      await settle(engine);
       reminderClock = now.add(const Duration(minutes: 2));
       transport.replyHistoryFailure = null;
       transport.receivedReply = true;
-      await engine.tick();
+      await settle(engine);
       expect(store.job('r')!['state'], 'cancelled');
       expect(store.job('r')!['errorCode'], 'replied');
       expect(store.job('r')!['due'], isNot(true));
@@ -316,7 +323,7 @@ void main() {
               .toIso8601String(),
         });
         transport.replyHistoryFailure = 'waiting_keys';
-        await engine.tick();
+        await settle(engine);
         final job = store.job('r')!;
         expect(job['state'], 'done');
         expect(job['due'], true);
@@ -345,7 +352,7 @@ void main() {
               .add(const Duration(seconds: 20))
               .toIso8601String(),
         });
-        await engine.tick();
+        await settle(engine);
         expect(store.job('r')!['state'], 'done');
         expect(store.job('r')!.containsKey('replyCheck'), isFalse);
       },
@@ -356,22 +363,22 @@ void main() {
       () async {
         final due = now.add(const Duration(seconds: 45));
         create(due);
-        await engine.tick();
+        await settle(engine);
         expect(transport.replyChecks, 1);
         expect(store.job('r')!['state'], 'queued');
         reminderClock = now.add(const Duration(seconds: 10));
-        await engine.tick();
+        await settle(engine);
         expect(transport.replyChecks, 1);
         reminderClock = now.add(const Duration(seconds: 30));
-        await engine.tick();
+        await settle(engine);
         expect(transport.replyChecks, 2);
         expect(store.job('r')!['nextReplyCheckAt'], due.toIso8601String());
         reminderClock = now.add(const Duration(seconds: 40));
-        await engine.tick();
+        await settle(engine);
         expect(transport.replyChecks, 2);
         expect(store.job('r')!['due'], isNot(true));
         reminderClock = due;
-        await engine.tick();
+        await settle(engine);
         expect(transport.replyChecks, 3);
         final job = store.job('r')!;
         expect(job['state'], 'done');
@@ -400,7 +407,7 @@ void main() {
     );
     restarted.accept(command);
     expect(store.outbox, hasLength(1));
-    await restarted.tick();
+    await settle(restarted);
     expect(transport.sent, isEmpty);
     expect(transport.reads, isEmpty);
   });
@@ -429,13 +436,13 @@ void main() {
       );
       final first = op('first', 'transcript.request', 't', requestBody);
       engine.accept(first);
-      await engine.tick();
+      await settle(engine);
       await engine.waitForIdle();
       final completed = store.job('t')!;
       expect(completed['state'], 'done');
       expect(transcriber.calls, 1);
       engine.accept(first);
-      await engine.tick();
+      await settle(engine);
       await engine.waitForIdle();
       expect(transcriber.calls, 1);
       engine.accept(
@@ -454,7 +461,7 @@ void main() {
       );
       expect(store.job('t')!['state'], 'queued');
       expect(store.job('t')!['text'], isNull);
-      await engine.tick();
+      await settle(engine);
       await engine.waitForIdle();
       expect(transcriber.calls, 2);
       expect(store.job('t')!['state'], 'done');
@@ -479,7 +486,7 @@ void main() {
       engine.accept(request);
       expect(store.jobs(), hasLength(1));
       expect(store.outbox, hasLength(1));
-      await engine.tick();
+      await settle(engine);
       await engine.waitForIdle();
       expect(transcriber.calls, 1);
       expect(store.job('transcript:test')!['state'], 'done');
@@ -496,7 +503,7 @@ void main() {
   );
   Future<void> completeTranscript() async {
     engine.accept(op('request', 'transcript.request', 't', transcriptBody()));
-    await engine.tick();
+    await settle(engine);
     await engine.waitForIdle();
   }
 
@@ -509,7 +516,7 @@ void main() {
         engine.accept(
           op('request', 'transcript.request', 't', transcriptBody()),
         );
-        await engine.tick();
+        await settle(engine);
         await started.future;
         engine.accept(
           op('cancel', 'transcript.cancel', 't', {
@@ -522,7 +529,7 @@ void main() {
         expect(store.job('t'), cancelled);
         transport.holdSourceProbe = null;
         await engine.auditTranscriptSources(force: true);
-        await engine.tick();
+        await settle(engine);
         await engine.waitForIdle();
         expect(store.job('t')!['state'], 'cancelled');
         expect(transport.audioLoads, 0);
@@ -536,7 +543,7 @@ void main() {
       final probe = transport.holdSourceProbe = Completer<bool?>();
       final started = transport.sourceProbeStarted = Completer<void>();
       engine.accept(op('request', 'transcript.request', 't', transcriptBody()));
-      await engine.tick();
+      await settle(engine);
       await started.future;
       engine.accept(
         op('cancel', 'transcript.cancel', 't', {
@@ -560,7 +567,7 @@ void main() {
       expect(transport.audioLoads, 0);
       expect(transcriber.calls, 0);
       transport.holdSourceProbe = null;
-      await engine.tick();
+      await settle(engine);
       await engine.waitForIdle();
       expect(store.job('t')!['state'], 'done');
       expect(transcriber.calls, 1);
@@ -571,7 +578,7 @@ void main() {
     () async {
       final held = transcriber.hold = Completer<void>();
       engine.accept(op('request', 'transcript.request', 't', transcriptBody()));
-      await engine.tick();
+      await settle(engine);
       await Future<void>.delayed(Duration.zero);
       expect(transcriber.calls, 1);
       engine.accept(
@@ -594,7 +601,7 @@ void main() {
       expect(store.job('t'), retry);
       expect(store.job('t')!['acceptedOpId'], 'retry');
       transcriber.hold = null;
-      await engine.tick();
+      await settle(engine);
       await engine.waitForIdle();
       expect(store.job('t')!['state'], 'done');
       expect(store.job('t')!['acceptedOpId'], 'retry');
@@ -633,7 +640,7 @@ void main() {
     () async {
       transcriber.hold = Completer<void>();
       engine.accept(op('request', 'transcript.request', 't', transcriptBody()));
-      await engine.tick();
+      await settle(engine);
       await Future<void>.delayed(Duration.zero);
       transport.redacted = true;
       transcriber.hold!.complete();
@@ -648,7 +655,7 @@ void main() {
     () async {
       transcriber.hold = Completer<void>();
       engine.accept(op('request', 'transcript.request', 't', transcriptBody()));
-      await engine.tick();
+      await settle(engine);
       await Future<void>.delayed(Duration.zero);
       transport.redacted = true;
       await engine.auditTranscriptSources(force: true);
@@ -678,11 +685,11 @@ void main() {
       await completeTranscript();
       expect(store.job('t')!['state'], 'waitingSync');
       expect(transcriber.calls, 0);
-      await engine.tick();
+      await settle(engine);
       expect(transcriber.calls, 0);
       transport.redacted = false;
       await engine.auditTranscriptSources(force: true);
-      await engine.tick();
+      await settle(engine);
       await engine.waitForIdle();
       expect(store.job('t')!['state'], 'done');
       expect(transcriber.calls, 1);
@@ -693,7 +700,7 @@ void main() {
     () async {
       transcriber.hold = Completer<void>();
       engine.accept(op('request', 'transcript.request', 't', transcriptBody()));
-      await engine.tick();
+      await settle(engine);
       await Future<void>.delayed(Duration.zero);
       transport.redacted = null;
       transcriber.hold!.complete();
@@ -706,7 +713,7 @@ void main() {
       );
       final restarted = WorkerEngine(store, transport, transcriber);
       restarted.recover();
-      await restarted.tick();
+      await settle(restarted);
       expect(transcriber.calls, 1);
       transport.redacted = false;
       await restarted.auditTranscriptSources(force: true);
@@ -752,7 +759,7 @@ void main() {
     () async {
       transcriber.hold = Completer<void>();
       engine.accept(op('request', 'transcript.request', 't', transcriptBody()));
-      await engine.tick();
+      await settle(engine);
       await Future<void>.delayed(Duration.zero);
       transport.redacted = null;
       transcriber.hold!.complete();
@@ -805,7 +812,10 @@ void main() {
       expect(transport.sourceProbes, probes + 1);
       clockNow = clockNow.add(WorkerEngine.sourceAuditInterval);
       await engine.auditTranscriptSources();
-      expect(transport.sourceProbes, probes + 1 + WorkerEngine.sourceAuditBatch);
+      expect(
+        transport.sourceProbes,
+        probes + 1 + WorkerEngine.sourceAuditBatch,
+      );
     },
   );
   test(
@@ -842,15 +852,23 @@ void main() {
         ),
       ),
     );
-    await engine.tick();
+    await settle(engine);
     await engine.waitForIdle();
-    await engine.tick();
+    await settle(engine);
     expect(store.job('t')!['state'], 'unknown');
     expect(transcriber.calls, 1);
   });
   test('paid crash recovery is unknown and scheduled recovery reuses txid', () {
     store.saveJob({
       'id': 't',
+      'kind': 'transcript',
+      'revision': 1,
+      'state': 'processing',
+      'providerAttemptAt': now.toIso8601String(),
+    });
+    // Interrupted before anything reached the provider: simply queued again.
+    store.saveJob({
+      'id': 'unpaid',
       'kind': 'transcript',
       'revision': 1,
       'state': 'processing',
@@ -864,6 +882,9 @@ void main() {
     });
     engine.recover();
     expect(store.job('t')!['state'], 'unknown');
+    expect(store.job('t')!['errorCode'], 'paid_request_unknown');
+    expect(store.job('unpaid')!['state'], 'queued');
+    expect(store.job('unpaid')!['errorCode'], isNull);
     expect(store.job('s')!['state'], 'queued');
     expect(store.job('s')!['transactionId'], 'persisted');
   });
@@ -872,10 +893,10 @@ void main() {
     () async {
       engine.accept(op('create', 'schedule.create', 's', schedule('s', now)));
       transport.failUnknown = true;
-      await engine.tick();
+      await settle(engine);
       final tx = store.job('s')!['transactionId'];
       transport.failUnknown = false;
-      await engine.tick();
+      await settle(engine);
       expect(transport.sent, [tx, tx]);
       expect(store.job('s')!['state'], 'done');
     },
@@ -889,7 +910,7 @@ void main() {
         schedule('s', now.subtract(const Duration(minutes: 6))),
       ),
     );
-    await engine.tick();
+    await settle(engine);
     expect(store.job('s')!['state'], 'paused');
     expect(transport.sent, isEmpty);
   });
@@ -898,7 +919,7 @@ void main() {
     () async {
       engine.accept(op('create', 'schedule.create', 's', schedule('s', now)));
       transport.deviceId = 'NEW_DEVICE';
-      await engine.tick();
+      await settle(engine);
       expect(transport.sent, isEmpty);
       expect(store.job('s')!['state'], 'paused');
     },
@@ -909,7 +930,7 @@ void main() {
     engine.accept(
       op('stale', 'schedule.update', 's', schedule('s', now), revision: 1),
     );
-    await engine.tick();
+    await settle(engine);
     expect(transport.sent, isEmpty);
     expect(store.job('s')!['state'], 'cancelled');
     expect(store.outbox.last['payload']['errorCode'], 'conflict');
@@ -977,10 +998,10 @@ void main() {
         ),
       ),
     );
-    await engine.tick();
+    await settle(engine);
     await Future<void>.delayed(Duration.zero);
     engine.accept(op('create', 'schedule.create', 's', schedule('s', now)));
-    await engine.tick();
+    await settle(engine);
     expect(transport.sent, hasLength(1));
     transcriber.hold!.complete();
     await engine.waitForIdle();
@@ -996,7 +1017,7 @@ void main() {
           'untilReply': false,
         }),
       );
-      await engine.tick();
+      await settle(engine);
       expect(store.job('r')!['state'], 'done');
       expect(store.outbox.last['kind'], 'reminder.result');
       expect(store.outbox.last['payload']['due'], isTrue);
@@ -1013,7 +1034,7 @@ void main() {
       engine.accept(
         op('cancel-reminder2', 'reminder.cancel', 'r2', {}, revision: 1),
       );
-      await engine.tick();
+      await settle(engine);
       expect(store.job('r2')!['state'], 'cancelled');
     },
   );
