@@ -43,7 +43,13 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart'
-    show MergedEvent, MergedSendRouter, PersonGroup, SendTarget, SourceEventRef;
+    show
+        MergedEvent,
+        MergedSendRouter,
+        PersonGroup,
+        PersonRouting,
+        SendTarget,
+        SourceEventRef;
 
 /// What happened to a reply typed into a notification.
 enum NotificationReplyOutcome {
@@ -116,21 +122,25 @@ const _sendReserve = Duration(seconds: 6);
 ///
 /// A single chat: the chat itself. A merged person: the person composer's
 /// router ([MergedSendRouter.resolve]) with the notified incoming message as
-/// the most recent event, which today is the network the person last wrote
-/// on. This is the single place where a person-level send preference (a
-/// fixed default network, merge-person lane FT-03) applies to notification
-/// replies. A target that is gone or not writable falls back to [room].
+/// the most recent event and the person's "Send messages via" choice
+/// (`person-prefs:<id>`, FT-03): Automatic answers on the network the person
+/// just wrote on, "Always Telegram" (fixed) on that network. Chats that cannot
+/// receive the person's messages now (left, or shown by another person) are
+/// never picked, as in the merged composer. A target that is gone or not
+/// writable falls back to [room].
 Room notificationReplyRoom(
   PersonalClient personal,
   Room room, {
   String? eventId,
   DateTime? now,
 }) {
+  InboxProjection projection;
   PersonGroup? group;
   try {
-    group = InboxProjection(personal).groupFor(room);
+    projection = InboxProjection(personal);
+    group = projection.groupFor(room);
   } catch (_) {
-    group = null;
+    return room;
   }
   if (group == null) return room;
   try {
@@ -147,6 +157,13 @@ Room notificationReplyRoom(
         isOutgoing: false,
         value: null,
       ),
+      automatic:
+          projection.preferencesFor(group.id).routing ==
+          PersonRouting.automatic,
+      available: {
+        for (final source in projection.sourcesOf(group))
+          if (source.sendable) source.member,
+      },
     );
     final target = personal.client.getRoomById(routed.conversation.roomId);
     if (target == null ||
