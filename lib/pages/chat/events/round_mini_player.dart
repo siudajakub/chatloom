@@ -372,8 +372,10 @@ class RoundMiniPlayerController extends ChangeNotifier
     final service = TelegramRoundService.of(session.event.room.client);
     if (!service.canExplicitlyReport(session.event)) return;
     session.reporting = true;
+    session.error = null;
     _notify();
     try {
+      // On success the action disappears (canExplicitlyReport is false).
       await service.explicitlyReportPlayed(session.event);
     } catch (_) {
       session.error = 'Playback receipt was not sent.';

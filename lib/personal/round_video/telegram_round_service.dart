@@ -83,9 +83,6 @@ class TelegramRoundService extends ChangeNotifier
         (RoundSendTarget, RoundEncodingProfile, PreparedRoundMedia, String)
       >{};
 
-  /// Live dispatch phase per action (memory only, never decides a send).
-  final _phases = <String, RoundSendPhase>{};
-
   /// First frames of this session's own rounds, by transaction ID: the
   /// bubble shows the frame from the moment the recorder closes, before
   /// the server has the round (Telegram). Small JPEGs, bounded.
@@ -107,7 +104,6 @@ class TelegramRoundService extends ChangeNotifier
   /// state, trust and capability are still evaluated at every guard.
   static const preflightReuse = Duration(seconds: 30);
 
-  RoundSendPhase? phaseOf(String actionId) => _phases[actionId];
 
   /// The action of an own round bubble (`round-<id>`), or null.
   static String? actionOf(Event event) {
@@ -151,13 +147,6 @@ class TelegramRoundService extends ChangeNotifier
   }
 
   bool _opened = false;
-
-  /// Fire-and-forget open when a Telegram chat appears, so the first visible
-  /// round does not pay for the SQLCipher open. Failures surface on next use.
-  void initializeEagerly() {
-    if (_closed || _opened) return;
-    unawaited(initialize().catchError((Object _) {}));
-  }
 
   Future<void> _open() async {
     final account = client.userID, device = client.deviceID;
@@ -205,11 +194,6 @@ class TelegramRoundService extends ChangeNotifier
       store: _store!,
       guard: _guard,
       onPhase: (actionId, phase) {
-        if (phase == null) {
-          _phases.remove(actionId);
-        } else {
-          _phases[actionId] = phase;
-        }
         if (!_closed) notifyListeners();
       },
       encrypt: (bytes, thumbnail) async {
@@ -1122,6 +1106,8 @@ class TelegramRoundService extends ChangeNotifier
   @override
   bool canExplicitlyReport(Event event) =>
       !event.redacted &&
+      // Sent once: the action disappears after success (CC-20).
+      !_reported.contains('${event.room.id}:${event.eventId}') &&
       verifiedMediaStateSnapshot(event)?['expired'] != true &&
       event.senderId != client.userID &&
       event.room.client == client &&
@@ -1142,11 +1128,19 @@ class TelegramRoundService extends ChangeNotifier
   @override
   Future<void> explicitlyReportPlayed(Event event) =>
       _reportPlayed(event, true);
+
+  /// Sends one playback receipt. Automatic reports end silently when a gate
+  /// closes; an explicit one (the user tapped "Send playback receipt")
+  /// throws instead, so the UI can say it was not sent (CC-20).
   Future<void> _reportPlayed(Event event, bool explicit) async {
+    void notSent() {
+      if (explicit) throw StateError('Playback receipt not sent');
+    }
+
     final intentAge = Stopwatch()..start();
     final account = client.userID, device = client.deviceID;
     final surfaceGeneration = PersonalPrivacy.surfaceGeneration;
-    if ((await mediaState(event))?['expired'] == true) return;
+    if ((await mediaState(event))?['expired'] == true) return notSent();
     if (!canExplicitlyReport(event) ||
         intentAge.elapsed >= const Duration(seconds: 20) ||
         client.userID != account ||
@@ -1155,10 +1149,11 @@ class TelegramRoundService extends ChangeNotifier
         (!explicit && incognito) ||
         !PersonalPrivacy.surfaceUnlocked ||
         !PersonalPrivacy.surfaceForeground) {
-      return;
+      return notSent();
     }
     final key = '${event.room.id}:${event.eventId}';
-    if (_reporting.contains(key) || _reported.contains(key)) return;
+    if (_reported.contains(key)) return;
+    if (_reporting.contains(key)) return notSent();
     final binding = TelegramRoomBinding.of(event.room)!;
     final requestId = const Uuid().v4();
     final currentIncognito = incognito;
@@ -1176,7 +1171,7 @@ class TelegramRoundService extends ChangeNotifier
       'explicit_grant': explicit,
     };
     final server = client.baseUri;
-    if (server == null) return;
+    if (server == null) return notSent();
     _reporting.add(key);
     try {
       final result = await withMediaPlayedGrant(
@@ -1203,9 +1198,15 @@ class TelegramRoundService extends ChangeNotifier
           retryOnTransportFailure: false,
         ),
       );
-      if (result != null) _reported.add(key);
+      if (result != null) {
+        _reported.add(key);
+        notifyListeners();
+      } else {
+        notSent();
+      }
     } catch (_) {
       /* No durable public-receipt queue or delayed automatic retry. */
+      if (explicit) rethrow;
     } finally {
       _reporting.remove(key);
     }

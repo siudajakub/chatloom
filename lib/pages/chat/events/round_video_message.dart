@@ -1024,9 +1024,18 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         !receipts.canExplicitlyReport(widget.event)) {
       return;
     }
-    setState(() => _reporting = true);
+    setState(() {
+      _reporting = true;
+      _error = null;
+    });
     try {
       await receipts.explicitlyReportPlayed(widget.event);
+      // The action disappears; say once that it worked (CC-20).
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('Playback receipt sent')));
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _error = 'Playback receipt was not sent.');

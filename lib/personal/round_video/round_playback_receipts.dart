@@ -9,5 +9,7 @@ abstract interface class RoundPlaybackReceipts {
   bool get incognito;
   bool canExplicitlyReport(Event event);
   Future<void> onUserStartedPlaying(Event event);
+  /// Throws when the receipt was not sent; afterwards
+  /// [canExplicitlyReport] is false for [event].
   Future<void> explicitlyReportPlayed(Event event);
 }
