@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -10,6 +11,8 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/image_edit_geometry.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/personal/capabilities.dart'
+    show PersonalCapabilityUnavailable;
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -73,6 +76,22 @@ class SendFileDialog extends StatefulWidget {
   final String initialCaption;
   final FrozenAttachmentContext? composeContext;
 
+  /// Checks the selection against the destination before anything is
+  /// shown in the chat, e.g. a bridge's media limits for a merged chat's
+  /// source. Throw [PersonalCapabilityUnavailable] to keep the dialog open
+  /// with that reason; return false to stay open silently (the user backed
+  /// out of a follow-up question).
+  final Future<bool> Function(
+    BuildContext context,
+    List<XFile> files,
+    String caption,
+  )?
+  preflight;
+
+  /// Each attachment's accepted event ID (a merged chat keeps the newest
+  /// outgoing message as its routing anchor).
+  final void Function(String eventId, DateTime acceptedAt)? onAccepted;
+
   const SendFileDialog({
     required this.room,
     required this.files,
@@ -82,6 +101,8 @@ class SendFileDialog extends StatefulWidget {
     this.replyTo,
     this.initialCaption = '',
     this.composeContext,
+    this.preflight,
+    this.onAccepted,
     super.key,
   });
 
@@ -158,6 +179,12 @@ class SendFileDialogState extends State<SendFileDialog> {
     });
     try {
       widget.composeContext?.validate();
+      final preflight = widget.preflight;
+      if (preflight != null) {
+        final files = _files.skip(_accepted).toList();
+        if (!await preflight(context, files, label) || !mounted) return;
+        widget.composeContext?.validate();
+      }
       final proceed = await showTrustUserInRoomDialog(context, widget.room);
       if (!mounted || !proceed) return;
       widget.composeContext?.validate();
@@ -217,7 +244,7 @@ class SendFileDialogState extends State<SendFileDialog> {
         }
         if (!mounted) return;
         widget.composeContext?.validate();
-        await OutgoingMedia.send(
+        final ticket = await OutgoingMedia.send(
           widget.room,
           file,
           txid: _transactionIds[i],
@@ -228,11 +255,29 @@ class SendFileDialogState extends State<SendFileDialog> {
           threadLastEventId: widget.threadLastEventId,
           prepare: prepare,
         );
+        final onAccepted = widget.onAccepted;
+        if (onAccepted != null) {
+          unawaited(
+            ticket.accepted.then(
+              (id) => onAccepted(id, DateTime.now()),
+              onError: (Object _) {},
+            ),
+          );
+        }
         if (mounted) setState(() => _accepted = i + 1);
       }
       if (mounted) {
         setState(() => _sending = false);
         Navigator.of(context).pop(AttachmentSendResult(label));
+      }
+    } on PersonalCapabilityUnavailable catch (error) {
+      if (mounted) setState(() => _problem = error.reason);
+    } on OtherPartyCanNotReceiveMessages catch (_) {
+      if (mounted) {
+        setState(
+          () => _problem =
+              'No one in this chat can read encrypted messages yet. Your selection and caption are kept.',
+        );
       }
     } on FileTooBigMatrixException catch (_) {
       if (mounted) {
