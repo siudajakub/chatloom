@@ -1137,8 +1137,12 @@ void main() {
     expect(find.byTooltip('Send voice message'), findsOneWidget);
     expect(find.bySemanticsLabel(RegExp(r'^Recording, 0:0')), findsOneWidget);
     await state.pause();
+    // The paused row fades through to the recorded waveform.
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
     expect(find.byTooltip('Resume recording'), findsOneWidget);
+    // Paused: the recorded waveform with play replaces the live bars.
+    expect(find.byTooltip('Listen to recording'), findsOneWidget);
     expect(
       find.bySemanticsLabel(RegExp(r'^Recording paused, ')),
       findsOneWidget,
@@ -1147,6 +1151,34 @@ void main() {
     await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
     await tester.pump();
   });
+
+  testWithDeadline(
+    'listening to a paused recording finishes it once; send reuses the file',
+    (tester) async {
+      final (state, room) = await mount(tester);
+      await start(state, room);
+      expect(await state.finishForReview(), isNull, reason: 'not paused');
+      await state.pause();
+      expect(state.canResume, isTrue);
+      expect(state.isReviewing, isFalse);
+      final path = await state.finishForReview();
+      expect(path, platform.stopOutput);
+      expect(state.isReviewing, isTrue);
+      expect(state.canResume, isFalse, reason: 'a stopped file cannot grow');
+      expect(await state.finishForReview(), path);
+      expect(platform.stops, 1);
+      final sent = <String>[];
+      await state.stopAndSend((path, _, _, _) async {
+        sent.add(path);
+        return true;
+      });
+      expect(sent, [path]);
+      expect(platform.stops, 1, reason: 'the reviewed file is the one sent');
+      expect(state.isRecording, isFalse);
+      expect(state.isReviewing, isFalse);
+      await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
+    },
+  );
 
   test('waveform keeps early and late peaks with bounded memory', () {
     final waveform = RecordingWaveform();

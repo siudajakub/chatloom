@@ -152,6 +152,20 @@ class RecordingViewModelState extends State<RecordingViewModel> {
 
   bool isPaused = false;
 
+  /// The finished file while the user listens before sending (UX: Telegram's
+  /// recorded panel, Signal's voice note draft). Set by [finishForReview].
+  String? _reviewPath;
+
+  /// Whether the recording was finished for listening: it can be played,
+  /// sent or deleted, but no longer resumed (the platform recorder only
+  /// writes a playable file once it stops).
+  bool get isReviewing => _reviewPath != null;
+
+  /// The whole recording's envelope, 0..1 per bar, for the review player.
+  List<double> get reviewWaveform => [
+    for (final peak in _waveform.samples(count: 40)) peak / 1024,
+  ];
+
   bool _current(int generation, _VoiceRecordingSession session) =>
       mounted && generation == _generation && identical(_session, session);
 
@@ -387,6 +401,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
     ]).then<void>((_) {});
 
     fileName = null;
+    _reviewPath = null;
     duration = Duration.zero;
     amplitudeTimeline.clear();
     _waveform.clear();
@@ -469,6 +484,35 @@ class RecordingViewModelState extends State<RecordingViewModel> {
         _showError();
         setState(_reset);
       }
+    } finally {
+      if (_current(generation, session)) setState(() => _transitioning = false);
+    }
+  }
+
+  /// Stops a paused recording so its file can be played before sending.
+  /// Returns the playable path, or null when the recording is gone.
+  Future<String?> finishForReview() async {
+    final session = _session;
+    if (session == null) return null;
+    if (_reviewPath != null) return _reviewPath;
+    if (controlsBusy || !isPaused) return null;
+    final generation = _generation;
+    setState(() => _transitioning = true);
+    _stopSampling();
+    _clock.stop();
+    duration = _clock.elapsed;
+    try {
+      final path = await session.stop();
+      if (!_current(generation, session)) return null;
+      if (path == null) throw StateError('Recording failed');
+      _reviewPath = path;
+      return path;
+    } catch (_) {
+      if (_current(generation, session)) {
+        _showError();
+        setState(_reset);
+      }
+      return null;
     } finally {
       if (_current(generation, session)) setState(() => _transitioning = false);
     }
