@@ -157,10 +157,11 @@ Future<void> main() async {
   }, at);
   final description = worker.describe(at);
   check(
+    // Settings-copy wave 5: plain wording ("not set up", "Waiting …").
     description.contains('blocked') &&
-        description.contains('not configured') &&
-        description.contains('Pending tasks: 2') &&
-        description.contains('hints: 3'),
+        description.contains('not set up') &&
+        description.contains('Waiting tasks: 2') &&
+        description.contains('Waiting reminders: 3'),
     'Readiness fields lost',
   );
   check(

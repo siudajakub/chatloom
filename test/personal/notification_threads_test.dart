@@ -81,9 +81,18 @@ void main() {
 
     test('saved merges count for cleanup even when the merge is no longer '
         'valid, and an unloaded store falls back to the room ids', () {
-      // A source that left: the merge is invalid, its notification may
-      // still be in the shade.
+      // A left source keeps the person merged (merge-person FT-01) ...
       whatsapp.membership = Membership.leave;
+      expect(InboxProjection(personal).groupFor(telegram)?.id, person.id);
+      // ... a joined source that is now a group chat does not (wave-3
+      // group safety): the merge is invalid, its notification may still be
+      // in the shade.
+      whatsapp.membership = Membership.join;
+      whatsapp.state('m.bridge', {
+        'protocol': {'id': 'whatsapp'},
+        'bridgebot': '@bridge:example.invalid',
+        'com.beeper.room_type.v2': 'group',
+      }, key: 'fixture');
       expect(InboxProjection(personal).groupFor(telegram), isNull);
       expect(
         notificationIdsForRooms(client.clientName, [

@@ -391,8 +391,7 @@ void main() {
       client,
     );
     expect(find.byType(EmojiPicker), findsNothing);
-    await tester.tap(find.byTooltip('More message actions'));
-    await tester.pumpAndSettle();
+    // UX-02: the emoji toggle sits beside "+", no tray to open first.
     await tester.tap(find.byTooltip('Emoji picker'));
     await tester.pumpAndSettle();
     expect(find.byType(EmojiPicker), findsOneWidget);

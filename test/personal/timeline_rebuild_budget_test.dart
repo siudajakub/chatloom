@@ -16,6 +16,7 @@ import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/widgets/matrix.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -342,7 +343,7 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('emoji picker and action tray toggles rebuild no row', (
+    testWidgets('emoji picker and attach menu toggles rebuild no row', (
       tester,
     ) async {
       final controller = await mountChat(tester);
@@ -351,10 +352,13 @@ void main() {
         await tester.pump(const Duration(milliseconds: 400));
         controller.emojiPickerAction();
         await tester.pump(const Duration(milliseconds: 400));
-        await tester.tap(find.byTooltip('More message actions'));
+        // UX-02: "+" opens the attach menu (no inline tray any more).
+        await tester.tap(find.byTooltip('Attach media or a file'));
         await tester.pump(const Duration(milliseconds: 400));
-        await tester.tap(find.byTooltip('Hide message actions'));
+        expect(find.text('Photo or video'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('Photo or video'), findsNothing);
       });
       expect(rebuilds, 0);
       await tester.pumpWidget(const SizedBox.shrink());

@@ -128,8 +128,10 @@ void main() {
           failSave ? isEmpty : 'The next draft',
         );
         expect(personal.completed, failSave ? 0 : 1);
+        // CS-12: a failed draft clear is logged only; the message itself
+        // is safe in the outbox, so no notice interrupts the user.
         if (failSave)
-          expect(find.textContaining('Message accepted.'), findsOneWidget);
+          expect(find.byType(SnackBar), findsNothing);
         else
           expect(personal.drafts.last.text, 'The next draft');
         await tester.pumpWidget(const SizedBox.shrink());

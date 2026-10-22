@@ -204,7 +204,8 @@ void main() {
       final room = _room('telegram')..sendingAllowed = false;
       final plan = StickerSendPlan.forRoom(room, _sticker('image/webp'));
       expect(plan.possible, isFalse);
-      expect(plan.reason, contains('Matrix permissions'));
+      // The capability's own plain-language reason (bridge-health lane).
+      expect(plan.reason, 'You can’t send messages in this chat.');
     });
 
     test('an encrypted favourite keeps its file reference', () {

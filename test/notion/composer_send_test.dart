@@ -609,7 +609,8 @@ void main() {
       );
       expect(retriable.kind, MessageDeliveryKind.notDelivered);
       expect(retriable.canRetry, isTrue);
-      expect(retriable.canDelete, isFalse);
+      // BR-06: never delivered, so the "Not delivered" sheet may remove it.
+      expect(retriable.canDelete, isTrue);
       expect(retriable.label, 'Not delivered to Telegram · Tap for details');
       expect(retriable.detail, contains('Try sending it again.'));
       // An echo/ack timeout may have arrived: no retry, no "too old".

@@ -576,10 +576,19 @@ void main() {
         expect(find.byKey(const ValueKey('reaction-❤️')), findsOneWidget);
       }
       if (c.state == 'actions') {
-        await tester.tap(find.byTooltip('More message actions'));
-        await tester.pumpAndSettle();
-        expect(find.byTooltip('Hide message actions'), findsOneWidget);
-        expect(find.byTooltip('Attach media or a file'), findsOneWidget);
+        if (c.merged) {
+          // The production composer (UX-02): "+" opens the attach menu
+          // directly; the emoji toggle sits beside it.
+          expect(find.byTooltip('Emoji picker'), findsOneWidget);
+          await tester.tap(find.byTooltip('Attach media or a file'));
+          await tester.pumpAndSettle();
+          expect(find.text('Photo or video'), findsOneWidget);
+        } else {
+          await tester.tap(find.byTooltip('More message actions'));
+          await tester.pumpAndSettle();
+          expect(find.byTooltip('Hide message actions'), findsOneWidget);
+          expect(find.byTooltip('Attach media or a file'), findsOneWidget);
+        }
       }
       TestGesture? held;
       if (c.state == 'hold') {

@@ -461,14 +461,20 @@ void main() {
         personal.values['org:${source.id}']?['notificationMode'],
         'mentionsOnly',
       );
-      await tester.ensureVisible(find.byType(SwitchListTile));
-      await tester.tap(find.byType(Switch));
+      // "Low priority" (CS-06) is a second switch on this page.
+      final ignore = find.widgetWithText(SwitchListTile, 'Ignore chat');
+      final ignoreSwitch = find.descendant(
+        of: ignore,
+        matching: find.byType(Switch),
+      );
+      await tester.ensureVisible(ignore);
+      await tester.tap(ignoreSwitch);
       await tester.pumpAndSettle();
       expect(
         InboxProjection(personal).notificationModeFor(source),
         PersonalNotificationMode.muted,
       );
-      await tester.tap(find.byType(Switch));
+      await tester.tap(ignoreSwitch);
       await tester.pumpAndSettle();
       expect(
         InboxProjection(personal).notificationModeFor(source),
@@ -481,7 +487,11 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(
-        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).onChanged,
+        tester
+            .widget<SwitchListTile>(
+              find.widgetWithText(SwitchListTile, 'Ignore chat'),
+            )
+            .onChanged,
         isNull,
       );
       await tester.pumpWidget(const SizedBox());
