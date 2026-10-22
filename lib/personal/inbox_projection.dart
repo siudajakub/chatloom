@@ -45,14 +45,21 @@ class InboxProjection {
     final source = metadataForEntity(room.id);
     final kind = classifier.classify(room);
     final policy = networkPreferences(kind.network);
-    return source.notificationMode ??
-        metadata.notificationMode ??
+    final explicit = source.notificationMode ?? metadata.notificationMode;
+    final inherited =
         (kind.isGroup ? policy.groupNotifications : null) ??
-        policy.notifications ??
-        ((metadata.muted ||
-                metadata.lowPriority ||
-                source.muted ||
-                source.lowPriority)
+        policy.notifications;
+    if (explicit == PersonalNotificationMode.muted) return explicit!;
+    // An active (possibly timed) mute from the inbox menu outranks the other
+    // choices but never loosens a fully muted network default.
+    if (metadata.muted || source.muted) {
+      return explicit == null && inherited == PersonalNotificationMode.muted
+          ? PersonalNotificationMode.muted
+          : PersonalNotificationMode.mentionsOnly;
+    }
+    return explicit ??
+        inherited ??
+        ((metadata.lowPriority || source.lowPriority)
             ? PersonalNotificationMode.mentionsOnly
             : PersonalNotificationMode.all);
   }

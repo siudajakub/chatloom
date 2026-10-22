@@ -9,6 +9,8 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat_timeline_preload.dart';
 import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
+import 'package:chatloom/pages/chat_list/chat_list_body.dart'
+    show InboxRowMemo;
 import 'package:chatloom/pages/chat_list/chat_list_item.dart'
     show notionInboxAvatar;
 import 'package:chatloom/pages/chat_list/chat_list_view.dart';
@@ -61,11 +63,13 @@ import '../../widgets/matrix.dart';
 
 enum ActiveFilter { allChats, unread, groups, messages }
 
-/// The long-press menu of an inbox row, in order: Pin/Unpin, Merge… (or
-/// Unmerge on a merged person), Notifications, Ignore/Restore. Disabled
-/// entries explain themselves by staying visible (private sync not ready,
-/// a change awaiting acknowledgement, a network group that cannot merge).
-List<ChatMenuItem> chatMenuItems(
+/// The long-press menu of an inbox row, in order (Telegram, Messenger):
+/// Mark as read/unread, Pin/Unpin, Mute…/Unmute, Archive/Unarchive, Merge…
+/// (Unmerge on a merged person), Ignore/Restore. Notification settings are
+/// the last row of the Mute menu. Disabled entries explain themselves by
+/// staying visible (private sync not ready, a change awaiting
+/// acknowledgement, a network group that cannot merge).
+List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
   PersonalClient owner,
   Room room, {
   required String pinLabel,
@@ -75,15 +79,57 @@ List<ChatMenuItem> chatMenuItems(
   final entity = projection.entityFor(room);
   final group = projection.groupFor(room);
   final joined = room.membership == Membership.join;
-  final pinned = projection.metadataFor(room).isPinned;
+  final metadata = projection.metadataFor(room);
+  final pinned = metadata.isPinned;
   final ignored = projection.placementFor(room) == ChatPlacement.ignored;
+  final unread = inboxSources(owner, room).any((source) => source.isUnread);
+  final canWrite = joined && canEditChatPreferences(owner, 'org:$entity');
   return [
+    unread
+        ? ChatMenuItem(
+            ChatMenuAction.read,
+            Icons.mark_chat_read_outlined,
+            'Mark as read',
+            enabled: joined,
+          )
+        : ChatMenuItem(
+            ChatMenuAction.unread,
+            Icons.mark_chat_unread_outlined,
+            'Mark as unread',
+            enabled: joined,
+          ),
     ChatMenuItem(
       ChatMenuAction.pin,
       pinned ? Icons.push_pin : Icons.push_pin_outlined,
       pinned ? unpinLabel : pinLabel,
       enabled: joined && NotionMetadataActions.canEdit(owner, entity),
     ),
+    metadata.muted
+        ? ChatMenuItem(
+            ChatMenuAction.unmute,
+            Icons.notifications_active_outlined,
+            'Unmute',
+            enabled: canWrite,
+          )
+        : ChatMenuItem(
+            ChatMenuAction.mute,
+            Icons.notifications_off_outlined,
+            'Mute…',
+            enabled: joined,
+          ),
+    metadata.archived
+        ? ChatMenuItem(
+            ChatMenuAction.unarchive,
+            Icons.unarchive_outlined,
+            'Unarchive',
+            enabled: canWrite,
+          )
+        : ChatMenuItem(
+            ChatMenuAction.archive,
+            Icons.archive_outlined,
+            'Archive',
+            enabled: canWrite && !ignored,
+          ),
     if (group != null)
       ChatMenuItem(
         ChatMenuAction.unmerge,
@@ -99,19 +145,59 @@ List<ChatMenuItem> chatMenuItems(
         enabled: owner.ready && InboxProjection.mergeable(room),
       ),
     ChatMenuItem(
-      ChatMenuAction.notifications,
-      Icons.notifications_outlined,
-      'Notifications',
-      enabled: joined,
-    ),
-    ChatMenuItem(
       ChatMenuAction.ignore,
       ignored ? Icons.visibility_outlined : Icons.visibility_off_outlined,
       ignored ? 'Restore chat' : 'Ignore chat',
-      enabled: joined && canEditChatPreferences(owner, 'org:$entity'),
+      enabled: canWrite,
     ),
   ];
 }
+
+/// The source rooms of [room]'s inbox row: every room of a merged person,
+/// otherwise the room itself.
+List<Room> inboxSources(PersonalClient owner, Room room) {
+  final group = InboxProjection(owner).groupFor(room);
+  if (group == null) return [room];
+  final rooms = group.members
+      .map((member) => owner.client.getRoomById(member.roomId))
+      .whereType<Room>()
+      .toList();
+  return rooms.isEmpty ? [room] : rooms;
+}
+
+/// Marks [room]'s inbox row read without opening it: each unread source
+/// gets a manual read marker through the privacy filter (the same rule as
+/// the chat's own "Mark as read": incognito allows an explicit action, the
+/// receipt is public only when public receipts are on) and loses a manual
+/// unread flag (room account data, no receipt).
+Future<void> markInboxRowRead(PersonalClient owner, Room room) async {
+  for (final source in inboxSources(owner, room)) {
+    if (source.membership != Membership.join || !source.isUnread) continue;
+    if (source.markedUnread) await source.markUnread(false);
+    final id = source.lastEvent?.eventId;
+    if (source.notificationCount > 0 && id != null) {
+      await PersonalPrivacy.markRead(source, id, manual: true);
+    }
+  }
+}
+
+/// Marks [room]'s inbox row unread (Telegram's dot): the manual-unread flag
+/// on one source (a merged person's default chat), never a receipt.
+Future<void> markInboxRowUnread(PersonalClient owner, Room room) {
+  final group = InboxProjection(owner).groupFor(room);
+  final target =
+      (group == null ? null : owner.client.getRoomById(group.defaultRoomId)) ??
+      room;
+  return target.markUnread(true);
+}
+
+/// Human end of a timed mute for the confirmation ("for 1 hour").
+String muteLabel(MuteChoice choice) => switch (choice) {
+  MuteChoice.hour => 'Muted for 1 hour',
+  MuteChoice.eightHours => 'Muted for 8 hours',
+  MuteChoice.week => 'Muted for 1 week',
+  MuteChoice.always || MuteChoice.settings => 'Muted',
+};
 
 class ChatList extends StatefulWidget {
   final String? activeChat;
@@ -245,6 +331,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   InboxController? _inbox;
   bool _inboxVisible = true;
 
+  /// Built inbox rows reused across publishes (see [InboxRowMemo]).
+  final rowMemo = InboxRowMemo();
+
   /// Rows (by inbox entity) that a merge, unmerge or undo just produced:
   /// each flashes once so the eye finds where the chats went (Telegram
   /// animates such moves; the inbox does not reorder with motion).
@@ -284,6 +373,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       WidgetsBinding.instance.addPostFrameCallback((_) => current.dispose());
     }
     _selectionKey = null;
+    rowMemo.clear();
     return _inbox = InboxController(client, personal)..active = _inboxVisible;
   }
 
@@ -546,9 +636,10 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     );
   }
 
-  /// Long-press menu of an inbox row: Pin, Merge… (Unmerge on a merged
-  /// person), Notifications and Ignore/Restore. Leave, block, tags, spaces
-  /// and low priority are intentionally not offered here.
+  /// Long-press menu of an inbox row (see [chatMenuItems]). Every change
+  /// applies at once without a loader; reversible ones offer Undo, a
+  /// failure is explained in a snackbar. Leave, block, tags, spaces and low
+  /// priority are intentionally not offered here.
   Future<void> chatContextAction(Room room, BuildContext posContext) async {
     final owner = personal;
     final account = inboxAccountKey;
@@ -557,16 +648,18 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     final anchor = box.localToGlobal(Offset.zero) & box.size;
     final projection = InboxProjection(owner);
     final l10n = L10n.of(context);
+    final title = projection.displayName(room);
+    Widget avatar() => notionInboxAvatar(
+      owner,
+      InboxProjection(owner),
+      room,
+      size: NotionSize.avatarSm,
+    );
     final action = await showChatActionsMenu(
       posContext,
       anchor: anchor,
-      title: projection.displayName(room),
-      avatar: notionInboxAvatar(
-        owner,
-        projection,
-        room,
-        size: NotionSize.avatarSm,
-      ),
+      title: title,
+      avatar: avatar(),
       items: chatMenuItems(
         owner,
         room,
@@ -574,22 +667,115 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         unpinLabel: l10n.unpin,
       ),
     );
-    if (action == null) return;
-    if (!mounted ||
-        inboxAccountKey != account ||
-        !identical(personal, owner) ||
-        !identical(room.client, owner.client))
+    if (action == null || !mounted) return;
+    if (!_sameInbox(owner, account) || !identical(room.client, owner.client)) {
       return;
+    }
+    String entity() => InboxProjection(owner).entityFor(room);
 
     switch (action) {
+      case ChatMenuAction.read:
+        _runChange(
+          owner,
+          account,
+          () => markInboxRowRead(owner, room),
+          failure: 'Couldn’t mark the chat as read. Try again.',
+        );
+        return;
+      case ChatMenuAction.unread:
+        _runChange(
+          owner,
+          account,
+          () => markInboxRowUnread(owner, room),
+          failure: 'Couldn’t mark the chat as unread. Try again.',
+        );
+        return;
       case ChatMenuAction.pin:
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => NotionMetadataActions.setPinned(
-            owner,
-            InboxProjection(owner).entityFor(room),
-            !InboxProjection(owner).metadataFor(room).isPinned,
+        final pinned = InboxProjection(owner).metadataFor(room).isPinned;
+        _runChange(
+          owner,
+          account,
+          () => NotionMetadataActions.setPinned(owner, entity(), !pinned),
+          failure: pinned
+              ? 'Couldn’t unpin the chat. Check private sync and try again.'
+              : 'Couldn’t pin the chat. Check private sync and try again.',
+        );
+        return;
+      case ChatMenuAction.mute:
+        final choice = await showChatActionsMenu<MuteChoice>(
+          posContext.mounted ? posContext : context,
+          anchor: anchor,
+          title: title,
+          avatar: avatar(),
+          haptic: false,
+          items: muteMenuItems(
+            canMute: canEditChatPreferences(owner, 'org:${entity()}'),
           ),
+        );
+        if (choice == null || !mounted || !_sameInbox(owner, account)) return;
+        if (choice == MuteChoice.settings) {
+          await Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => ChatPreferencesPage(personal: owner, room: room),
+            ),
+          );
+          return;
+        }
+        final target = entity();
+        final duration = choice.duration;
+        _runChange(
+          owner,
+          account,
+          () => NotionMetadataActions.setMuted(
+            owner,
+            target,
+            muted: true,
+            until: duration == null ? null : DateTime.now().add(duration),
+          ),
+          failure: 'Couldn’t mute the chat. Check private sync and try again.',
+          done: muteLabel(choice),
+          undo: () => NotionMetadataActions.setMuted(
+            owner,
+            target,
+            muted: false,
+          ),
+        );
+        return;
+      case ChatMenuAction.unmute:
+        _runChange(
+          owner,
+          account,
+          () => NotionMetadataActions.setMuted(owner, entity(), muted: false),
+          failure:
+              'Couldn’t unmute the chat. Check private sync and try again.',
+        );
+        return;
+      case ChatMenuAction.archive:
+      case ChatMenuAction.unarchive:
+        final archive = action == ChatMenuAction.archive;
+        final target = entity();
+        final sources = inboxSources(owner, room);
+        _runChange(
+          owner,
+          account,
+          () => NotionMetadataActions.setArchived(
+            owner,
+            target,
+            archive,
+            sources: sources,
+          ),
+          failure: archive
+              ? 'Couldn’t archive the chat. Check private sync and try again.'
+              : 'Couldn’t move the chat back. Check private sync and try again.',
+          done: archive ? 'Chat archived' : null,
+          undo: archive
+              ? () => NotionMetadataActions.setArchived(
+                  owner,
+                  target,
+                  false,
+                  sources: sources,
+                )
+              : null,
         );
         return;
       case ChatMenuAction.merge:
@@ -607,11 +793,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         );
         return;
       case ChatMenuAction.ignore:
-        if (!canEditChatPreferences(
-          owner,
-          'org:${InboxProjection(owner).entityFor(room)}',
-        ))
-          return;
+        final target = entity();
+        if (!canEditChatPreferences(owner, 'org:$target')) return;
         final projection = InboxProjection(owner);
         final metadata = projection.metadataFor(room);
         final ignored = projection.placementFor(room) == ChatPlacement.ignored;
@@ -626,18 +809,88 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
                         ChatPlacement.ignored,
               )
             : metadata.setIgnored(true);
-        await showFutureLoadingDialog(
-          context: context,
-          future: () => owner.put(
-            'org:${metadata.entityId}',
+        final previous = owner.values['org:$target'];
+        Future<void> write(Map<String, dynamic> value) =>
+            owner.put('org:$target', value);
+        _runChange(
+          owner,
+          account,
+          () => write(
             {
-              ...?owner.values['org:${metadata.entityId}'],
+              ...?previous,
               ...updated.toJson(),
             }.cast<String, dynamic>(),
           ),
+          failure: ignored
+              ? 'Couldn’t restore the chat. Check private sync and try again.'
+              : 'Couldn’t ignore the chat. Check private sync and try again.',
+          done: ignored ? null : 'Chat ignored',
+          undo: ignored
+              ? null
+              : () => write(
+                  {
+                    ...?owner.values['org:$target'],
+                    ...InboxProjection(owner)
+                        .metadataForEntity(target)
+                        .restoreIgnored(
+                          inheritedIgnored:
+                              kind.isGroup &&
+                              projection
+                                      .networkPreferences(kind.network)
+                                      .groupPlacement ==
+                                  ChatPlacement.ignored,
+                        )
+                        .toJson(),
+                  }.cast<String, dynamic>(),
+                ),
         );
         return;
     }
+  }
+
+  /// Runs a private change without blocking the UI: the inbox shows it as
+  /// soon as the local replica has it. [done] confirms it in a snackbar,
+  /// with Undo when [undo] is given; a failure explains itself.
+  void _runChange(
+    PersonalClient owner,
+    String account,
+    Future<void> Function() change, {
+    required String failure,
+    String? done,
+    Future<void> Function()? undo,
+  }) {
+    if (!_sameInbox(owner, account)) return;
+    final messenger = ScaffoldMessenger.of(context);
+    void failed(Object _) {
+      if (!_sameInbox(owner, account)) return;
+      _refreshInbox();
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(failure)));
+    }
+
+    change().then((_) {
+      if (_sameInbox(owner, account)) _refreshInbox();
+    }, onError: failed);
+    if (done == null) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(done),
+          action: undo == null
+              ? null
+              : SnackBarAction(
+                  label: 'Undo',
+                  onPressed: () {
+                    if (!_sameInbox(owner, account)) return;
+                    undo().then((_) {
+                      if (_sameInbox(owner, account)) _refreshInbox();
+                    }, onError: failed);
+                  },
+                ),
+        ),
+      );
   }
 
   bool _sameInbox(PersonalClient owner, String account) =>

@@ -77,7 +77,13 @@ class ConversationMetadata {
   final int? pinOrder;
   final bool archived;
   final bool lowPriority;
-  final bool muted;
+
+  /// The stored mute switch; [muted] also honours [mutedUntil].
+  final bool mutedFlag;
+
+  /// End of a timed mute (UTC); null mutes until the user unmutes. Expiry
+  /// is evaluated when the value is read, so nothing needs a timer.
+  final DateTime? mutedUntil;
   final bool ignored;
   final ChatPlacement? placement;
   final PersonalNotificationMode? notificationMode;
@@ -91,7 +97,8 @@ class ConversationMetadata {
     this.pinOrder,
     this.archived = false,
     this.lowPriority = false,
-    this.muted = false,
+    bool muted = false,
+    DateTime? mutedUntil,
     this.ignored = false,
     this.placement,
     this.notificationMode,
@@ -99,7 +106,9 @@ class ConversationMetadata {
     this.avatarAsset,
     this.theme,
     this.revision = 0,
-  }) : labelIds = Set.unmodifiable(labelIds) {
+  }) : labelIds = Set.unmodifiable(labelIds),
+       mutedFlag = muted,
+       mutedUntil = muted ? mutedUntil?.toUtc() : null {
     if (entityId.isEmpty ||
         revision < 0 ||
         (pinOrder != null && pinOrder! < 0)) {
@@ -111,6 +120,14 @@ class ConversationMetadata {
   }
 
   bool get isPinned => pinOrder != null;
+
+  /// Muted right now (a timed mute that has ended reads as not muted).
+  bool get muted => mutedAt(DateTime.now());
+  bool mutedAt(DateTime now) {
+    final until = mutedUntil;
+    return mutedFlag && (until == null || now.isBefore(until));
+  }
+
   bool visibleInInbox(Iterable<PersonalLabel> labels) =>
       !archived &&
       !ignored &&
@@ -119,12 +136,15 @@ class ConversationMetadata {
       !labels.any((l) => labelIds.contains(l.id) && !l.showInInbox);
 
   /// Low Priority and mute allow only an explicit mention or a thread reply.
+  /// An active mute outranks an explicit "All messages" choice (it is the
+  /// newer, more specific action, as in Telegram); "Muted" stays stricter.
   bool shouldNotify({bool mentioned = false, bool threadReplyToMe = false}) =>
       !ignored &&
       placement != ChatPlacement.ignored &&
       notificationMode != PersonalNotificationMode.muted &&
-      ((notificationMode == PersonalNotificationMode.all ||
-              (notificationMode == null && !(muted || lowPriority))) ||
+      ((!muted &&
+              (notificationMode == PersonalNotificationMode.all ||
+                  (notificationMode == null && !lowPriority))) ||
           mentioned ||
           threadReplyToMe);
 
@@ -142,7 +162,10 @@ class ConversationMetadata {
   ConversationMetadata onActivity() => archived ? _copy(archived: false) : this;
   ConversationMetadata setArchived(bool value) => _copy(archived: value);
   ConversationMetadata setLowPriority(bool value) => _copy(lowPriority: value);
-  ConversationMetadata setMuted(bool value) => _copy(muted: value);
+
+  /// Mutes until [until] (null: until unmuted) or unmutes.
+  ConversationMetadata setMuted(bool value, {DateTime? until}) =>
+      _copy(muted: value, mutedUntil: () => value ? until : null);
   ConversationMetadata setIgnored(bool value) => _copy(ignored: value);
   ConversationMetadata restoreIgnored({bool inheritedIgnored = false}) {
     final restored = setIgnored(false);
@@ -169,6 +192,7 @@ class ConversationMetadata {
     bool? archived,
     bool? lowPriority,
     bool? muted,
+    DateTime? Function()? mutedUntil,
     bool? ignored,
     ChatPlacement? Function()? placement,
     PersonalNotificationMode? Function()? notificationMode,
@@ -181,7 +205,8 @@ class ConversationMetadata {
     pinOrder: pinOrder == null ? this.pinOrder : pinOrder(),
     archived: archived ?? this.archived,
     lowPriority: lowPriority ?? this.lowPriority,
-    muted: muted ?? this.muted,
+    muted: muted ?? mutedFlag,
+    mutedUntil: mutedUntil == null ? this.mutedUntil : mutedUntil(),
     ignored: ignored ?? this.ignored,
     placement: placement == null ? this.placement : placement(),
     notificationMode: notificationMode == null
@@ -198,7 +223,10 @@ class ConversationMetadata {
     'pinOrder': pinOrder,
     'archived': archived,
     'lowPriority': lowPriority,
-    'muted': muted,
+    'muted': mutedFlag,
+    // Always written, so a later "until I unmute" clears an older end time
+    // when callers merge this map over the stored one.
+    'mutedUntil': mutedUntil?.toUtc().toIso8601String(),
     'ignored': ignored,
     'placement': placement?.name,
     'notificationMode': notificationMode?.name,
@@ -215,6 +243,9 @@ class ConversationMetadata {
         archived: j['archived'] as bool? ?? false,
         lowPriority: j['lowPriority'] as bool? ?? false,
         muted: j['muted'] as bool? ?? false,
+        mutedUntil: j['mutedUntil'] is String
+            ? DateTime.tryParse(j['mutedUntil'] as String)?.toUtc()
+            : null,
         ignored: j['ignored'] as bool? ?? false,
         placement: preferenceEnum(ChatPlacement.values, j['placement']),
         notificationMode: preferenceEnum(

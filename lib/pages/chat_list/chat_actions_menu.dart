@@ -4,30 +4,89 @@ import 'dart:math' as math;
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// The long-press actions of an inbox row. Deliberately short: everything
-/// else (leave, block, tags, spaces, low priority) lives in chat details.
-enum ChatMenuAction { pin, merge, unmerge, notifications, ignore }
+/// The long-press actions of an inbox row (Telegram, Messenger). Deliberately
+/// short: everything else (leave, block, tags, spaces, low priority) lives in
+/// chat details; notification details sit at the end of the Mute menu.
+enum ChatMenuAction {
+  read,
+  unread,
+  pin,
+  mute,
+  unmute,
+  archive,
+  unarchive,
+  merge,
+  unmerge,
+  notifications,
+  ignore,
+}
 
-class ChatMenuItem {
-  final ChatMenuAction action;
+/// The second step of "Mute…": how long (Telegram's durations), or the
+/// chat's notification settings.
+enum MuteChoice {
+  hour(Duration(hours: 1)),
+  eightHours(Duration(hours: 8)),
+  week(Duration(days: 7)),
+  always(null),
+  settings(null);
+
+  const MuteChoice(this.duration);
+
+  /// Null: no end ([always]) or not a mute ([settings]).
+  final Duration? duration;
+}
+
+class ChatMenuItem<T extends Object> {
+  final T action;
   final IconData icon;
   final String label;
   final bool enabled;
   const ChatMenuItem(this.action, this.icon, this.label, {this.enabled = true});
+
+  String get keyName => switch (action) {
+    final Enum value => value.name,
+    final value => '$value',
+  };
 }
+
+/// The rows of the Mute menu; the durations need private sync ([canMute]),
+/// the settings row is always there.
+List<ChatMenuItem<MuteChoice>> muteMenuItems({required bool canMute}) => [
+  ChatMenuItem(MuteChoice.hour, Icons.schedule, 'For 1 hour', enabled: canMute),
+  ChatMenuItem(
+    MuteChoice.eightHours,
+    Icons.bedtime_outlined,
+    'For 8 hours',
+    enabled: canMute,
+  ),
+  ChatMenuItem(
+    MuteChoice.week,
+    Icons.date_range_outlined,
+    'For 1 week',
+    enabled: canMute,
+  ),
+  ChatMenuItem(
+    MuteChoice.always,
+    Icons.notifications_off_outlined,
+    'Until I unmute',
+    enabled: canMute,
+  ),
+  const ChatMenuItem(MuteChoice.settings, Icons.tune, 'Notification settings…'),
+];
 
 /// Rounded glass panel anchored to the long-pressed row, in the inbox
 /// dock's language (overlay tint, hairline, rounded corners, inset row
 /// highlights). It grows from the row with the popover motion and blurs
 /// only once the popover has settled (DESIGN.md "Glass").
-Future<ChatMenuAction?> showChatActionsMenu(
+Future<T?> showChatActionsMenu<T extends Object>(
   BuildContext context, {
   required Rect anchor,
   required String title,
-  required List<ChatMenuItem> items,
+  required List<ChatMenuItem<T>> items,
   Widget? avatar,
+  bool haptic = true,
 }) {
-  NotionHaptics.longPress();
+  if (haptic) NotionHaptics.longPress();
   final root = Navigator.of(context, rootNavigator: true).context;
   final window =
       (root.findRenderObject() as RenderBox?)?.size ??
@@ -41,7 +100,7 @@ Future<ChatMenuAction?> showChatActionsMenu(
           anchor.left + NotionSize.avatar,
           below ? anchor.bottom : anchor.top,
         );
-  return showNotionPopover<ChatMenuAction>(
+  return showNotionPopover<T>(
     context: context,
     alignment: window.isEmpty
         ? Alignment.center
@@ -56,7 +115,7 @@ Future<ChatMenuAction?> showChatActionsMenu(
         below: below,
         centred: centred,
       ),
-      child: ChatActionsPanel(title: title, avatar: avatar, items: items),
+      child: ChatActionsPanel<T>(title: title, avatar: avatar, items: items),
     ),
   );
 }
@@ -118,10 +177,10 @@ class _ChatMenuLayout extends SingleChildLayoutDelegate {
       old.centred != centred;
 }
 
-class ChatActionsPanel extends StatelessWidget {
+class ChatActionsPanel<T extends Object> extends StatelessWidget {
   final String title;
   final Widget? avatar;
-  final List<ChatMenuItem> items;
+  final List<ChatMenuItem<T>> items;
   const ChatActionsPanel({
     super.key,
     required this.title,
@@ -175,7 +234,7 @@ class ChatActionsPanel extends StatelessWidget {
                   ),
                 ),
                 const NotionGlassDivider(vertical: false),
-                for (final item in items) _ChatMenuRow(item: item),
+                for (final item in items) _ChatMenuRow<T>(item: item),
               ],
               rise: NotionMotion.rise / 2,
               afterRoute: false,
@@ -187,8 +246,8 @@ class ChatActionsPanel extends StatelessWidget {
   }
 }
 
-class _ChatMenuRow extends StatelessWidget {
-  final ChatMenuItem item;
+class _ChatMenuRow<T extends Object> extends StatelessWidget {
+  final ChatMenuItem<T> item;
   const _ChatMenuRow({required this.item});
 
   @override
@@ -201,7 +260,7 @@ class _ChatMenuRow extends StatelessWidget {
       enabled: item.enabled,
       scale: NotionMotion.pressRow,
       child: NotionGlassMenuRow(
-        key: ValueKey('chat-menu-${item.action.name}'),
+        key: ValueKey('chat-menu-${item.keyName}'),
         leading: Icon(item.icon, size: NotionSize.icon, color: color),
         title: item.label,
         style: tokens.typography.body.copyWith(color: color),

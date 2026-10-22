@@ -281,6 +281,29 @@ void main() {
       );
     });
 
+    test('a timed mute counts until it ends and outranks an explicit mode', () {
+      String iso(Duration offset) => now.add(offset).toUtc().toIso8601String();
+      final active = {
+        'muted': true,
+        'mutedUntil': iso(const Duration(hours: 1)),
+      };
+      final ended = {
+        'muted': true,
+        'mutedUntil': iso(const Duration(hours: -1)),
+      };
+      expect(block(candidate(chat: active)), 'muted');
+      expect(block(candidate(person: active)), 'muted');
+      expect(block(candidate(chat: ended)), isNull);
+      expect(
+        block(candidate(chat: {...active, 'notificationMode': 'all'})),
+        'muted',
+      );
+      expect(
+        block(candidate(chat: {...ended, 'notificationMode': 'all'})),
+        isNull,
+      );
+    });
+
     test('per-chat Always/Never outrank network and mute rules only', () {
       final always = policy
           .withNetwork('telegram', false)

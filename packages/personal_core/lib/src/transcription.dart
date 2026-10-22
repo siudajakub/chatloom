@@ -476,6 +476,7 @@ String? autoTranscriptionBlock(
           candidate.chatMetadata,
           candidate.personMetadata,
           candidate.networkMetadata,
+          now,
         )) {
       return 'muted';
     }
@@ -499,18 +500,30 @@ bool _ignored(Map<String, dynamic>? metadata) =>
     (metadata['ignored'] == true || metadata['placement'] == 'ignored');
 
 /// Mirrors ConversationMetadata.shouldNotify precedence: an explicit chat
-/// notification mode wins, then chat/person mute, then the network default.
+/// "Muted" mode and an active chat/person mute win, then an explicit chat
+/// notification mode, then the network default. A timed mute that ended
+/// (`mutedUntil` in the past) no longer counts.
 bool _muted(
   Map<String, dynamic>? chat,
   Map<String, dynamic>? person,
   Map<String, dynamic>? network,
+  DateTime now,
 ) {
   const modes = {'all', 'mentionsOnly', 'muted'};
   final chatMode = chat?['notificationMode'];
-  if (modes.contains(chatMode)) return chatMode == 'muted';
-  if (chat?['muted'] == true || person?['muted'] == true) return true;
+  if (chatMode == 'muted') return true;
+  if (_activeMute(chat, now) || _activeMute(person, now)) return true;
+  if (modes.contains(chatMode)) return false;
   if (person?['notificationMode'] == 'muted') return true;
   return network?['notifications'] == 'muted';
+}
+
+bool _activeMute(Map<String, dynamic>? metadata, DateTime now) {
+  if (metadata?['muted'] != true) return false;
+  final until = metadata?['mutedUntil'];
+  if (until is! String) return true;
+  final end = DateTime.tryParse(until);
+  return end == null || now.isBefore(end);
 }
 
 /// FIPS 180-4 SHA-256 as lowercase hex. personal_core has no runtime

@@ -431,7 +431,7 @@ void main() {
     expect(() => planMerge(personal, [whatsapp]), throwsArgumentError);
   });
 
-  test('long-press menu has exactly pin, merge, notifications, ignore', () {
+  test('long-press menu: read state, pin, mute, archive, merge, ignore', () {
     List<String> labels(Room room) => [
       for (final item in chatMenuItems(
         personal,
@@ -441,7 +441,14 @@ void main() {
       ))
         item.label,
     ];
-    expect(labels(whatsapp), ['Pin', 'Merge…', 'Notifications', 'Ignore chat']);
+    expect(labels(whatsapp), [
+      'Mark as unread',
+      'Pin',
+      'Mute…',
+      'Archive',
+      'Merge…',
+      'Ignore chat',
+    ]);
     personal.values['person:p'] = PersonGroup(
       id: 'p',
       name: 'Fictional person',
@@ -449,9 +456,11 @@ void main() {
       defaultRoomId: whatsapp.id,
     ).toJson().cast<String, dynamic>();
     expect(labels(telegram), [
+      'Mark as unread',
       'Pin',
+      'Mute…',
+      'Archive',
       'Unmerge',
-      'Notifications',
       'Ignore chat',
     ]);
     final groupMenu = chatMenuItems(
@@ -471,9 +480,68 @@ void main() {
         signal,
         pinLabel: 'Pin',
         unpinLabel: 'Unpin',
-      ).where((i) => i.enabled),
-      [isA<ChatMenuItem>().having((i) => i.label, 'label', 'Notifications')],
+      ).where((i) => i.enabled).map((i) => i.label),
+      // Read state is room account data / a receipt, and the Mute menu
+      // still opens the notification settings without private sync.
+      ['Mark as unread', 'Mute…'],
     );
+    personal.available = true;
+    // A muted, archived chat offers the way back; the mute ends by itself.
+    personal.values['org:${signal.id}'] = {
+      'muted': true,
+      'mutedUntil': DateTime.now()
+          .add(const Duration(hours: 1))
+          .toUtc()
+          .toIso8601String(),
+      'archived': true,
+    };
+    expect(labels(signal), containsAll(['Unmute', 'Unarchive']));
+    personal.values['org:${signal.id}'] = {
+      'muted': true,
+      'mutedUntil': DateTime.now()
+          .subtract(const Duration(minutes: 1))
+          .toUtc()
+          .toIso8601String(),
+    };
+    expect(labels(signal), containsAll(['Mute…', 'Archive']));
+    expect(
+      muteMenuItems(
+        canMute: false,
+      ).where((i) => i.enabled).map((i) => i.action),
+      [MuteChoice.settings],
+    );
+    expect(muteMenuItems(canMute: true).map((i) => i.label), [
+      'For 1 hour',
+      'For 8 hours',
+      'For 1 week',
+      'Until I unmute',
+      'Notification settings…',
+    ]);
+  });
+
+  test('a timed mute limits notifications until it ends', () {
+    PersonalNotificationMode mode() =>
+        InboxProjection(personal).notificationModeFor(whatsapp);
+    String iso(Duration offset) =>
+        DateTime.now().add(offset).toUtc().toIso8601String();
+    expect(mode(), PersonalNotificationMode.all);
+    personal.values['org:${whatsapp.id}'] = {
+      'muted': true,
+      'mutedUntil': iso(const Duration(hours: 1)),
+      'notificationMode': 'all',
+    };
+    expect(mode(), PersonalNotificationMode.mentionsOnly);
+    personal.values['org:${whatsapp.id}'] = {
+      'muted': true,
+      'mutedUntil': iso(const Duration(minutes: -1)),
+    };
+    expect(mode(), PersonalNotificationMode.all);
+    // Muting never loosens a fully muted network default.
+    personal.values['network-policy:whatsapp'] = {'notifications': 'muted'};
+    personal.values['org:${whatsapp.id}'] = {'muted': true};
+    expect(mode(), PersonalNotificationMode.muted);
+    personal.values.remove('network-policy:whatsapp');
+    personal.values.remove('org:${whatsapp.id}');
   });
 
   testWidgets('picker: search, select, confirm', (tester) async {
@@ -557,10 +625,17 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    for (final label in ['Pin', 'Merge…', 'Notifications', 'Ignore chat']) {
+    for (final label in [
+      'Mark as unread',
+      'Pin',
+      'Mute…',
+      'Archive',
+      'Merge…',
+      'Ignore chat',
+    ]) {
       expect(find.text(label), findsOneWidget);
     }
-    for (final gone in ['Leave', 'More', 'Add tag', 'Mark as unread']) {
+    for (final gone in ['Leave', 'More', 'Add tag', 'Notifications']) {
       expect(find.text(gone), findsNothing);
     }
     await tester.tap(find.text('Merge…'));

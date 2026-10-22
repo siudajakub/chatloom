@@ -18,8 +18,13 @@ Future<bool> personalNotificationEligible(
       notificationMode ??
       (metadata.ignored || metadata.placement == ChatPlacement.ignored
           ? PersonalNotificationMode.muted
+          : metadata.notificationMode == PersonalNotificationMode.muted
+          ? PersonalNotificationMode.muted
+          // An active (timed) mute outranks an explicit chat mode.
+          : metadata.muted
+          ? PersonalNotificationMode.mentionsOnly
           : metadata.notificationMode ??
-                ((metadata.muted || metadata.lowPriority)
+                (metadata.lowPriority
                     ? PersonalNotificationMode.mentionsOnly
                     : PersonalNotificationMode.all));
   if (mode == PersonalNotificationMode.muted) return false;

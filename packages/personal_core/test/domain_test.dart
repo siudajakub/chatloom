@@ -409,6 +409,40 @@ void main() {
       expect(metadata.muted, isTrue);
       expect(metadata.visibleInInbox([]), isFalse);
     });
+    test('a timed mute ends by itself and round-trips through JSON', () {
+      final now = DateTime.utc(2026, 10, 21, 12);
+      final metadata = ConversationMetadata(
+        entityId: 'synthetic',
+      ).setMuted(true, until: now.add(const Duration(hours: 1)));
+      expect(metadata.mutedAt(now), isTrue);
+      expect(metadata.mutedAt(now.add(const Duration(hours: 2))), isFalse);
+      final json = metadata.toJson();
+      expect(json['muted'], isTrue);
+      expect(json['mutedUntil'], '2026-10-21T13:00:00.000Z');
+      final parsed = ConversationMetadata.fromJson(json.cast());
+      expect(parsed.mutedUntil, now.add(const Duration(hours: 1)));
+      // "Until I unmute" clears the end; unmuting clears both.
+      final always = parsed.setMuted(true);
+      expect(always.toJson()['mutedUntil'], isNull);
+      expect(always.mutedAt(now.add(const Duration(days: 400))), isTrue);
+      expect(parsed.setMuted(false).toJson()['muted'], isFalse);
+      expect(parsed.setMuted(false).mutedUntil, isNull);
+      // An ended mute notifies again; an active one outranks "All messages".
+      final ended = ConversationMetadata(
+        entityId: 'synthetic',
+        muted: true,
+        mutedUntil: DateTime.now().subtract(const Duration(minutes: 1)),
+      );
+      expect(ended.muted, isFalse);
+      expect(ended.shouldNotify(), isTrue);
+      final activeAll = ConversationMetadata(
+        entityId: 'synthetic',
+        muted: true,
+        notificationMode: PersonalNotificationMode.all,
+      );
+      expect(activeAll.shouldNotify(), isFalse);
+      expect(activeAll.shouldNotify(mentioned: true), isTrue);
+    });
     test('only mentions and thread replies bypass mute and low priority', () {
       final metadata = ConversationMetadata(
         entityId: 'synthetic',

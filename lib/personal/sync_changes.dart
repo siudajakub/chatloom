@@ -282,6 +282,7 @@ const _fieldLabels = <String, String>{
   'archived': 'Archived',
   'lowPriority': 'Low priority',
   'muted': 'Privately muted',
+  'mutedUntil': 'Mute ends',
   'ignored': 'Ignored',
   'placement': 'Placement',
   'notificationMode': 'Notifications',
