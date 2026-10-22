@@ -46,10 +46,9 @@ analyzer:
     - lib/l10n/*.dart
     - build/**
     - android/**
-    - ios/**
     - web/**
-    - windows/**
     - macos/**
+    - ios/**
     - linux/**
 
 dart_code_linter:

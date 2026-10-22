@@ -18,14 +18,10 @@ path = [
     ".gitignore",
     ".metadata",
     "android/**",
-    "ios/**",
-    "linux/**",
     "macos/**",
     "integration_test/.gitignore",
     "integration_test/data/**",
     "integration_test/synapse/**",
-    "snap/**",
-    "windows/**",
     "web/**"
 ]
 precedence = "aggregate"
@@ -52,12 +48,9 @@ path = [
     "assets/logo/**",
     "android/app/src/main/res/mipmap**/**",
     "android/app/src/main/res/drawable**/*.png",
-    "ios/Runner/Assets.xcassets/AppIcon.appiconset/**",
     "macos/Runner/Assets.xcassets/AppIcon.appiconset/**",
     "web/favicon.png",
-    "web/icons/**",
-    "snap/gui/*.png",
-    "windows/runner/resources/app_icon.ico"
+    "web/icons/**"
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026-Present ChatLoom authors"
