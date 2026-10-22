@@ -271,7 +271,11 @@ void main() {
       final early = tester.getTopLeft(find.text('Early').first);
       final late = tester.getTopLeft(find.text('Late'));
       expect(early.dx, lessThan(late.dx));
-      expect(find.text('Messages'), findsOneWidget);
+      // The view chips replaced the second large title (UX-16).
+      expect(
+        find.byKey(const ValueKey('notion_inbox_chip_inbox')),
+        findsOneWidget,
+      );
     },
   );
   testWidgets(

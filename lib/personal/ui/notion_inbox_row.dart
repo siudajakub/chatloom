@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/personal/ui/notion_inbox_network_badge.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -53,6 +54,10 @@ class NotionInboxRow extends StatelessWidget {
 
   /// Flash once on first build too (a row a merge or unmerge just created).
   final bool highlightOnMount;
+
+  /// Networks marked on the avatar (UX-17, FT-12): set only while the inbox
+  /// shows all networks; two stacked marks for a merged person. Empty: none.
+  final List<String> networks;
   const NotionInboxRow({
     super.key,
     required this.avatar,
@@ -77,6 +82,7 @@ class NotionInboxRow extends StatelessWidget {
     this.onLongPress,
     this.highlight,
     this.highlightOnMount = false,
+    this.networks = const [],
   });
 
   @override
@@ -104,6 +110,7 @@ class NotionInboxRow extends StatelessWidget {
         'Unread',
       if (muted) notificationLabel ?? 'Notifications limited',
       if (pinned) 'Pinned',
+      ?notionNetworksAnnouncement(networks),
     ];
     final previewColor = typing
         ? colors.accent
@@ -140,7 +147,26 @@ class NotionInboxRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       ExcludeSemantics(
-                        child: SizedBox.square(dimension: 40, child: avatar),
+                        child: SizedBox.square(
+                          dimension: 40,
+                          // One shape with or without the badge, so the
+                          // avatar keeps its element when the network
+                          // filter changes (no image reload).
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Positioned.fill(child: avatar),
+                              if (networks.isNotEmpty)
+                                PositionedDirectional(
+                                  end: -NotionSpace.xxs,
+                                  bottom: -NotionSpace.xxs,
+                                  child: NotionInboxNetworkBadge(
+                                    networks: networks,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/personal/ui/notion_inbox_dock.dart';
 import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
-import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/personal/ui/notion_inbox_view_chips.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
@@ -35,6 +35,9 @@ class NotionInboxPage extends StatelessWidget {
   final Widget? headerStatus;
   final bool loading;
   final String? emptyMessage;
+
+  /// Unread chats of the current network selection, on the "Unread" chip.
+  final int unreadCount;
   const NotionInboxPage({
     super.key,
     this.rows = const [],
@@ -55,6 +58,7 @@ class NotionInboxPage extends StatelessWidget {
     this.headerStatus,
     this.loading = false,
     this.emptyMessage,
+    this.unreadCount = 0,
   });
   int? _indexOfRow(Key key) {
     final index = rows.indexWhere((row) => row.key == key);
@@ -138,15 +142,20 @@ class NotionInboxPage extends StatelessWidget {
                       : null,
                 ),
               ),
+              // One-tap views (UX-16) instead of a second large title; the
+              // same state as the dock's "Show chats" menu.
               SliverPadding(
-                padding: EdgeInsets.fromLTRB(20, showPins ? 24 : 20, 20, 10),
+                padding: EdgeInsets.fromLTRB(
+                  NotionSpace.inset,
+                  showPins ? NotionSpace.md : NotionSpace.sm,
+                  NotionSpace.inset,
+                  NotionSpace.xs,
+                ),
                 sliver: SliverToBoxAdapter(
-                  child: NotionFadeThrough(
-                    child: Text(
-                      inboxViewLabel(selectedView),
-                      key: ValueKey(selectedView),
-                      style: NotionTokens.title.copyWith(fontSize: 28),
-                    ),
+                  child: NotionInboxViewChips(
+                    selected: selectedView,
+                    onViewSelected: onViewSelected,
+                    unreadCount: unreadCount,
                   ),
                 ),
               ),
