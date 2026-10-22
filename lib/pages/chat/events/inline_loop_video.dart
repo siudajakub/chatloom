@@ -18,6 +18,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:video_player/video_player.dart';
 
+import 'inline_loop_slots.dart';
 import 'outgoing_upload_progress.dart';
 
 /// Bridged GIFs and Telegram video stickers as Telegram shows them: a muted
@@ -54,7 +55,7 @@ class InlineLoopVideo extends StatefulWidget {
   final Timeline? timeline;
 
   /// Native players alive at once across the app.
-  static const maxPlayers = 3;
+  static const maxPlayers = InlineLoopSlots.max;
 
   /// Share of the frame that must be visible to play.
   static const visibleFraction = .5;
@@ -72,7 +73,7 @@ class InlineLoopVideo extends StatefulWidget {
 
   /// Tests: the players alive now.
   @visibleForTesting
-  static int get debugLivePlayers => _InlineLoopVideoState._live.length;
+  static int get debugLivePlayers => InlineLoopSlots.live;
 
   static Map<String, Object?>? _info(Event event) =>
       event.content.tryGetMap<String, Object?>('info');
@@ -129,9 +130,6 @@ class InlineLoopVideo extends StatefulWidget {
 
 class _InlineLoopVideoState extends State<InlineLoopVideo>
     with WidgetsBindingObserver {
-  /// Live players, oldest first.
-  static final _live = <_InlineLoopVideoState>[];
-
   late final RoundPlaybackHandle _handle;
 
   VideoPlayerController? _player;
@@ -319,12 +317,11 @@ class _InlineLoopVideoState extends State<InlineLoopVideo>
     final generation = ++_generation;
     // Make room: the oldest live player gives way. Synchronous, so rows
     // starting in the same frame never exceed the limit together.
-    while (_live.length >= InlineLoopVideo.maxPlayers) {
-      final oldest = _live.first;
-      oldest._evicted = true;
-      unawaited(oldest._release());
-    }
-    _live.add(this);
+    // ChatLoom wave 5b: the budget is shared with the GIF search grid.
+    InlineLoopSlots.acquire(this, () {
+      _evicted = true;
+      unawaited(_release());
+    });
     VideoPlayerController? player;
     try {
       player = await _createPlayer(generation);
@@ -378,7 +375,7 @@ class _InlineLoopVideoState extends State<InlineLoopVideo>
     final lease = _lease;
     _player = null;
     _lease = null;
-    _live.remove(this);
+    InlineLoopSlots.release(this);
     if (player != null && mounted && !_disposed) setState(() {});
     try {
       await player?.dispose();
