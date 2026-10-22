@@ -229,24 +229,41 @@ void main() {
   });
 
   group('status words', () {
-    BridgeHealth health(BridgeHealthState state) => BridgeHealth(
+    BridgeHealth health(
+      BridgeHealthState state, {
+      String? event,
+      bool checking = false,
+    }) => BridgeHealth(
       network: 'whatsapp',
       state: state,
       title: 't',
       reason: '',
       signature: 's',
+      stateEvent: event,
+      checking: checking,
     );
 
-    test('one of three pills, none without any signal', () {
-      expect(networkStatusOf(null), NetworkStatus.unknown);
-      expect(networkStatusLabel(NetworkStatus.unknown), isNull);
+    test('honest pills: evidence for Connected, words for the rest', () {
+      expect(networkStatusOf(null), NetworkStatus.none);
+      expect(networkStatusLabel(NetworkStatus.none), isNull);
       expect(
         networkStatusOf(health(BridgeHealthState.ok)),
         NetworkStatus.connected,
       );
+      // Unknown is never "Connected" (BR-02).
       expect(
         networkStatusOf(health(BridgeHealthState.unknown)),
-        NetworkStatus.connected,
+        NetworkStatus.unknown,
+      );
+      expect(
+        networkStatusOf(health(BridgeHealthState.unknown, checking: true)),
+        NetworkStatus.none,
+      );
+      expect(
+        networkStatusOf(
+          health(BridgeHealthState.degraded, event: 'TRANSIENT_DISCONNECT'),
+        ),
+        NetworkStatus.connecting,
       );
       expect(
         networkStatusOf(health(BridgeHealthState.degraded)),
@@ -258,18 +275,28 @@ void main() {
       );
       expect(
         networkStatusOf(health(BridgeHealthState.loggedOut)),
-        NetworkStatus.disconnected,
+        NetworkStatus.signedOut,
       );
       expect(
         [
           for (final status in [
             NetworkStatus.connected,
+            NetworkStatus.connecting,
             NetworkStatus.attention,
+            NetworkStatus.signedOut,
             NetworkStatus.disconnected,
+            NetworkStatus.unknown,
           ])
             networkStatusLabel(status),
         ],
-        ['Connected', 'Needs attention', 'Disconnected'],
+        [
+          'Connected',
+          'Connecting',
+          'Needs attention',
+          'Needs sign-in',
+          'Disconnected',
+          'Status unknown',
+        ],
       );
     });
 
@@ -322,7 +349,7 @@ void main() {
         health: evaluateBridgeHealth('whatsapp', signals, now),
       );
       expect(problem.subtitle, 'Signed out');
-      expect(problem.status, NetworkStatus.disconnected);
+      expect(problem.status, NetworkStatus.signedOut);
     });
 
     test('verdicts carry a short summary without the network name', () {
@@ -345,7 +372,8 @@ void main() {
 
       expect(summary('BAD_CREDENTIALS'), 'Signed out');
       expect(summary('UNCONFIGURED'), 'Not signed in');
-      expect(summary('TRANSIENT_DISCONNECT'), 'Disconnected');
+      expect(summary('TRANSIENT_DISCONNECT'), 'Reconnecting');
+      expect(summary('UNKNOWN_ERROR'), 'Disconnected');
       expect(summary('BRIDGE_UNREACHABLE'), 'Bridge isn’t running');
       expect(summary('CONNECTING'), 'Reconnecting');
       expect(
@@ -393,11 +421,12 @@ void main() {
       of: find.byKey(ValueKey('network-$network')),
       matching: finder,
     );
-    expect(inRow('whatsapp', find.text('Disconnected')), findsOneWidget);
+    expect(inRow('whatsapp', find.text('Needs sign-in')), findsOneWidget);
     expect(inRow('whatsapp', find.text('Signed out')), findsOneWidget);
     expect(inRow('telegram', find.text('Connected')), findsOneWidget);
     expect(inRow('telegram', find.text('1 chat')), findsOneWidget);
-    expect(inRow('signal', find.byType(NotionStatusPill)), findsNothing);
+    // The bridge can't be asked from this device: honest, not "Connected".
+    expect(inRow('signal', find.text('Status unknown')), findsOneWidget);
     // The technical bridge chat is not a network of its own.
     expect(find.text('Matrix'), findsNothing);
     // No settings jargon on the list.
@@ -428,7 +457,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('WhatsApp'), findsWidgets);
       expect(find.text('Fictional Account'), findsOneWidget);
-      expect(find.text('Disconnected'), findsOneWidget);
+      expect(find.text('Needs sign-in'), findsOneWidget);
+      expect(
+        find.textContaining('send “login” in the bridge chat'),
+        findsOneWidget,
+      );
       expect(find.text('WhatsApp is signed out'), findsOneWidget);
       expect(find.text('Last message received'), findsNothing);
       await tester.tap(find.text('Sign in'));
@@ -487,6 +520,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Working normally.'), findsOneWidget);
+      // A recent message proves delivery, not a known login: no sign-out.
+      expect(find.byKey(const ValueKey('network-sign-out')), findsNothing);
       // Telegram groups default to their own view.
       final placement = find.byKey(const ValueKey('network-groups-placement'));
       expect(
@@ -609,7 +644,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
-      expect(find.text('Disconnected'), findsOneWidget);
+      expect(find.text('Needs sign-in'), findsOneWidget);
       await tester.pumpWidget(
         _host(
           NetworkDetailPage(
@@ -780,8 +815,11 @@ void main() {
       await tester.tap(find.widgetWithText(NotionButton, 'Sign out'));
       await tester.pumpAndSettle();
       expect(signedOut, ['whatsapp']);
+      // At once signed out (CC-25): no "Connected", no second sign-out.
       expect(find.byKey(const ValueKey('network-sign-out')), findsNothing);
-      expect(find.textContaining('Signed out of WhatsApp.'), findsOneWidget);
+      expect(find.text('You signed out of WhatsApp'), findsOneWidget);
+      expect(find.text('Needs sign-in'), findsOneWidget);
+      expect(find.text('Connected'), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       fixture.personal.dispose();
@@ -836,7 +874,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Disconnected'), findsOneWidget);
+      expect(find.text('Needs sign-in'), findsOneWidget);
       expect(find.byKey(const ValueKey('network-sign-out')), findsNothing);
       await tester.pumpWidget(const SizedBox());
       fixture.personal.dispose();

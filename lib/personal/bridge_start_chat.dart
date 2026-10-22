@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:chatloom/personal/bridge_contact_search.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -79,14 +80,16 @@ Future<Room> startBridgedChat({
   return waitForBridgedChat(client, contact.dmRoomId!, timeout: timeout);
 }
 
-/// A short, human reason for a failed start (no ids, no URLs).
+/// A short, human reason for a failed start (no ids, no URLs, no bridge
+/// jargon): bridge texts go through [humanErrorText], which keeps a
+/// network's own sentences ("Phone number is not on WhatsApp.") and rewords
+/// bridgev2's technical ones.
 String bridgedChatError(Object error, String network) => switch (error) {
-  BridgeProvisioningException(:final message?) when message.isNotEmpty =>
-    message,
-  BridgeProvisioningException(unreachable: true) =>
-    'ChatLoom can’t reach your $network bridge.',
   TimeoutException() =>
     'The $network bridge didn’t open the chat in time. It may still appear '
         'in your inbox.',
-  _ => 'Something went wrong. Try again.',
+  BridgeProvisioningException(:final message, unreachable: true)
+      when bridgeMessageText(message, network: network) == null =>
+    'ChatLoom can’t reach your $network bridge.',
+  _ => humanErrorText(error, network: network),
 };

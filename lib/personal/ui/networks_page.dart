@@ -37,43 +37,70 @@ import 'package:personal_core/personal_core.dart';
 // one exception is "Sign out of <network>" (confirmed, J 2026-10-21), which
 // sends the bridge's `logout` command to its bot (`network_sign_out.dart`).
 
-/// The one status a network shows in the list.
+/// The one status a network shows in the list. Only evidence makes a
+/// network "Connected" (BR-02): a current answer from its bridge, or a
+/// recent remote message.
 enum NetworkStatus {
-  /// No problem reported (or messages flow).
+  /// The bridge says the login works, or messages arrived recently.
   connected,
 
-  /// Works, but something needs a look: reconnecting, the phone app is
-  /// needed, or messages are not being delivered.
+  /// The bridge reconnects by itself (shown after 3 minutes).
+  connecting,
+
+  /// Works, but something needs a look: the phone app is needed, or
+  /// messages are not being delivered.
   attention,
 
-  /// Messages do not arrive: signed out, disconnected, bridge not running.
+  /// Signed out or never signed in: messages do not arrive until sign-in.
+  signedOut,
+
+  /// Messages do not arrive: disconnected, bridge not running.
   disconnected,
 
-  /// Nothing known about a bridge (native Matrix, an unknown bridge, or the
-  /// first scan has not finished): no pill.
+  /// A bridged network ChatLoom has no current status for (the bridge can't
+  /// be asked, or hasn't answered recently).
   unknown,
+
+  /// No pill: native Matrix, nothing known yet, or the first check runs.
+  none,
 }
 
-NetworkStatus networkStatusOf(BridgeHealth? health) => switch (health?.state) {
-  null => NetworkStatus.unknown,
-  BridgeHealthState.ok || BridgeHealthState.unknown => NetworkStatus.connected,
-  BridgeHealthState.degraded => NetworkStatus.attention,
-  BridgeHealthState.disconnected ||
-  BridgeHealthState.loggedOut => NetworkStatus.disconnected,
-};
+NetworkStatus networkStatusOf(BridgeHealth? health) {
+  if (health == null) return NetworkStatus.none;
+  return switch (health.state) {
+    BridgeHealthState.ok => NetworkStatus.connected,
+    BridgeHealthState.unknown =>
+      health.checking ? NetworkStatus.none : NetworkStatus.unknown,
+    BridgeHealthState.degraded =>
+      const {
+            'CONNECTING',
+            'STARTING',
+            'TRANSIENT_DISCONNECT',
+          }.contains(health.stateEvent)
+          ? NetworkStatus.connecting
+          : NetworkStatus.attention,
+    BridgeHealthState.loggedOut => NetworkStatus.signedOut,
+    BridgeHealthState.disconnected => NetworkStatus.disconnected,
+  };
+}
 
 String? networkStatusLabel(NetworkStatus status) => switch (status) {
   NetworkStatus.connected => 'Connected',
+  NetworkStatus.connecting => 'Connecting',
   NetworkStatus.attention => 'Needs attention',
+  NetworkStatus.signedOut => 'Needs sign-in',
   NetworkStatus.disconnected => 'Disconnected',
-  NetworkStatus.unknown => null,
+  NetworkStatus.unknown => 'Status unknown',
+  NetworkStatus.none => null,
 };
 
 NotionStatusTone networkStatusTone(NetworkStatus status) => switch (status) {
   NetworkStatus.connected => NotionStatusTone.success,
+  NetworkStatus.connecting ||
   NetworkStatus.attention => NotionStatusTone.warning,
+  NetworkStatus.signedOut ||
   NetworkStatus.disconnected => NotionStatusTone.danger,
-  NetworkStatus.unknown => NotionStatusTone.neutral,
+  NetworkStatus.unknown || NetworkStatus.none => NotionStatusTone.neutral,
 };
 
 String networkChatCount(int chats) => switch (chats) {
@@ -93,7 +120,8 @@ String networkAgo(DateTime at, DateTime now) {
 
 /// Human state of one bridge login report (Advanced).
 String bridgeReportLabel(BridgeStateReport report) => switch (report.state) {
-  BridgeHealthState.ok || BridgeHealthState.unknown => 'Connected',
+  BridgeHealthState.ok => 'Connected',
+  BridgeHealthState.unknown => 'Unknown',
   BridgeHealthState.degraded =>
     report.userAction == 'OPEN_NATIVE' ? 'Needs the phone app' : 'Connecting',
   BridgeHealthState.disconnected =>
@@ -186,11 +214,18 @@ class NetworkSummary {
 
   static List<String> _accounts(BridgeHealthMonitor monitor, String network) =>
       {
-        for (final report
-            in monitor.signalsFor(network)?.reports.values ??
-                const <BridgeStateReport>[])
+        for (final report in bridgeLoginReports(monitor.signalsFor(network)))
           ?report.remoteName,
       }.toList()..sort();
+}
+
+/// The per-login states to show: the bridge's current answer when there is
+/// one, else the notices this device saw.
+List<BridgeStateReport> bridgeLoginReports(BridgeSignals? signals) {
+  if (signals == null) return const [];
+  return signals.liveAt != null
+      ? signals.live.values.toList()
+      : signals.reports.values.toList();
 }
 
 /// Rebuilds when the account's rooms are added or removed (chat counts),
@@ -527,6 +562,13 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
     super.initState();
     PersonalPageLoad.request(context, personal);
     listenToRooms();
+    // Opening the network asks its bridge for the current state (at most
+    // once a minute); the page shows the last verdict meanwhile.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _network != 'matrix') {
+        unawaited(_monitor.refresh(_network));
+      }
+    });
   }
 
   NetworkPreferences get _policy =>
@@ -596,6 +638,9 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
           widget.signOut ??
           NetworkSignOut(client: personal.client, monitor: _monitor).signOut;
       await signOut(_network);
+      // Signed out at once (CC-25): no "Connected", no second sign-out;
+      // the bridge is asked again to confirm.
+      _monitor.noteSignedOut(_network);
       if (mounted) setState(() => _signedOut = true);
     } catch (error, stack) {
       if (!mounted) return;
@@ -755,6 +800,7 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
     final bridgeChat = _monitor.managementRoom(_network);
     if (health != null && health.state.isProblem) {
       final signIn = health.state == BridgeHealthState.loggedOut;
+      final reason = health.describe(now);
       return Padding(
         padding: const EdgeInsets.only(bottom: NotionSpace.md),
         child: NotionCallout(
@@ -768,7 +814,10 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
               ? NotionCalloutTone.warning
               : NotionCalloutTone.danger,
           title: health.title,
-          message: health.describe(now),
+          // bridgev2 signs in through its bot: say what to send there.
+          message: signIn && bridgeChat != null
+              ? '$reason Tap Sign in, then send “login” in the bridge chat.'
+              : reason,
           actionLabel: bridgeChat == null
               ? null
               : signIn
@@ -779,10 +828,14 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
       );
     }
     final text = switch (summary.status) {
-      NetworkStatus.connected => 'Working normally.',
       _ when _network == 'matrix' =>
         'Matrix chats connect directly, without a bridge.',
-      _ => 'No problems reported.',
+      NetworkStatus.connected => 'Working normally.',
+      NetworkStatus.unknown when health!.reason.isNotEmpty =>
+        'Status unknown. ${health.reason}',
+      NetworkStatus.unknown => 'Status unknown.',
+      _ when health?.checking ?? false => 'Checking the connection…',
+      _ => 'No status from the bridge yet.',
     };
     return Padding(
       padding: const EdgeInsets.only(bottom: NotionSpace.xs),
@@ -799,10 +852,17 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
   /// button.
   Widget? _signOutAction(BuildContext context, NetworkSummary summary) {
     final state = _signedOut;
+    final health = summary.health;
+    // Offered only for a login known to be signed in (BR-02): never from an
+    // old message or an unknown status, and not again after signing out.
+    if (state == true) return null;
     if (state == null &&
         (!_active ||
             _network == 'matrix' ||
-            summary.status != NetworkStatus.connected ||
+            health == null ||
+            !health.signedIn ||
+            health.userInitiated ||
+            health.state == BridgeHealthState.loggedOut ||
             _monitor.managementRoom(_network) == null)) {
       return null;
     }
@@ -818,11 +878,8 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
                   onPressed: () => _confirmSignOut(summary.label),
                 )
               : Text(
-                  state
-                      ? 'Signed out of ${summary.label}. Sign in again from '
-                            'the bridge chat.'
-                      : 'Signing out of ${summary.label}…',
-                  key: ValueKey(('network-sign-out-state', state)),
+                  'Signing out of ${summary.label}…',
+                  key: const ValueKey(('network-sign-out-state', false)),
                   textAlign: TextAlign.center,
                   style: context.notion.typography.calloutMuted,
                 ),
@@ -981,7 +1038,8 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
   Widget _diagnostics(BuildContext context, NetworkSummary summary) {
     final now = (widget.clock ?? DateTime.now)();
     final signals = _monitor.signalsFor(_network);
-    final reports = signals?.reports.values.toList() ?? const [];
+    final reports = bridgeLoginReports(signals);
+    final checkedAt = signals?.liveAt;
     final inbound = signals?.lastInbound;
     final failures =
         signals?.deliveries
@@ -998,9 +1056,13 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (reports.isEmpty)
-          const NotionListRow(
+          NotionListRow(
             title: 'Bridge status',
-            subtitle: 'The bridge hasn’t reported a problem on this device.',
+            subtitle: signals?.liveUnavailable ?? false
+                ? 'ChatLoom can’t ask this bridge from this device.'
+                : checkedAt != null
+                ? 'No account signed in · checked ${networkAgo(checkedAt, now)}'
+                : 'The bridge hasn’t reported a problem on this device.',
           )
         else
           for (final (index, report) in reports.indexed)
@@ -1008,9 +1070,11 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
               title:
                   report.remoteName ??
                   (reports.length == 1 ? 'Account' : 'Account ${index + 1}'),
-              subtitle:
-                  '${bridgeReportLabel(report)} · reported '
-                  '${networkAgo(report.at, now)}',
+              subtitle: report.live && checkedAt != null
+                  ? '${bridgeReportLabel(report)} · checked '
+                        '${networkAgo(checkedAt, now)}'
+                  : '${bridgeReportLabel(report)} · reported '
+                        '${networkAgo(report.at, now)}',
             ),
         NotionListRow(
           title: 'Last message received',

@@ -39,7 +39,7 @@ class UrlLauncher {
     final url = this.url;
     if (url == null || url.trim().isEmpty) {
       scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text(l10n.cantOpenUri(url ?? ''))),
+        const SnackBar(content: Text('Couldn’t open this link.')),
       );
       return;
     }
@@ -64,7 +64,7 @@ class UrlLauncher {
     if (uri == null) {
       // we can't open this thing
       scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text(l10n.cantOpenUri(url))),
+        const SnackBar(content: Text('Couldn’t open this link.')),
       );
       return;
     }
@@ -118,7 +118,7 @@ class UrlLauncher {
     }
     if (uri.host.isEmpty) {
       scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text(l10n.cantOpenUri(url))),
+        const SnackBar(content: Text('Couldn’t open this link.')),
       );
       return;
     }
