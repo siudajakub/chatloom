@@ -721,8 +721,8 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
               ),
             NotionListRow(
               title: 'Change account notification rules',
-              subtitle: 'Settings → Notifications',
-              onTap: () => context.push('/rooms/settings/notifications'),
+              subtitle: 'Rules shared by all your Beeper apps',
+              onTap: () => context.push('/rooms/settings/notifications/rules'),
             ),
           ],
           const NotionSectionHeader(title: 'Recent pushes'),

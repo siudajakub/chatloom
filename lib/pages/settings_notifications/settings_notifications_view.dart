@@ -15,6 +15,7 @@ import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/push_helper.dart';
 import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -23,6 +24,21 @@ import 'package:unifiedpush_ui/unifiedpush_ui.dart';
 
 import '../../widgets/matrix.dart';
 import 'settings_notifications.dart';
+
+/// Opens this app's notification settings in Android (sound, vibration,
+/// pop-up and channels), like Signal's "Sounds" and Telegram's
+/// "Notifications and Sounds" hand-off.
+Future<void> openSystemNotificationSettings() async {
+  try {
+    await FlutterLocalNotificationsPlugin()
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.openAppNotificationSettings();
+  } catch (_) {
+    // The system screen is unavailable; nothing else to offer.
+  }
+}
 
 class SettingsNotificationsView extends StatelessWidget {
   final SettingsNotificationsController controller;
@@ -98,13 +114,40 @@ class SettingsNotificationsView extends StatelessWidget {
                       title: L10n.of(context).playSoundOnNotification,
                       setting: AppSettings.webNotificationSound,
                     ),
-                  const NotionSectionHeader(title: 'Delivery'),
+                  if (PlatformInfos.isAndroid)
+                    NotionListRow(
+                      key: const ValueKey('notifications-sound'),
+                      leading: const Icon(Icons.volume_up_outlined),
+                      title: 'Sound & vibration',
+                      subtitle: 'Sound, vibration and pop-up in Android settings',
+                      onTap: openSystemNotificationSettings,
+                    ),
+                  NotionListRow(
+                    leading: const Icon(Icons.hub_outlined),
+                    title: 'Per network',
+                    subtitle: 'Notifications for each network',
+                    onTap: () => context.push('/rooms/settings/networks'),
+                  ),
+                  const NotionSectionHeader(title: 'Troubleshooting'),
+                  NotionListRow(
+                    leading: const Icon(Icons.troubleshoot_outlined),
+                    title: 'Troubleshoot notifications',
+                    subtitle: 'Checks, recent pushes and a test notification',
+                    onTap: () => context.push(
+                      '/rooms/settings/notifications/diagnostics',
+                    ),
+                  ),
+                  if (PlatformInfos.isAndroid)
+                    const BatteryOptimizationStatus(),
+                  // Manual gateway setup, registration details and the
+                  // server rules are in Settings › Advanced › Developer.
+                  const NotionSectionHeader(title: 'Advanced'),
                   if (pushService != null)
                     ListenableBuilder(
                       listenable: pushService.registrationChanges,
                       builder: (context, _) => NotionListRow(
                         leading: const Icon(Icons.phonelink_setup_outlined),
-                        title: 'Push setup & registration',
+                        title: 'Push setup',
                         subtitle: pushService.registrationDescription(
                           Matrix.of(context).client,
                         ),
@@ -114,35 +157,17 @@ class SettingsNotificationsView extends StatelessWidget {
                   else
                     NotionListRow(
                       leading: const Icon(Icons.phonelink_setup_outlined),
-                      title: 'Push setup & registration',
+                      title: 'Push setup',
                       subtitle: 'Registration status is unavailable.',
                       onTap: () => context.push('/rooms/settings/push'),
                     ),
-                  NotionListRow(
-                    leading: const Icon(Icons.troubleshoot_outlined),
-                    title: 'Notification diagnostics',
-                    subtitle: 'Checks, recent outcomes and a test notification',
-                    onTap: () => context.push(
-                      '/rooms/settings/notifications/diagnostics',
-                    ),
-                  ),
-                  if (PlatformInfos.isAndroid)
-                    const BatteryOptimizationStatus(),
-                  const NotionSectionHeader(title: 'Advanced'),
-                  NotionListRow(
-                    leading: const Icon(Icons.rule_outlined),
-                    title: 'Server notification rules',
-                    subtitle: 'Matrix push rules of your account',
-                    onTap: () =>
-                        context.push('/rooms/settings/notifications/rules'),
-                  ),
                 ],
                 if (controller.widget.serverRules) ...[
                   const Padding(
                     padding: EdgeInsets.only(bottom: NotionSpace.xs),
                     child: Text(
                       'These rules are stored on your account and decide which '
-                      'events notify every device. Per-chat rules live in '
+                      'events notify every device. Per-chat settings are in '
                       'Networks.',
                     ),
                   ),
