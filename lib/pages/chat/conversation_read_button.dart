@@ -49,8 +49,9 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not mark all messages as read. Tap to retry.'),
+          SnackBar(
+            content: const Text('Couldn’t mark as read.'),
+            action: SnackBarAction(label: 'Retry', onPressed: _read),
           ),
         );
       }

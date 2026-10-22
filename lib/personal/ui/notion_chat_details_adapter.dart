@@ -448,7 +448,11 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                       _sources();
                     },
                   ),
-                if (widget.room != null) ...[
+                // Only a native Matrix chat has an address worth sharing; a
+                // bridged DM's ID is the network's ghost account (CS-25).
+                if (widget.room != null &&
+                    projection.classifier.classify(widget.room!).network ==
+                        'matrix') ...[
                   if (widget.room!.canonicalAlias.isNotEmpty ||
                       widget.room!.directChatMatrixIDForDisplay != null)
                     NotionListRow(
@@ -476,9 +480,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
   Future<void> _leave(Room room) async {
     final confirmed = await showOkCancelAlertDialog(
       context: context,
-      title: 'Leave this source?',
+      title: 'Leave this chat?',
       message:
-          'This changes your membership on this network. Private archive does not leave the room.',
+          'You leave it on the network too. To only hide it here, archive it instead.',
       isDestructive: true,
       okLabel: 'Leave',
       cancelLabel: 'Cancel',
@@ -603,8 +607,8 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           leading: const Icon(Icons.lock_outline),
           title: 'Encryption & recovery',
           subtitle: room.encrypted
-              ? 'Matrix transport encrypted · the source-network hop has its own security'
-              : 'Matrix transport is not encrypted · the source-network hop has its own security',
+              ? 'Encrypted up to Beeper · the network has its own security'
+              : 'Not encrypted up to Beeper · the network has its own security',
           onTap: () => context.push('/rooms/${room.id}/encryption'),
         ),
         if (!room.isDirectChatForDisplay) ...[
@@ -621,7 +625,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           if (room.canInvite)
             NotionListRow(
               leading: const Icon(Icons.person_add_outlined),
-              title: 'Invite to this source',
+              title: 'Invite to this chat',
               onTap: () => context.push('/rooms/${room.id}/invite'),
             ),
         ],
@@ -639,16 +643,16 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             room.canChangeStateEvent(EventTypes.RoomName))
           NotionListRow(
             leading: const Icon(Icons.edit_outlined),
-            title: 'Rename network room',
-            subtitle: 'Changes the name for everyone on this source',
+            title: 'Rename group',
+            subtitle: 'Changes the name for everyone on the network',
             onTap: widget.controller?.setDisplaynameAction,
           ),
         if (!room.isDirectChatForDisplay &&
             room.canChangeStateEvent(EventTypes.RoomAvatar))
           NotionListRow(
             leading: const Icon(Icons.photo_camera_outlined),
-            title: 'Change network room avatar',
-            subtitle: 'Visible to everyone on this source',
+            title: 'Change group photo',
+            subtitle: 'Visible to everyone on the network',
             onTap: widget.controller?.setAvatarAction,
           ),
         NotionListRow(
@@ -659,8 +663,8 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         const Divider(),
         NotionListRow(
           leading: const Icon(Icons.logout_outlined),
-          title: 'Leave this source',
-          subtitle: 'Changes your membership on the network',
+          title: 'Leave chat',
+          subtitle: 'You also leave it on the network',
           onTap: () => _leave(room),
         ),
       ],
@@ -719,7 +723,10 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                 NotionConversationContentPage(rooms: sources, name: name),
           ),
         ),
-        preferences: sourceRooms.isEmpty ? null : _privatePreferences,
+        // A single chat's Notifications row opens the same page.
+        preferences: room != null || sourceRooms.isEmpty
+            ? null
+            : _privatePreferences,
         mute: room == null ? _sources : _privatePreferences,
         notifications: room == null ? _sources : _privatePreferences,
         pin: canEdit
@@ -729,8 +736,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                     'Could not change the pin. Check private sync and try again.',
               )
             : null,
+        // Incognito is global: open Privacy & security, where it lives.
         privacy: () async {
-          await context.push('/rooms/settings');
+          await context.push('/rooms/settings/security');
           _refresh();
         },
         appearance: canEdit ? _organize : null,

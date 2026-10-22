@@ -172,7 +172,7 @@ class NotionChatDetailsPage extends StatelessWidget {
                 NotionPropertyRow(
                   label: 'Nickname',
                   value: Text(
-                    data.nickname ?? 'Source network name',
+                    data.nickname ?? 'Name from the network',
                     style: NotionTokens.body,
                   ),
                   onTap: pending ? null : actions.nickname,
@@ -181,18 +181,23 @@ class NotionChatDetailsPage extends StatelessWidget {
                   'Your nickname is private.',
                   style: TextStyle(fontSize: 12, color: secondary),
                 ),
+                // One row per page: for a single chat, Notifications opens
+                // the same page as the visibility rules, so the adapter
+                // passes no separate [preferences] action (CS-06).
                 if (actions.preferences != null)
                   NotionListRow(
                     leading: const Icon(Icons.tune),
-                    title: 'Chat rules',
-                    subtitle: 'Ignore, restore or override network rules',
+                    title: 'Visibility',
+                    subtitle: 'Where this chat appears, or ignore it',
                     onTap: actions.preferences,
                   ),
                 NotionListRow(
                   leading: const Icon(Icons.notifications_none_outlined),
                   title: 'Notifications',
                   subtitle: data.notifications == 'Choose a source'
-                      ? 'Managed separately for each source'
+                      ? 'Set for each network'
+                      : actions.preferences == null
+                      ? 'Also where this chat appears'
                       : null,
                   trailing: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 130),
@@ -221,8 +226,8 @@ class NotionChatDetailsPage extends StatelessWidget {
                 ),
                 NotionListRow(
                   leading: const Icon(Icons.visibility_off_outlined),
-                  title: 'Incognito mode',
-                  subtitle: 'Applies to this device',
+                  title: 'Incognito',
+                  subtitle: 'For all chats on this device',
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -241,7 +246,7 @@ class NotionChatDetailsPage extends StatelessWidget {
                 ),
                 NotionListRow(
                   leading: const Icon(Icons.palette_outlined),
-                  title: 'Chat appearance',
+                  title: 'Colours & avatar',
                   subtitle: actions.appearance == null
                       ? 'Connect private sync to edit'
                       : null,

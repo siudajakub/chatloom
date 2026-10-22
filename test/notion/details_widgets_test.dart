@@ -23,13 +23,16 @@ void main() {
           ),
         ),
       );
-      await tester.scrollUntilVisible(find.text('Incognito mode'), 180);
-      await tester.ensureVisible(find.text('Incognito mode'));
+      await tester.scrollUntilVisible(find.text('Incognito'), 180);
+      await tester.ensureVisible(find.text('Incognito'));
       await tester.pumpAndSettle();
-      expect(find.text('Applies to this device'), findsOneWidget);
+      expect(find.text('For all chats on this device'), findsOneWidget);
+      // No separate visibility row without a [preferences] action (CS-06).
+      expect(find.text('Visibility'), findsNothing);
+      expect(find.text('Chat rules'), findsNothing);
       // The only switch is the private pin control.
       expect(find.byType(Switch), findsOneWidget);
-      await tester.tap(find.text('Incognito mode'));
+      await tester.tap(find.text('Incognito'));
       expect(privacy, 1);
       expect(find.text('Mentions only'), findsOneWidget);
       expect(tester.takeException(), isNull);

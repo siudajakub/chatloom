@@ -127,13 +127,11 @@ void main() {
     expect(b.receipts, [(r'$b', r'$b', true)]);
     a.gate!.complete();
     await tester.pumpAndSettle();
-    expect(
-      find.text('Could not mark all messages as read. Tap to retry.'),
-      findsOneWidget,
-    );
+    expect(find.text('Couldn’t mark as read.'), findsOneWidget);
 
+    // The snackbar's Retry runs the same explicit read (CS-13).
     b.fail = false;
-    await tester.tap(find.byType(ConversationReadButton));
+    await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(b.receipts.last, (r'$new', r'$new', true));
   });
