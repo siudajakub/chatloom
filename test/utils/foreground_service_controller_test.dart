@@ -2,9 +2,77 @@
 import 'dart:async';
 
 import 'package:chatloom/utils/foreground_service_controller.dart';
+import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('the ongoing notification says what is running, user work first '
+      '(not "Loading messages" for everything)', () {
+    expect(
+      foregroundServiceText([ForegroundServiceTasks.push]),
+      'Checking for new messages…',
+    );
+    expect(
+      foregroundServiceText([
+        ForegroundServiceTasks.push,
+        ForegroundServiceTasks.sendFiles,
+      ]),
+      'Sending files…',
+    );
+    expect(
+      foregroundServiceText([ForegroundServiceTasks.notificationReply]),
+      'Sending your reply…',
+    );
+    expect(
+      foregroundServiceText([ForegroundServiceTasks.notificationAction]),
+      'Marking as read…',
+    );
+    // The existing lease names stay valid for the push and upload callers.
+    expect(ForegroundServiceTasks.push, 'background_push');
+    expect(ForegroundServiceTasks.sendFiles, 'send_files');
+    // Renamed in place: the channel id stays.
+    expect(ForegroundServiceChannel.id, 'fluffychat_sync');
+    expect(ForegroundServiceChannel.name, 'Background activity');
+  });
+
+  test('the start sees the lease it starts for; later lease changes update '
+      'the running service, the last stop does not', () async {
+    final starting = <String?>[];
+    final updates = <List<String>>[];
+    late ForegroundServiceController controller;
+    controller = ForegroundServiceController(
+      start: () async => starting.add(controller.starting),
+      stop: () async {},
+      update: (running) async => updates.add(running),
+    );
+    await controller.start('push');
+    expect(starting, ['push']);
+    expect(controller.starting, isNull);
+    expect(updates, isEmpty);
+    await controller.start('upload');
+    await controller.stop('upload');
+    await controller.stop('push');
+    expect(updates, [
+      ['push', 'upload'],
+      ['push'],
+    ]);
+  });
+
+  test('a failing update never breaks the leases', () async {
+    var stops = 0;
+    final controller = ForegroundServiceController(
+      start: () async {},
+      stop: () async => stops++,
+      update: (_) async => throw StateError('synthetic update failure'),
+    );
+    await controller.start('push');
+    await controller.start('upload');
+    await controller.stop('upload');
+    await controller.stop('push');
+    expect(controller.runningServices, isEmpty);
+    expect(stops, 1);
+  });
+
   test('stop waits for a pending native start', () async {
     final gate = Completer<void>();
     final operations = <String>[];

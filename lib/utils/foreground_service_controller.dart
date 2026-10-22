@@ -6,17 +6,28 @@ import 'dart:async';
 class ForegroundServiceController {
   final Future<void> Function() _start;
   final Future<void> Function() _stop;
+  final Future<void> Function(List<String> running)? _update;
   final Duration operationTimeout;
   final List<String> runningServices = [];
   Future<void> _queue = Future<void>.value();
   bool _started = false;
 
+  /// The lease whose native start is in progress (not yet in
+  /// [runningServices]), so the start can describe it.
+  String? get starting => _starting;
+  String? _starting;
+
+  /// [update] runs in the queue after a lease was added to or removed from a
+  /// running service that keeps running (the ongoing notification describes
+  /// the current work). Its failures are ignored.
   ForegroundServiceController({
     required Future<void> Function() start,
     required Future<void> Function() stop,
+    Future<void> Function(List<String> running)? update,
     this.operationTimeout = const Duration(seconds: 10),
   }) : _start = start,
-       _stop = stop;
+       _stop = stop,
+       _update = update;
 
   Future<void> _enqueue(Future<void> Function() operation) {
     final next = _queue.then((_) => operation());
@@ -25,9 +36,29 @@ class ForegroundServiceController {
   }
 
   Future<void> start(String name) => _enqueue(() async {
-    if (!_started) await _ensureStarted();
+    if (!_started) {
+      _starting = name;
+      try {
+        await _ensureStarted();
+      } finally {
+        _starting = null;
+      }
+      runningServices.add(name);
+      return;
+    }
     runningServices.add(name);
+    await _changed();
   });
+
+  Future<void> _changed() async {
+    final update = _update;
+    if (update == null || !_started || runningServices.isEmpty) return;
+    try {
+      await update(
+        List.unmodifiable(runningServices),
+      ).timeout(operationTimeout);
+    } catch (_) {}
+  }
 
   Future<void> _ensureStarted() async {
     final startup = _start();
@@ -58,8 +89,9 @@ class ForegroundServiceController {
   }
 
   Future<void> stop(String name) => _enqueue(() async {
-    runningServices.remove(name);
+    final removed = runningServices.remove(name);
     await _stopWhenUnused();
+    if (removed) await _changed();
   });
 
   Future<void> _stopWhenUnused() async {
