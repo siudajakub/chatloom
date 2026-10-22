@@ -447,10 +447,11 @@ class Event extends MatrixEvent {
     final fileBytes = await room.client.database.getFile(
       Uri(scheme: 'cache', host: 'file', path: transactionId),
     );
-    if (fileBytes == null) {
-      await cancelSend();
-      throw Exception('Can not try to send again. File is no longer cached.');
-    }
+    // ChatLoom: a missing copy never deletes the unsent event. Upstream
+    // cancelled the send here, so a preview, save, share or download of an
+    // unsent file without this device's copy made its bubble vanish.
+    // [sendAgain] reports [FileNoLongerInCacheException] instead.
+    if (fileBytes == null) return null;
     return switch (messageType) {
       MessageTypes.Video => MatrixVideoFile(
         bytes: fileBytes,

@@ -1378,6 +1378,10 @@ class Room {
       threadLastEventId: threadLastEventId,
       displayPendingEvent: displayPendingEvent,
     );
+    // ChatLoom: keep this device's copy until the server accepted the event.
+    // `sendEvent` returns null after a failed final PUT; upstream deleted the
+    // copy anyway, so Retry of that file could never work.
+    if (eventId == null) return null;
     await client.database.deleteFile(
       Uri(scheme: 'cache', host: 'file', path: txid),
     );
@@ -2170,13 +2174,20 @@ class Room {
     if (cache) {
       for (final user in users) {
         setState(user); // at *least* cache this in-memory
-        await client.database.storeEventUpdate(
-          id,
-          user,
-          EventUpdateType.state,
-          client,
-        );
       }
+      // ChatLoom: one database transaction (one commit) for the whole list.
+      // Upstream stored every member in its own autocommit, i.e. N commits
+      // with their fsyncs on the database isolate, on every member fetch.
+      await client.database.transaction(() async {
+        for (final user in users) {
+          await client.database.storeEventUpdate(
+            id,
+            user,
+            EventUpdateType.state,
+            client,
+          );
+        }
+      });
     }
 
     users.removeWhere((u) => !membershipFilter.contains(u.membership));

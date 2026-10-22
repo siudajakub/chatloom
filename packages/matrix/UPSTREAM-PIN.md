@@ -90,3 +90,35 @@ Transaction IDs, the event content, encryption (`MatrixFile.encrypt`) and
 the server requests are unchanged. Regression: app
 `test/personal/outgoing_media_test.dart` (send order and retries through the
 app's media queue) and `test/notion/attachment_flow_test.dart`.
+
+### 2026-10-22 — unsent files: no self-deleting bubble, copy kept until accepted
+
+Two one-line changes on the send path of files (wave 5, lane outbox-send):
+
+- `Event._getCachedFile` no longer calls `cancelSend()` when this device's
+  copy (`cache://file/<txid>`) is missing; it returns null. Upstream deleted
+  the unsent event from the database and the timeline there, so any preview,
+  save, share or download of an unsent file without a copy (a round echo, a
+  file above the cache's size limit, an evicted copy) made its bubble vanish
+  (CC-03). `Event.sendAgain` still throws `FileNoLongerInCacheException`;
+  `downloadAndDecryptAttachment` falls through to the server URL (or throws
+  when there is none yet).
+- `Room.sendFileEvent` deletes the cached copy and thumbnail only when
+  `sendEvent` returned an event ID. `sendEvent` returns null after a failed
+  final PUT (any `MatrixException` but `M_FORBIDDEN`, or the transport
+  timeout); upstream deleted the copy anyway, so Retry of that file could
+  never work (CC-04). The app's Retry resends such an event without its bytes
+  (`OutgoingMedia.retry`).
+
+Regression: app `test/personal/sdk_send_file_event_test.dart` (real SDK
+database) and `test/personal/outgoing_media_test.dart`.
+
+### 2026-10-22 — member list stored in one transaction
+
+`Room.requestParticipants(cache: true)` stores the fetched members inside one
+`database.transaction` instead of one autocommit per member (PF-04): one
+commit instead of N on the database isolate, for the chat-open warm-up, the
+trust check and the first encryption of a room without complete member
+counts. Members are still set in memory first; the stored rows, the request
+and encryption are unchanged. Regression: app
+`test/personal/sdk_send_file_event_test.dart`.
