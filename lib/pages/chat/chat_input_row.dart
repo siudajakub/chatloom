@@ -16,7 +16,6 @@ import 'package:chatloom/personal/round_video/round_availability.dart'
 import 'package:chatloom/personal/round_video/round_outbox_sync.dart';
 import 'package:chatloom/personal/round_video/round_record_button.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/other_party_can_receive.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -25,6 +24,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 import 'chat.dart' show AddPopupMenuActions;
+import 'composer_menu.dart';
+import 'composer_recipient_notice.dart';
+import 'composer_send_later.dart';
 import 'conversation_source.dart';
 import 'conversation_source_picker.dart' show ConversationSourceHintHost;
 import 'input_bar.dart';
@@ -85,86 +87,118 @@ class _ChatInputRowState extends State<ChatInputRow> {
     if (holding != _holding && mounted) setState(() => _holding = holding);
   }
 
-  PopupMenuItem<AddPopupMenuActions> _attachItem(
-    AddPopupMenuActions value,
-    IconData icon,
-    String label,
-  ) => PopupMenuItem(
-    value: value,
-    child: ListTile(
-      leading: Icon(icon, size: NotionSize.icon),
-      title: Text(label),
-      contentPadding: EdgeInsets.zero,
-    ),
-  );
-
-  Widget _attachMenu(BuildContext context, VoidCallback used) =>
-      PopupMenuButton<AddPopupMenuActions>(
-        useRootNavigator: true,
-        tooltip: 'Attach media or a file',
-        icon: const Icon(Icons.attach_file_outlined, size: NotionSize.iconMd),
-        style: IconButton.styleFrom(
-          minimumSize: const Size.square(NotionSize.touchTarget),
-          foregroundColor: Theme.of(context).colorScheme.onSurface,
-          shape: NotionShapes.pill,
+  /// "+" opens the attach menu directly (Telegram's paperclip, Messenger's
+  /// "+"): one tap to the combined system photo and video picker. Library
+  /// media first, then capture, then structured content; the rare silent
+  /// round and the account switch stay last.
+  Future<void> _openAttachMenu(BuildContext anchor) async {
+    final l10n = L10n.of(context);
+    final matrix = Matrix.of(context);
+    void pick(AddPopupMenuActions choice) =>
+        controller.onAddPopupMenuButtonSelected(choice);
+    final run = await showComposerMenu<VoidCallback>(
+      anchor,
+      semanticLabel: 'Attach',
+      entries: [
+        ComposerMenuEntry(
+          () => pick(AddPopupMenuActions.gallery),
+          Icons.photo_library_outlined,
+          'Photo or video',
         ),
-        onSelected: (choice) {
-          used();
-          controller.onAddPopupMenuButtonSelected(choice);
-        },
-        // Library media first, then capture, then structured content; the
-        // rare silent round stays last.
-        itemBuilder: (BuildContext context) => [
-          _attachItem(
-            AddPopupMenuActions.image,
-            Icons.image_outlined,
-            L10n.of(context).sendImage,
+        ComposerMenuEntry(
+          () => pick(AddPopupMenuActions.file),
+          Icons.attachment_outlined,
+          l10n.sendFile,
+        ),
+        if (PlatformInfos.isMobile) ...[
+          const ComposerMenuEntry.divider(),
+          ComposerMenuEntry(
+            () => pick(AddPopupMenuActions.photoCamera),
+            Icons.camera_alt_outlined,
+            l10n.takeAPhoto,
           ),
-          _attachItem(
-            AddPopupMenuActions.video,
-            Icons.movie_outlined,
-            L10n.of(context).sendVideo,
+          ComposerMenuEntry(
+            () => pick(AddPopupMenuActions.videoCamera),
+            Icons.videocam_outlined,
+            l10n.recordAVideo,
           ),
-          _attachItem(
-            AddPopupMenuActions.file,
-            Icons.attachment_outlined,
-            L10n.of(context).sendFile,
-          ),
-          if (PlatformInfos.isMobile) ...[
-            const PopupMenuDivider(),
-            _attachItem(
-              AddPopupMenuActions.photoCamera,
-              Icons.camera_alt_outlined,
-              L10n.of(context).takeAPhoto,
-            ),
-            _attachItem(
-              AddPopupMenuActions.videoCamera,
-              Icons.videocam_outlined,
-              L10n.of(context).recordAVideo,
-            ),
-          ],
-          const PopupMenuDivider(),
-          if (PlatformInfos.isMobile)
-            _attachItem(
-              AddPopupMenuActions.location,
-              Icons.gps_fixed_outlined,
-              L10n.of(context).shareLocation,
-            ),
-          _attachItem(
-            AddPopupMenuActions.poll,
-            Icons.poll_outlined,
-            L10n.of(context).startPoll,
-          ),
-          if (controller.canRecordRoundSilently) ...[
-            const PopupMenuDivider(),
-            _attachItem(
-              AddPopupMenuActions.roundVideoSilent,
-              Icons.notifications_off_outlined,
-              'Record a round video silently',
-            ),
-          ],
         ],
-      );
+        const ComposerMenuEntry.divider(),
+        if (PlatformInfos.isMobile)
+          ComposerMenuEntry(
+            () => pick(AddPopupMenuActions.location),
+            Icons.gps_fixed_outlined,
+            l10n.shareLocation,
+          ),
+        ComposerMenuEntry(
+          () => pick(AddPopupMenuActions.poll),
+          Icons.poll_outlined,
+          l10n.startPoll,
+        ),
+        if (controller.canRecordRoundSilently) ...[
+          const ComposerMenuEntry.divider(),
+          ComposerMenuEntry(
+            () => pick(AddPopupMenuActions.roundVideoSilent),
+            Icons.notifications_off_outlined,
+            'Record a round video silently',
+          ),
+        ],
+        if (controller.allowsAccountSwitch &&
+            matrix.isMultiAccount &&
+            matrix.hasComplexBundles &&
+            matrix.currentBundle!.length > 1) ...[
+          const ComposerMenuEntry.divider(),
+          ComposerMenuEntry(
+            _pickAccount,
+            Icons.switch_account_outlined,
+            'Send from another account',
+          ),
+        ],
+      ],
+    );
+    if (!mounted || run == null) return;
+    run();
+  }
+
+  /// The composer's "+": the attach menu, unavailable while editing.
+  Widget _attachButton() {
+    final enabled = controller.composerEnabled && controller.editEvent == null;
+    return Builder(
+      builder: (anchor) => IconButton(
+        tooltip: 'Attach media or a file',
+        icon: const Icon(Icons.add),
+        onPressed: enabled ? () => _openAttachMenu(anchor) : null,
+      ),
+    );
+  }
+
+  /// Long press on Send (Telegram's `onSendLongClick`): Send later or Remind
+  /// me, the same flows as the conversation menu. "Send without sound" is
+  /// left out: the bridges cannot honour it.
+  Future<void> _openSendMenu(BuildContext anchor) async {
+    final host = controller;
+    if (host is! ComposerSendLaterHost || host.editEvent != null) return;
+    NotionHaptics.longPress();
+    final run = await showComposerMenu<Future<void> Function()>(
+      anchor,
+      alignEnd: true,
+      semanticLabel: 'Send options',
+      entries: [
+        ComposerMenuEntry(
+          (host as ComposerSendLaterHost).composerSendLater,
+          Icons.schedule_outlined,
+          'Send later',
+        ),
+        ComposerMenuEntry(
+          (host as ComposerSendLaterHost).composerRemindMe,
+          Icons.alarm_outlined,
+          'Remind me',
+        ),
+      ],
+    );
+    if (!mounted || run == null) return;
+    await run();
+  }
 
   /// Opens the sending-account menu above the composer.
   Future<void> _pickAccount() async {
@@ -201,35 +235,18 @@ class _ChatInputRowState extends State<ChatInputRow> {
     controller.setSendingClient(client);
   }
 
-  List<ComposerAction> _actions(BuildContext context) {
-    final matrix = Matrix.of(context);
-    // Round video has its own button beside the mic (see [_roundAction]).
-    return [
-      if (controller.editEvent == null)
-        ComposerAction(
-          icon: Icons.attach_file_outlined,
-          label: 'Attach media or a file',
-          anchor: _attachMenu,
-        ),
-      ComposerAction(
-        icon: controller.showEmojiPicker
-            ? Icons.keyboard
-            : Icons.add_reaction_outlined,
-        label: 'Emoji picker',
-        selected: controller.showEmojiPicker,
-        onPressed: controller.emojiPickerAction,
-      ),
-      if (controller.allowsAccountSwitch &&
-          matrix.isMultiAccount &&
-          matrix.hasComplexBundles &&
-          matrix.currentBundle!.length > 1)
-        ComposerAction(
-          icon: Icons.switch_account_outlined,
-          label: 'Send from another account',
-          onPressed: _pickAccount,
-        ),
-    ];
-  }
+  /// Always beside "+": the emoji toggle (one tap, like Telegram and
+  /// Messenger), unchanged in look and behaviour.
+  List<ComposerAction> _inlineActions() => [
+    ComposerAction(
+      icon: controller.showEmojiPicker
+          ? Icons.keyboard
+          : Icons.add_reaction_outlined,
+      label: 'Emoji picker',
+      selected: controller.showEmojiPicker,
+      onPressed: controller.emojiPickerAction,
+    ),
+  ];
 
   /// Round video in this chat, or null outside supported Telegram chats.
   /// Display only: `TelegramRoundService.captureAndSend` re-checks it.
@@ -268,16 +285,29 @@ class _ChatInputRowState extends State<ChatInputRow> {
   ) {
     final enabled = controller.composerEnabled;
     if (controller.sendController.text.trim().isNotEmpty) {
-      return NotionSendButton(
+      final later =
+          enabled &&
+          controller is ComposerSendLaterHost &&
+          controller.editEvent == null;
+      return KeyedSubtree(
         key: const ValueKey('primary-send'),
-        busy: controller.composerBusy,
-        onPressed: enabled ? controller.send : null,
+        child: Builder(
+          builder: (anchor) => NotionSendButton(
+            busy: controller.composerBusy,
+            onPressed: enabled ? controller.send : null,
+            onLongPress: later ? () => _openSendMenu(anchor) : null,
+          ),
+        ),
       );
     }
     if (!record.voice) {
-      return NotionSendButton(
+      // The same widget shape as the enabled send button above, so the
+      // morph updates it in place (one button) instead of cross-fading.
+      return KeyedSubtree(
         key: const ValueKey('primary-send'),
-        busy: controller.composerBusy,
+        child: Builder(
+          builder: (_) => NotionSendButton(busy: controller.composerBusy),
+        ),
       );
     }
     final round = _round;
@@ -305,19 +335,11 @@ class _ChatInputRowState extends State<ChatInputRow> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    if (!controller.room.otherPartyCanReceiveMessages) {
-      return Padding(
-        padding: const EdgeInsets.all(12),
-        child: Text(
-          L10n.of(context).otherPartyNotLoggedIn,
-          style: theme.textTheme.bodySmall,
-        ),
-      );
-    }
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // The composer stays: a calm notice replaces the old blocking text.
+        ComposerRecipientNotice(room: controller.room),
         if (PlatformInfos.supportsRoundCapture &&
             PersonalClient.networkOf(controller.room) == 'telegram')
           RoundOutboxSync(room: controller.room),
@@ -386,7 +408,8 @@ class _ChatInputRowState extends State<ChatInputRow> {
                         (emojis, category) => emojis..addAll(category.emoji),
                       ),
                 ),
-                actions: _actions(context),
+                addAction: _attachButton(),
+                inlineActions: _inlineActions(),
                 actionsEnabled: controller.composerEnabled,
                 collapseOnText: controller.sendController,
                 collapseToken: Object.hash(

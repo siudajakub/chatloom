@@ -10,11 +10,17 @@ class NotionSendButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool busy;
   final String tooltip;
+
+  /// Long press (touch) or secondary click (mouse) on an enabled button,
+  /// for example Send later / Remind me (Telegram's `onSendLongClick`).
+  /// The tooltip then shows on hover only, so it never covers the menu.
+  final VoidCallback? onLongPress;
   const NotionSendButton({
     super.key,
     this.onPressed,
     this.busy = false,
     this.tooltip = 'Send message',
+    this.onLongPress,
   });
 
   /// Presses with a spring (the send button is a reward element), pulses
@@ -31,7 +37,8 @@ class NotionSendButton extends StatelessWidget {
     final fill = palette.accentFill;
     final onFill = palette.onAccentFill;
     // Springs when it turns enabled (first character typed) or back.
-    return NotionPop(
+    final more = send == null ? null : onLongPress;
+    final button = NotionPop(
       playOnMount: false,
       trigger: onPressed != null,
       child: NotionPressable(
@@ -40,7 +47,6 @@ class NotionSendButton extends StatelessWidget {
         enabled: send != null,
         child: IconButton(
           key: const Key('send_button'),
-          tooltip: tooltip,
           onPressed: send == null
               ? null
               : () {
@@ -72,6 +78,17 @@ class NotionSendButton extends StatelessWidget {
                 )
               : arrow,
         ),
+      ),
+    );
+    // One stable tree whether or not the long press is offered (busy
+    // toggles it on every send), so the pop and press state survive.
+    return Tooltip(
+      message: tooltip,
+      triggerMode: onLongPress == null ? null : TooltipTriggerMode.manual,
+      child: GestureDetector(
+        onLongPress: more,
+        onSecondaryTap: more,
+        child: button,
       ),
     );
   }

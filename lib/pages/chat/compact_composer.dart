@@ -35,6 +35,10 @@ class CompactComposer extends StatefulWidget {
   /// Inline actions revealed by the composer's own "+" button.
   final List<ComposerAction>? actions;
 
+  /// Actions that always sit between the "+" ([addAction]) and the editor,
+  /// for example the emoji toggle when "+" opens the attach menu directly.
+  final List<ComposerAction> inlineActions;
+
   /// Disables the "+" button (and collapses an open tray) when false.
   final bool actionsEnabled;
 
@@ -59,6 +63,7 @@ class CompactComposer extends StatefulWidget {
     this.sourceWidth = 0,
     this.contextPreview,
     this.actions,
+    this.inlineActions = const [],
     this.actionsEnabled = true,
     this.collapseOnText,
     this.onExpandedChanged,
@@ -195,9 +200,11 @@ class _CompactComposerState extends State<CompactComposer>
         widget.sourceWidth,
         chip is ConversationSourceChip ? chip.preferredWidth(context) : 0.0,
       );
+      final rowChrome =
+          _rowChrome + widget.inlineActions.length * NotionSize.touchTarget;
       final inline =
           constraints.maxWidth >=
-          measuredSourceWidth + _rowChrome + _fieldChrome + _editorMin;
+          measuredSourceWidth + rowChrome + _fieldChrome + _editorMin;
       final actions = widget.actions ?? const <ComposerAction>[];
       // The secondary action only takes room from the editor. It never moves
       // the source out of line: the composer would change height as the
@@ -208,7 +215,7 @@ class _CompactComposerState extends State<CompactComposer>
       double roomBeside(double source) => math.max(
         0.0,
         constraints.maxWidth -
-            _rowChrome -
+            rowChrome -
             secondaryWidth -
             source -
             _fieldChrome,
@@ -263,6 +270,18 @@ class _CompactComposerState extends State<CompactComposer>
                   dimension: NotionSize.touchTarget,
                   child: _addButton(context),
                 ),
+                for (final action in widget.inlineActions)
+                  SizedBox.square(
+                    dimension: NotionSize.touchTarget,
+                    child: NotionIconButton(
+                      icon: action.icon,
+                      label: action.label,
+                      selected: action.selected,
+                      onPressed: widget.actionsEnabled
+                          ? action.onPressed
+                          : null,
+                    ),
+                  ),
                 // Always present so the editor keeps its index in this row.
                 ComposerActionTray(
                   actions: actions,

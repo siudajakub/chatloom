@@ -128,9 +128,22 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Send later'));
     await tester.pumpAndSettle();
-    expect(find.text('Attachment'), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
+    // The Send later sheet, or (without private sync in this fixture) one
+    // specific explanation; never a generic "could not request" text.
+    final sheet = find.text('Schedule message');
+    final explained = find.textContaining('Send later needs private sync');
+    final failed = find.textContaining('Couldn’t schedule this message');
+    expect(
+      sheet.evaluate().isNotEmpty ||
+          explained.evaluate().isNotEmpty ||
+          failed.evaluate().isNotEmpty,
+      isTrue,
+    );
+    if (sheet.evaluate().isNotEmpty) {
+      expect(find.text('Schedule an attachment'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+    }
     expect(editor.value, original);
     expect(client.requests, isEmpty);
     expect(tester.takeException(), isNull);

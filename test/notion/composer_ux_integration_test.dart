@@ -5,8 +5,10 @@ import 'dart:convert';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/composer_keyboard.dart';
+import 'package:chatloom/pages/chat/send_file_dialog.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/merged_attachments.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
-import 'package:chatloom/personal/merged_media_dialog.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -248,7 +250,7 @@ void main() {
     await tester.pumpAndSettle();
   });
   testWidgets(
-    'merged attachment preview shows image, lets files be removed and never sends on cancel',
+    'merged attachments use the normal send dialog with the source check',
     (tester) async {
       final client = ConversationClient();
       final room = ConversationRoom(client, '!merged-preview:example.invalid');
@@ -257,6 +259,8 @@ void main() {
       late BuildContext page;
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: L10n.localizationsDelegates,
+          supportedLocales: L10n.supportedLocales,
           home: Scaffold(
             body: Builder(
               builder: (context) {
@@ -267,45 +271,106 @@ void main() {
           ),
         ),
       );
-      final result = showMergedMediaDialog(
-        page,
-        personal,
-        SendTarget(conversation: personal.ref(room)),
-        pickedFiles: [
-          XFile.fromData(
-            base64Decode(
-              'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+      await tester.pumpAndSettle();
+      var checks = 0;
+      final result = showDialog<AttachmentSendResult>(
+        context: page,
+        builder: (_) => SendFileDialog(
+          room: room,
+          outerContext: page,
+          threadLastEventId: null,
+          threadRootEventId: null,
+          initialCaption: 'Fictional caption',
+          files: [
+            XFile.fromData(
+              base64Decode(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+              ),
+              name: 'photo.png',
+              path: 'photo.png',
+              mimeType: 'image/png',
             ),
-            name: 'photo.png',
-            path: 'photo.png',
-            mimeType: 'image/png',
-          ),
-          XFile.fromData(
-            utf8.encode('fictional file'),
-            name: 'notes.txt',
-            path: 'notes.txt',
-          ),
-        ],
+          ],
+          preflight: (context, files, caption) async {
+            checks++;
+            expect(files.single.name, 'photo.png');
+            expect(caption, 'Fictional caption');
+            throw const PersonalCapabilityUnavailable(
+              'This network does not accept images.',
+            );
+          },
+        ),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(Image), findsOneWidget);
-      expect(find.text('photo.png'), findsOneWidget);
-      await tester.tap(find.byTooltip('Remove notes.txt'));
-      await tester.pump();
-      expect(find.text('notes.txt'), findsNothing);
-      await tester.tap(find.byTooltip('Remove photo.png'));
-      await tester.pump();
-      expect(
-        tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
-        isNull,
-      );
-      await tester.tap(find.text('Cancel'));
+      // The same caption field and compression switch as any chat.
+      expect(find.text('Fictional caption'), findsOneWidget);
+      expect(find.byType(Switch), findsOneWidget);
+      await tester.tap(find.text(L10n.of(page).send));
       await tester.pumpAndSettle();
-      expect((await result).accepted, isFalse);
+      expect(checks, 1);
+      // The bridge's reason, inline; the selection and caption stay.
+      expect(find.text('This network does not accept images.'), findsOneWidget);
+      expect(find.text('Fictional caption'), findsOneWidget);
+      await tester.tap(find.text(L10n.of(page).cancel));
+      await tester.pumpAndSettle();
+      expect(await result, isNull);
       expect(personal.sends, isEmpty);
       expect(tester.takeException(), isNull);
     },
   );
+  testWidgets('merged preflight asks before an unverified feature', (
+    tester,
+  ) async {
+    final client = ConversationClient();
+    final room = ConversationRoom(client, '!merged-check:example.invalid');
+    late BuildContext page;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) {
+              page = context;
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      ),
+    );
+    final file = XFile.fromData(
+      utf8.encode('fictional'),
+      name: 'notes.txt',
+      path: 'notes.txt',
+    );
+    Future<MergedAttachmentMeasure> measure(XFile _) async => (
+      feature: BridgeFeature.upload,
+      media: const BridgeMediaRequest(mimeType: 'text/plain', sizeBytes: 9),
+    );
+    final status = RoomCapabilities.forFeature(
+      BridgeFeature.upload,
+      room,
+      media: const BridgeMediaRequest(mimeType: 'text/plain', sizeBytes: 9),
+    ).status;
+    final check = mergedAttachmentPreflight(
+      page,
+      room: room,
+      replyTo: null,
+      files: [file],
+      caption: '',
+      measure: measure,
+    );
+    await tester.pumpAndSettle();
+    switch (status) {
+      case CapabilityStatus.unavailable:
+        await expectLater(check, throwsA(isA<PersonalCapabilityUnavailable>()));
+      case CapabilityStatus.unverified:
+        expect(find.text('Not verified for this network'), findsOneWidget);
+        await tester.tap(find.text('Back'));
+        await tester.pumpAndSettle();
+        expect(await check, isFalse);
+      default:
+        expect(await check, isTrue);
+    }
+  });
   testWidgets(
     'details show one destination for shared content and one notification action',
     (tester) async {

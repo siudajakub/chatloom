@@ -83,6 +83,12 @@ class _ComposerController extends ChatController {
   void onAddPopupMenuButtonSelected(AddPopupMenuActions choice) {
     attachments.add(choice);
   }
+
+  final later = <String>[];
+  @override
+  Future<void> composerSendLater() async => later.add('schedule');
+  @override
+  Future<void> composerRemindMe() async => later.add('reminder');
 }
 
 void main() {
@@ -305,7 +311,7 @@ void main() {
     },
   );
   testWidgets(
-    'ordinary plus opens inline media/emoji actions without schedule or popping',
+    'ordinary plus opens the attach menu directly; emoji stays one tap',
     (tester) async {
       final client = ConversationClient();
       final room = ConversationRoom(client, '!input:example.invalid');
@@ -320,45 +326,47 @@ void main() {
         client,
       );
       final editor = tester.state(find.byType(EditableText));
-      await tester.tap(find.byTooltip('More message actions'));
-      await tester.pumpAndSettle();
-      // Inline row in the composer bar, not a bottom sheet.
-      expect(find.byType(BottomSheet), findsNothing);
-      expect(find.byTooltip('Hide message actions'), findsOneWidget);
-      expect(find.byTooltip('Attach media or a file'), findsOneWidget);
-      expect(find.byTooltip('Emoji picker'), findsOneWidget);
-      // Send later lives only in the conversation three-dots menu.
-      expect(find.byTooltip('Schedule a message'), findsNothing);
-      expect(find.text('Schedule text'), findsNothing);
+      // The emoji toggle is always beside "+", no tray to open first.
+      expect(find.byTooltip('More message actions'), findsNothing);
+      expect(find.byTooltip('Emoji picker').hitTestable(), findsOneWidget);
       await tester.tap(find.byTooltip('Attach media or a file'));
       await tester.pumpAndSettle();
+      // A glass menu above the composer, not a bottom sheet.
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.byType(NotionGlassPanel), findsOneWidget);
+      // Send later lives in the conversation menu and on Send's long press.
+      expect(find.text('Send later'), findsNothing);
       final l10n = L10n.of(tester.element(find.byType(ChatInputRow)));
       final file = l10n.sendFile;
-      expect(find.text(file), findsOneWidget);
-      // Library media, then (mobile) capture, then structured content.
+      // Library media (photo and video together), then structured content.
       final order = [
-        l10n.sendImage,
-        l10n.sendVideo,
+        'Photo or video',
         file,
         l10n.startPoll,
       ].map((label) => tester.getCenter(find.text(label)).dy).toList();
       for (var i = 1; i < order.length; i++) {
         expect(order[i], greaterThan(order[i - 1]));
       }
+      expect(find.text(l10n.sendImage), findsNothing);
+      expect(find.text(l10n.sendVideo), findsNothing);
       expect(find.text('Record a round video silently'), findsNothing);
+      await tester.tap(find.text('Photo or video'));
+      await tester.pumpAndSettle();
+      // One tap from the menu to the combined picker; the chat stays.
+      expect(controller.attachments, [AddPopupMenuActions.gallery]);
+      expect(find.byType(NotionGlassPanel), findsNothing);
+      expect(find.byType(ChatInputRow), findsOneWidget);
+      await tester.tap(find.byTooltip('Attach media or a file'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text(file));
       await tester.pumpAndSettle();
-      // The selection dispatches once and never pops the chat route.
-      expect(controller.attachments, [AddPopupMenuActions.file]);
-      expect(find.byType(ChatInputRow), findsOneWidget);
-      expect(find.byTooltip('More message actions'), findsOneWidget);
-      await tester.tap(find.byTooltip('More message actions'));
-      await tester.pumpAndSettle();
+      expect(controller.attachments, [
+        AddPopupMenuActions.gallery,
+        AddPopupMenuActions.file,
+      ]);
       await tester.tap(find.byTooltip('Emoji picker'));
       await tester.pumpAndSettle();
       expect(controller.emojiOpens, 1);
-      expect(find.byType(ChatInputRow), findsOneWidget);
-      expect(find.byTooltip('More message actions'), findsOneWidget);
       expect(tester.state(find.byType(EditableText)), same(editor));
       await tester.pumpWidget(const SizedBox.shrink());
       controller.sendController.dispose();
@@ -366,37 +374,78 @@ void main() {
       controller.scrollController.dispose();
     },
   );
-  testWidgets('merged plus is inline, compact chip keeps its picker', (
+  testWidgets('long press on Send offers Send later and Remind me', (
     tester,
   ) async {
     final client = ConversationClient();
-    final a = ConversationRoom(client, '!tray-a:example.invalid');
-    final b = ConversationRoom(client, '!tray-b:example.invalid');
-    a.message(r'$tray-a', 'A');
-    final personal = ConversationPersonal(client);
-    addTearDown(personal.dispose);
+    final room = ConversationRoom(client, '!later:example.invalid');
+    final controller = _ComposerController(room);
     await mountConversation(
       tester,
-      MergedChatPage(personal: personal, group: group(personal, a, b)),
+      // The fake does not rebuild on typing: listen to the text instead.
+      Scaffold(
+        body: ListenableBuilder(
+          listenable: controller.sendController,
+          builder: (_, _) => ChatInputRow(controller),
+        ),
+      ),
       client,
     );
-    expect(
-      tester.getSize(find.byType(ConversationSourceChip)).width,
-      lessThanOrEqualTo(56),
-    );
-    await tester.tap(find.byTooltip('More message actions'));
+    await tester.enterText(find.byType(TextField), 'Later text');
     await tester.pumpAndSettle();
-    expect(find.byType(BottomSheet), findsNothing);
-    expect(find.byTooltip('Attach media or a file'), findsOneWidget);
-    // Silent rounds live in the attach popup, never as a bare tray icon.
-    expect(find.byIcon(Icons.notifications_off_outlined), findsNothing);
-    expect(find.byTooltip('Send options'), findsNothing);
-    expect(find.text('Schedule text'), findsNothing);
-    await tester.enterText(find.byType(TextField), 'Typed');
+    await tester.longPress(find.byKey(const Key('send_button')));
     await tester.pumpAndSettle();
-    expect(find.byTooltip('More message actions'), findsOneWidget);
-    expect(find.byType(MergedChatPage), findsOneWidget);
+    expect(find.byType(NotionGlassPanel), findsOneWidget);
+    expect(find.text('Remind me'), findsOneWidget);
+    await tester.tap(find.text('Send later'));
+    await tester.pumpAndSettle();
+    expect(controller.later, ['schedule']);
+    await tester.longPress(find.byKey(const Key('send_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remind me'));
+    await tester.pumpAndSettle();
+    expect(controller.later, ['schedule', 'reminder']);
+    // The text is untouched: Send later decides later whether to clear it.
+    expect(controller.sendController.text, 'Later text');
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.sendController.dispose();
+    controller.inputFocus.dispose();
+    controller.scrollController.dispose();
   });
+  testWidgets(
+    'merged plus opens the attach menu, compact chip keeps its picker',
+    (tester) async {
+      final client = ConversationClient();
+      final a = ConversationRoom(client, '!tray-a:example.invalid');
+      final b = ConversationRoom(client, '!tray-b:example.invalid');
+      a.message(r'$tray-a', 'A');
+      final personal = ConversationPersonal(client);
+      addTearDown(personal.dispose);
+      await mountConversation(
+        tester,
+        MergedChatPage(personal: personal, group: group(personal, a, b)),
+        client,
+      );
+      expect(
+        tester.getSize(find.byType(ConversationSourceChip)).width,
+        lessThanOrEqualTo(56),
+      );
+      expect(find.byTooltip('Emoji picker'), findsOneWidget);
+      await tester.tap(find.byTooltip('Attach media or a file'));
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.text('Photo or video'), findsOneWidget);
+      expect(find.text('Send later'), findsNothing);
+      // Silent rounds stay in the attach menu, never as a bare composer icon.
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pumpAndSettle();
+      expect(find.text('Photo or video'), findsNothing);
+      await tester.enterText(find.byType(TextField), 'Typed');
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Attach media or a file'), findsOneWidget);
+      expect(find.byType(MergedChatPage), findsOneWidget);
+    },
+  );
   for (final brightness in Brightness.values) {
     testWidgets(
       '${brightness.name} reply quote has readable text on its fill',
