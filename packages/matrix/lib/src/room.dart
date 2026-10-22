@@ -1122,7 +1122,10 @@ class Room {
           customImageResizer: client.customImageResizer,
         );
 
-        if (thumbnail != null && file.size < thumbnail.size) {
+        // ChatLoom: `<=`, not `<`. A resizer that keeps an animated image
+        // whole returns the original bytes as the "thumbnail"; upstream then
+        // uploaded the same file twice.
+        if (thumbnail != null && file.size <= thumbnail.size) {
           thumbnail = null; // in this case, the thumbnail is not usefull
         }
       } catch (e, s) {

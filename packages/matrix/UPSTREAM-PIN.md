@@ -91,6 +91,19 @@ the server requests are unchanged. Regression: app
 `test/personal/outgoing_media_test.dart` (send order and retries through the
 app's media queue) and `test/notion/attachment_flow_test.dart`.
 
+### 2026-10-22 — `sendFileEvent`: no thumbnail that is the file itself
+
+The app's image resizer (`customImageResizer`, Android and web) keeps an
+animated GIF/WebP whole: it returns the original bytes at the original size.
+`MatrixImageFile.generateThumbnail` accepts that as the thumbnail when the
+image is within the thumbnail dimension, and `sendFileEvent` dropped a
+thumbnail only when it was *larger* than the file, so a small animated image
+was uploaded twice (file and identical "thumbnail"). The thumbnail is now
+also dropped when it is as large as the file. The event then carries no
+`thumbnail_file`/`thumbnail_url`, and receivers show the original, which is
+what they displayed anyway. Regression: `test/room_test.dart`
+("sendFileEvent drops a thumbnail as large as the file").
+
 ### 2026-10-22 — unsent files: no self-deleting bubble, copy kept until accepted
 
 Two one-line changes on the send path of files (wave 5, lane outbox-send):

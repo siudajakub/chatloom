@@ -1631,6 +1631,68 @@ void main() {
       );
     });
 
+    test('sendFileEvent drops a thumbnail as large as the file', () async {
+      // ChatLoom: an animated image kept whole by the resizer must not be
+      // uploaded a second time as its own thumbnail.
+      final gifRoom = Room(
+        id: '!gif:server.abc',
+        client: matrix,
+        membership: Membership.join,
+      );
+      FakeMatrixApi
+              .currentApi!
+              .api['PUT']!['/client/v3/rooms/!gif%3Aserver.abc/send/m.room.message/giftxid'] =
+          (req) => {'event_id': '\$event${FakeMatrixApi.eventCounter++}'};
+      FakeMatrixApi
+          .currentApi!
+          .api['POST']!['/media/v3/upload?filename=file.gif'] = (req) => {
+        'content_uri': 'mxc://example.com/gifTestMxcUri',
+      };
+      // ASCII: the fake API decodes upload bodies as UTF-8.
+      final bytes = Uint8List.fromList(List.generate(500, (i) => 65 + i % 26));
+      matrix.customImageResizer = (arguments) async =>
+          MatrixImageFileResizedResponse(
+            bytes: arguments.bytes,
+            width: 200,
+            height: 100,
+            originalWidth: 200,
+            originalHeight: 100,
+          );
+      try {
+        FakeMatrixApi.calledEndpoints.clear();
+        final resp = await gifRoom.sendFileEvent(
+          MatrixImageFile(
+            bytes: bytes,
+            name: 'file.gif',
+            mimeType: 'image/gif',
+          ),
+          txid: 'giftxid',
+        );
+        expect(resp, isNotNull);
+        final uploads = FakeMatrixApi.calledEndpoints.keys
+            .where((key) => key.startsWith('/media/v3/upload'))
+            .toList();
+        expect(uploads, ['/media/v3/upload?filename=file.gif']);
+        final content =
+            json.decode(
+                  FakeMatrixApi.calledEndpoints.entries
+                      .firstWhere(
+                        (e) => e.key.startsWith(
+                          '/client/v3/rooms/!gif%3Aserver.abc/send/m.room.message/giftxid',
+                        ),
+                      )
+                      .value
+                      .first,
+                )
+                as Map<String, Object?>;
+        final info = content['info'] as Map<String, Object?>;
+        expect(info.containsKey('thumbnail_url'), isFalse);
+        expect(info.containsKey('thumbnail_file'), isFalse);
+      } finally {
+        matrix.customImageResizer = null;
+      }
+    });
+
     test('sendFileEvent video with customVideoThumbnailGenerator', () async {
       // A dedicated room so the sent video events don't leak into tests
       // using the shared `room`:
