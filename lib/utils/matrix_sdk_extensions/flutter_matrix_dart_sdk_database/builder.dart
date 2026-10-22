@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/media/protected_matrix_database.dart';
+import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/storage/database_policy.dart';
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/utils/client_manager.dart';
@@ -96,8 +97,10 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
   late final String cipher;
   try {
     await keyLock.lock(FileLock.blockingExclusive);
-    cipher = await getDatabaseCipher(
-      requireExisting: await _hasExistingMatrixDatabase(dirname(path)),
+    final requireExisting = await _hasExistingMatrixDatabase(dirname(path));
+    cipher = await PersonalPerformanceProbe.time(
+      'db.key.matrix',
+      () => getDatabaseCipher(requireExisting: requireExisting),
     );
   } finally {
     await keyLock.close();
@@ -109,6 +112,8 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
     cipher: cipher,
   );
 
+  // Includes the SQLCipher key derivation (first query in onConfigure).
+  final opening = Stopwatch()..start();
   final database = await factory.openDatabase(
     path,
     options: OpenDatabaseOptions(
@@ -122,6 +127,8 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
       },
     ),
   );
+
+  PersonalPerformanceProbe.record('db.open.matrix', opening.elapsed);
 
   final matrixDatabase = ProtectedMatrixDatabase(
     clientName,

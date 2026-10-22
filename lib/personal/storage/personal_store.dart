@@ -2,6 +2,7 @@
 
 import 'dart:io';
 
+import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
@@ -33,12 +34,19 @@ class PersonalStore {
       try {
         await lock.lock(FileLock.blockingExclusive);
         await requireEncryptedDatabaseFile(path);
-        final cipher = await getProtectedStorageCipher(
-          'personal_database_password_v1',
-          requireExisting: await File(path).exists(),
+        final requireExisting = await File(path).exists();
+        final cipher = await PersonalPerformanceProbe.time(
+          'db.key.personal',
+          () => getProtectedStorageCipher(
+            'personal_database_password_v1',
+            requireExisting: requireExisting,
+          ),
         );
         return PersonalStore._(
-          await SqlCipherJsonDatabase.open(path: path, cipher: cipher),
+          await PersonalPerformanceProbe.time(
+            'db.open.personal',
+            () => SqlCipherJsonDatabase.open(path: path, cipher: cipher),
+          ),
         );
       } finally {
         await lock.close();

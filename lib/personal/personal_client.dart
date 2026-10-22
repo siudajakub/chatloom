@@ -1802,6 +1802,8 @@ class PersonalClient extends ChangeNotifier {
         }
         if (_echoed.length > 256) _echoed.remove(_echoed.first);
         _echoed.add(txid);
+        // The caller's `send` span (zone-bound listener): bubble on screen.
+        PersonalPerformanceProbe.currentSpan?.markAfterFrame('bubble');
         if (!queued.isCompleted) queued.complete();
       });
       final replyId = payload['replyId'] as String?;

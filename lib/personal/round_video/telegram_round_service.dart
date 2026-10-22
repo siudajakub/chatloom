@@ -15,6 +15,7 @@ import 'package:chatloom/personal/media/pending_media_store.dart';
 import 'package:chatloom/personal/media/send_error_text.dart';
 import 'package:chatloom/personal/media/upload_progress.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
@@ -162,7 +163,10 @@ class TelegramRoundService extends ChangeNotifier
         'pending_round_password_v1',
         requireExisting: await File(path).exists(),
       );
-      _store = await PendingMediaStore.open(path: path, cipher: cipher);
+      _store = await PersonalPerformanceProbe.time(
+        'db.open.pending',
+        () => PendingMediaStore.open(path: path, cipher: cipher),
+      );
     } finally {
       await lock.close();
     }

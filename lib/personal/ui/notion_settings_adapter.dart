@@ -9,6 +9,7 @@ import 'package:chatloom/personal/ui/developer_settings_page.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/personal/ui/notion_settings_page.dart';
+import 'package:chatloom/personal/ui/performance_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/avatar.dart';
@@ -109,6 +110,16 @@ class _NotionSettingsAdapterState extends State<NotionSettingsAdapter> {
               title: 'Private sync',
               subtitle: SyncChanges.settingsSummary(personal),
               onTap: () => _route('/rooms/settings/sync'),
+            ),
+            NotionListRow(
+              leading: const Icon(Icons.speed_outlined),
+              title: 'Performance',
+              subtitle: 'Smoothness and timings on this device',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const PerformancePage(),
+                ),
+              ),
             ),
             NotionListRow(
               leading: const Icon(Icons.info_outline),

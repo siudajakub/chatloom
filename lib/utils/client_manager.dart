@@ -9,6 +9,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/composer_commands.dart';
 import 'package:chatloom/personal/diagnostics.dart';
 import 'package:chatloom/personal/performance_probe.dart';
+import 'package:chatloom/personal/performance_probe_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/utils/custom_http_client.dart';
@@ -103,7 +104,7 @@ abstract class ClientManager {
     final client = Client(
       clientName,
       httpClient: PrivacyHttpClient(
-        CustomHttpClient.createHTTPClient(),
+        PerformanceTimingClient(CustomHttpClient.createHTTPClient()),
         incognito: () => PersonalPrivacy.policy.incognito,
       ),
       verificationMethods: {
@@ -151,6 +152,7 @@ abstract class ClientManager {
     client.syncErrorMaxTimeoutSec = 60;
     // No typed `/logout`, `/leave`, `/clearcache`…: formatting commands only.
     restrictComposerCommands(client);
+    ClientPerformanceProbe.watch(client);
     if (!PersonalPrivacy.policy.allowOnlinePresence) {
       client.syncPresence = PresenceType.offline;
     }
