@@ -115,9 +115,8 @@ class SendLocationDialogState extends State<SendLocationDialog> {
     } else if (denied) {
       contentWidget = Text(L10n.of(context).locationPermissionDeniedNotice);
     } else if (error != null) {
-      contentWidget = Text(
-        L10n.of(context).errorObtainingLocation(error.toString()),
-      );
+      // Never the raw exception (CS-11).
+      contentWidget = const Text('Couldn’t get your location. Try again.');
     } else {
       contentWidget = Row(
         mainAxisSize: .min,

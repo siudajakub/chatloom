@@ -119,7 +119,7 @@ void main() {
             message: 'Phone number is not on WhatsApp',
           ),
         ),
-        'Phone number is not on WhatsApp',
+        'Phone number is not on WhatsApp.',
       );
       for (final message in ['M_UNKNOWN', 'M_UNKNOWN: M_UNKNOWN', 'HTTP 500']) {
         final text = humanErrorText(
@@ -223,5 +223,220 @@ void main() {
       ).code,
       'matrix_m_unknown',
     );
+  });
+
+  group('bridgeMessageText', () {
+    // Every bridgev2 / connector / fork text known to reach the app, with
+    // the sentence it becomes (BR-04, BR-15).
+    const known = {
+      'media too large': 'This file is too large for WhatsApp.',
+      'media too large: 30.0 MiB is larger than the maximum of 16.0 MiB':
+          'This file is too large for WhatsApp.',
+      'too large file (25 MiB)': 'This file is too large for WhatsApp.',
+      'unsupported message type':
+          'WhatsApp doesn’t support this kind of message.',
+      'unsupported media type': 'WhatsApp doesn’t support this kind of file.',
+      'unsupported view-limited type':
+          'WhatsApp doesn’t support this view-once message.',
+      'captions are not supported here':
+          'Captions aren’t supported in this chat. Send the file without text.',
+      'location messages are not supported here':
+          'Locations can’t be sent to this chat.',
+      'the message is too old to be edited':
+          'This message is too old to edit on WhatsApp.',
+      'the message has been edited too many times':
+          'This message can’t be edited again on WhatsApp.',
+      'this bridge does not support edits':
+          'Messages in this chat can’t be edited.',
+      'edits are not allowed in this chat':
+          'Messages in this chat can’t be edited.',
+      'this bridge does not support reactions':
+          'WhatsApp doesn’t support reactions.',
+      'this bridge does not support polls': 'WhatsApp doesn’t support polls.',
+      'this bridge does not support deleting messages':
+          'WhatsApp doesn’t support deleting messages.',
+      'vote target poll not found': 'This poll is no longer available.',
+      'media duration too long':
+          'This video or recording is too long for WhatsApp.',
+      'voice message too long': 'This voice message is too long for WhatsApp.',
+      'failed to download media':
+          'The bridge couldn’t download the file. Send it again.',
+      'failed to reupload media':
+          'The bridge couldn’t upload the file to WhatsApp. Send it again.',
+      'failed to convert media':
+          'The bridge couldn’t convert this file for WhatsApp.',
+      'target message not found':
+          'The original message is no longer on WhatsApp.',
+      'internal database error': 'The bridge had a problem. Try again later.',
+      'panic in event handler': 'The bridge had a problem. Try again later.',
+      "You're not logged in (receiver login is not logged in)":
+          'You’re signed out of WhatsApp. Sign in on the Networks page, then '
+          'try again.',
+      'You’re not logged in (no usable logins found)':
+          'You’re signed out of WhatsApp. Sign in on the Networks page, then '
+          'try again.',
+      'Failed to get login to handle event':
+          'The bridge couldn’t find your WhatsApp account. Check it on the '
+          'Networks page.',
+      'not connected':
+          'WhatsApp isn’t connected right now. Try again in a moment.',
+      'remote echo timed out':
+          'WhatsApp didn’t confirm this message in time. It may still have '
+          'arrived; check before sending it again.',
+      'remote ack timed out':
+          'WhatsApp didn’t confirm this message in time. It may still have '
+          'arrived; check before sending it again.',
+      'rate limited by Slack':
+          'WhatsApp asks you to slow down. Wait a moment and try again.',
+      'message is too long for Slack': 'This message is too long for WhatsApp.',
+      'server rejected message: blocked':
+          'WhatsApp didn’t accept this message.',
+      'failed to convert message: bad html':
+          'The bridge couldn’t convert this message for WhatsApp.',
+      'Identifier not found': 'No one on WhatsApp has that number or username.',
+      'Failed to decode request body':
+          'The bridge had a problem. Try again later.',
+    };
+
+    test('known bridge strings become sentences naming the network', () {
+      for (final MapEntry(:key, :value) in known.entries) {
+        expect(bridgeMessageText(key, network: 'WhatsApp'), value, reason: key);
+        expect(value, isNot(matches(_raw)), reason: key);
+      }
+    });
+
+    test('the Telegram fork codes and placeholders are worded', () {
+      const fork = {
+        'Round video rejected: encode_timeout':
+            'Telegram couldn’t process this video message. Try sending it '
+            'again.',
+        'Telegram media operation: transfer_timeout':
+            'Telegram couldn’t process this video message. Try sending it '
+            'again.',
+        'Round video rejected: duration_limit':
+            'Video messages can be up to 60 seconds long.',
+        'Round video rejected: file_size_limit':
+            'This video message is too large for Telegram.',
+        'Round video rejected: invalid_video_profile':
+            'This video can’t be sent as a Telegram video message.',
+        'Round video rejected: round_permission_denied':
+            'You can’t send video messages in this chat.',
+        'Telegram media operation: CHAT_WRITE_FORBIDDEN':
+            'You can’t send messages in this chat.',
+        'Round video rejected: VOICE_MESSAGES_FORBIDDEN':
+            'This person doesn’t accept voice and video messages.',
+        'Round video rejected: round_ack_missing':
+            'Telegram didn’t confirm this video message. It may still appear '
+            'in the chat.',
+        'Telegram media operation: FLOOD_WAIT_30':
+            'Telegram asks you to wait a moment before sending again.',
+        'Round video rejected: something_new':
+            'Telegram didn’t accept this video message.',
+        'A wait of {seconds} seconds is required':
+            'Telegram asks you to wait a moment before trying again.',
+      };
+      for (final MapEntry(:key, :value) in fork.entries) {
+        final text = bridgeMessageText(key, network: 'Telegram');
+        expect(text, value, reason: key);
+        expect(text, isNot(contains('_')));
+        expect(text, isNot(contains('{')));
+      }
+    });
+
+    test('other human text is cleaned up, codes give null', () {
+      expect(
+        bridgeMessageText('the recipient blocked you', network: 'Signal'),
+        'The recipient blocked you.',
+      );
+      expect(
+        bridgeMessageText(
+          'failed to send: context deadline exceeded',
+          network: 'Signal',
+        ),
+        'Failed to send.',
+      );
+      for (final code in [
+        'encode_timeout',
+        'M_UNKNOWN',
+        'HTTP 500',
+        'Request failed {code}',
+        '',
+        null,
+      ]) {
+        expect(
+          bridgeMessageText(code, network: 'Signal'),
+          isNull,
+          reason: code,
+        );
+      }
+      expect(
+        bridgeMessageText('media too large'),
+        contains('the other network'),
+      );
+      expect(
+        bridgeMessageMeansSignedOut(
+          "You're not logged in (receiver login is not logged in)",
+        ),
+        isTrue,
+      );
+      expect(bridgeMessageMeansSignedOut('media too large'), isFalse);
+    });
+  });
+
+  group('bridgeDeliveryText', () {
+    test('reason codes are the fallback; retry advice only when it helps', () {
+      String text(String? reason, {bool retriable = false, String? message}) =>
+          bridgeDeliveryText(
+            retriable: retriable,
+            reason: reason,
+            message: message,
+            network: 'WhatsApp',
+          );
+      expect(
+        text('m.foreign_network_error'),
+        'WhatsApp didn’t accept this message.',
+      );
+      expect(
+        text('m.foreign_network_error', retriable: true),
+        'WhatsApp didn’t accept this message. Try sending it again.',
+      );
+      expect(
+        text('m.no_permission'),
+        'You don’t have permission to send this here.',
+      );
+      expect(
+        text('m.bridge_unavailable'),
+        'The WhatsApp bridge isn’t running.',
+      );
+      expect(
+        text(
+          'm.event_too_old',
+          retriable: true,
+          message: 'remote echo timed out',
+        ),
+        allOf(contains('may still have arrived'), isNot(contains('too old'))),
+      );
+      expect(
+        text('m.event_not_handled', retriable: true),
+        'The bridge couldn’t deliver this message. Try sending it again.',
+      );
+      expect(
+        text('com.beeper.unsupported_event', message: 'media too large'),
+        'This file is too large for WhatsApp.',
+      );
+      // Advice already in the sentence is not repeated.
+      expect(
+        text(
+          'm.event_not_handled',
+          retriable: true,
+          message: 'failed to download media',
+        ),
+        'The bridge couldn’t download the file. Send it again.',
+      );
+      expect(
+        text('m.foreign_network_error', message: 'encode_timeout'),
+        'WhatsApp didn’t accept this message.',
+      );
+    });
   });
 }

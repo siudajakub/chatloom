@@ -29,7 +29,8 @@ extension MatrixFileExtension on MatrixFile {
 
     scaffoldMessenger.showSnackBar(
       SnackBar(
-        content: Text(l10n.fileHasBeenSavedAt(downloadPath.toString())),
+        // Not the device path (CS-11): the person chose where it went.
+        content: const Text('File saved.'),
         showCloseIcon: true,
       ),
     );
