@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/performance_probe_client.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
@@ -41,6 +43,10 @@ class InboxController extends ChangeNotifier {
       client.onSyncStatus.stream.listen(_onStatus, onError: (_) {}),
       personal.changes.listen(_onPersonalChange, onError: (_) {}),
       client.onRoomState.stream.listen(_onRoomState, onError: (_) {}),
+      // A bridge report about a row's last own message (delivery ticks).
+      BridgeDeliveryLedger.of(
+        client,
+      ).changes.listen((room) => _mark(rooms: [room]), onError: (_) {}),
     ]);
   }
 
@@ -155,21 +161,29 @@ class InboxController extends ChangeNotifier {
   /// Other users' read receipts change nothing an inbox row shows: unread
   /// counts move only with new events or the account's own receipts (some
   /// servers repeat `unread_notifications` in every room entry, so it is no
-  /// signal by itself).
-  bool _othersReceiptsOnly(JoinedRoomUpdate update) {
+  /// signal by itself). The exception is a receipt on the room's last own
+  /// message: it turns the row's ticks into "read".
+  bool _othersReceiptsOnly(String roomId, JoinedRoomUpdate update) {
     final ephemeral = update.ephemeral;
     final own = client.userID;
-    return own != null &&
-        ephemeral != null &&
-        ephemeral.isNotEmpty &&
-        ephemeral.every(
+    if (own == null ||
+        ephemeral == null ||
+        ephemeral.isEmpty ||
+        !ephemeral.every(
           (event) =>
               event.type == 'm.receipt' && !_mentions(event.content, own),
-        ) &&
-        (update.timeline?.events?.isEmpty ?? true) &&
-        (update.state?.isEmpty ?? true) &&
-        (update.accountData?.isEmpty ?? true) &&
-        update.summary == null;
+        ) ||
+        !(update.timeline?.events?.isEmpty ?? true) ||
+        !(update.state?.isEmpty ?? true) ||
+        !(update.accountData?.isEmpty ?? true) ||
+        update.summary != null) {
+      return false;
+    }
+    final last = client.getRoomById(roomId)?.lastEvent;
+    if (last == null || !OwnSenderResolver.of(client).isOwnEvent(last)) {
+      return true;
+    }
+    return !ephemeral.any((event) => event.content.containsKey(last.eventId));
   }
 
   /// Whether a receipt content (`{event: {type: {user: …}}}`) names [user].
@@ -188,7 +202,7 @@ class InboxController extends ChangeNotifier {
     final ids = <String>{
       for (final entry
           in rooms?.join?.entries ?? <MapEntry<String, JoinedRoomUpdate>>[])
-        if (!_othersReceiptsOnly(entry.value)) entry.key,
+        if (!_othersReceiptsOnly(entry.key, entry.value)) entry.key,
       ...?rooms?.invite?.keys,
       ...?rooms?.leave?.keys,
       ...?rooms?.knock?.keys,

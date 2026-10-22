@@ -10,6 +10,7 @@ import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:chatloom/personal/worker_readiness.dart';
+import 'package:chatloom/ui/notion/notion_delivery_tick.dart';
 import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -495,6 +496,53 @@ void main() {
     await tester.pump();
     expect(row().failed, isTrue);
     expect(find.byKey(const ValueKey('notion_inbox_failed')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('a receipt on the last own message turns its ticks to read', (
+    tester,
+  ) async {
+    final client = _Client();
+    final room = _Room(client, '!ticks:example.invalid')
+      ..message(r'$t1', 'See you', outgoing: true);
+    addTearDown(PersonalClient.of(client).dispose);
+    final controller = await mountInbox(tester, client);
+    final inbox = controller.inbox;
+    NotionInboxRow row() =>
+        tester.widget<NotionInboxRow>(find.byType(NotionInboxRow));
+    expect(row().delivery, NotionDeliveryState.sent);
+    final generation = inbox.generation;
+    room.receiptState.global.otherUsers['@anna:example.invalid'] =
+        LatestReceiptStateData(r'$t1', 1);
+    client.onSync.add(
+      SyncUpdate(
+        nextBatch: 'fixture-read',
+        rooms: RoomsUpdate(
+          join: {
+            room.id: JoinedRoomUpdate(
+              ephemeral: [
+                BasicEvent(
+                  type: 'm.receipt',
+                  content: {
+                    r'$t1': {
+                      'm.read': {
+                        '@anna:example.invalid': {'ts': 1},
+                      },
+                    },
+                  },
+                ),
+              ],
+            ),
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    expect(inbox.generation, greaterThan(generation));
+    expect(row().delivery, NotionDeliveryState.read);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });

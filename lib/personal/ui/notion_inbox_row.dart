@@ -24,6 +24,10 @@ class NotionInboxRow extends StatelessWidget {
   /// The last own message was not sent: a danger mark before the preview
   /// (Telegram, Messenger).
   final bool failed;
+
+  /// Ticks of the last message when it is own (Telegram's dialog list):
+  /// drawn before the time; null for none.
+  final NotionDeliveryState? delivery;
   final bool selected;
   final bool muted;
   final String? notificationLabel;
@@ -60,6 +64,7 @@ class NotionInboxRow extends StatelessWidget {
     this.unread = false,
     this.mentioned = false,
     this.failed = false,
+    this.delivery,
     this.selected = false,
     this.muted = false,
     this.notificationLabel,
@@ -90,6 +95,8 @@ class NotionInboxRow extends StatelessWidget {
       preview,
       ?time,
       if (failed) 'Last message not sent',
+      if (delivery case final state?)
+        'Last message ${NotionDeliveryTick.labelOf(state).toLowerCase()}',
       if (mentioned) 'You were mentioned',
       if (unreadCount > 0)
         '$unreadCount unread messages'
@@ -248,17 +255,33 @@ class NotionInboxRow extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             if (time != null)
-                              NotionLazySwitcher(
-                                alignment: AlignmentDirectional.topEnd,
-                                child: Text(
-                                  time!,
-                                  key: ValueKey(time),
-                                  style: NotionType.footnote.copyWith(
-                                    color: hasUnread && !muted
-                                        ? colors.text
-                                        : secondary,
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (delivery case final state?) ...[
+                                    NotionDeliveryTick(
+                                      key: const ValueKey(
+                                        'notion_inbox_delivery',
+                                      ),
+                                      state: state,
+                                      color: secondary,
+                                      size: NotionDeliveryTick.defaultSize + 2,
+                                    ),
+                                    const SizedBox(width: 2),
+                                  ],
+                                  NotionLazySwitcher(
+                                    alignment: AlignmentDirectional.topEnd,
+                                    child: Text(
+                                      time!,
+                                      key: ValueKey(time),
+                                      style: NotionType.footnote.copyWith(
+                                        color: hasUnread && !muted
+                                            ? colors.text
+                                            : secondary,
+                                      ),
+                                    ),
                                   ),
-                                ),
+                                ],
                               ),
                             // The badge pops in when the first unread arrives,
                             // pulses and rolls its number on every new one, and
