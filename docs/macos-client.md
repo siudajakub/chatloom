@@ -5,7 +5,7 @@ SQLCipher store, private metadata sync, durable outbox and worker integration.
 System notifications, notification sounds, Dock badges and push registration
 are disabled on macOS. Reminders and scheduled messages remain in Tools; the
 worker continues to execute accepted jobs independently of the app.
-The in-app incoming-call dialog is retained independently of system alerts.
+Voice and video calls are not supported (removed 2026-10-22).
 
 ## Build and download
 
@@ -127,7 +127,6 @@ checks require a real Mac/account and remain **NOT RUN** until observed:
 | Media | Voice capture/playback/seek, video and round playback, attachments, downloads, clipboard and file drag/drop |
 | Native round capture | Camera/mic allow/deny, cancel, pause/resume, trim, 60-second limit, A/V sync and Telegram delivery |
 | Desktop lifecycle | Resize, two columns, native menus, shortcuts, close/Dock reopen, sleep/wake and app lock |
-| Calls | Camera, microphone, audio routes and available call controls on the actual account |
 | Performance | Cold/warm startup, long inbox/history scroll, CPU/RAM at idle, media, sleep/wake and energy use |
 
 Use the existing opt-in numeric performance probe for a profile build:

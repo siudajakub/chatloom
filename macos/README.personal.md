@@ -17,7 +17,7 @@ It checks native storage/crypto/media, signatures and embedded architectures.
 Linux can run shared tests and trigger Actions; it cannot compile this target.
 
 System notifications, push, notification sounds and Dock badges are disabled.
-In-app incoming-call dialogs remain enabled. Artifacts are ad-hoc signed and
+Voice and video calls are not supported. Artifacts are ad-hoc signed and
 not Apple notarized. Real-account and physical-device acceptance is separate.
 
 [Full macOS behavior, artifacts, storage and acceptance guide](../docs/macos-client.md).

@@ -6,6 +6,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ChatLoom has no analytics, advertising or crash-reporting service. It talks
 only to the services below, and only those the user or operator configures.
+The sign-in screen offers the default homeserver without fetching any list,
+and ChatLoom has no voice or video calls, so no call or token service is
+contacted.
 
 | Party | What it receives |
 |---|---|
@@ -15,8 +18,6 @@ only to the services below, and only those the user or operator configures.
 | Google Firebase Cloud Messaging (Android) | The FCM token, opaque routing IDs and delivery time; no message text or names. |
 | Worker (optional, self-hosted) | A separate Matrix device of your own account. It reads only end-to-end encrypted journal commands from your verified devices, and media you ask it to transcribe, or that automatic transcription selects when both the synced user policy and the operator switch are on. Disappearing messages are never transcribed. It never replies to contacts. |
 | Transcription provider (OpenAI, via the worker) | The audio track of the selected media, stripped of metadata. No text, names or chat IDs. |
-| GitHub | The sign-in screen fetches a public list of recommended homeservers. |
-| Call service | Calls in native Matrix rooms request a token from the homeserver's advertised LiveKit service, or from a fallback service when none is advertised. |
 
 On the device, Matrix data is stored in an SQLCipher-encrypted database whose
 key is held in the platform's secure storage; if secure storage is unavailable

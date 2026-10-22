@@ -159,7 +159,8 @@ C = 1024
 VARIANTS = {
     # Full app icon: rounded dark tile with the coloured mark.
     'logo': svg(C, rounded_bg(C) + glyph(C, fit=0.80)),
-    # Full-bleed tile for platforms that mask the icon themselves (iOS).
+    # Full-bleed tile for platforms that mask the icon themselves (no current
+    # target renders it; kept so a future iOS target can).
     'logo_square': svg(C, square_bg(C) + glyph(C, fit=0.66)),
     # Maskable web icon: mark within the 80% safe zone.
     'logo_maskable': svg(C, square_bg(C) + glyph(C, fit=0.58)),
@@ -248,23 +249,6 @@ def solid_png(out, color, size=1):
     render(svg_text, out, size)
 
 
-def write_ico(out, pngs):
-    entries = []
-    data = b''
-    offset = 6 + 16 * len(pngs)
-    for p in pngs:
-        blob = Path(p).read_bytes()
-        w, h = png_size(p)
-        entries.append(
-            struct.pack(
-                '<BBBBHHII',
-                w % 256, h % 256, 0, 0, 1, 32, len(blob), offset + len(data),
-            )
-        )
-        data += blob
-    out.write_bytes(struct.pack('<HHH', 0, 1, len(pngs)) + b''.join(entries) + data)
-
-
 def font_env(tmp):
     conf = Path(tmp) / 'fonts.conf'
     conf.write_text(
@@ -321,14 +305,6 @@ def main():
         add('logo_notification', f'{res}/drawable-{d}/notifications_icon.png', round(24 * k))
         add('logo_splash', f'{res}/drawable-{d}/splash.png', round(177 * k))
 
-    # iOS.
-    ios = 'ios/Runner/Assets.xcassets/AppIcon.appiconset'
-    for p in sorted((ROOT / ios).glob('Icon-App-*.png')):
-        stem = p.stem[len('Icon-App-'):]
-        pts, scale = stem.split('@')
-        w = round(float(pts.split('x')[0]) * int(scale[:-1]))
-        add('logo_square', f'{ios}/{p.name}', w)
-
     # macOS (Contents.json names plus the unused legacy *-mac.png copies).
     mac = 'macos/Runner/Assets.xcassets/AppIcon.appiconset'
     for n in (16, 32, 64, 128, 256, 512, 1024):
@@ -343,9 +319,6 @@ def main():
     for n in (192, 512):
         add('logo_maskable', f'web/icons/Icon-maskable-{n}.png', n)
 
-    # Linux snap / desktop.
-    add('logo', 'snap/gui/fluffychat.png', 500)
-
     for text, out, w, h in jobs:
         render(text, out, w, h, env=env)
 
@@ -353,20 +326,12 @@ def main():
     for d in ('drawable', 'drawable-v21', 'drawable-night', 'drawable-night-v21'):
         solid_png(ROOT / res / d / 'background.png', BG)
 
-    # Windows .ico with PNG-compressed entries.
-    ico_parts = []
-    for n in (16, 24, 32, 48, 64, 128, 256):
-        p = Path(tmp) / f'ico-{n}.png'
-        render(v['logo'], p, n)
-        ico_parts.append(p)
-    write_ico(ROOT / 'windows/runner/resources/app_icon.ico', ico_parts)
-
     for _, out, w, h in jobs:
         got = png_size(out)
         if got != (w, h or w):
             print(f'size mismatch {out}: {got}', file=sys.stderr)
             return 1
-    print(f'rendered {len(jobs) + 4 + 1} files')
+    print(f'rendered {len(jobs) + 4} files')
     return 0
 
 
