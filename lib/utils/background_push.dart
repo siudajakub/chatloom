@@ -746,7 +746,6 @@ class BackgroundPush {
         final outcome = await pushHelper(
           PushNotification.fromJson(data),
           clients: clients,
-          l10n: l10n,
           activeRoomId: matrix?.activeRoomId,
           flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
           test: kind == PushKind.test,
@@ -1060,7 +1059,6 @@ class BackgroundPush {
         final outcome = await pushHelper(
           PushNotification.fromJson(data),
           clients: clients,
-          l10n: l10n,
           activeRoomId: matrix?.activeRoomId,
           flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
         );

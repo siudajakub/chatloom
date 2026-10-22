@@ -1,10 +1,8 @@
--keep class com.hiennv.flutter_callkit_incoming.** { *; }
-
 # Release builds run R8 with optimisation (proguard-android-optimize.txt).
 # Plugins below rely on reflection or JNI and do not ship complete consumer
-# rules. Firebase, AndroidX/Media3 (video_player, just_audio), Tink
-# (flutter_secure_storage), flutter_webrtc and flutter_callkit_incoming ship
-# their own; SQLCipher, vodozemac and webcrypto are Dart FFI (no JVM code).
+# rules. Firebase, AndroidX/Media3 (video_player, just_audio) and Tink
+# (flutter_secure_storage) ship their own; SQLCipher, vodozemac and webcrypto
+# are Dart FFI (no JVM code).
 
 # flutter_local_notifications stores scheduled notifications as Gson JSON of
 # its model classes (reminders, scheduled messages): field names must stay.

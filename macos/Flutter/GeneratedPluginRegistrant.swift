@@ -18,11 +18,9 @@ import flutter_local_notifications
 import flutter_new_badger
 import flutter_secure_storage_darwin
 import flutter_web_auth_2
-import flutter_webrtc
 import geolocator_apple
 import just_audio
 import light_compressor_v2
-import livekit_client
 import local_auth_darwin
 import managed_configurations
 import package_info_plus
@@ -51,11 +49,9 @@ func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   FlutterNewBadgerPlugin.register(with: registry.registrar(forPlugin: "FlutterNewBadgerPlugin"))
   FlutterSecureStorageDarwinPlugin.register(with: registry.registrar(forPlugin: "FlutterSecureStorageDarwinPlugin"))
   FlutterWebAuth2Plugin.register(with: registry.registrar(forPlugin: "FlutterWebAuth2Plugin"))
-  FlutterWebRTCPlugin.register(with: registry.registrar(forPlugin: "FlutterWebRTCPlugin"))
   GeolocatorPlugin.register(with: registry.registrar(forPlugin: "GeolocatorPlugin"))
   JustAudioPlugin.register(with: registry.registrar(forPlugin: "JustAudioPlugin"))
   LightCompressorPlugin.register(with: registry.registrar(forPlugin: "LightCompressorPlugin"))
-  LiveKitPlugin.register(with: registry.registrar(forPlugin: "LiveKitPlugin"))
   LocalAuthPlugin.register(with: registry.registrar(forPlugin: "LocalAuthPlugin"))
   ManagedConfigurationsPlugin.register(with: registry.registrar(forPlugin: "ManagedConfigurationsPlugin"))
   FPPPackageInfoPlusPlugin.register(with: registry.registrar(forPlugin: "FPPPackageInfoPlusPlugin"))

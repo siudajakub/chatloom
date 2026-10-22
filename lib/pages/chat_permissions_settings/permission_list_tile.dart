@@ -5,7 +5,6 @@
 
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
-import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call_member.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -68,7 +67,8 @@ class PermissionsListTile extends StatelessWidget {
           return L10n.of(context).enableEncryption;
         case 'm.room.server_acl':
           return L10n.of(context).editBlockedServers;
-        case MatrixRtcCallMember.eventType:
+        // Group calls are not supported; an existing level stays readable.
+        case 'org.matrix.msc3401.call.member':
           return 'Create or join a group call';
       }
     }

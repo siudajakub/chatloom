@@ -79,11 +79,6 @@ class MatrixState extends State<Matrix> {
 
   BackgroundPush? backgroundPush;
 
-  final ValueNotifier<String?> activeCallRoomId = ValueNotifier(null);
-  final ValueNotifier<CallPosition> callPosition = ValueNotifier(
-    CallPosition.fullScreen,
-  );
-
   Client get client {
     if (_activeClient < 0 || _activeClient >= widget.clients.length) {
       return currentBundle!.first!;
@@ -689,5 +684,3 @@ class MatrixState extends State<Matrix> {
     );
   }
 }
-
-enum CallPosition { fullScreen, top }

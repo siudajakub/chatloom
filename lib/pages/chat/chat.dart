@@ -54,7 +54,6 @@ import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
-import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
@@ -94,7 +93,6 @@ class ChatPage extends StatelessWidget {
   final List<ShareItem>? shareItems;
   final String? eventId;
   final Timeline? timeline;
-  final String? action;
 
   const ChatPage({
     super.key,
@@ -102,7 +100,6 @@ class ChatPage extends StatelessWidget {
     this.eventId,
     this.shareItems,
     this.timeline,
-    this.action,
   });
 
   @override
@@ -122,12 +119,11 @@ class ChatPage extends StatelessWidget {
     }
 
     return ChatPageWithRoom(
-      key: Key('chat_page_${roomId}_${eventId}_$action'),
+      key: Key('chat_page_${roomId}_$eventId'),
       room: room,
       shareItems: shareItems,
       eventId: eventId,
       timeline: timeline,
-      action: action,
     );
   }
 }
@@ -137,7 +133,6 @@ class ChatPageWithRoom extends StatefulWidget {
   final List<ShareItem>? shareItems;
   final String? eventId;
   final Timeline? timeline;
-  final String? action;
 
   const ChatPageWithRoom({
     super.key,
@@ -145,7 +140,6 @@ class ChatPageWithRoom extends StatefulWidget {
     this.shareItems,
     this.eventId,
     this.timeline,
-    this.action,
   });
 
   @override
@@ -749,13 +743,9 @@ class ChatController extends State<ChatPageWithRoom>
       _openProbe.mark('first_frame');
       NotionMotion.afterRouteSettled(context, () => _openProbe.mark('route'));
       _shareItems();
-      _checkMatrixRtcCallSupport();
       // The first send must not wait for the member list (trust check);
       // loaded once the opening slide has finished.
       warmUpSendPath(room, route: ModalRoute.of(context)?.animation);
-      if (widget.action == 'call') {
-        Matrix.of(context).activeCallRoomId.value = room.id;
-      }
     });
     web.window.addEventListener('paste', _handleClipboardFilePasteWeb);
 
@@ -801,63 +791,6 @@ class ChatController extends State<ChatPageWithRoom>
         exceptionContext: ExceptionContext.joinRoom,
       );
     });
-  }
-
-  /// One LiveKit discovery per client and process; failures are retried.
-  static final _liveKitSupport = Expando<Future<bool>>();
-
-  Future<void> _checkMatrixRtcCallSupport() async {
-    // Bridged rooms never offer the call button, so they never need the
-    // network round trip.
-    final checkedRoom = room;
-    if (checkedRoom.states['m.bridge'] != null ||
-        checkedRoom.states['uk.half-shot.bridge'] != null) {
-      return;
-    }
-    // Keep the request and its rebuild off the chat-open transition.
-    await _awaitRouteSettled();
-    if (!mounted) return;
-    final client = checkedRoom.client;
-    final support = _liveKitSupport[client] ??= client
-        .getLiveKitServiceUrls()
-        .then((urls) => urls.isNotEmpty);
-    try {
-      if (!await support || !mounted || supportLiveKitCalls) return;
-      setState(() {
-        supportLiveKitCalls = true;
-      });
-    } catch (e) {
-      if (identical(_liveKitSupport[client], support)) {
-        _liveKitSupport[client] = null;
-      }
-      Logs().d('Unable to check MatrixRTC call support', e);
-    }
-  }
-
-  /// Completes when this page's push transition has finished (or at once if
-  /// it is not animating). Bounded so a stalled animation never blocks.
-  Future<void> _awaitRouteSettled() async {
-    if (!mounted) return;
-    final animation = ModalRoute.of(context)?.animation;
-    if (animation == null || animation.status != AnimationStatus.forward) {
-      return;
-    }
-    final settled = Completer<void>();
-    void listener(AnimationStatus status) {
-      if (status != AnimationStatus.forward && !settled.isCompleted) {
-        settled.complete();
-      }
-    }
-
-    animation.addStatusListener(listener);
-    try {
-      await settled.future.timeout(
-        const Duration(milliseconds: 500),
-        onTimeout: () {},
-      );
-    } finally {
-      animation.removeStatusListener(listener);
-    }
   }
 
   @override
@@ -1319,13 +1252,6 @@ class ChatController extends State<ChatPageWithRoom>
     // We do not set read marker if timeline is empty
     final timeline = this.timeline;
     if (timeline == null || timeline.events.isEmpty) return;
-
-    // Do not set read marker on rtc notification while call is active. This
-    // mutes callkit.
-    if (room.hasActiveMatrixRtcCall &&
-        timeline.events.first.type == RtcNotificationContent.eventType) {
-      return;
-    }
 
     eventId ??= timeline.events.firstWhereOrNull((event) {
       if (isTelegramMediaControl(event.type)) return false;
@@ -2840,12 +2766,6 @@ class ChatController extends State<ChatPageWithRoom>
       cancelReplyEventAction();
     }
   }
-
-  void startOrJoinVideoCall() {
-    Matrix.of(context).activeCallRoomId.value = room.id;
-  }
-
-  bool supportLiveKitCalls = false;
 
   Future<void> _cancelEditWithConfirmation() async {
     final originalText = editEvent!

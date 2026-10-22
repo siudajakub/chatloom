@@ -46,12 +46,9 @@ import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_callkit_incoming/entities/entities.dart';
-import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_shortcuts_new/flutter_shortcuts_new.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:matrix/matrix.dart' as sdk;
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart'
     show ChatPlacement, PersonGroup;
@@ -222,26 +219,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
   StreamSubscription? _intentFileStreamSubscription;
 
-  StreamSubscription? _callEventSubscription;
-
   late ActiveFilter activeFilter;
-
-  void _onCallEvent(CallEvent? event) {
-    switch (event) {
-      case CallEventActionCallAccept():
-        _joinCallWith(event.callKitParams);
-        break;
-      case CallEventActionCallEnded():
-        final roomId = event.callKitParams.extra?.tryGet<String>('roomId');
-        if (roomId != null &&
-            Matrix.of(context).activeCallRoomId.value == roomId) {
-          Matrix.of(context).activeCallRoomId.value = null;
-        }
-        break;
-      default:
-        break;
-    }
-  }
 
   Future<void> onChatTap(Room room) async {
     final group = InboxProjection(personal).groupFor(room);
@@ -540,15 +518,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     await shortcuts.listenAction(_dispatchShortcut);
   }
 
-  void _joinCallWith(CallKitParams params) {
-    if (!mounted) return;
-    final roomId = params.extra?.tryGet<String>('roomId');
-    final clientName = params.extra?.tryGet<String>('clientName');
-    if (roomId != null) {
-      context.go('/rooms/$roomId?client=$clientName&action=call');
-    }
-  }
-
   void _loadAccountInbox(Client client) {
     PersonalClient.of(client)
         .load()
@@ -572,17 +541,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     _initReceiveSharingIntent();
 
     waitForInitialSync();
-    if (PlatformInfos.isMobile) {
-      _callEventSubscription = FlutterCallkitIncoming.onEvent.listen(
-        _onCallEvent,
-      );
-      FlutterCallkitIncoming.activeCalls().then((calls) {
-        final params = calls.firstOrNull;
-        if (params == null) return;
-        _joinCallWith(params);
-      });
-    }
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (mounted) {
@@ -617,7 +575,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     if (identical(_shortcutOwner, this)) _shortcutOwner = null;
     _intentDataStreamSubscription?.cancel();
     _intentFileStreamSubscription?.cancel();
-    _callEventSubscription?.cancel();
     scrollController.dispose();
     _inbox?.dispose();
     _inbox = null;

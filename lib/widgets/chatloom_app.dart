@@ -15,7 +15,6 @@ import 'package:chatloom/utils/macos_desktop.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/client_startup.dart';
-import 'package:chatloom/widgets/layouts/call_overlay.dart';
 import 'package:chatloom/widgets/theme_builder.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/foundation.dart';
@@ -132,16 +131,13 @@ class ChatLoomApp extends StatelessWidget {
               child: Matrix(
                 clients: clients,
                 store: store,
-                child: CallOverlay(
-                  child: Column(
-                    children: [
-                      if (startup != null)
-                        ClientStartupNotice(startup: startup!),
-                      Expanded(
-                        child: testWidget ?? child ?? const SizedBox.shrink(),
-                      ),
-                    ],
-                  ),
+                child: Column(
+                  children: [
+                    if (startup != null) ClientStartupNotice(startup: startup!),
+                    Expanded(
+                      child: testWidget ?? child ?? const SizedBox.shrink(),
+                    ),
+                  ],
                 ),
               ),
             ),

@@ -24,7 +24,6 @@ import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
-import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
@@ -311,10 +310,6 @@ Future<void> startGui(
       );
       return;
     }
-  }
-
-  if (PlatformInfos.isLinux || PlatformInfos.isWindows) {
-    JustAudioMediaKit.ensureInitialized();
   }
 
   // Render healthy accounts immediately; room/account loading is handled by

@@ -217,7 +217,6 @@ Future<void> notificationTapBackground(
   // Dismiss needs no account; legacy mute never changes server push rules.
   if (action == null ||
       action == ChatLoomNotificationActions.open ||
-      action == ChatLoomNotificationActions.enterCall ||
       action == ChatLoomNotificationActions.dismiss ||
       action == ChatLoomNotificationActions.mute) {
     return;
@@ -491,8 +490,6 @@ Future<void> notificationTap(
               personGroupId: await personGroupIdForNotification(client, roomId),
             ),
           );
-        case ChatLoomNotificationActions.enterCall:
-          router?.go('/rooms/$roomId?client=${client.clientName}&action=call');
       }
     case NotificationResponseType.notificationDismissed:
       return;
@@ -584,11 +581,4 @@ String notificationRoute(
 
 /// `mute` is kept only so actions on old notifications parse; it no longer
 /// changes the account's server push rules (Personal Chat modes are private).
-enum ChatLoomNotificationActions {
-  markAsRead,
-  reply,
-  mute,
-  open,
-  enterCall,
-  dismiss,
-}
+enum ChatLoomNotificationActions { markAsRead, reply, mute, open, dismiss }

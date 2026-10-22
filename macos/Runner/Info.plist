@@ -32,9 +32,9 @@
 	<key>NSLocationUsageDescription</key>
 	<string>Share your location with your contacts in ChatLoom.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Use your camera to record video messages and join calls in ChatLoom.</string>
+	<string>Use your camera to record video messages in ChatLoom.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Use your microphone to record voice and video messages and join calls in ChatLoom.</string>
+	<string>Use your microphone to record voice and video messages in ChatLoom.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock ChatLoom with biometrics.</string>
 	<key>NSMainNibFile</key>

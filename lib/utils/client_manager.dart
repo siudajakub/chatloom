@@ -15,7 +15,6 @@ import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/utils/custom_http_client.dart';
 import 'package:chatloom/utils/custom_image_resizer.dart';
 import 'package:chatloom/utils/init_with_restore.dart';
-import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call_member.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/sync_network_recovery.dart';
@@ -124,8 +123,6 @@ abstract class ClientManager {
         'im.ponies.room_emotes',
         // Sticker packs imported by bridges (stable MSC2545 type).
         'm.room.image_pack',
-        // To display call state in chat list
-        MatrixRtcCallMember.eventType,
       },
       customImageResizer: PlatformInfos.supportsCustomImageResizer
           ? customImageResizer

@@ -43,51 +43,6 @@ void main() {
     },
   );
 
-  test('immediately completed call syncs are paced', () async {
-    var syncs = 0;
-    final pauses = <Duration>[];
-    await pollIncomingCall(
-      lifetime: const Duration(seconds: 30),
-      sync: () async {
-        syncs++;
-      },
-      finished: () async => syncs == 3,
-      delay: (duration) async {
-        pauses.add(duration);
-      },
-    );
-    expect(syncs, 3);
-    expect(pauses, [const Duration(seconds: 2), const Duration(seconds: 2)]);
-  });
-
-  test('a hung sync cannot retain the incoming-call monitor', () async {
-    final network = Completer<void>();
-    var checked = false;
-    await pollIncomingCall(
-      lifetime: const Duration(seconds: 30),
-      requestTimeout: const Duration(milliseconds: 10),
-      sync: () => network.future,
-      finished: () async {
-        checked = true;
-        return false;
-      },
-    );
-    expect(checked, isFalse);
-    network.complete();
-  });
-
-  test('expired call never performs network work', () async {
-    var calls = 0;
-    await pollIncomingCall(
-      lifetime: Duration.zero,
-      sync: () async {
-        calls++;
-      },
-      finished: () async => false,
-    );
-    expect(calls, 0);
-  });
-
   test(
     'late reminder claim cannot invoke the guarded notification callback',
     () async {
@@ -111,19 +66,6 @@ void main() {
       claim.complete();
       await lateError;
       expect(shown, 0);
-    },
-  );
-
-  test(
-    'a hung native completion check also observes the call deadline',
-    () async {
-      final nativeCheck = Completer<bool>();
-      await pollIncomingCall(
-        lifetime: const Duration(milliseconds: 10),
-        sync: () async {},
-        finished: () => nativeCheck.future,
-      );
-      nativeCheck.complete(false);
     },
   );
 }

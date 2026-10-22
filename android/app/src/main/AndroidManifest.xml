@@ -26,7 +26,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <uses-sdk
-            tools:overrideLibrary="io.wazo.callkeep, net.touchcapture.qr.flutterqr, com.cloudwebrtc.webrtc, org.webrtc, com.it_nomads.fluttersecurestorage, com.pichillilorenzo.flutter_inappwebview, com.example.video_compress, com.otaliastudios.transcoder, com.otaliastudios.opengl, com.kineapps.flutter_file_dialog, com.llfbandit.record, com.pravera.flutter_foreground_task"/>
+            tools:overrideLibrary="net.touchcapture.qr.flutterqr, com.it_nomads.fluttersecurestorage, com.pichillilorenzo.flutter_inappwebview, com.example.video_compress, com.otaliastudios.transcoder, com.otaliastudios.opengl, com.kineapps.flutter_file_dialog, com.llfbandit.record, com.pravera.flutter_foreground_task"/>
     <application
         android:label="ChatLoom"
         android:icon="@mipmap/ic_launcher"
@@ -43,7 +43,6 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:showOnLockScreen="false"
-            android:turnScreenOn="true"
             android:windowSoftInputMode="adjustResize"
             android:exported="true">
 
@@ -130,7 +129,7 @@
         </service>
 
         <service android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-             android:foregroundServiceType="camera|microphone|mediaProjection|shortService"
+             android:foregroundServiceType="shortService"
              android:exported="false">
         </service>
 

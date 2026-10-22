@@ -27,9 +27,7 @@ import 'package:chatloom/personal/personal_hub.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/account_config.dart';
-import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:chatloom/widgets/pulsating_widget.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -46,7 +44,6 @@ class ChatView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final hasActiveGroupCall = controller.room.hasActiveMatrixRtcCall;
     controller.joinInviteOnce();
     final bottomSheetPadding = ChatLoomThemes.isColumnMode(context)
         ? 16.0
@@ -170,44 +167,6 @@ class ChatView extends StatelessWidget {
                   title: ChatAppBarTitle(controller),
                   actions: [
                     if (!controller.room.isArchived) ...[
-                      if (hasActiveGroupCall)
-                        PulsatingWidget(
-                          color: theme.colorScheme.error,
-                          child: Padding(
-                            padding: const EdgeInsets.all(4.0),
-                            child: TextButton.icon(
-                              icon: Icon(switch (controller
-                                  .room
-                                  .activeMatrixRtcCallIntent) {
-                                .voice => Icons.video_call_outlined,
-                                _ => Icons.mic_outlined,
-                              }),
-                              label: Text(
-                                controller.room
-                                    .getActiveMatrixRtcMembers()
-                                    .length
-                                    .toString(),
-                              ),
-                              onPressed:
-                                  controller.room.hasPermissionForMatrixRtcCall
-                                  ? controller.startOrJoinVideoCall
-                                  : null,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: theme.colorScheme.error,
-                                foregroundColor: theme.colorScheme.onError,
-                              ),
-                            ),
-                          ),
-                        )
-                      else if (controller.room.states['m.bridge'] == null &&
-                          controller.room.states['uk.half-shot.bridge'] ==
-                              null &&
-                          controller.room.hasPermissionForMatrixRtcCall &&
-                          controller.supportLiveKitCalls)
-                        IconButton(
-                          icon: Icon(Icons.call_outlined),
-                          onPressed: controller.startOrJoinVideoCall,
-                        ),
                       RoomPersonalButton(
                         room: scheduledSource,
                         composer: controller.sendController,
@@ -428,7 +387,6 @@ class ChatView extends StatelessWidget {
                                         ),
                                   ),
                                   if (AppSettings.personalIncognito.value) ...[
-                                    const SizedBox(height: NotionSpace.xs),
                                     ConversationReadButton(
                                       rooms: [controller.room],
                                       loadedEvents: (_) =>

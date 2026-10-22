@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/l10n/l10n.dart';
-import 'package:chatloom/pages/chat_list/active_call_indicator.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/organization_page.dart';
@@ -11,7 +10,6 @@ import 'package:chatloom/personal/private_avatar.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
-import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/room_status_extension.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
@@ -103,7 +101,6 @@ List<Object?> chatListItemSignature(
     // Day of the time labels ("12:30" becomes "Mon").
     DateTime(now.year, now.month, now.day),
     room.membership,
-    room.hasActiveMatrixRtcCall,
     projection.displayName(room),
     projection.avatarFor(room),
     for (final source in _rowSources(projection, room)) ...[
@@ -303,9 +300,7 @@ class _ChatListItemState extends State<ChatListItem> {
       typing: showsTyping,
       pinned: metadata.isPinned,
       failed: showsFailed && !showsTyping,
-      previewLeading: room.hasActiveMatrixRtcCall
-          ? ActiveCallIndicator(room: room)
-          : showsFailed && !showsTyping
+      previewLeading: showsFailed && !showsTyping
           ? null
           : lastEvent?.status.isSending == true
           // Only a send that takes noticeably long shows a spinner.

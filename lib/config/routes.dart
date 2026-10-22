@@ -500,7 +500,6 @@ abstract class AppRoutes {
           roomId: state.pathParameters['roomid']!,
           shareItems: shareItems,
           eventId: state.uri.queryParameters['event'],
-          action: state.uri.queryParameters['action'],
         ),
         // Only the chat's own parameters: opening details, search
         // or members keeps the identical chat page underneath.
@@ -508,7 +507,6 @@ abstract class AppRoutes {
           'chat',
           state.pathParameters['roomid'],
           state.uri.queryParameters['event'],
-          state.uri.queryParameters['action'],
           body,
           _Identity(state.extra),
         ),

@@ -2,7 +2,6 @@
 import 'dart:async';
 
 import 'package:chatloom/config/setting_keys.dart';
-import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/message_notification.dart';
 import 'package:chatloom/personal/notification_threads.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -213,7 +212,6 @@ class _Fixture {
     String roomId = _roomId,
     bool test = false,
   }) async {
-    final l10n = await L10n.delegate.load(const Locale('en'));
     final outcome = await pushHelper(
       PushNotification(
         roomId: roomId,
@@ -222,7 +220,6 @@ class _Fixture {
         devices: const [],
       ),
       clients: clients ?? [client],
-      l10n: l10n,
       flutterLocalNotificationsPlugin: plugin,
       test: test,
     );

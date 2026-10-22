@@ -29,34 +29,3 @@ class PushWorkBudget {
     }
   }
 }
-
-/// Pace even immediately completed syncs (e.g. offline) and bound every wait.
-Future<void> pollIncomingCall({
-  required Duration lifetime,
-  required Future<void> Function() sync,
-  required Future<bool> Function() finished,
-  Duration interval = const Duration(seconds: 2),
-  Duration requestTimeout = const Duration(seconds: 8),
-  Future<void> Function(Duration)? delay,
-}) async {
-  if (lifetime <= Duration.zero) return;
-  final budget = PushWorkBudget(limit: lifetime);
-  final pause = delay ?? Future<void>.delayed;
-  while (budget.active) {
-    try {
-      await budget.wait(() => sync().timeout(requestTimeout));
-    } on TimeoutException {
-      // Leave the native incoming-call timeout in charge when offline.
-      return;
-    }
-    if (!budget.active) return;
-    try {
-      if (await budget.wait(finished)) return;
-    } on TimeoutException {
-      return;
-    }
-    final remaining = budget.remaining;
-    if (remaining <= Duration.zero) return;
-    await pause(remaining < interval ? remaining : interval);
-  }
-}

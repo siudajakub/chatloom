@@ -7,7 +7,6 @@ import 'dart:typed_data';
 
 import 'package:chatloom/pages/new_group/new_group_view.dart';
 import 'package:chatloom/utils/file_selector.dart';
-import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call_member.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:go_router/go_router.dart';
@@ -66,11 +65,6 @@ class NewGroupController extends State<NewGroup> {
           ? sdk.CreateRoomPreset.publicChat
           : sdk.CreateRoomPreset.privateChat,
       groupName: nameController.text.isNotEmpty ? nameController.text : null,
-      powerLevelContentOverride: publicGroup
-          ? null
-          : {
-              'events': {MatrixRtcCallMember.eventType: 0},
-            },
       initialState: [
         if (avatar != null)
           sdk.StateEvent(

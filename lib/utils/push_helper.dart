@@ -27,9 +27,7 @@ import 'package:chatloom/personal/push_rule_check.dart';
 import 'package:chatloom/personal/reminder_notification.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
-import 'package:chatloom/utils/call_kit_params.dart';
 import 'package:chatloom/utils/client_manager.dart';
-import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:chatloom/utils/notification_avatar_extension.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/notification_client_routing.dart';
@@ -37,7 +35,6 @@ import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/push_work_policy.dart';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
-import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_new_badger/flutter_new_badger.dart';
 import 'package:http/http.dart' as http;
@@ -67,7 +64,6 @@ PersonalClient Function(Client client) pushPersonalClientOf = PersonalClient.of;
 Future<PushOutcome> pushHelper(
   PushNotification notification, {
   List<Client>? clients,
-  L10n? l10n,
   String? activeRoomId,
   required FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin,
   bool test = false,
@@ -84,12 +80,9 @@ Future<PushOutcome> pushHelper(
   var outcome = PushOutcome.error;
   Object? failure;
   try {
-    final locale =
-        l10n ?? await work.wait<L10n>(() => lookupL10n(AppConfig.appLocale));
     outcome = await _tryPushHelper(
       notification,
       clients: clients,
-      l10n: locale,
       activeRoomId: activeRoomId,
       run: run,
       work: work,
@@ -237,7 +230,6 @@ class _Fallback {
 Future<PushOutcome> _tryPushHelper(
   PushNotification notification, {
   List<Client>? clients,
-  required L10n l10n,
   String? activeRoomId,
   required _PushRun run,
   required PushWorkBudget work,
@@ -387,16 +379,10 @@ Future<PushOutcome> _tryPushHelper(
     return PushOutcome.pushRules;
   }
 
-  final incomingCall =
-      event.type == RtcNotificationContent.eventType &&
-      event.tryParseRtcNotificationContent()?.notificationType == .ring &&
-      PlatformInfos.isMobile;
-
   // A merged person page shows its rooms without one room id in the route.
   // Behind the app lock the open chat is not visible, so it still alerts
   // (and is cleared locally once the chat is seen after unlocking).
   if (!run.test &&
-      !incomingCall &&
       (activeRoomId == event.room.id ||
           SeenChatNotifications.isOpen(client.clientName, event.room.id)) &&
       PersonalPrivacy.surfaceUnlocked &&
@@ -416,10 +402,6 @@ Future<PushOutcome> _tryPushHelper(
     ),
   )) {
     return PushOutcome.mentionsOnly;
-  }
-  if (incomingCall) {
-    await work.wait(() => _showIncomingCall(event, l10n, work));
-    return PushOutcome.shown;
   }
   await _showMessageNotification(
     client: client,
@@ -1173,64 +1155,4 @@ class ChatLoomPushPayload {
 extension on PushNotification {
   String? get clientName =>
       devices?.firstOrNull?.data?.tryGet<String>('client_name');
-}
-
-Future<void> _showIncomingCall(
-  Event event,
-  L10n l10n,
-  PushWorkBudget work,
-) async {
-  final callId = '${event.room.id}|${event.room.client.clientName}';
-  final activeCalls = await work.wait(FlutterCallkitIncoming.activeCalls);
-  if (activeCalls.any((call) => call.id == callId)) {
-    Logs().d(
-      'Call with this ID is already active. Ignoring this Push Notification...',
-      callId,
-    );
-    return;
-  }
-  final intentStr = event.content.tryGet<String>('m.call.intent');
-  final intent =
-      MatrixRtcCallIntent.values.singleWhereOrNull(
-        (i) => i.name == intentStr,
-      ) ??
-      .video;
-  final timeout =
-      event.tryParseRtcNotificationContent()?.lifetime ??
-      RtcNotificationContent.defaultLifetime;
-  final params = await work.wait(
-    () => buildChatLoomCallKitParams(
-      event.room,
-      l10n: l10n,
-      intent: intent,
-      timeout: timeout,
-    ),
-  );
-  await work.wait(() => FlutterCallkitIncoming.showCallkitIncoming(params));
-
-  await pollIncomingCall(
-    lifetime: timeout < work.remaining ? timeout : work.remaining,
-    sync: () => event.room.client.oneShotSync(timeout: Duration.zero),
-    finished: () async {
-      if (!event.room.hasActiveMatrixRtcCall) {
-        Logs().i('The other party has ended the call');
-        await FlutterCallkitIncoming.endCall(params.id);
-        return true;
-      }
-      if (event.room.ownMatrixRtcMembership != null) {
-        Logs().d('User has joined the call.');
-        return true;
-      }
-      if (event.room.getActiveMatrixRtcMembers().any(
-        (member) =>
-            member.senderId == event.room.client.userID! &&
-            member.deviceId != event.room.client.deviceID!,
-      )) {
-        Logs().i('User has accepted the call on a different device');
-        await FlutterCallkitIncoming.endCall(params.id);
-        return true;
-      }
-      return false;
-    },
-  );
 }
