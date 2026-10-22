@@ -385,7 +385,7 @@ dialogs and sheets never bounce.
 | `popFrom` .6 · `dialogFrom` .94 · `popoverFrom` .92 | scale | start scales |
 | `refreshFrom` .5 | opacity | a list that changed view or network fades in from here, never from an empty frame |
 | `sheetStyle` / `sheetStyleOf(context)` · `menuStyle` | `AnimationStyle` | `showModalBottomSheet(sheetAnimationStyle:)`, `showMenu`/`PopupMenuButton(popUpAnimationStyle:)` |
-| `reduced(context)` | bool | **the** reduced-motion check (Android "Remove animations", iOS Reduce Motion) |
+| `reduced(context)` | bool | **the** reduced-motion check (Android "Remove animations", iOS Reduce Motion), also while the app is inactive (`NotionActivity`) |
 | `of(context, d)` | Duration | `d`, or zero under reduced motion |
 | `staggerFor(i)` | Duration | capped stagger delay |
 
@@ -405,6 +405,7 @@ decide; nothing buzzes by default.
 | `NotionStaggeredColumn(children:)`, `NotionEntrance.stagger(list)` | a short stack of sections | `NotionStaggeredColumn(children: [title, body, actions])` |
 | `NotionFadeThrough(child:)` | same slot, new state (title, filtered list, empty ↔ content); key each state | `NotionFadeThrough(child: Text(label, key: ValueKey(label)))` |
 | `NotionMorphSwitcher(child:, bounce:, rotate:)` | glyph/button swaps (mic → send, idle → busy) | `NotionMorphSwitcher(bounce: true, child: Icon(icon, key: ValueKey(icon)))` |
+| `NotionLazySwitcher(child:, style:, bounce:)` | the same fade / morph swap inside list rows: no controller until the child's key first changes, so rows built by scrolling cost no ticker (inbox rows) | `NotionLazySwitcher(child: Text(time, key: ValueKey(time)))` |
 | `NotionAnimatedCount(count:, style:, format:)` | numbers that change: rolls up/down | `NotionAnimatedCount(count: unread, style: NotionType.micro)` |
 | `NotionSizeReveal(visible:, child:, axis:)` | single element appearing/disappearing with size + fade (callout, reply preview, typing row) | `NotionSizeReveal(visible: error != null, child: NotionCallout(...))` |
 | `NotionPop(child:, trigger:, visible:, bounce:)` | badges, reaction chips, dots: spring in, pulse on `trigger`, pop out | `NotionPop(trigger: count, child: badge)` |
@@ -475,11 +476,14 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
    (a popover reveals its glass by clip, `NotionGlassReveal`).
 2. Lists: entrances play on a page's first appearance (≤ 10 items, inside a
    `NotionEntranceScope`) or for the one newest message. Scroll-built items
-   never animate. No per-item controllers beyond that. The conversation
-   timeline has no first-screen entrance at all: its rows render during the
-   page push (Telegram), a list that replaces its loading placeholder fades
-   in once as a whole (from `refreshFrom`, `short`), and only the one newest
-   message animates its arrival.
+   never animate. No per-item controllers beyond that: `NotionPressable`,
+   `NotionRowHighlight`, `NotionSizeReveal` and a non-playing
+   `NotionEntrance` create theirs on first use; in rows use
+   `NotionLazySwitcher` instead of `AnimatedSwitcher`-based switchers. The
+   conversation timeline has no first-screen entrance at all: its rows render
+   during the page push (Telegram), a list that replaces its loading
+   placeholder fades in once as a whole (from `refreshFrom`, `short`), and
+   only the one newest message animates its arrival.
 3. Every one-shot animation settles to identity (opacity 1, offset 0,
    scale 1); goldens of resting states stay pixel-identical.
 4. Every loop (`NotionTypingDots`, `NotionPulse`, skeleton shimmer, spinners)
@@ -497,6 +501,12 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
    inside `lib/ui/notion/`). Delays come from controller timelines.
 6. All motion honours `NotionMotion.reduced(context)`: no wrapper effect or
    zero duration, with an unchanged widget tree.
+   `reduced` is also true while the app is not in front of the user
+   (`NotionActivity` at the app root: another app has focus, the window is
+   occluded, minimised or closed). The same scope turns `TickerMode` off, so
+   loops, GIF frames and spinners stop and one-shot motion that starts then
+   shows its end state. Sync, sending and platform video keep running;
+   scrolling an unfocused macOS window re-enables animation briefly.
 7. No rebuilds per tick: use `*Transition`/`AnimatedBuilder` with a `child`,
    `CustomPaint(repaint:)` for loops; never `setState` on every frame.
 8. Never wrap subtrees that hold GlobalKeys or whole pages in a switcher
