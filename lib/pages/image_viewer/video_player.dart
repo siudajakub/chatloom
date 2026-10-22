@@ -6,6 +6,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:chatloom/pages/chat/events/inline_loop_video.dart';
 import 'package:chatloom/pages/chat/events/round_video_view.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
@@ -28,10 +29,15 @@ class EventVideoPlayer extends StatefulWidget {
   final Object? heroTag;
   final BorderRadius sourceRadius;
 
+  /// Event id of the viewer page on screen. The player starts (and keeps
+  /// playing) only while it is this page; null: always (a single video).
+  final ValueListenable<String?>? currentPage;
+
   const EventVideoPlayer(
     this.event, {
     this.heroTag,
     this.sourceRadius = NotionRadius.mdAll,
+    this.currentPage,
     super.key,
   });
 
@@ -44,11 +50,43 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     pause: () async {
       await _videoPlayerController?.pause();
     },
+    // Background without a lock: pause and keep the position (the frame
+    // stays, play resumes it).
+    retain: () async {
+      await _videoPlayerController?.pause();
+    },
+    // Lock, account switch, another page: the player is gone; a play
+    // button (not a spinner) starts it again.
     stop: () async {
       await _disposeControllers();
-      if (mounted) setState(() {});
+      if (mounted) setState(() => _stopped = true);
     },
   );
+
+  /// Stopped from outside (or never started on a page swiped past): the
+  /// thumbnail shows a play button.
+  bool _stopped = false;
+
+  bool get _isCurrentPage {
+    final page = widget.currentPage;
+    return page == null || page.value == widget.event.eventId;
+  }
+
+  void _onPageChanged() {
+    if (!mounted) return;
+    if (_isCurrentPage) {
+      if (_videoPlayerController == null && !_downloading && !_loadFailed) {
+        unawaited(_downloadAction());
+      }
+    } else {
+      final video = _videoPlayerController;
+      if (video != null && video.value.isPlaying) {
+        unawaited(video.pause().catchError((Object _) {}));
+      }
+      _playback.releaseAudible();
+    }
+  }
+
   bool _coordinating = false;
   void _checkAudible() {
     final player = _videoPlayerController;
@@ -95,11 +133,17 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
 
     if (_downloading) return;
     _downloading = true;
-    if (mounted) setState(() => _loadFailed = false);
+    if (mounted) {
+      setState(() {
+        _loadFailed = false;
+        _stopped = false;
+      });
+    }
     try {
       if (!await _playback.acquireAudible() ||
           !_playback.isCurrent ||
           !mounted) {
+        if (mounted) setState(() => _stopped = true);
         return;
       }
       final fileSize = widget.event.content
@@ -121,7 +165,10 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
 
       // Dispose the controllers if we already have them.
       await _disposeControllers();
-      if (!mounted || !_playback.isCurrent) return;
+      if (!mounted || !_playback.isCurrent) {
+        if (mounted) setState(() => _stopped = true);
+        return;
+      }
       late VideoPlayerController videoPlayerController;
 
       // Create the VideoPlayerController from the contents of videoFile.
@@ -143,7 +190,12 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
       await videoPlayerController.initialize();
       if (!mounted || !_playback.isCurrent) {
         await _disposeControllers();
+        if (mounted) setState(() => _stopped = true);
         return;
+      }
+      // A GIF loops in the viewer too (Telegram).
+      if (InlineLoopVideo.applies(widget.event)) {
+        await videoPlayerController.setLooping(true);
       }
 
       // The viewer uses the same quiet transport as voice notes and rounds.
@@ -177,6 +229,7 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
 
   @override
   void dispose() {
+    widget.currentPage?.removeListener(_onPageChanged);
     _playback.dispose();
     unawaited(_disposeControllers().catchError((Object _) {}));
     super.dispose();
@@ -185,18 +238,59 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   @override
   void initState() {
     super.initState();
+    widget.currentPage?.addListener(_onPageChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _downloadAction();
+      if (!mounted) return;
+      if (_isCurrentPage) {
+        _downloadAction();
+      } else {
+        setState(() => _stopped = true);
+      }
     });
+  }
+
+  @override
+  void didUpdateWidget(EventVideoPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentPage != widget.currentPage) {
+      oldWidget.currentPage?.removeListener(_onPageChanged);
+      widget.currentPage?.addListener(_onPageChanged);
+    }
   }
 
   Future<void> _retry() async {
     if (_downloading) return;
     await _disposeControllers();
     if (!mounted) return;
-    setState(() => _loadFailed = false);
+    setState(() {
+      _loadFailed = false;
+      _stopped = false;
+    });
     await _downloadAction();
   }
+
+  Widget _playButton() => Semantics(
+    button: true,
+    label: 'Play video',
+    child: GestureDetector(
+      key: const ValueKey('viewer-video-play'),
+      onTap: _retry,
+      child: const DecoratedBox(
+        decoration: ShapeDecoration(
+          color: NotionMediaColors.scrim,
+          shape: CircleBorder(),
+        ),
+        child: Padding(
+          padding: EdgeInsets.all(NotionSpace.sm),
+          child: Icon(
+            Icons.play_arrow,
+            color: NotionMediaColors.onScrim,
+            size: NotionSize.touchTarget,
+          ),
+        ),
+      ),
+    ),
+  );
 
   Widget _failure() => Padding(
     padding: const EdgeInsets.all(NotionSpace.sm),
@@ -357,6 +451,8 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
                       ),
                     if (_loadFailed)
                       Center(child: _failure())
+                    else if (_stopped && !_downloading)
+                      Center(child: _playButton())
                     else
                       Center(
                         child: NotionDelayedReveal(

@@ -247,6 +247,7 @@ class ImageViewerView extends StatelessWidget {
                   event,
                   heroTag: controller.heroTagFor(event),
                   sourceRadius: controller.widget.sourceRadius,
+                  currentPage: controller.currentPage,
                 ),
               ),
             ),

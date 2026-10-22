@@ -145,14 +145,25 @@ class ImageViewerController extends State<ImageViewer>
     }
   }
 
-  /// A page swiped away forgets its zoom, like Telegram.
+  /// Event id of the page on screen; a video plays only on its own page.
+  late final ValueNotifier<String?> currentPage = ValueNotifier(
+    widget.event.eventId,
+  );
+
+  /// A page swiped away forgets its zoom, like Telegram. Players of other
+  /// pages stop first; the new page's video then starts on its own (it
+  /// waited for [currentPage]), so the stop never catches it.
   void onPageChanged(int index) {
     final current = allEvents[index].eventId;
     zoom.stop();
     for (final entry in _transforms.entries) {
       if (entry.key != current) entry.value.value = Matrix4.identity();
     }
-    RoundPlaybackCoordinator.shared.stopAll(suspend: false);
+    currentPage.value = null;
+    RoundPlaybackCoordinator.shared
+        .stopAll(suspend: false)
+        .catchError((Object _) {});
+    currentPage.value = current;
   }
 
   Event get currentEventOrInitial =>
@@ -263,6 +274,7 @@ class ImageViewerController extends State<ImageViewer>
     dismiss.dispose();
     zoom.dispose();
     chromeVisible.dispose();
+    currentPage.dispose();
     for (final transform in _transforms.values) {
       transform.dispose();
     }
