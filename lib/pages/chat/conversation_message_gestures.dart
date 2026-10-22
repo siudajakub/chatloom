@@ -257,7 +257,9 @@ class _ConversationMessageGesturesState
 
   bool _pointerAllowed(PointerDownEvent event) {
     if (!_touchEnabled || _pointers.isNotEmpty) return false;
-    final media = MediaQuery.maybeOf(context);
+    // Read without a dependency: a touched row must not rebuild on every
+    // keyboard-inset frame (or any other MediaQuery change).
+    final media = context.getInheritedWidgetOfExactType<MediaQuery>()?.data;
     if (media == null) return true;
     // Leave both platform back edges to the system, even when a test/embedder
     // does not report its gesture inset.

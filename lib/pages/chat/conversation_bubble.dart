@@ -132,6 +132,10 @@ class ConversationBubble extends StatelessWidget {
   final Widget Function(Widget surface)? surfaceBuilder;
   final bool media;
   final bool selected;
+
+  /// The message a jump landed on: its fill flashes once (see
+  /// [ConversationFlash]) instead of keeping an outline.
+  final bool flash;
   final Color? backgroundColor;
   final double maxWidthFraction;
 
@@ -153,10 +157,15 @@ class ConversationBubble extends StatelessWidget {
     this.surfaceBuilder,
     this.media = false,
     this.selected = false,
+    this.flash = false,
     this.backgroundColor,
     this.maxWidthFraction = NotionBubble.maxWidthFraction,
     this.chromeless = false,
   }) : assert(maxWidthFraction > 0 && maxWidthFraction <= 1);
+
+  /// Peak strength of the jump flash: the bubble's own text colour over its
+  /// fill, so it reads on solid, gradient and private-palette bubbles.
+  static const double flashOpacity = .22;
 
   bool get _startsGroup =>
       groupPosition == ConversationGroupPosition.single ||
@@ -220,9 +229,14 @@ class ConversationBubble extends StatelessWidget {
           math.min(width * fraction, width - (outgoing ? 0 : avatarSlot)),
         );
         final surface = chromeless
-            ? ConversationSelectionScope(
-                selected: selected,
-                color: colors.text.withAlpha(140),
+            // A round shows the jump flash as its selection ring.
+            ? ConversationFlash(
+                active: flash,
+                builder: (context, f, child) => ConversationSelectionScope(
+                  selected: selected || f > 0,
+                  color: colors.text.withAlpha(140),
+                  child: child!,
+                ),
                 child: DefaultTextStyle.merge(
                   style: TextStyle(color: colors.text),
                   child: body,
@@ -230,35 +244,48 @@ class ConversationBubble extends StatelessWidget {
               )
             : ClipRRect(
                 borderRadius: radius,
-                // The selection outline fades in and out instead of snapping.
-                child: ConversationLazyTween(
-                  value: selected ? 1 : 0,
-                  builder: (context, t, child) => Container(
-                    decoration: BoxDecoration(
-                      color: gradient != null
-                          ? null
-                          : backgroundColor ??
-                                (outgoing ? colors.outgoing : colors.incoming),
-                      gradient: gradient == null
-                          ? null
-                          : LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: gradient,
-                            ),
-                      borderRadius: radius,
-                    ),
-                    foregroundDecoration: t <= 0
-                        ? null
-                        : BoxDecoration(
-                            borderRadius: radius,
-                            border: Border.all(
-                              color: ink.withAlpha(
-                                (140 * t.clamp(0.0, 1.0)).round(),
+                // The jump flash and the selection outline fade in and out
+                // instead of snapping. The foreground decoration is always
+                // there (empty at rest), so neither ever remounts the body.
+                child: ConversationFlash(
+                  active: flash,
+                  builder: (context, f, child) => ConversationLazyTween(
+                    value: selected ? 1 : 0,
+                    builder: (context, t, child) => Container(
+                      decoration: BoxDecoration(
+                        color: gradient != null
+                            ? null
+                            : backgroundColor ??
+                                  (outgoing
+                                      ? colors.outgoing
+                                      : colors.incoming),
+                        gradient: gradient == null
+                            ? null
+                            : LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: gradient,
                               ),
-                              width: 2,
-                            ),
-                          ),
+                        borderRadius: radius,
+                      ),
+                      foregroundDecoration: BoxDecoration(
+                        borderRadius: radius,
+                        color: f <= 0
+                            ? null
+                            : ink.withValues(
+                                alpha: flashOpacity * f.clamp(0.0, 1.0),
+                              ),
+                        border: t <= 0
+                            ? null
+                            : Border.all(
+                                color: ink.withAlpha(
+                                  (140 * t.clamp(0.0, 1.0)).round(),
+                                ),
+                                width: 2,
+                              ),
+                      ),
+                      child: child,
+                    ),
                     child: child,
                   ),
                   child: Padding(

@@ -260,8 +260,16 @@ void main() {
       // MaterialApp animates a theme change on the retained tree. Assert the
       // requested roles after that transition, rather than its previous frame.
       await tester.pumpAndSettle();
+      // The fill (the flash/selection overlay is the foreground box).
       final decoration = tester.widget<DecoratedBox>(
-        find.descendant(of: fill('color'), matching: find.byType(DecoratedBox)),
+        find.descendant(
+          of: fill('color'),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is DecoratedBox &&
+                widget.position == DecorationPosition.background,
+          ),
+        ),
       );
       return (decoration.decoration as BoxDecoration).color!;
     }
