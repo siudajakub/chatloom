@@ -29,6 +29,11 @@ class WorkerReadiness {
   /// workers.
   final bool? autoTranscriptionLive;
 
+  /// Curve25519 identity key of the device that sent this heartbeat (the
+  /// megolm sender the trust check proved). Identifies the worker's session
+  /// in the device list; never shown.
+  final String? deviceKey;
+
   const WorkerReadiness({
     required this.receivedAt,
     this.healthy,
@@ -40,12 +45,14 @@ class WorkerReadiness {
     this.autoTranscription,
     this.transcriptionMedia,
     this.autoTranscriptionLive,
+    this.deviceKey,
   });
 
   factory WorkerReadiness.fromPayload(
     Map<String, dynamic> payload,
-    DateTime at,
-  ) {
+    DateTime at, {
+    String? deviceKey,
+  }) {
     int? count(Object? value) =>
         value is int && value >= 0 && value <= 1000000 ? value : null;
     String? allowed(Object? value, Set<String> values) =>
@@ -77,6 +84,7 @@ class WorkerReadiness {
       autoTranscriptionLive: payload['autoTranscriptionLive'] is bool
           ? payload['autoTranscriptionLive'] as bool
           : null,
+      deviceKey: deviceKey,
     );
   }
 
@@ -97,7 +105,8 @@ class WorkerReadiness {
       other.pendingReminderHints == pendingReminderHints &&
       other.autoTranscription == autoTranscription &&
       other.transcriptionMedia == transcriptionMedia &&
-      other.autoTranscriptionLive == autoTranscriptionLive;
+      other.autoTranscriptionLive == autoTranscriptionLive &&
+      other.deviceKey == deviceKey;
 
   @override
   int get hashCode => Object.hash(
@@ -111,6 +120,7 @@ class WorkerReadiness {
     autoTranscription,
     transcriptionMedia,
     autoTranscriptionLive,
+    deviceKey,
   );
 
   String describe(DateTime now) {

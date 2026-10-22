@@ -11,6 +11,12 @@ import 'package:matrix/matrix.dart';
 class ErrorReporter {
   static String startupPhase = 'bindings';
 
+  /// Set once the GUI runs (`startGui`). From then on, an uncaught error
+  /// without a navigator (startup surface, app lock) is logged only: the
+  /// fatal start screen would replace a working app (and its lock) with a
+  /// dead one.
+  static bool guiStarted = false;
+
   final BuildContext? context;
   final String? message;
 
@@ -55,6 +61,7 @@ class ErrorReporter {
       unawaited(ErrorReporter(context).reportUnhandled(error, stackTrace));
       return;
     }
+    if (guiStarted) return;
     runApp(
       MaterialApp(
         home: Scaffold(
