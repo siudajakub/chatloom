@@ -5,6 +5,8 @@
 
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/stickers/sticker_pack_import.dart';
+import 'package:chatloom/personal/stickers/sticker_pack_sheet.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
@@ -46,6 +48,17 @@ class UrlLauncher {
         {'#', '@', '!', '+', '\$'}.contains(url[0]) ||
         url.toLowerCase().startsWith(AppConfig.schemePrefix)) {
       return openMatrixToUrl();
+    }
+    // A Telegram or WhatsApp sticker pack opens its pack sheet ("Add N
+    // stickers"); the sheet still offers the network's own app.
+    final stickerPack = StickerPackLink.parse(url);
+    if (stickerPack != null) {
+      await showStickerPackSheet(
+        context,
+        client: Matrix.of(context).client,
+        link: stickerPack,
+      );
+      return;
     }
     final uri = Uri.tryParse(url);
     if (uri == null) {

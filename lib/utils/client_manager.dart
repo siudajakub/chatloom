@@ -121,6 +121,8 @@ abstract class ClientManager {
         'pl.personal.chat.telegram.media_capabilities',
         // To make room emotes work
         'im.ponies.room_emotes',
+        // Sticker packs imported by bridges (stable MSC2545 type).
+        'm.room.image_pack',
         // To display call state in chat list
         MatrixRtcCallMember.eventType,
       },
