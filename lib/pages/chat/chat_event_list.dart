@@ -13,6 +13,7 @@ import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/encryption_info.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/pages/chat/seen_by_row.dart';
 import 'package:chatloom/pages/chat/typing_indicators.dart';
 import 'package:chatloom/personal/media/media_prefetcher.dart';
@@ -188,6 +189,16 @@ class _ChatEventListState extends State<ChatEventList>
     _prefetch = MediaPrefetcher.of(
       client,
     ).attach(roomIds: rooms, events: () => _prefetchEvents);
+  }
+
+  /// A message whose reactions or thread replies must stay visible under it
+  /// is never hidden inside another message's album.
+  bool _hasFooterContent(Event event) {
+    final timeline = controller.timelineFor(event);
+    if (timeline == null) return true;
+    return event.hasAggregatedEvents(timeline, RelationshipTypes.reaction) ||
+        event.hasAggregatedEvents(timeline, RelationshipTypes.thread) ||
+        event.hasAggregatedEvents(timeline, RelationshipTypes.edit);
   }
 
   // ---------------------------------------------------------------------
@@ -379,6 +390,13 @@ class _ChatEventListState extends State<ChatEventList>
     _dayStarts = dayStarts;
     _scheduleWideCache();
     _attachPrefetch(events);
+    // Photo/video albums (media-render lane): one O(n) pass per list build.
+    final albums = MediaAlbums.of(
+      events,
+      standalone: (event) =>
+          event.eventId == controller.readMarkerEventId ||
+          _hasFooterContent(event),
+    );
     // One palette lookup per list build instead of one per row.
     _listenPersonal();
     final roomPalette = controller.conversationPalette;
@@ -529,7 +547,16 @@ class _ChatEventListState extends State<ChatEventList>
                   (event.transactionId ?? event.eventId) ==
                   controller.animateInEventId;
 
+              final album = albums[i];
+              // A lead draws the whole album and groups with the message
+              // older than it; hidden members keep an empty row.
               final nextEvent = i + 1 < events.length ? events[i + 1] : null;
+              final olderIndex = album != null && album.lead
+                  ? i + album.olderIndexOffset
+                  : i + 1;
+              final groupOlder = olderIndex < events.length
+                  ? events[olderIndex]
+                  : null;
               final previousEvent = i > 0 ? events[i - 1] : null;
 
               // Collapsed state event
@@ -568,6 +595,7 @@ class _ChatEventListState extends State<ChatEventList>
                         ConversationUnreadDivider(count: unread),
                       Message(
                         event,
+                        album: album,
                         bigEmojis: controller.bigEmojis,
                         onSwipe: () => controller.replyAction(replyTo: event),
                         onInfoTab: controller.showEventInfo,
@@ -584,7 +612,7 @@ class _ChatEventListState extends State<ChatEventList>
                         seriesBoundary: controller.seriesBoundary,
                         strictCapabilities: controller.strictCapabilities,
                         displayReadMarker: firstUnread >= 0 && i == markerRow,
-                        nextEvent: nextEvent,
+                        nextEvent: groupOlder,
                         previousEvent: previousEvent,
                         wallpaperMode: hasWallpaper,
                         scrollController: controller.scrollController,
