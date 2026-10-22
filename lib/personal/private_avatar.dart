@@ -12,6 +12,25 @@ const privateAvatarMaxBytes = 2 * 1024 * 1024;
 /// Private store key of the avatar the user set for a conversation entity.
 String privateAvatarKey(String entityId) => 'avatar:$entityId';
 
+/// Prefix of `ConversationMetadata.avatarAsset` of a merged person whose
+/// photo is the network photo of one of its chats (`source:<room id>`).
+const personAvatarSourcePrefix = 'source:';
+
+/// The chat whose network photo a person shows, from its `avatarAsset`.
+String? personAvatarSource(Object? asset) =>
+    asset is String &&
+        asset.startsWith(personAvatarSourcePrefix) &&
+        asset.length > personAvatarSourcePrefix.length
+    ? asset.substring(personAvatarSourcePrefix.length)
+    : null;
+
+/// Whether the private avatar of [entityId] is the one shown: one is set
+/// and the person did not choose a network photo instead.
+bool privateAvatarShown(PersonalClient personal, String entityId) =>
+    personal.values.containsKey(privateAvatarKey(entityId)) &&
+    personAvatarSource(personal.values['org:$entityId']?['avatarAsset']) ==
+        null;
+
 /// Downloads and decrypts the private avatar stored for [entityId].
 ///
 /// Returns null when none is set or it cannot be loaded; never throws.

@@ -259,6 +259,11 @@ String syncEntityTitle(
     return 'Merged conversation · '
         '${_personName(personal, entity.substring('person:'.length))}';
   }
+  if (entity.startsWith('person-prefs:')) {
+    return 'Merged conversation settings · '
+        '${_personName(personal, entity.substring('person-prefs:'.length))}';
+  }
+  if (entity.startsWith('merge-dismissed:')) return 'Merge suggestion';
   if (entity.startsWith('network-policy:')) {
     return 'Network defaults · '
         '${notionNetworkLabel(entity.substring('network-policy:'.length))}';
@@ -289,6 +294,9 @@ const _fieldLabels = <String, String>{
   'pinOrder': 'Pinned',
   'theme': 'Colors',
   'members': 'Chats',
+  'defaultRoomId': 'Default chat',
+  'routing': 'Send messages via',
+  'nameRoomId': 'Name',
   'groupPlacement': 'Groups',
   'groupNotifications': 'Group notifications',
   'notifications': 'Notifications',
@@ -332,6 +340,11 @@ String _format(String key, Object? value) {
   if (value == null) return 'none';
   if (value is bool) return value ? 'on' : 'off';
   if (key == 'pinOrder') return 'yes';
+  // Chat references never show their identifiers.
+  if (key == 'defaultRoomId' || key == 'nameRoomId') return 'another chat';
+  if (key == 'routing') {
+    return value == 'fixed' ? 'always the default chat' : 'automatic';
+  }
   if (key == 'maxSeconds' && value is int) {
     return value % 60 == 0 ? '${value ~/ 60} min' : '$value s';
   }

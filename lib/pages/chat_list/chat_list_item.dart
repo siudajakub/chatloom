@@ -58,7 +58,7 @@ Widget personalConversationAvatar(
   );
   // Avatar clips itself (superellipse Material); only the private preview
   // needs an explicit clip.
-  if (!personal.values.containsKey(privateAvatarKey(entityId))) return network;
+  if (!privateAvatarShown(personal, entityId)) return network;
   return ClipRRect(
     borderRadius: BorderRadius.circular(NotionTokens.avatarRadius),
     child: PrivateAvatarPreview(

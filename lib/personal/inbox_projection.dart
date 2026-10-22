@@ -3,6 +3,7 @@ import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/private_avatar.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -16,8 +17,7 @@ class InboxProjection {
   /// Use only within one synchronous render/filter pass, never for actions.
   InboxProjection.snapshot(this.personal) : _snapshot = true;
   final bool _snapshot;
-  List<PersonGroup>? _groups;
-  Map<String, PersonGroup>? _groupIndex;
+  PersonGroupResolution? _resolved;
   final _metadata = <String, ConversationMetadata>{};
   Set<String>? _due;
   late final classifier = ConversationClassifier(personal.client.rooms);
@@ -118,30 +118,26 @@ class InboxProjection {
     return declared;
   }
 
-  List<PersonGroup> get _validGroups =>
-      _snapshot ? (_groups ??= _parseValidGroups()) : _parseValidGroups();
+  /// Saved persons resolved against the current chats (see
+  /// [PersonGroupResolution]): a person stays merged while one of its chats
+  /// is joined; a chat two persons list belongs to one of them.
+  PersonGroupResolution get resolution =>
+      _snapshot ? (_resolved ??= _resolve()) : _resolve();
 
-  List<PersonGroup> _parseValidGroups() {
-    final parsed = <PersonGroup>[];
-    for (final group in personal.groups) {
-      if (group.members.every(
-        (m) =>
-            m.accountId == personal.client.userID &&
-            mergeable(personal.client.getRoomById(m.roomId)),
-      )) {
-        parsed.add(group);
-      }
+  PersonGroupResolution _resolve() =>
+      resolvePersonGroups(personal.groups, _memberState);
+
+  PersonMemberState _memberState(ConversationRef member) {
+    final room = member.accountId == personal.client.userID
+        ? personal.client.getRoomById(member.roomId)
+        : null;
+    if (room == null || room.membership != Membership.join) {
+      return PersonMemberState.inactive;
     }
-    final counts = <String, int>{};
-    for (final group in parsed) {
-      for (final member in group.members) {
-        counts.update(member.roomId, (n) => n + 1, ifAbsent: () => 1);
-      }
-    }
-    return parsed
-        .where((g) => g.members.every((m) => counts[m.roomId] == 1))
-        .toList();
+    return mergeable(room) ? PersonMemberState.active : PersonMemberState.unsafe;
   }
+
+  List<PersonGroup> get _validGroups => resolution.valid;
 
   /// The valid person group with [id], if any.
   PersonGroup? groupById(String id) {
@@ -151,18 +147,50 @@ class InboxProjection {
     return null;
   }
 
-  PersonGroup? groupFor(Room room) {
-    if (_snapshot) {
-      _groupIndex ??= {
-        for (final group in _validGroups)
-          for (final member in group.members) member.roomId: group,
-      };
-      return _groupIndex![room.id];
+  /// The person that shows [room] (only for a joined chat it owns).
+  PersonGroup? groupFor(Room room) => resolution.ownerOf(room.id);
+
+  /// Every chat of [group] with its current status. Works for any group,
+  /// also one that is not (or no longer) saved.
+  List<PersonSource> sourcesOf(PersonGroup group) {
+    final owners = resolution;
+    return [
+      for (final member in group.members)
+        PersonSource._(
+          member,
+          member.accountId == personal.client.userID
+              ? personal.client.getRoomById(member.roomId)
+              : null,
+          owners,
+          group,
+        ),
+    ];
+  }
+
+  /// The chats of [group] it shows right now (joined, owned by it).
+  List<Room> activeSourcesOf(PersonGroup group) => [
+    for (final source in sourcesOf(group))
+      if (source.status == PersonSourceStatus.active) source.room!,
+  ];
+
+  /// Private preferences of the person [groupId] (routing, name source).
+  PersonPreferences preferencesFor(String groupId) =>
+      PersonPreferences.fromJson(personal.values[personPreferencesKey(groupId)]);
+
+  /// The one name of a merged person everywhere: the private nickname, else
+  /// the current name of the chosen source chat, else the saved name.
+  String personName(PersonGroup group) {
+    final entity = 'person:${group.id}';
+    final override =
+        metadataForEntity(entity).nickname ??
+        _text(personal.values['nickname:$entity']?['name']);
+    if (override?.trim().isNotEmpty == true) return override!;
+    final source = preferencesFor(group.id).nameRoomId;
+    if (source != null && group.members.any((m) => m.roomId == source)) {
+      final name = personal.client.getRoomById(source)?.getLocalizedDisplayname();
+      if (name != null && name.trim().isNotEmpty) return name;
     }
-    for (final group in _validGroups) {
-      if (group.members.any((m) => m.roomId == room.id)) return group;
-    }
-    return null;
+    return group.name;
   }
 
   String entityFor(Room room) {
@@ -265,27 +293,34 @@ class InboxProjection {
 
   String displayName(Room room) {
     final group = groupFor(room);
-    final entity = entityFor(room);
+    if (group != null) return personName(group);
+    final entity = room.id;
     final override =
         metadataForEntity(entity).nickname ??
         _text(personal.values['nickname:$entity']?['name']);
     return override?.trim().isNotEmpty == true
         ? override!
-        : group?.name ?? room.getLocalizedDisplayname();
+        : room.getLocalizedDisplayname();
   }
 
   /// Network avatar of the conversation: the room's own, or for a merged
-  /// person the first source room that has one (the default network may
-  /// have no photo). Private avatars are resolved by the widgets.
+  /// person its chosen network photo, else the first source room that has
+  /// one (the default network may have no photo). Private avatars are
+  /// resolved by the widgets.
   Uri? avatarFor(Room room) {
-    final own = room.avatar;
-    if (own != null) return own;
     final group = groupFor(room);
-    if (group == null) return null;
-    return avatarForGroup(group);
+    if (group != null) return avatarForGroup(group) ?? room.avatar;
+    return room.avatar;
   }
 
   Uri? avatarForGroup(PersonGroup group) {
+    final chosen = personAvatarSource(
+      metadataForEntity('person:${group.id}').avatarAsset,
+    );
+    if (chosen != null && group.members.any((m) => m.roomId == chosen)) {
+      final avatar = personal.client.getRoomById(chosen)?.avatar;
+      if (avatar != null) return avatar;
+    }
     final rooms = [
       group.defaultRoomId,
       ...group.members.map((m) => m.roomId),
@@ -300,10 +335,9 @@ class InboxProjection {
   int unreadCount(Room room) {
     final group = groupFor(room);
     if (group == null) return room.notificationCount;
-    return group.members
-        .map((m) => personal.client.getRoomById(m.roomId))
-        .whereType<Room>()
-        .fold(0, (count, r) => count + r.notificationCount);
+    return activeSourcesOf(
+      group,
+    ).fold(0, (count, r) => count + r.notificationCount);
   }
 
   bool get hasDraftConflicts =>
@@ -338,22 +372,24 @@ class InboxProjection {
     final available = {
       for (final room in input.where(_candidate)) room.id: room,
     };
-    final groups = _validGroups;
     final members = <String, PersonGroup>{};
-    for (final group in groups) {
-      // A network group room can never be hidden by an invalid DM merge.
-      if (group.members.every((m) => mergeable(available[m.roomId]))) {
-        for (final member in group.members) {
-          members[member.roomId] = group;
-        }
-      }
+    for (final entry in resolution.owners.entries) {
+      // Only chats of this index; a network group room never hides here.
+      if (mergeable(available[entry.key])) members[entry.key] = entry.value;
     }
     final index = InboxIndex._(this, available, members);
     for (final room in available.values) {
       final group = members[room.id];
       final entity = group == null ? room.id : 'person:${group.id}';
       if (index._records.containsKey(entity)) continue;
-      index._put(entity, _record(room, entity, group, available));
+      final sources = group == null
+          ? [room]
+          : [
+              for (final member in group.members)
+                if (members[member.roomId]?.id == group.id)
+                  available[member.roomId]!,
+            ];
+      index._put(entity, _record(room, entity, group, sources));
     }
     return index;
   }
@@ -362,25 +398,30 @@ class InboxProjection {
     Room room,
     String entity,
     PersonGroup? group,
-    Map<String, Room> available,
+    List<Room> sourceRooms,
   ) {
-    final sourceRooms = group == null
-        ? [room]
-        : group.members.map((m) => available[m.roomId]!).toList();
     final representative = group == null
         ? room
-        : available[group.defaultRoomId] ?? sourceRooms.first;
+        : sourceRooms.firstWhere(
+            (source) => source.id == group.defaultRoomId,
+            orElse: () => sourceRooms.first,
+          );
     final lastEvents =
         sourceRooms.map((r) => r.lastEvent).whereType<Event>().toList()
           ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
     final latest = lastEvents.firstOrNull;
     final metadata = metadataForEntity(entity);
-    final nickname =
-        metadata.nickname ??
-        _text(personal.values['nickname:$entity']?['name']);
-    final title = nickname?.trim().isNotEmpty == true
-        ? nickname!
-        : group?.name ?? room.getLocalizedDisplayname();
+    final String title;
+    if (group != null) {
+      title = personName(group);
+    } else {
+      final nickname =
+          metadata.nickname ??
+          _text(personal.values['nickname:$entity']?['name']);
+      title = nickname?.trim().isNotEmpty == true
+          ? nickname!
+          : room.getLocalizedDisplayname();
+    }
     final labels = personal.values.containsKey('labels:$entity')
         ? _legacyLabels(entity).toSet()
         : {
@@ -517,8 +558,62 @@ class InboxIndex {
     }
     for (final room in changed) {
       projection.forgetEntity(room.id);
-      _put(room.id, projection._record(room, room.id, null, _available));
+      _put(room.id, projection._record(room, room.id, null, [room]));
     }
     return true;
   }
+}
+
+/// One chat of a merged person and its current status.
+class PersonSource {
+  final ConversationRef member;
+
+  /// The chat on this device; null when it was left or deleted.
+  final Room? room;
+  final PersonSourceStatus status;
+
+  /// The other person that shows this chat ([PersonSourceStatus.elsewhere]).
+  final PersonGroup? owner;
+
+  PersonSource._(
+    this.member,
+    this.room,
+    PersonGroupResolution resolution,
+    PersonGroup group,
+  ) : status = _statusOf(member, room, resolution, group),
+      owner = switch (resolution.ownerOf(member.roomId)) {
+        final PersonGroup other when other.id != group.id => other,
+        _ => null,
+      };
+
+  static PersonSourceStatus _statusOf(
+    ConversationRef member,
+    Room? room,
+    PersonGroupResolution resolution,
+    PersonGroup group,
+  ) {
+    if (room == null || room.membership != Membership.join) {
+      return PersonSourceStatus.inactive;
+    }
+    final owner = resolution.ownerOf(member.roomId);
+    if (owner != null && owner.id != group.id) {
+      return PersonSourceStatus.elsewhere;
+    }
+    return InboxProjection.mergeable(room)
+        ? PersonSourceStatus.active
+        : PersonSourceStatus.unsafe;
+  }
+
+  /// Can receive this person's messages: joined and not shown by another
+  /// person. (A joined chat that is no longer a one-to-one chat keeps the
+  /// whole person out of the inbox; it is flagged on the person page.)
+  bool get sendable =>
+      status == PersonSourceStatus.active ||
+      status == PersonSourceStatus.unsafe;
+
+  /// An invitation is pending for this chat (it is not joined).
+  bool get invited => room?.membership == Membership.invite;
+
+  @override
+  String toString() => 'PersonSource(${status.name}, redacted)';
 }
