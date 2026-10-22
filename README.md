@@ -8,87 +8,47 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # ChatLoom
 
-A private messenger for Android and macOS that brings your Beeper conversations into one quiet workspace. Built with Flutter and Matrix, with encrypted storage, private organization and a shared interface across both platforms.
-
-## Screens
+All your chats in one calm, private place. ChatLoom brings WhatsApp, Telegram, Signal, Messenger and your other Beeper conversations into a single inbox on your phone and your Mac.
 
 <p>
-  <img src="docs/screenshots/inbox.png" width="240" alt="ChatLoom inbox with pinned conversations and floating network dock">
-  <img src="docs/screenshots/conversation.png" width="240" alt="ChatLoom conversation with grouped messages, replies and voice transcription controls">
-  <img src="docs/screenshots/settings.png" width="240" alt="ChatLoom settings and privacy controls">
+  <img src="docs/screenshots/inbox.png" width="240" alt="Inbox with pinned conversations">
+  <img src="docs/screenshots/conversation.png" width="240" alt="Conversation with replies and voice messages">
+  <img src="docs/screenshots/settings.png" width="240" alt="Settings and privacy">
 </p>
 
-Rendered on 21 October 2026 from production presentation widgets with fictional data. These are component previews, not captures of a signed-in device. The test renderer uses the opaque glass fallback; native blur and account behavior require separate verification. [Capture provenance](docs/screenshots/README.md).
+## What you get
 
-## What ChatLoom does
+- **One inbox for everything.** Filter by network, pin what matters, add private labels, and merge one person's chats from different apps into a single thread.
+- **Full conversations.** Replies, reactions, voice notes, photos, files and Telegram round videos. You always see which network a message goes out through.
+- **Voice messages as text.** Read a voice note instead of listening to it.
+- **Tools that save time.** Drafts that follow you between devices, bookmarks, reminders and messages scheduled for later.
+- **Privacy by default.** Messages stay end‑to‑end encrypted and are stored securely on your device.
+- **Phone and desktop alike.** Android and macOS share the same look and features.
 
-- **One inbox:** network filters, pins, private labels and reversible groups that combine a person's conversations while preserving each message's source.
-- **Conversations:** replies, reactions, voice, attachments and Telegram round video, subject to the source network's capabilities. The composer keeps the sending network visible.
-- **Private tools:** synchronized drafts, bookmarks, reminders, scheduled messages and transcription through an enrolled worker.
-- **Privacy:** new installations start in Incognito. Matrix encryption and recovery remain in place; native storage uses SQLCipher and fails closed when unavailable.
-- **Shared desktop and mobile app:** Android and macOS use the same Flutter screens and domain logic on `main`, with native platform code in separate directories.
+## Getting started
 
-Transcription requires the configured worker; automatic voice/round transcription also requires both user policy and the operator switch, with duration and budget limits. Automatic transcription of your own messages has a separate user setting. Disappearing messages are excluded. ChatLoom does not automatically reply.
+1. Install ChatLoom on Android or macOS.
+2. Sign in with your Beeper account.
+3. Enter your recovery key to unlock your encrypted message history.
+4. On Android, allow notifications when asked. Everything else sets itself up.
 
-## Design language
+## Everyday use
 
-ChatLoom is text-first: warm charcoal backgrounds, neutral surfaces and clear type hierarchy. The floating inbox dock sets the visual language for navigation, controls and overlays.
+**Organising chats.** The bar at the bottom of the inbox switches between chat types and networks. Telegram groups land in *Groups*. Chats you never want to see go to *Ignored* (hidden and fully silent). Messages from Beeper's helper bots are kept in *Technical*. You can change the rules in **Settings → Chats & organization → Networks & chat rules** or for a single chat in its details.
 
-| Element | Language |
-|---|---|
-| Palette | Warm near-black `#191919`, grey surfaces, off-white text; Messenger-blue own bubbles and a configurable accent |
-| Typography | Bundled Roboto, restrained weights, large page titles and muted metadata |
-| Shapes | Rounded message groups, circular avatars, pill controls and a floating dock |
-| Glass | Translucent tint and fine borders on fixed bars and overlays; solid scrolling content |
-| Motion | Brief press and transition feedback, reduced-motion support, no animated blur |
-| Themes | Dark by default; light mode, 8 accents × 3 colour intensities, system text scaling and private conversation appearance |
+**Notifications.** Each chat can be set to *All messages*, *Mentions only* or *Muted*. If notifications stop arriving, open **Settings → Notifications → Push setup & registration** and tap retry.
 
-The implementation is documented in [DESIGN.md](DESIGN.md). Its internal `Notion*` tokens and primitives define the shared ChatLoom design system.
+**Incognito.** New installs start in Incognito: others won't see when you've read their messages, when you're typing or whether you're online. A chat is marked as read only when you do it yourself. You can turn Incognito off in **Settings → Privacy**.
 
-## Build from source
+**Transcription.** Tap the transcribe button on a voice message to get its text. You can also have incoming voice and round messages transcribed automatically in **Settings → Sync & transcriptions**. Transcripts are only for you; the sender never sees them. Disappearing messages are never transcribed.
 
-Requirements: Flutter **3.47.4** (Dart 3.13), the pinned `pubspec.lock`, and for
-Android a JDK 17 and an Android SDK/NDK as selected by Flutter. macOS builds need
-a Mac with full Xcode (Command Line Tools are not enough).
+**Reminders and scheduled messages.** Long‑press a message to bookmark it, set a reminder, or write a reply and choose *Send later*. You'll find all of them under **Settings → Tools**.
 
-```sh
-flutter pub get --enforce-lockfile
-flutter analyze lib
-flutter test test/personal
-```
+**Appearance.** Dark by default, with a light mode, eight accent colours and support for larger system text.
 
-Android release (arm64 only). Build with pub enabled; do not pass `--no-pub`:
+## Good to know
 
-```sh
-flutter build apk --release --target-platform android-arm64
-```
-
-Files that are never committed and that you provide yourself:
-
-| File | Purpose |
-|---|---|
-| `android/key.properties` | Release signing: `storeFile`, `storePassword`, `keyAlias`, `keyPassword` |
-| `android/app/google-services.json` | Your own Firebase project for FCM push. Without it a release build stops; add `-Pchatloom.allowNoFirebase=true` for a deliberate build without push |
-| `assets/vodozemac/0.8.1/*` | Web-only crypto bindings, built by `scripts/prepare-web.sh` (needed only for `flutter build web`) |
-
-Push delivery also needs your own push gateway ([push-gateway/README.md](push-gateway/README.md)).
-Its origin is set at build time with
-`--dart-define=CHATLOOM_PUSH_GATEWAY=https://push.example.org`; there is no default,
-so a build without it has no automatic push setup. Sync, reminders and transcription
-need the optional [worker](worker/README.md). Development environment notes (toolchain,
-job queue, signing, Firebase) are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
-
-| Area | Guide |
-|---|---|
-| Setup, privacy, worker and verification | [Client guide](README.personal.md) |
-| Android build and signing | [Android](android/README.personal.md) |
-| macOS build and native behavior | [macOS](macos/README.personal.md) |
-| Design tokens and components | [Design system](DESIGN.md) |
-| Worker and private task execution | [Worker](worker/README.md) |
-| Android push registration | [Push gateway](push-gateway/README.md) |
-
-macOS requires a Mac with full Xcode. System notifications, notification sounds and Dock badges are disabled there; Android push has its own configuration. A passing build or component test does not establish real-account encryption, history, media delivery or push acceptance. See the [macOS acceptance guide](docs/macos-client.md) and [UI verification record](docs/notion-ui/VERIFICATION.md) for the tested scope.
-
-## License and acknowledgements
-
-ChatLoom is a modified version of [FluffyChat](https://github.com/krille-chan/fluffychat) v2.10.0, © 2019-Present Christian Kußowski and the FluffyChat contributors, AGPL-3.0-or-later. ChatLoom's changes started in October 2026; [NOTICE.md](NOTICE.md) describes what was modified. The vendored Famedly Matrix Dart SDK is retained in `packages/matrix`. The application is licensed under **AGPL-3.0-or-later**; see [LICENSE](LICENSE). Original copyright notices and third-party licenses remain with their sources, including bundled fonts and Matrix emoji verification data. Thanks to the upstream contributors, translators and testers.
+- ChatLoom never sends a message on its own — only you do.
+- Sync, transcription and reminders use a companion service. **Settings → Sync & transcriptions** shows whether it's online.
+- On a Mac, new messages arrive only while ChatLoom is open, and there are no system notifications.
+- What you can do in a chat (reactions, edits, voice) depends on what the original network supports.
