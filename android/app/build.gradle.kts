@@ -8,8 +8,16 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Frame benchmarks (docs/performance-benchmarks.md) install a
+// separate app, pl.personal.chat.perf, next to the real one and never over it:
+// `flutter drive` uninstalls an app whose signature differs, which would delete
+// the real app's data. Set by scripts/perf/run-benchmarks.sh; no push.
+val perfBenchmark = project.findProperty("chatloomPerfBenchmark")?.toString() == "true"
+
 val googleServicesFile = file("google-services.json")
-if (googleServicesFile.exists()) {
+if (perfBenchmark) {
+    logger.warn("Performance benchmark build: applicationId pl.personal.chat.perf, no Firebase.")
+} else if (googleServicesFile.exists()) {
     apply(plugin = "com.google.gms.google-services")
 } else {
     // Without the Firebase configuration the APK builds and starts, but FCM
@@ -89,6 +97,9 @@ android {
 
     defaultConfig {
         applicationId = "pl.personal.chat"
+        if (perfBenchmark) {
+            applicationIdSuffix = ".perf"
+        }
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -105,7 +116,9 @@ android {
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
+            // R8 optimisation on (the non-optimize file adds -dontoptimize);
+            // keep rules for reflection-based plugins are in proguard-rules.pro.
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 }
