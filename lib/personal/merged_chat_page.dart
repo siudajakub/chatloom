@@ -14,6 +14,7 @@ import 'package:chatloom/pages/chat/chat_message_actions.dart';
 import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart';
 import 'package:chatloom/pages/chat/composer_keyboard.dart';
+import 'package:chatloom/pages/chat/composer_send_later.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
@@ -34,6 +35,7 @@ import 'package:chatloom/pages/chat/undecryptable_fix_sheet.dart';
 import 'package:chatloom/pages/chat/voice_message_sender.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
@@ -41,16 +43,14 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
 import 'package:chatloom/personal/network_rejections.dart';
+import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/person_group_identity.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_hub.dart'
-    show
-        conversationQuickActions,
-        personalDate,
-        requestConversationReminder,
-        schedulePersonalAttachment;
+    show conversationQuickActions, requestConversationReminder;
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/read_targets.dart';
 import 'package:chatloom/personal/round_video/round_availability.dart';
 import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
@@ -59,22 +59,29 @@ import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/personal/send_warmup.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
+import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
-import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
+import 'package:chatloom/personal/ui/person_page.dart';
+import 'package:chatloom/personal/ui/person_sheets.dart'
+    show personSourceActivity;
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/utils/error_reporter.dart';
+import 'package:chatloom/utils/file_selector.dart';
+import 'package:chatloom/utils/macos_desktop.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:file_picker/file_picker.dart' show FileType;
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -83,9 +90,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
-import 'package:uuid/uuid.dart';
 
-import 'merged_media_dialog.dart';
+import 'merged_attachments.dart';
+import 'send_later.dart' show runSendLater;
 
 class SourceChatPage extends StatelessWidget {
   final SourceEventRef source;
@@ -189,7 +196,8 @@ class _MergedChatPageState extends State<_MergedChatView>
     implements
         ConversationTimelineSource,
         ConversationComposerHost,
-        ConversationSourceHintHost {
+        ConversationSourceHintHost,
+        ComposerSendLaterHost {
   late final PersonalClient personal = widget.personal;
   PersonGroup get group => widget.group;
 
@@ -264,6 +272,15 @@ class _MergedChatPageState extends State<_MergedChatView>
   String? _savedDraftText;
   bool _draftRestored = false;
   final unavailable = <String>{};
+
+  /// Sources that are not part of the conversation right now (left,
+  /// deleted, only invited, or shown by another person): not loaded, never
+  /// routed to; the notice links to the person page.
+  final _inactive = <String>{};
+
+  /// Members that can receive the next message and the person's routing
+  /// mode, cached between store changes (see [_routing]).
+  (Set<ConversationRef>, bool)? _routingCache;
   @override
   Event? replyEvent;
   @override
@@ -297,8 +314,25 @@ class _MergedChatPageState extends State<_MergedChatView>
       rooms: () => conversationRoomIds,
       notify: _notify,
     );
+    if (PlatformInfos.isMacOS) {
+      MacDesktopCommands.bindChat(
+        this,
+        MacChatCommands(
+          searchInChat: () => unawaited(_quickAction('source.search')),
+          scrollToTop: () {
+            if (!scrollController.hasClients) return;
+            scrollController.jumpTo(scrollController.position.maxScrollExtent);
+          },
+          scrollToBottom: () => unawaited(_jumpToLatest()),
+        ),
+      );
+    }
     _load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _openProbe.mark('first_frame');
+        NotionMotion.afterRouteSettled(context, () => _openProbe.mark('route'));
+      }
       // The first send must not wait for the member list (trust check);
       // loaded once the opening slide has finished.
       final room = mounted ? _targetRoom : null;
@@ -313,6 +347,7 @@ class _MergedChatPageState extends State<_MergedChatView>
     super.didUpdateWidget(oldWidget);
     // The store hands out a new group object on every read; only a change of
     // the sources is worth re-merging the history (and rebuilding the rows).
+    _routingCache = null;
     if (!samePersonMembers(oldWidget.group, widget.group)) {
       final members = {for (final m in widget.group.members) m.roomId};
       for (final roomId in timelines.keys.toList()) {
@@ -350,13 +385,16 @@ class _MergedChatPageState extends State<_MergedChatView>
   // Private store and derived rows.
 
   /// Everything this page renders from the personal store: the person's
-  /// nickname and palettes. Draft saves, heartbeats and unrelated metadata
+  /// name, photo, routing and palettes. Draft saves, heartbeats and unrelated metadata
   /// leave it unchanged and therefore do not rebuild the conversation.
   String _computePersonalSignature() {
     final projection = InboxProjection.snapshot(personal);
     final person = projection.metadataForEntity('person:${group.id}');
     return jsonEncode([
-      person.nickname,
+      projection.personName(group),
+      person.avatarAsset,
+      // "Send messages via" changes the composer's network.
+      projection.preferencesFor(group.id).routing.name,
       person.theme?.toJson(),
       for (final member in group.members)
         switch (personal.client.getRoomById(member.roomId)) {
@@ -368,6 +406,7 @@ class _MergedChatPageState extends State<_MergedChatView>
 
   void _personalChanged() {
     if (!mounted) return;
+    _routingCache = null;
     final signature = _computePersonalSignature();
     if (signature == _personalSignature) return;
     _personalSignature = signature;
@@ -523,6 +562,8 @@ class _MergedChatPageState extends State<_MergedChatView>
     _generation++;
     if (!loading) setState(() => loading = true);
     unavailable.clear();
+    _inactive.clear();
+    _routingCache = null;
     problem = null;
     try {
       // Journal network synchronization must not block source conversations.
@@ -541,9 +582,15 @@ class _MergedChatPageState extends State<_MergedChatView>
         // Cached rooms can still provide history; missing sources remain retryable.
       }
       if (!mounted) return;
+      final sources = InboxProjection.snapshot(personal).sourcesOf(group);
+      for (final source in sources) {
+        if (!source.sendable) _inactive.add(source.member.roomId);
+      }
       await Future.wait(
         group.members.map((member) async {
           if (timelines.containsKey(member.roomId)) return;
+          // Left, deleted or only invited, or shown by another person.
+          if (_inactive.contains(member.roomId)) return;
           final room = personal.client.getRoomById(member.roomId);
           if (room == null || member.accountId != personal.client.userID) {
             unavailable.add(member.roomId);
@@ -574,6 +621,15 @@ class _MergedChatPageState extends State<_MergedChatView>
       if (unavailable.isNotEmpty) {
         problem =
             'Some sources are unavailable. History from available networks is shown.';
+      } else if (_inactive.isNotEmpty && problem == null) {
+        final networks = {
+          for (final member in group.members)
+            if (_inactive.contains(member.roomId))
+              notionNetworkLabel(member.network),
+        }.join(', ');
+        problem = _inactive.length == 1
+            ? 'The $networks chat is no longer part of this conversation. The other networks keep working.'
+            : 'Some chats ($networks) are no longer part of this conversation. The other networks keep working.';
       }
     } catch (_) {
       problem =
@@ -583,9 +639,15 @@ class _MergedChatPageState extends State<_MergedChatView>
     _resolveReadMarker();
     _applyInitialSource();
     setState(() => loading = false);
+    _openProbe
+      ..mark('timeline')
+      ..markAfterFrame('rows');
     _scheduleVisibilityScan();
     unawaited(_revealPendingEvent());
   }
+
+  /// `merged_open.*` probe points, from this page's creation (the tap).
+  final _openProbe = PersonalPerformanceProbe.span('merged_open');
 
   void _restoreDraft() {
     final draft = personal.values['draft:person:${group.id}'];
@@ -664,6 +726,8 @@ class _MergedChatPageState extends State<_MergedChatView>
   /// Source timelines report many updates per sync batch; apply them once
   /// per frame (before layout, so the anchor is read from the old layout).
   void _timelineChanged() {
+    // A membership change of a source arrives through its timeline.
+    _routingCache = null;
     if (!mounted || _timelineChangeScheduled) return;
     _timelineChangeScheduled = true;
     SchedulerBinding.instance.scheduleFrameCallback((_) {
@@ -854,16 +918,43 @@ class _MergedChatPageState extends State<_MergedChatView>
         (recent == null || confirmed.timestamp.isAfter(recent.timestamp))) {
       recent = confirmed;
     }
+    final (available, automatic) = _routing;
     final routed = MergedSendRouter.resolve(
       group: group,
       now: DateTime.now(),
       recentEvent: recent,
       override: replyEvent == null ? selectedNetwork : null,
       replyTo: replyEvent == null ? null : personal.source(replyEvent!),
+      automatic: automatic,
+      available: available,
     );
     return SendTarget(
       conversation: routed.conversation,
       readUpToEventId: viewed[routed.conversation.roomId]?.eventId,
+    );
+  }
+
+  /// Members that can receive messages now (joined, not shown by another
+  /// person) and whether the person routes automatically ("Send messages
+  /// via" on the person page). Cached between store and timeline changes;
+  /// a cached source that was left meanwhile recomputes it.
+  (Set<ConversationRef>, bool) get _routing {
+    final cached = _routingCache;
+    if (cached != null &&
+        cached.$1.every(
+          (ref) =>
+              personal.client.getRoomById(ref.roomId)?.membership ==
+              Membership.join,
+        )) {
+      return cached;
+    }
+    final projection = InboxProjection.snapshot(personal);
+    return _routingCache = (
+      {
+        for (final source in projection.sourcesOf(group))
+          if (source.sendable) source.member,
+      },
+      projection.preferencesFor(group.id).routing == PersonRouting.automatic,
     );
   }
 
@@ -1462,17 +1553,21 @@ class _MergedChatPageState extends State<_MergedChatView>
               : 'Bookmark',
           onSelected: () => _bookmark(event),
         ),
+      // Stickers: favourite, view pack; GIFs: save (Telegram).
+      ...stickerMessageActions(context, display),
       if (_canSave(display))
         ConversationMessageAction(
           icon: Icons.download_outlined,
           label: l10n.downloadFile,
           onSelected: () => display.saveFile(this.context),
         ),
-      ConversationMessageAction(
-        icon: Icons.info_outlined,
-        label: l10n.messageInfo,
-        onSelected: () => showEventInfo(event),
-      ),
+      // Raw message source: developer options only (CS-23).
+      if (DeveloperOptions.enabled)
+        ConversationMessageAction(
+          icon: Icons.info_outlined,
+          label: l10n.messageInfo,
+          onSelected: () => showEventInfo(event),
+        ),
       if (!failed && _canRedact(event))
         ConversationMessageAction(
           icon: Icons.delete_outlined,
@@ -1545,26 +1640,30 @@ class _MergedChatPageState extends State<_MergedChatView>
       selected: _needsNetworkChoice ? null : target.conversation,
       sources: [
         for (final member in frozenGroup.members)
-          ConversationSourceOption(
-            conversation: member,
-            title:
-                personal.client
-                    .getRoomById(member.roomId)
-                    ?.getLocalizedDisplayname() ??
-                'Unavailable source',
-            subtitle: personal.client.userID == member.accountId
-                ? 'Current account · Source ${frozenGroup.members.indexOf(member) + 1}'
-                : 'Different account · Source ${frozenGroup.members.indexOf(member) + 1}',
-            available:
-                member.accountId == personal.client.userID &&
-                personal.client.getRoomById(member.roomId)?.membership ==
-                    Membership.join &&
-                personal.client
-                        .getRoomById(member.roomId)
-                        ?.canSendDefaultMessages ==
-                    true,
-            unavailableReason: 'Source disconnected or sending unavailable',
-          ),
+          if (personal.client.getRoomById(member.roomId) case final room?)
+            ConversationSourceOption(
+              conversation: member,
+              title: room.getLocalizedDisplayname(),
+              // Telegram-like: what the choice means, never "Source 2".
+              subtitle: [
+                if (member.roomId == frozenGroup.defaultRoomId) 'Default',
+                ?personSourceActivity(context, room),
+              ].join(' · ').nullIfEmpty,
+              available:
+                  member.accountId == personal.client.userID &&
+                  _routing.$1.contains(member) &&
+                  room.canSendDefaultMessages,
+              unavailableReason: _routing.$1.contains(member)
+                  ? 'Sending is not available on this network right now'
+                  : 'This chat is no longer part of this conversation',
+            )
+          else
+            ConversationSourceOption(
+              conversation: member,
+              title: 'Chat no longer available',
+              available: false,
+              unavailableReason: 'Left or deleted',
+            ),
       ],
     ).whenComplete(() => _choosingSource = false);
     // The keyboard stays up across the switch (Telegram, Messenger).
@@ -1773,6 +1872,8 @@ class _MergedChatPageState extends State<_MergedChatView>
       return;
     }
     setState(() => sending = true);
+    // Tap → durable → bubble → server ack (`send.*` probe points).
+    final probe = PersonalPerformanceProbe.span('send');
     final durable = Completer<void>();
     Future<bool>? draft;
     Future<ImmediateSendResult>? outcome;
@@ -1780,24 +1881,35 @@ class _MergedChatPageState extends State<_MergedChatView>
       final proceed = await showTrustUserInRoomDialog(context, room);
       if (!proceed || !consumeOriginal()) return;
       _stopTyping();
-      outcome = personal.sendImmediate(
-        room,
-        text,
-        replyTo: replyAtSend,
-        editEventId: editAtSend?.eventId,
-        onDurable: (attempt) {
-          final saved = draft = _consumeSent(sent);
-          // The draft no longer holds the text: an identical message typed
-          // later is a new one, never this attempt resumed.
-          unawaited(
-            saved.then((stored) async {
-              if (stored) {
-                await personal.markImmediateConsumed(attempt.actionId);
-              }
-            }),
-          );
-          if (!durable.isCompleted) durable.complete();
-        },
+      outcome = PersonalPerformanceProbe.runInSpan<Future<ImmediateSendResult>>(
+        probe,
+        () => personal.sendImmediate(
+          room,
+          text,
+          replyTo: replyAtSend,
+          editEventId: editAtSend?.eventId,
+          onDurable: (attempt) {
+            probe.mark('durable');
+            final saved = draft = _consumeSent(sent);
+            // The draft no longer holds the text: an identical message typed
+            // later is a new one, never this attempt resumed.
+            unawaited(
+              saved.then((stored) async {
+                if (stored) {
+                  await personal.markImmediateConsumed(attempt.actionId);
+                }
+              }),
+            );
+            if (!durable.isCompleted) durable.complete();
+          },
+        ),
+      );
+      unawaited(
+        outcome.then((result) {
+          if (result.state == ImmediateSendState.accepted) {
+            probe.finish('acked');
+          }
+        }, onError: (Object _) {}),
       );
       // Free the composer as soon as the message is durable.
       await Future.any<void>([
@@ -1904,20 +2016,18 @@ class _MergedChatPageState extends State<_MergedChatView>
       if (mounted && result.eventId != null && sent.edit == null) {
         _rememberAccepted(sent.target, result.eventId!, DateTime.now());
       }
+      // The bubble already shows "Sent"; local bookkeeping the user cannot
+      // act on is logged, not shown (CS-12).
       if (!stored) {
-        _notify(
-          'Message accepted. Your draft and send state are retained until saving is confirmed.',
-        );
+        Logs().w('[Chat] sent_draft_not_updated');
         return;
       }
       try {
         await personal.completeImmediate(result.actionId);
-      } catch (_) {
+      } catch (error) {
+        logBackgroundError('send_state_retained', error);
         // Still never resumed by an identical later message.
         await personal.markImmediateConsumed(result.actionId);
-        _notify(
-          'Message accepted. Its send state is retained until local storage is ready.',
-        );
       }
       return;
     }
@@ -1987,11 +2097,15 @@ class _MergedChatPageState extends State<_MergedChatView>
     );
   }
 
-  /// Files go through the source-bound media dialog: it checks the bridge's
-  /// media limits and keeps a reply to a message of the same source.
-  Future<void> _attachMedia() async {
+  /// Attachments use the same dialog as every other chat ([SendFileDialog]:
+  /// preview, caption, editing, compression, a bubble per file), bound to
+  /// the frozen source: the bridge's media limits are checked first and a
+  /// reply stays with a message of the same source. [pick] runs after the
+  /// draft is saved (a picker may take the app to the background).
+  Future<void> _attachMedia(Future<List<XFile>> Function() pick) async {
     if (sending || loading || _needsNetworkChoice) return;
     final frozen = target;
+    final room = personal.client.getRoomById(frozen.conversation.roomId);
     final oldText = sendController.text;
     final sourceReply = replyEvent;
     _draftTimer?.cancel();
@@ -1999,6 +2113,21 @@ class _MergedChatPageState extends State<_MergedChatView>
     var mediaAccepted = false;
     setState(() => sending = true);
     try {
+      if (room == null ||
+          frozen.conversation.accountId != personal.client.userID ||
+          !room.canSendDefaultMessages) {
+        throw const PersonalCapabilityUnavailable(
+          'The selected source is unavailable. Choose a network before attaching a file.',
+        );
+      }
+      if (sourceReply != null &&
+          (sourceReply.room.id != room.id ||
+              sourceReply.room.client != personal.client ||
+              sourceReply.redacted)) {
+        throw const PersonalCapabilityUnavailable(
+          'An attachment can only reply to a message in the selected network.',
+        );
+      }
       if (_savedDraftText != oldText &&
           (_savedDraftText != null || oldText.isNotEmpty)) {
         await personal.savePersonalDraft(key, frozen, oldText);
@@ -2006,23 +2135,44 @@ class _MergedChatPageState extends State<_MergedChatView>
       }
       final current = personal.values[key];
       final baseline = current == null ? null : jsonDecode(jsonEncode(current));
-      if (!mounted) return;
-      final result = await showMergedMediaDialog(
-        context,
-        personal,
-        frozen,
-        replyTo: sourceReply,
-        caption: oldText,
-        onAccepted: (id, at) {
-          if (mounted) _rememberAccepted(frozen, id, at);
-        },
+      bool isCurrent() =>
+          _stillHere() &&
+          target.conversation == frozen.conversation &&
+          identical(replyEvent, sourceReply);
+      final files = await pick();
+      if (!mounted || files.isEmpty || !isCurrent()) return;
+      final result = await showAdaptiveDialog<AttachmentSendResult>(
+        context: context,
+        builder: (c) => SendFileDialog(
+          files: files,
+          room: room,
+          outerContext: context,
+          threadRootEventId: null,
+          threadLastEventId: null,
+          replyTo: sourceReply,
+          initialCaption: oldText,
+          composeContext: FrozenAttachmentContext(
+            room: room,
+            replyTo: sourceReply,
+            isCurrent: isCurrent,
+          ),
+          preflight: (context, files, caption) => mergedAttachmentPreflight(
+            context,
+            room: room,
+            replyTo: sourceReply,
+            files: files,
+            caption: caption,
+          ),
+          onAccepted: (id, at) {
+            if (mounted) _rememberAccepted(frozen, id, at);
+          },
+        ),
       );
-      if (!mounted) return;
-      mediaAccepted = result.accepted;
+      if (!mounted || result == null) return;
+      mediaAccepted = true;
       // A later draft or a changed caption belongs to the user. Clear only the
       // exact captured text after all file sends were accepted.
-      if (result.accepted &&
-          result.caption == oldText.trim() &&
+      if (result.caption == oldText.trim() &&
           sendController.text == oldText &&
           baseline is Map &&
           baseline['text'] == oldText &&
@@ -2041,39 +2191,38 @@ class _MergedChatPageState extends State<_MergedChatView>
           await personal.savePersonalDraft(key, frozen, sendController.text);
         }
       }
-      if (result.accepted && replyEvent == sourceReply) replyEvent = null;
+      if (replyEvent == sourceReply) replyEvent = null;
     } on PersonalCapabilityUnavailable catch (error) {
       _notify(error.reason);
-    } catch (_) {
-      _notify(
-        mediaAccepted
-            ? 'Attachments accepted. Your draft is retained until saving is confirmed.'
-            : 'Attachments could not be prepared. Your draft is preserved.',
-      );
+    } catch (error) {
+      // Accepted attachments show their own bubbles (CS-12).
+      if (mediaAccepted) {
+        logBackgroundError('attachment_draft_retained', error);
+      } else {
+        _notify('Couldn’t send the attachments. Your draft is kept.');
+      }
     } finally {
       if (mounted) setState(() => sending = false);
     }
   }
 
-  Future<void> _sendFiles(List<XFile> files) async {
-    final room = _targetRoom;
-    if (files.isEmpty || room == null || !mounted) return;
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: files,
-        room: room,
-        outerContext: context,
-        threadRootEventId: null,
-        threadLastEventId: null,
-      ),
-    );
-  }
+  /// Keeps the app lock from treating a system picker as leaving the app.
+  Future<T> _picking<T>(Future<T> picker) =>
+      AppLock.of(context).pauseWhile(picker);
 
   @override
   Future<void> sendImageFromClipBoard(Uint8List? image) async {
     if (image == null || !composerEnabled) return;
-    await _sendFiles([XFile.fromData(image)]);
+    await _attachMedia(
+      () async => [
+        XFile.fromData(
+          image,
+          name: 'pasted-image.png',
+          path: 'pasted-image.png',
+          mimeType: 'image/png',
+        ),
+      ],
+    );
   }
 
   @override
@@ -2081,32 +2230,52 @@ class _MergedChatPageState extends State<_MergedChatView>
     final room = _targetRoom;
     if (room == null || !composerEnabled) return;
     switch (choice) {
+      case AddPopupMenuActions.gallery:
+        unawaited(
+          _attachMedia(
+            () => PlatformInfos.isMobile
+                ? _picking(
+                    ImagePicker().pickMultipleMedia(requestFullMetadata: false),
+                  )
+                : selectFiles(
+                    context,
+                    allowMultiple: true,
+                    type: FileType.media,
+                  ),
+          ),
+        );
       case AddPopupMenuActions.file:
-      case AddPopupMenuActions.image:
-      case AddPopupMenuActions.video:
-        unawaited(_attachMedia());
+        unawaited(
+          _attachMedia(() => selectFiles(context, allowMultiple: true)),
+        );
       case AddPopupMenuActions.poll:
         showAdaptiveBottomSheet(
           context: context,
           builder: (context) => StartPollBottomSheet(room: room),
         );
       case AddPopupMenuActions.photoCamera:
-        unawaited(() async {
-          inputFocus.unfocus();
-          final file = await ImagePicker().pickImage(
-            source: ImageSource.camera,
-          );
-          if (file != null) await _sendFiles([file]);
-        }());
+        inputFocus.unfocus();
+        unawaited(
+          _attachMedia(() async {
+            final file = await _picking(
+              ImagePicker().pickImage(source: ImageSource.camera),
+            );
+            return [?file];
+          }),
+        );
       case AddPopupMenuActions.videoCamera:
-        unawaited(() async {
-          inputFocus.unfocus();
-          final file = await ImagePicker().pickVideo(
-            source: ImageSource.camera,
-            maxDuration: const Duration(minutes: 1),
-          );
-          if (file != null) await _sendFiles([file]);
-        }());
+        inputFocus.unfocus();
+        unawaited(
+          _attachMedia(() async {
+            final file = await _picking(
+              ImagePicker().pickVideo(
+                source: ImageSource.camera,
+                maxDuration: const Duration(minutes: 1),
+              ),
+            );
+            return [?file];
+          }),
+        );
       case AddPopupMenuActions.location:
         showAdaptiveDialog(
           context: context,
@@ -2232,11 +2401,7 @@ class _MergedChatPageState extends State<_MergedChatView>
       return;
     }
     if (action == 'source.details') {
-      await showNotionMergedChatDetails(
-        context,
-        personal: personal,
-        group: group,
-      );
+      await showPersonPage(context, personal: personal, group: group);
       return;
     }
     if (action == 'source.search') {
@@ -2244,7 +2409,7 @@ class _MergedChatPageState extends State<_MergedChatView>
         MaterialPageRoute(
           builder: (_) => NotionConversationContentPage(
             rooms: timelines.values.map((t) => t.room).toList(),
-            name: group.name,
+            name: InboxProjection.snapshot(personal).personName(group),
           ),
         ),
       );
@@ -2289,96 +2454,68 @@ class _MergedChatPageState extends State<_MergedChatView>
   }
 
   Future<void> _allRead() async {
-    var failed = false;
-    for (final member in group.members) {
-      final room = personal.client.getRoomById(member.roomId);
-      final id = room?.lastEvent?.eventId;
-      if (room == null || id == null) {
-        failed = true;
-        continue;
-      }
-      try {
-        await PersonalPrivacy.markRead(room, id, manual: true);
-      } catch (_) {
-        failed = true;
-      }
+    // Same targets as the read button (never a local echo); a source with
+    // nothing to mark is skipped. The receipt follows the receipt setting.
+    final targets = conversationReadTargets(
+      [
+        for (final member in group.members)
+          ?personal.client.getRoomById(member.roomId),
+      ],
+      loaded: (room) => timelines[room.id]?.events ?? const [],
+    );
+    // The user asked for this: say so and offer the retry (CS-13).
+    if (await markConversationRead(targets) > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Couldn’t mark every source as read.'),
+          action: SnackBarAction(label: 'Retry', onPressed: _allRead),
+        ),
+      );
     }
-    if (failed) _notify('Some sources did not confirm the read marker.');
   }
 
+  /// Send later through the frozen source (the shared sheet: time presets,
+  /// inline validation, then the text or an attachment).
   Future<void> _schedule() async {
     if (sending || _needsNetworkChoice || editEvent != null) return;
     final frozen = target;
     final text = sendController.text;
     final frozenReply = replyEvent;
     final privacyGeneration = PersonalPrivacy.surfaceGeneration;
-
+    bool sameComposerContext() =>
+        _stillHere() &&
+        target.conversation == frozen.conversation &&
+        identical(replyEvent, frozenReply);
     setState(() => sending = true);
     try {
-      final room = personal.client.getRoomById(frozen.conversation.roomId);
-      if (room == null) throw StateError('The selected source is unavailable.');
-      final composer = FrozenScheduledComposer.capture(
-        room: room,
-        target: frozen,
-        reply: frozenReply,
-        isCurrent: () =>
-            _stillHere() &&
-            PersonalPrivacy.surfaceUnlocked &&
-            PersonalPrivacy.surfaceGeneration == privacyGeneration &&
-            target.conversation == frozen.conversation &&
-            identical(replyEvent, frozenReply),
-      );
-      bool sameComposerContext() =>
-          _stillHere() &&
-          target.conversation == frozen.conversation &&
-          identical(replyEvent, frozenReply);
-      final attachment = await showNotionCustomDialog<bool>(
-        context: context,
-        builder: (context) => SimpleDialog(
-          title: const Text('Send later'),
-          children: [
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Text'),
-            ),
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Attachment'),
-            ),
-          ],
-        ),
-      );
-      if (attachment == null || !mounted) return;
-      composer.validateCurrent();
-      if (!attachment && text.trim().isEmpty) {
-        _notify(
-          'Write a message before scheduling text. Your draft is preserved.',
-        );
-        return;
-      }
-      if (attachment) {
-        await schedulePersonalAttachment(
-          context,
-          personal,
-          frozen,
-          composeContext: composer,
-        );
-      } else {
-        final due = await personalDate(context);
-        if (due == null || !mounted) return;
-        composer.validateCurrent();
-        if (!due.isAfter(DateTime.now())) throw StateError('Invalid date');
-        final id = const Uuid().v4();
-        await personal.schedule(
-          ScheduledSend(
-            id: id,
+      await runSendLater(
+        context,
+        personal: personal,
+        text: text,
+        chatName:
+            InboxProjection.snapshot(
+              personal,
+            ).metadataForEntity('person:${group.id}').nickname ??
+            group.name,
+        freeze: () {
+          final room = personal.client.getRoomById(frozen.conversation.roomId);
+          if (room == null) {
+            throw SendLaterProblem('The selected source is unavailable.');
+          }
+          return FrozenScheduledComposer.capture(
+            room: room,
             target: frozen,
-            dueAt: due,
-            content: composer.content({'msgtype': 'm.text', 'body': text}),
-            transactionId: 'schedule-$id',
-          ),
-        );
-        if (sendController.text == text && sameComposerContext()) {
+            reply: frozenReply,
+            isCurrent: () =>
+                _stillHere() &&
+                PersonalPrivacy.surfaceUnlocked &&
+                PersonalPrivacy.surfaceGeneration == privacyGeneration &&
+                target.conversation == frozen.conversation &&
+                identical(replyEvent, frozenReply),
+          );
+        },
+        onTextScheduled: () async {
+          if (sendController.text != text || !sameComposerContext()) return;
           await personal.savePersonalDraft(
             'draft:person:${group.id}',
             frozen,
@@ -2392,16 +2529,18 @@ class _MergedChatPageState extends State<_MergedChatView>
           } else if (mounted) {
             await _draft();
           }
-        }
-      }
-    } catch (_) {
-      _notify(
-        'The message could not be scheduled in the selected source. Your draft is preserved.',
+        },
       );
     } finally {
       if (mounted) setState(() => sending = false);
     }
   }
+
+  @override
+  Future<void> composerSendLater() => _schedule();
+
+  @override
+  Future<void> composerRemindMe() => _quickAction('reminder');
 
   /// Only the list's spacer and the jump button follow the composer's
   /// height; the page and the rows do not rebuild while it animates.
@@ -2435,6 +2574,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   void dispose() {
     _rejections?.dispose();
+    MacDesktopCommands.unbindChat(this);
     _generation++;
     if (_savedDraftText != sendController.text && editEvent == null) {
       try {
@@ -2480,13 +2620,14 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
     final columns = ChatLoomThemes.isColumnMode(context);
     final projection = InboxProjection.snapshot(personal);
-    final person = projection.metadataForEntity('person:${group.id}');
-    final displayName = person.nickname ?? group.name;
+    // One name everywhere (inbox, header, person page, People settings).
+    final displayName = projection.personName(group);
     final anyRoom = _anyRoom;
     final background = conversationPalette.theme?.backgroundColor;
     final notice = problem;
     final wallpaper = personal.client.applicationAccountConfig;
     final retry = unavailable.isNotEmpty || timelines.isEmpty;
+    final manage = !retry && _inactive.isNotEmpty;
     // Brand-new undecryptable rows get a moment for a key on its way, as in
     // ordinary chats; the fix sheet retries each row in its own source.
     final lockedCount = UndecryptableMessages.settledCount(_locked);
@@ -2504,7 +2645,8 @@ class _MergedChatPageState extends State<_MergedChatView>
       onPopInvokedWithResult: (pop, _) {
         if (pop) return;
         if (showEmojiPicker) {
-          emojiPickerAction();
+          // Telegram: back closes the panel without opening the keyboard.
+          hideEmojiPicker();
         } else if (replyEvent != null || editEvent != null) {
           cancelReplyEventAction();
         }
@@ -2541,11 +2683,8 @@ class _MergedChatPageState extends State<_MergedChatView>
             ),
             name: displayName,
             status: ConnectionStatusLine(client: personal.client),
-            onDetails: () => showNotionMergedChatDetails(
-              context,
-              personal: personal,
-              group: group,
-            ),
+            onDetails: () =>
+                showPersonPage(context, personal: personal, group: group),
           ),
           actions: [
             PopupMenuButton<String>(
@@ -2585,6 +2724,15 @@ class _MergedChatPageState extends State<_MergedChatView>
                                   onPressed: loading ? null : _load,
                                   child: const Text('Retry loading'),
                                 ),
+                              if (manage)
+                                TextButton(
+                                  onPressed: () => showPersonPage(
+                                    context,
+                                    personal: personal,
+                                    group: group,
+                                  ),
+                                  child: const Text('Manage'),
+                                ),
                               IconButton(
                                 icon: const Icon(Icons.close),
                                 tooltip: L10n.of(context).close,
@@ -2609,6 +2757,21 @@ class _MergedChatPageState extends State<_MergedChatView>
         body: anyRoom == null
             ? loading
                   ? const ConversationTimelineSkeleton()
+                  : _inactive.length == group.members.length
+                  ? NotionEmptyState(
+                      icon: Icons.link_off,
+                      title: 'None of these chats is available',
+                      message:
+                          'They were left or deleted. Replace them with the new chats of this person, or unmerge.',
+                      action: NotionButton(
+                        label: 'Manage chats',
+                        onPressed: () => showPersonPage(
+                          context,
+                          personal: personal,
+                          group: group,
+                        ),
+                      ),
+                    )
                   : NotionEmptyState(
                       icon: Icons.cloud_off_outlined,
                       title: 'No source of this conversation is available',
@@ -2705,6 +2868,8 @@ class _MergedChatPageState extends State<_MergedChatView>
                                           case final Room room)
                                         room,
                                   ],
+                                  loadedEvents: (room) =>
+                                      timelines[room.id]?.events ?? const [],
                                 ),
                               ],
                             ],
@@ -2766,4 +2931,8 @@ class _MergedSent {
     required this.edit,
     required this.pendingText,
   });
+}
+
+extension on String {
+  String? get nullIfEmpty => isEmpty ? null : this;
 }

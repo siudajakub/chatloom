@@ -16,12 +16,15 @@ import 'package:chatloom/pages/chat/chat_timeline_preload.dart';
 import 'package:chatloom/pages/chat/chat_view.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart'
     show ConversationSourceChip;
+import 'package:chatloom/pages/chat/conversation_message_actions.dart';
+import 'package:chatloom/pages/chat/composer_send_later.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
+import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/pages/chat/start_poll_bottom_sheet.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/pages/chat/utils/web_file_to_x_file.dart';
@@ -29,9 +32,13 @@ import 'package:chatloom/pages/chat/voice_message_sender.dart';
 import 'package:chatloom/pages/chat_details/chat_details.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/composer_commands.dart';
+import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/network_rejections.dart';
+import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/personal_hub.dart' show RoomPersonalButton;
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_availability.dart';
 import 'package:chatloom/personal/round_video/round_capture_controller.dart';
@@ -40,23 +47,25 @@ import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/personal/send_warmup.dart';
+import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
+import 'package:chatloom/utils/macos_desktop.dart';
 import 'package:chatloom/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
 import 'package:chatloom/utils/platform_infos.dart';
-import 'package:chatloom/utils/show_scaffold_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:chatloom/widgets/notion_room_actions.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -145,7 +154,10 @@ class ChatPageWithRoom extends StatefulWidget {
 
 class ChatController extends State<ChatPageWithRoom>
     with WidgetsBindingObserver
-    implements ConversationTimelineSource, ConversationComposerHost {
+    implements
+        ConversationTimelineSource,
+        ConversationComposerHost,
+        ComposerSendLaterHost {
   @override
   Room get room => sendingClient.getRoomById(roomId) ?? widget.room;
 
@@ -364,6 +376,31 @@ class ChatController extends State<ChatPageWithRoom>
   bool get strictCapabilities => false;
 
   // ConversationComposerHost: the room is the send target.
+
+  /// The conversation menu's actions for the current source (Send later,
+  /// Remind me), offered again by a long press on Send.
+  RoomPersonalButton _personalActions() {
+    final source = room;
+    return RoomPersonalButton(
+      room: source,
+      composer: sendController,
+      readCutoff: () => personalSeenEventId,
+      replyEvent: () => replyEvent,
+      isEditing: () => editEvent != null,
+      threadRootEventId: () => activeThreadId,
+      threadLastEventId: () => threadLastEventId,
+      isCurrentSource: () => mounted && identical(room, source),
+      clearScheduledReply: cancelReplyEventAction,
+    );
+  }
+
+  @override
+  Future<void> composerSendLater() =>
+      _personalActions().run(context, 'schedule');
+
+  @override
+  Future<void> composerRemindMe() =>
+      _personalActions().run(context, 'reminder');
 
   @override
   bool get composerEnabled => !_personalSending && !_attachmentPending;
@@ -617,6 +654,14 @@ class ChatController extends State<ChatPageWithRoom>
       _cancelEditWithConfirmation();
       return KeyEventResult.handled;
     }
+    // Telegram Desktop: Esc drops the reply being written.
+    if (evt is KeyDownEvent &&
+        evt.logicalKey == LogicalKeyboardKey.escape &&
+        replyEvent != null &&
+        !PlatformInfos.isMobile) {
+      cancelReplyEventAction();
+      return KeyEventResult.handled;
+    }
 
     // Enter confirming an IME candidate belongs to the editor, never send.
     if (evt.logicalKey.keyLabel == 'Enter' &&
@@ -673,9 +718,36 @@ class ChatController extends State<ChatPageWithRoom>
     inputFocus.addListener(_inputFocusListener);
 
     sendingClient = widget.room.client;
+    // A network refusing a reaction, edit or deletion is said here.
+    _rejections = NetworkRejectionWatcher(
+      widget.room.client,
+      rooms: () => {roomId},
+      notify: (text) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(text)));
+        }
+      },
+    );
+    if (PlatformInfos.isMacOS) {
+      MacDesktopCommands.bindChat(
+        this,
+        MacChatCommands(
+          searchInChat: () => performNotionRoomAction(context, room, 'search'),
+          scrollToTop: () {
+            if (!scrollController.hasClients) return;
+            scrollController.jumpTo(scrollController.position.maxScrollExtent);
+          },
+          scrollToBottom: () => unawaited(scrollDown()),
+        ),
+      );
+    }
     _loadDraft();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _openProbe.mark('first_frame');
+      NotionMotion.afterRouteSettled(context, () => _openProbe.mark('route'));
       _shareItems();
       _checkMatrixRtcCallSupport();
       // The first send must not wait for the member list (trust check);
@@ -810,6 +882,9 @@ class ChatController extends State<ChatPageWithRoom>
     });
   }
 
+  /// `chat_open.*` probe points, from this page's creation (the tap).
+  final _openProbe = PersonalPerformanceProbe.span('chat_open');
+
   Future<void> _tryLoadTimeline() async {
     final initialEventId = widget.eventId;
     final preload = _preload;
@@ -839,6 +914,9 @@ class ChatController extends State<ChatPageWithRoom>
       if (!mounted || timeline == null) return;
       // Runs before the load's rebuild (this listener was registered first).
       if (!timelineHold.value) holdIfFarUnread();
+      _openProbe
+        ..mark('timeline')
+        ..markAfterFrame('rows');
       // We launched the chat with a given initial event ID:
       if (initialEventId != null) {
         scrollToEventId(initialEventId);
@@ -1333,8 +1411,12 @@ class ChatController extends State<ChatPageWithRoom>
         });
   }
 
+  NetworkRejectionWatcher? _rejections;
+
   @override
   void dispose() {
+    _rejections?.dispose();
+    MacDesktopCommands.unbindChat(this);
     _timelineLoadGeneration++;
     WidgetsBinding.instance.removeObserver(this);
     timeline?.cancelSubscriptions();
@@ -1392,7 +1474,11 @@ class ChatController extends State<ChatPageWithRoom>
     if (!mounted) return;
     setState(() => _personalSending = true);
     try {
-      await _sendPersonal();
+      // Tap → durable → bubble → server ack (`send.*` probe points).
+      await PersonalPerformanceProbe.runInSpan(
+        PersonalPerformanceProbe.span('send'),
+        _sendPersonal,
+      );
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1515,6 +1601,7 @@ class ChatController extends State<ChatPageWithRoom>
       editEventId: frozenEdit?.eventId,
       threadId: frozenThread,
       onDurable: (attempt) {
+        PersonalPerformanceProbe.currentSpan?.mark('durable');
         final saved = draft = _consumeSent(sent);
         // Once the draft no longer holds the text, an identical message
         // typed later is a new one, never this attempt resumed.
@@ -1606,6 +1693,9 @@ class ChatController extends State<ChatPageWithRoom>
     try {
       result = await outcome;
     } catch (_) {}
+    if (result?.state == ImmediateSendState.accepted) {
+      PersonalPerformanceProbe.currentSpan?.finish('acked');
+    }
     var drafted = draft();
     if (drafted == null) {
       if (result?.state != ImmediateSendState.accepted) {
@@ -1628,20 +1718,18 @@ class ChatController extends State<ChatPageWithRoom>
     if (result == null) return;
     if (result.state == ImmediateSendState.accepted) {
       // Transport acceptance is final even if local draft handling fails.
+      // The bubble already shows "Sent"; local bookkeeping the user cannot
+      // act on is logged, not shown (CS-12).
       if (!stored) {
-        _notify(
-          'Message sent. The draft could not be updated; send state is preserved.',
-        );
+        Logs().w('[Chat] sent_draft_not_updated');
         return;
       }
       try {
         await personal.completeImmediate(result.actionId);
-      } catch (_) {
+      } catch (error) {
+        logBackgroundError('send_state_retained', error);
         // Still never resumed by an identical later message.
         await personal.markImmediateConsumed(result.actionId);
-        _notify(
-          'Message sent. Its send state is retained until local storage is ready.',
-        );
       }
       return;
     }
@@ -1800,14 +1888,16 @@ class ChatController extends State<ChatPageWithRoom>
       if (mounted && identical(replyEvent, frozen.replyTo)) {
         setState(() => replyEvent = null);
       }
-    } catch (_) {
-      if (mounted) {
+    } catch (error) {
+      // Accepted attachments show their own bubbles; only a failure before
+      // that is worth a notice (CS-12).
+      if (accepted) {
+        logBackgroundError('attachment_draft_retained', error);
+      } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text(
-              accepted
-                  ? 'Attachments accepted. Your draft is kept until saving is confirmed.'
-                  : 'Attachments could not be completed in the original conversation. Your draft is preserved.',
+              'Couldn’t send the attachments. Your draft is kept.',
             ),
           ),
         );
@@ -2000,9 +2090,7 @@ class ChatController extends State<ChatPageWithRoom>
   void copyEventAction(Event event) {
     Clipboard.setData(ClipboardData(text: eventText(event)));
     if (showEmojiPicker) setState(() => showEmojiPicker = false);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(L10n.of(context).copiedToClipboard)));
+    unawaited(showCopiedNotice(context, L10n.of(context).copiedToClipboard));
   }
 
   Future<void> reportEventAction(Event event) async {
@@ -2051,51 +2139,30 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
+  /// Delete for everyone: a plain confirm, the bubble goes at once, the
+  /// redaction runs in the background (see [MessageDeletions]).
   Future<void> redactEventAction(Event event) async {
-    final reasonInput = event.status.isSent
-        ? await showTextInputDialog(
-            context: context,
-            title: L10n.of(context).redactMessage,
-            message: L10n.of(context).redactMessageDescription,
-            isDestructive: true,
-            hintText: L10n.of(context).optionalRedactReason,
-            maxLength: 255,
-            maxLines: 3,
-            minLines: 1,
-            okLabel: L10n.of(context).remove,
-            cancelLabel: L10n.of(context).cancel,
-          )
-        : null;
-    if (reasonInput == null) return;
-    final reason = reasonInput.isEmpty ? null : reasonInput;
-    if (!mounted) return;
-    await showFutureLoadingDialog(
-      context: context,
-      future: () async {
-        if (event.status.isSent) {
-          if (event.canRedact) {
-            await event.redactEvent(reason: reason);
-          } else {
-            final client = currentRoomBundle.firstWhere(
-              (cl) => event.senderId == cl!.userID,
-              orElse: () => null,
-            );
-            if (client == null) {
-              return;
-            }
-            final room = client.getRoomById(roomId)!;
-            await Event.fromJson(
-              event.toJson(),
-              room,
-            ).redactEvent(reason: reason);
-          }
-        } else {
-          await event.cancelSend();
-        }
+    if (showEmojiPicker) setState(() => showEmojiPicker = false);
+    Future<String?> Function()? redact;
+    if (event.status.isSent && !event.canRedact) {
+      // Another account of this bundle sent it.
+      final client = currentRoomBundle.firstWhere(
+        (cl) => event.senderId == cl!.userID,
+        orElse: () => null,
+      );
+      final room = client?.getRoomById(roomId);
+      if (room == null) return;
+      redact = () => Event.fromJson(event.toJson(), room).redactEvent();
+    }
+    await MessageDeletions.delete(
+      context,
+      event,
+      timeline: timeline,
+      redact: redact,
+      refresh: () {
+        if (mounted) setState(() {});
       },
     );
-    if (!mounted) return;
-    setState(() => showEmojiPicker = false);
   }
 
   @override
@@ -2107,6 +2174,8 @@ class ChatController extends State<ChatPageWithRoom>
 
   bool canRedactEvent(Event event) {
     if (isArchived || event.redacted || !event.status.isSent) return false;
+    // Only what the network can delete for everyone (Telegram, Messenger).
+    if (!ConversationMessageActions.canDeleteForEveryone(event)) return false;
     final clients = Matrix.of(context).currentBundle;
     return event.canRedact ||
         (clients?.any((cl) => event.senderId == cl!.userID) ?? false);
@@ -2172,9 +2241,7 @@ class ChatController extends State<ChatPageWithRoom>
 
   bool canEditEvent(Event event) {
     if (isArchived ||
-        event.redacted ||
-        !event.status.isSent ||
-        RoundVideoDescriptor.fromContent(event.content) != null) {
+        !ConversationMessageActions.canEditContent(event, timeline)) {
       return false;
     }
     return currentRoomBundle.any((cl) => event.senderId == cl!.userID);
@@ -2191,11 +2258,9 @@ class ChatController extends State<ChatPageWithRoom>
       ).showForwardPicker(context, forward);
       return;
     }
-    await showScaffoldDialog(
-      context: context,
-      builder: (context) => ShareScaffoldDialog(
-        items: [ContentShareItem(forward.content.copy())],
-      ),
+    await showForwardSheet(
+      context,
+      items: [ContentShareItem(forward.content.copy())],
     );
   }
 
@@ -2527,11 +2592,12 @@ class ChatController extends State<ChatPageWithRoom>
       case AddPopupMenuActions.file:
         sendFileAction();
         return;
-      case AddPopupMenuActions.image:
-        sendFileAction(type: FileType.image);
-        return;
-      case AddPopupMenuActions.video:
-        sendFileAction(type: FileType.video);
+      case AddPopupMenuActions.gallery:
+        // The combined system photo/video picker (Android photo picker,
+        // multi-select); desktops pick media files.
+        PlatformInfos.isMobile
+            ? openGalleryAction()
+            : sendFileAction(type: FileType.media);
         return;
       case AddPopupMenuActions.poll:
         showAdaptiveBottomSheet(
@@ -2555,37 +2621,91 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
-  Future<void> unpinEvent(String eventId) async {
-    final response = await showOkCancelAlertDialog(
-      context: context,
-      title: L10n.of(context).unpin,
-      message: L10n.of(context).confirmEventUnpin,
-      okLabel: L10n.of(context).unpin,
-      cancelLabel: L10n.of(context).cancel,
-    );
-    if (!mounted) return;
-    if (response == OkCancelResult.ok) {
-      final events = room.pinnedEventIds
-        ..removeWhere((oldEvent) => oldEvent == eventId);
-      showFutureLoadingDialog(
-        context: context,
-        future: () => room.setPinnedEvents(events),
+  /// Pinned messages as the user last set them: a pin or unpin shows at
+  /// once and stays until the room's state confirms it (or it fails).
+  List<String> get pinnedEventIds {
+    final override = _pinnedOverride;
+    if (override == null) return room.pinnedEventIds;
+    final state = room.getState(EventTypes.RoomPinnedEvents);
+    if (_pinnedWritten && !identical(state, _pinnedStateAtWrite)) {
+      // The server's copy arrived (ours or a later change elsewhere).
+      _pinnedOverride = null;
+      return room.pinnedEventIds;
+    }
+    return override;
+  }
+
+  List<String>? _pinnedOverride;
+  Object? _pinnedStateAtWrite;
+  bool _pinnedWritten = false;
+  int _pinnedGeneration = 0;
+
+  Future<void> _setPinned(List<String> pinned, {required bool pinning}) async {
+    final generation = ++_pinnedGeneration;
+    final messenger = ScaffoldMessenger.of(context);
+    final frozen = room;
+    setState(() {
+      _pinnedOverride = List.unmodifiable(pinned);
+      _pinnedStateAtWrite = frozen.getState(EventTypes.RoomPinnedEvents);
+      _pinnedWritten = false;
+    });
+    try {
+      await frozen.setPinnedEvents(pinned);
+      if (!mounted || generation != _pinnedGeneration) return;
+      _pinnedWritten = true;
+      // The state event may already have arrived with the response.
+      setState(() {});
+    } catch (error) {
+      if (!mounted || generation != _pinnedGeneration) return;
+      setState(() => _pinnedOverride = null);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            pinning
+                ? 'Couldn’t pin the message. ${humanErrorText(error)}'
+                : 'Couldn’t unpin the message. ${humanErrorText(error)}',
+          ),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () {
+              if (mounted) unawaited(_setPinned(pinned, pinning: pinning));
+            },
+          ),
+        ),
       );
     }
   }
 
+  /// Unpins at once with Undo (Telegram): pins are reversible.
+  Future<void> unpinEvent(String eventId) async {
+    final before = pinnedEventIds;
+    if (!before.contains(eventId)) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Message unpinned'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            if (mounted) unawaited(_setPinned(before, pinning: true));
+          },
+        ),
+      ),
+    );
+    await _setPinned([
+      for (final id in before)
+        if (id != eventId) id,
+    ], pinning: false);
+  }
+
   /// Pins [event], or unpins it when it is pinned already.
   void pinEvent(Event event) {
-    final pinnedEventIds = room.pinnedEventIds;
-    if (pinnedEventIds.contains(event.eventId)) {
-      pinnedEventIds.remove(event.eventId);
-    } else {
-      pinnedEventIds.add(event.eventId);
+    final pinned = pinnedEventIds;
+    if (pinned.contains(event.eventId)) {
+      unawaited(unpinEvent(event.eventId));
+      return;
     }
-    showFutureLoadingDialog(
-      context: context,
-      future: () => room.setPinnedEvents(pinnedEventIds),
-    );
+    unawaited(_setPinned([...pinned, event.eventId], pinning: true));
   }
 
   Timer? _storeInputTimeoutTimer;
@@ -2814,8 +2934,8 @@ class ChatController extends State<ChatPageWithRoom>
 }
 
 enum AddPopupMenuActions {
-  image,
-  video,
+  /// Photos and videos in one picker.
+  gallery,
   file,
   poll,
   photoCamera,

@@ -4,6 +4,7 @@ import FlutterMacOS
 class MainFlutterWindow: NSWindow {
   private var desktopChannel: FlutterMethodChannel?
   private var wakeObserver: NSObjectProtocol?
+  private var occlusionObserver: NSObjectProtocol?
   private var roundCapture: RoundCapture?
 
   override func awakeFromNib() {
@@ -33,6 +34,15 @@ class MainFlutterWindow: NSWindow {
       forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
     ) { [weak self] _ in
       self?.desktopChannel?.invokeMethod("wake", arguments: nil)
+    }
+    // Decorative animation stops while the window is not on screen
+    // (covered, minimised or closed); see NotionActivity.
+    occlusionObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeOcclusionStateNotification, object: self, queue: .main
+    ) { [weak self] _ in
+      guard let self = self else { return }
+      self.desktopChannel?.invokeMethod(
+        "visibility", arguments: self.occlusionState.contains(.visible) && !self.isMiniaturized)
     }
     configureMenu(NSApp.mainMenu)
 
@@ -67,6 +77,9 @@ class MainFlutterWindow: NSWindow {
   deinit {
     if let observer = wakeObserver {
       NSWorkspace.shared.notificationCenter.removeObserver(observer)
+    }
+    if let observer = occlusionObserver {
+      NotificationCenter.default.removeObserver(observer)
     }
   }
 }

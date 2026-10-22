@@ -393,6 +393,9 @@ class _ConversationMessageGesturesState
 
   void _releaseSink({bool immediate = false}) {
     _sinkOrigin = null;
+    // A row scrolled away mid-fling is disposed (with its controller) before
+    // the pointer that started the fling goes up.
+    if (!mounted) return;
     final controller = _sinkController;
     if (controller == null) return;
     if (immediate || controller.value == 1 || !mounted) {

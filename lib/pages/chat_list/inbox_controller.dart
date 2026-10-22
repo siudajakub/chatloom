@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/performance_probe_client.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
@@ -255,6 +256,7 @@ class InboxController extends ChangeNotifier {
     _firstPending = null;
     _leading = false;
     if (_detached || !_pending) return;
+    final probe = Stopwatch()..start();
     _cooldown?.cancel();
     _cooldown = Timer(debounce, () => _cooldown = null);
     final changed = _changed.toList();
@@ -273,6 +275,7 @@ class InboxController extends ChangeNotifier {
       _rebuild();
     }
     generation++;
+    ClientPerformanceProbe.inboxPublished(client, probe.elapsed);
     notifyListeners();
   }
 

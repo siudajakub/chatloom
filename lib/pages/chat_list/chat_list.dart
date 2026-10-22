@@ -15,6 +15,7 @@ import 'package:chatloom/pages/chat_list/chat_list_item.dart'
     show notionInboxAvatar;
 import 'package:chatloom/pages/chat_list/chat_list_view.dart';
 import 'package:chatloom/pages/chat_list/inbox_controller.dart';
+import 'package:chatloom/pages/chat_list/inbox_keyboard_navigation.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart'
     show BridgeDirectory;
 import 'package:chatloom/personal/conversation_classification.dart';
@@ -565,7 +566,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
   @override
   void initState() {
-    if (PlatformInfos.isMacOS) MacDesktopCommands.bindSearch(this, openSearch);
+    if (PlatformInfos.isMacOS) {
+      MacDesktopCommands.bindInbox(this, inboxKeyboardCommands(this));
+    }
     _initReceiveSharingIntent();
 
     waitForInitialSync();
