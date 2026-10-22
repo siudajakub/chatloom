@@ -152,17 +152,31 @@ class MergedTimelineBuffer<T> {
 class MergedSendRouter {
   static const recentOutgoingWindow = Duration(minutes: 30);
 
+  /// The network of the next message: a reply stays on its source, an
+  /// explicit [override] wins, then (when [automatic]) the source of the
+  /// recent conversation, else the person's default chat.
+  ///
+  /// [available] are the members that can receive messages right now (a
+  /// chat that was left or deleted, or that belongs to another person, is
+  /// not). Automatic routing never picks an unavailable member and an
+  /// unavailable default falls back to the first available member. Without
+  /// [available] every member counts as available. With [automatic] false
+  /// (`Always <network>`) recent traffic is ignored.
   static SendTarget resolve({
     required PersonGroup group,
     required DateTime now,
     MergedEvent<Object?>? recentEvent,
     ConversationRef? override,
     SourceEventRef? replyTo,
+    bool automatic = true,
+    Set<ConversationRef>? available,
   }) {
     ConversationRef checked(ConversationRef ref) => group.members.firstWhere(
       (member) => member == ref,
       orElse: () => throw ArgumentError('Target is not a group member'),
     );
+    bool usable(ConversationRef ref) =>
+        available == null || available.contains(ref);
 
     if (replyTo != null) {
       final source = checked(replyTo.conversation);
@@ -172,11 +186,17 @@ class MergedSendRouter {
       return SendTarget(conversation: source);
     }
     if (override != null) return SendTarget(conversation: checked(override));
-    final fallback = group.members.firstWhere(
+    final preferred = group.members.firstWhere(
       (member) => member.roomId == group.defaultRoomId,
     );
-    if (recentEvent == null) return SendTarget(conversation: fallback);
+    final fallback = usable(preferred)
+        ? preferred
+        : group.members.where(usable).firstOrNull ?? preferred;
+    if (recentEvent == null || !automatic) {
+      return SendTarget(conversation: fallback);
+    }
     final source = checked(recentEvent.source.conversation);
+    if (!usable(source)) return SendTarget(conversation: fallback);
     final age = now.difference(recentEvent.timestamp);
     if (!recentEvent.isOutgoing ||
         (!age.isNegative && age <= recentOutgoingWindow)) {
@@ -184,6 +204,67 @@ class MergedSendRouter {
     }
     return SendTarget(conversation: fallback);
   }
+}
+
+/// Source edits of a saved person. Each returns a new group with the next
+/// revision; nothing about rooms, messages or accounts changes.
+extension PersonGroupEdits on PersonGroup {
+  /// Without the chat [roomId]; null when fewer than two chats would remain
+  /// (the person is then unmerged). Removing the default makes
+  /// [preferredDefault] (when it remains) or the first remaining chat the
+  /// default.
+  PersonGroup? withoutSource(String roomId, {String? preferredDefault}) {
+    if (!members.any((member) => member.roomId == roomId)) {
+      throw ArgumentError('Unknown group member');
+    }
+    final remaining = members.where((m) => m.roomId != roomId).toList();
+    if (remaining.length < 2) return null;
+    final keepsDefault = remaining.any((m) => m.roomId == defaultRoomId);
+    final nextDefault = keepsDefault
+        ? defaultRoomId
+        : remaining.any((m) => m.roomId == preferredDefault)
+        ? preferredDefault!
+        : remaining.first.roomId;
+    return _edited(members: remaining, defaultRoomId: nextDefault);
+  }
+
+  /// With [added] chats appended (already present ones are ignored).
+  PersonGroup withSources(Iterable<ConversationRef> added) {
+    final next = [...members];
+    for (final member in added) {
+      if (!next.contains(member)) next.add(member);
+    }
+    return next.length == members.length ? this : _edited(members: next);
+  }
+
+  /// With [roomId] as the default chat (the fallback of automatic routing
+  /// and the target of `Always <network>`).
+  PersonGroup withDefaultSource(String roomId) {
+    if (!members.any((member) => member.roomId == roomId)) {
+      throw ArgumentError('The default must be a member');
+    }
+    return roomId == defaultRoomId ? this : _edited(defaultRoomId: roomId);
+  }
+
+  /// With the saved name [value] (what builds without person preferences
+  /// show when no private nickname is set).
+  PersonGroup withName(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) throw ArgumentError('A group needs a name');
+    return trimmed == name ? this : _edited(name: trimmed);
+  }
+
+  PersonGroup _edited({
+    List<ConversationRef>? members,
+    String? defaultRoomId,
+    String? name,
+  }) => PersonGroup(
+    id: id,
+    name: name ?? this.name,
+    members: members ?? this.members,
+    defaultRoomId: defaultRoomId ?? this.defaultRoomId,
+    revision: revision + 1,
+  );
 }
 
 /// Eligibility comes from verified room membership, never names or avatars.

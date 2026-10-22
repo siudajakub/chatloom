@@ -9,6 +9,7 @@ export 'src/inbox_filtering.dart';
 export 'src/megolm_trust.dart';
 export 'src/personal_replica.dart';
 export 'src/person_group_collection.dart';
+export 'src/person_groups.dart';
 export 'src/round_video.dart';
 export 'src/own_identity.dart';
 export 'src/transcription.dart';
