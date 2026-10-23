@@ -4,6 +4,8 @@ import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:chatloom/personal/ui/notion_search_controls.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -24,6 +26,91 @@ Widget host(Widget child, {double scale = 1}) => MaterialApp(
 
 Widget avatar() => const ColoredBox(color: Color(0xFF555555));
 void main() {
+  for (final brightness in Brightness.values) {
+    testWidgets('unread emphasis clears after reading in $brightness', (
+      tester,
+    ) async {
+      Future<void> row({
+        bool unread = false,
+        bool selected = false,
+        bool muted = false,
+      }) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: NotionTheme.build(brightness),
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.topCenter,
+                child: SizedBox(
+                  width: 320,
+                  child: NotionInboxRow(
+                    avatar: avatar(),
+                    name: 'Ada',
+                    preview: 'Latest message',
+                    time: '09:12',
+                    unread: unread,
+                    selected: selected,
+                    muted: muted,
+                    onTap: () {},
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      Color background() =>
+          (tester
+                      .widget<AnimatedContainer>(
+                        find
+                            .descendant(
+                              of: find.byType(NotionInboxRow),
+                              matching: find.byType(AnimatedContainer),
+                            )
+                            .first,
+                      )
+                      .decoration!
+                  as BoxDecoration)
+              .color!;
+      await row();
+      final read = background();
+      expect(
+        tester.getSize(find.byType(NotionInboxRow)).height,
+        greaterThanOrEqualTo(88),
+      );
+      await row(unread: true);
+      expect(background(), isNot(read));
+      final title = tester.widget<Text>(find.text('Ada'));
+      expect(title.style!.fontWeight, FontWeight.w700);
+      expect(
+        NotionContrast.ratio(title.style!.color!, background()),
+        greaterThanOrEqualTo(4.5),
+      );
+      expect(
+        find.byKey(const ValueKey('notion_inbox_unread_dot')),
+        findsOneWidget,
+      );
+      await row(unread: true, selected: true);
+      final selection = background();
+      await row(selected: true);
+      expect(background(), selection);
+      await row(unread: true, muted: true);
+      expect(background(), read);
+      expect(
+        tester.widget<Text>(find.text('Ada')).style!.fontWeight,
+        FontWeight.w700,
+      );
+      await row();
+      expect(background(), read);
+      expect(
+        find.byKey(const ValueKey('notion_inbox_unread_dot')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
   setUpAll(() async {
     final fonts = FontLoader('Roboto')
       ..addFont(rootBundle.load('assets/notion/fonts/Roboto-Regular.ttf'))

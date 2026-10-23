@@ -323,7 +323,9 @@ class _ChatListItemState extends State<ChatListItem> {
       child: NotionInboxRow(
       avatar: ConversationActivityAvatar(
         activity: activity,
-        child: notionInboxAvatar(personal, projection, room),
+        child: notionInboxAvatar(
+          personal, projection, room, size: NotionSize.avatarLg,
+        ),
       ),
       networks: widget.showNetworks
           ? notionBadgeNetworks(notionRoomNetworks(projection, room))

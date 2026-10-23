@@ -201,6 +201,14 @@ Message bubbles keep their own geometry (`NotionBubble`).
 `iconSm 16 / icon 20 / iconMd 22 / iconLg 24`, avatars `24 / 40 / 56`,
 `dialogMaxWidth 420`, `contentMaxWidth 720`.
 
+Inbox conversation rows use `avatarLg` (56), `md` vertical and `xs`
+horizontal padding (minimum height 88), `headline` names and `callout`
+previews. Unread conversations use `palette.accentTint` with contrast-checked
+accent names/timestamps, bold names and a count or manual-unread dot.
+Selected conversations retain the selected surface; muted conversations keep
+neutral surfaces and badges but retain bold unread names. Read state therefore
+remains identifiable without relying on colour. Rows grow with text scaling.
+
 ### Transitional static API
 
 `NotionTokens.background`, `.text`, `.radius`, `.body` and the other static

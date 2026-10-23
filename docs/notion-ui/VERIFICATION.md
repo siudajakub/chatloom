@@ -1,5 +1,17 @@
 # Notion dark v2 — local delivery, 2026-10-13
 
+Update 2026-10-23 — inbox readability: 56 dp avatars, minimum 88 dp rows,
+17 dp names and 15 dp previews. Unread rows use the appearance accent tint,
+contrast-checked names/timestamps, bold names and the existing count/manual dot.
+Muted rows stay neutral; selection retains its own background. Presentation
+harness: **297 PASS**; full-app inbox widgets/motion/dock-layout: **32 PASS**,
+including light/dark unread-to-read transitions, narrow 200% text and desktop
+layout. Design lint: **PASS, no NEW**. Two inbox goldens updated and viewed:
+larger identities, fewer rows per viewport and blue unread surfaces with the
+default accent. Narrow large-text capture also viewed. Full `analyze lib`:
+83 informational findings; exit 1 from fatal infos. Native device/account
+acceptance, APK build, installation and deployment: **NOT RUN**.
+
 Update 2026-10-16: unified settings categories, focused Personal pages, responsive navigation and offline/privacy regressions are recorded in [the settings unification report](../personal/settings-unification-2026-10-16.md). Earlier settings screenshots describe the superseded layout; new synthetic captures are kept separately.
 
 Update 2026-10-15, canonical `client/`: the previously blocked full app graph now executes with the real native hooks and CLT SDK. Final startup/controller/details/inbox-widget run: **39 PASS**, ten suites. Escape in inbox search now closes once and preserves active IME composition, with a failing-before/passing-after regression. Analyzer: zero errors/warnings, 80 existing infos. The earlier isolated-checkout results below remain historical. Logged-in browser acceptance is partial and its privacy gate remains open after four unclassified denied POST attempts and loss of CDP; the new web/APK runtime is NOT RUN. See [current report](../personal/logged-in-wave-2026-10-15.md).

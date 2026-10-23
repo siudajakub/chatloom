@@ -122,7 +122,7 @@ Widget _inbox({bool empty = false, int extraPins = 0}) {
           : [
               for (var i = 0; i < names.length; i++)
                 NotionInboxRow(
-                  avatar: _avatar(names[i]),
+                  avatar: _avatar(names[i], NotionSize.avatarLg),
                   name: names[i],
                   preview: previews[i],
                   time: times[i],

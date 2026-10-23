@@ -91,9 +91,15 @@ class NotionInboxRow extends StatelessWidget {
     final secondary = Theme.of(context).colorScheme.onSurfaceVariant;
     final colors = context.notion.colors;
     final hasUnread = unreadCount > 0 || unread;
-    // Unread: bold name, brighter preview, accent badge; muted chats keep a
+    // Unread: tinted row, bold name, brighter preview, accent badge; muted chats keep a
     // grey badge so they do not compete with chats that notify.
     final palette = context.notion.palette;
+    final rowColor = selected
+        ? colors.selected
+        : hasUnread && !muted
+        ? palette.accentTint
+        : colors.background;
+    final unreadInk = NotionContrast.readable(rowColor, colors.accent);
     final badgeColor = muted ? colors.selected : palette.accentFill;
     final badgeText = muted ? colors.textSecondary : palette.onAccentFill;
     final announcement = [
@@ -129,10 +135,12 @@ class NotionInboxRow extends StatelessWidget {
         borderRadius: NotionRadius.rowAll,
         child: NotionPressable(
           scale: NotionMotion.pressRow,
-          // The selected background follows the open conversation.
+          // The selected background follows the open conversation; an
+          // unread row rests on the accent tint.
           child: _SelectedBackground(
             selected: selected,
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            color: colors.selected,
+            restColor: hasUnread && !muted ? palette.accentTint : null,
             child: Material(
               type: MaterialType.transparency,
               borderRadius: NotionRadius.rowAll,
@@ -142,13 +150,16 @@ class NotionInboxRow extends StatelessWidget {
                 onSecondaryTap: onLongPress,
                 borderRadius: NotionRadius.rowAll,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: NotionSpace.xs,
+                    vertical: NotionSpace.md,
+                  ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       ExcludeSemantics(
                         child: SizedBox.square(
-                          dimension: 40,
+                          dimension: NotionSize.avatarLg,
                           // One shape with or without the badge, so the
                           // avatar keeps its element when the network
                           // filter changes (no image reload).
@@ -181,9 +192,11 @@ class NotionInboxRow extends StatelessWidget {
                                       name,
                                       maxLines: large ? 2 : 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: NotionType.body.copyWith(
+                                      style: NotionType.headline.copyWith(
                                         height: 1.25,
-                                        color: colors.text,
+                                        color: hasUnread && !muted
+                                            ? unreadInk
+                                            : colors.text,
                                         fontWeight: hasUnread
                                             ? FontWeight.w700
                                             : FontWeight.w500,
@@ -215,7 +228,7 @@ class NotionInboxRow extends StatelessWidget {
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 3),
+                              const SizedBox(height: NotionSpace.xxs),
                               Row(
                                 children: [
                                   if (failed) ...[
@@ -256,7 +269,7 @@ class NotionInboxRow extends StatelessWidget {
                                         key: ValueKey((preview, typing)),
                                         maxLines: large ? 2 : 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: NotionType.footnote.copyWith(
+                                        style: NotionType.callout.copyWith(
                                           height: 1.3,
                                           color: previewColor,
                                           fontStyle: draft
@@ -302,8 +315,11 @@ class NotionInboxRow extends StatelessWidget {
                                       key: ValueKey(time),
                                       style: NotionType.footnote.copyWith(
                                         color: hasUnread && !muted
-                                            ? colors.text
+                                            ? unreadInk
                                             : secondary,
+                                        fontWeight: hasUnread
+                                            ? FontWeight.w600
+                                            : FontWeight.w400,
                                       ),
                                     ),
                                   ),
@@ -466,10 +482,14 @@ class _SelectedBackground extends StatefulWidget {
     required this.selected,
     required this.color,
     required this.child,
+    this.restColor,
   });
 
   final bool selected;
   final Color color;
+
+  /// Painted while not selected (the unread tint), crossfading with [color].
+  final Color? restColor;
   final Widget child;
 
   @override
@@ -515,6 +535,7 @@ class _SelectedBackgroundState extends State<_SelectedBackground>
                 ? kAlwaysCompleteAnimation
                 : kAlwaysDismissedAnimation),
         color: widget.color,
+        restColor: widget.restColor,
       ),
       child: widget.child,
     );
@@ -522,23 +543,37 @@ class _SelectedBackgroundState extends State<_SelectedBackground>
 }
 
 class _SelectionPainter extends CustomPainter {
-  _SelectionPainter({required this.animation, required this.color})
-    : super(repaint: animation);
+  _SelectionPainter({
+    required this.animation,
+    required this.color,
+    this.restColor,
+  }) : super(repaint: animation);
 
   final Animation<double> animation;
   final Color color;
+  final Color? restColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     final t = animation.value;
+    final rect = NotionRadius.rowAll.toRRect(Offset.zero & size);
+    final rest = restColor;
+    if (rest != null && t < 1) {
+      canvas.drawRRect(
+        rect,
+        Paint()..color = rest.withValues(alpha: rest.a * (1 - t)),
+      );
+    }
     if (t <= 0) return;
     canvas.drawRRect(
-      NotionRadius.rowAll.toRRect(Offset.zero & size),
+      rect,
       Paint()..color = color.withValues(alpha: color.a * t),
     );
   }
 
   @override
   bool shouldRepaint(_SelectionPainter old) =>
-      old.color != color || !identical(old.animation, animation);
+      old.color != color ||
+      old.restColor != restColor ||
+      !identical(old.animation, animation);
 }
