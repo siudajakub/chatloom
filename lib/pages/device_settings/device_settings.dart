@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:async/async.dart' show Result;
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/device_settings/device_settings_view.dart';
 import 'package:chatloom/pages/device_settings/device_signout.dart';
@@ -16,8 +15,7 @@ import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:collection/collection.dart' show IterableExtension;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/encryption.dart';
-import 'package:matrix/matrix.dart' hide Result;
-import 'package:url_launcher/url_launcher_string.dart';
+import 'package:matrix/matrix.dart';
 
 import '../../widgets/matrix.dart';
 
@@ -86,17 +84,13 @@ class DevicesSettingsController extends State<DevicesSettings> {
     final matrix = Matrix.of(context);
     final client = matrix.client;
 
-    final wellKnown = await Result.capture(client.getWellknown());
-    final accountManageUrl = wellKnown.asValue?.value.additionalProperties
-        .tryGetMap<String, Object?>('org.matrix.msc2965.authentication')
-        ?.tryGet<String>('account');
-    if (accountManageUrl != null) {
-      launchUrlString(accountManageUrl, mode: LaunchMode.inAppBrowserView);
-      return;
-    }
+    final deviceIds = devices
+        .map((device) => device.deviceId)
+        .where((deviceId) => deviceId != client.deviceID)
+        .toSet()
+        .toList();
+    if (deviceIds.isEmpty) return;
     if (!mounted) return;
-    final deviceIds = [for (final device in devices) device.deviceId];
-
     await showFutureLoadingDialog(
       context: context,
       delay: false,
@@ -104,7 +98,7 @@ class DevicesSettingsController extends State<DevicesSettings> {
         (auth) => client.deleteDevices(deviceIds, auth: auth),
       ),
     );
-    reload();
+    if (mounted) reload();
   }
 
   /// The ChatLoom worker's devices on this account ([findWorkerDeviceIds]).
@@ -178,10 +172,11 @@ class DevicesSettingsController extends State<DevicesSettings> {
       return;
     }
     req.onUpdate = () {
-      if ({
-        KeyVerificationState.error,
-        KeyVerificationState.done,
-      }.contains(req.state)) {
+      if (mounted &&
+          {
+            KeyVerificationState.error,
+            KeyVerificationState.done,
+          }.contains(req.state)) {
         setState(() {});
       }
     };

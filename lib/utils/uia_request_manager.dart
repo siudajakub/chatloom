@@ -3,14 +3,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:async';
-
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/utils/uia_stage.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/chatloom_app.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -26,7 +24,7 @@ extension UiaRequestManager on MatrixState {
         Logs().d('Uia Request Stage: ${uiaRequest.state}');
         return;
       }
-      final stage = uiaRequest.nextStages.first;
+      final stage = preferredUiaStage(uiaRequest.nextStages);
       Logs().d('Uia Request Stage: $stage');
       switch (stage) {
         case AuthenticationTypes.password:
@@ -63,9 +61,10 @@ extension UiaRequestManager on MatrixState {
           final stageUrl = uiaRequest.params
               .tryGetMap<String, Object?>(stage)
               ?.tryGet<String>('url');
-          final fallbackUrl = client.homeserver!.replace(
-            path: '/_matrix/client/v3/auth/$stage/fallback/web',
-            queryParameters: {'session': uiaRequest.session},
+          final fallbackUrl = uiaFallbackUrl(
+            client.homeserver!,
+            stage,
+            uiaRequest.session,
           );
           final url = stageUrl != null
               ? (Uri.tryParse(stageUrl) ?? fallbackUrl)
@@ -80,11 +79,29 @@ extension UiaRequestManager on MatrixState {
           );
           if (consent != OkCancelResult.ok) return uiaRequest.cancel();
 
-          launchUrl(url, mode: LaunchMode.inAppBrowserView);
-          final completer = Completer();
-          final listener = AppLifecycleListener(onResume: completer.complete);
-          await completer.future;
-          listener.dispose();
+          final launched = await launchUrl(
+            url,
+            mode: LaunchMode.externalApplication,
+          );
+          if (!launched) {
+            return uiaRequest.cancel(
+              UiaException('Authentication page could not be opened.'),
+            );
+          }
+
+          if (!navigatorContext.mounted) return uiaRequest.cancel();
+          final completed = await showOkCancelAlertDialog(
+            useRootNavigator: false,
+            context: navigatorContext,
+            title: l10n.pleaseFollowInstructionsOnWeb,
+            message:
+                'Complete authentication in your browser, then continue. '
+                'If the page is unavailable, cancel and verify this session '
+                'from another trusted device instead.',
+            okLabel: l10n.continueText,
+            cancelLabel: l10n.cancel,
+          );
+          if (completed != OkCancelResult.ok) return uiaRequest.cancel();
 
           return await uiaRequest.completeStage(
             AuthenticationData(
