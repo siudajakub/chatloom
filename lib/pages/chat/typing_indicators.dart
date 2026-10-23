@@ -6,9 +6,9 @@
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
+import 'package:chatloom/personal/ui/conversation_activity_widgets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/avatar.dart';
-import 'package:chatloom/widgets/matrix.dart';
 import 'package:collection/collection.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -28,6 +28,8 @@ class TypingIndicators extends StatefulWidget {
 class _TypingIndicatorsState extends State<TypingIndicators> {
   /// Last non-empty set, shown while the row collapses.
   List<User> _shown = const [];
+  Client? _shownClient;
+  String? _shownRooms;
 
   @override
   Widget build(BuildContext context) {
@@ -37,28 +39,27 @@ class _TypingIndicatorsState extends State<TypingIndicators> {
     const avatarSize = Avatar.defaultSize / 2;
 
     final rooms = controller.typingRooms;
-    final roomIds = {for (final room in rooms) room.id};
-    return StreamBuilder<Object>(
-      stream: controller.room.client.onSync.stream.where(
-        (syncUpdate) => roomIds.any(
-          (roomId) =>
-              syncUpdate.rooms?.join?[roomId]?.ephemeral?.any(
-                (ephemeral) => ephemeral.type == 'm.typing',
-              ) ??
-              false,
-        ),
-      ),
-      builder: (context, _) {
-        final ownId = Matrix.of(context).client.userID;
-        final typingUsers = [
-          for (final room in rooms)
-            ...room.typingUsers.where((u) => u.stateKey != ownId),
-        ];
+    final roomSignature = (rooms.map((room) => room.id).toList()..sort()).join('|');
+    if (!identical(_shownClient, controller.room.client) ||
+        _shownRooms != roomSignature) {
+      _shown = const [];
+      _shownClient = controller.room.client;
+      _shownRooms = roomSignature;
+    }
+    return ConversationActivityBuilder(
+      client: controller.room.client,
+      rooms: rooms,
+      builder: (context, activity) {
+        final ownId = controller.room.client.userID;
+        final typingUsers = activity.typing.map((entry) => entry.user).toList();
         if (typingUsers.isNotEmpty) _shown = typingUsers;
         final users = _shown;
         final newest = controller.conversationEvents?.firstOrNull;
 
-        return Container(
+        return Semantics(
+          liveRegion: true,
+          label: conversationTypingText(context, activity, sourceLabels: rooms.length > 1),
+          child: Container(
           width: double.infinity,
           alignment: Alignment.center,
           child: ConstrainedBox(
@@ -127,6 +128,7 @@ class _TypingIndicatorsState extends State<TypingIndicators> {
                 ),
               ),
             ),
+          ),
           ),
         );
       },

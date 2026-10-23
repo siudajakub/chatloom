@@ -3,6 +3,7 @@
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/own_sender.dart';
@@ -11,10 +12,10 @@ import 'package:chatloom/personal/private_avatar.dart';
 import 'package:chatloom/personal/ui/notion_inbox_network_badge.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
+import 'package:chatloom/personal/ui/conversation_activity_widgets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:chatloom/utils/room_status_extension.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
@@ -211,20 +212,33 @@ class _ChatListItemState extends State<ChatListItem> {
         supplied != null && identical(supplied.personal, personal)
         ? supplied
         : InboxProjection.snapshot(personal);
-    final metadata = projection.metadataFor(room);
     final sources = _rowSources(projection, room);
+    return ConversationActivityBuilder(
+      client: room.client,
+      rooms: sources,
+      builder: (context, activity) => _buildRow(
+        context, personal, projection, sources, activity,
+      ),
+    );
+  }
+
+  Widget _buildRow(
+    BuildContext context,
+    PersonalClient personal,
+    InboxProjection projection,
+    List<Room> sources,
+    ConversationActivity activity,
+  ) {
+    final room = widget.room;
+    final metadata = projection.metadataFor(room);
     final events =
         sources.map((source) => source.lastEvent).whereType<Event>().toList()
           ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
     final lastEvent = events.firstOrNull;
     final name = projection.displayName(room);
-    final typing = sources.where(
-      (source) =>
-          source.typingUsers.any((user) => user.id != room.client.userID),
+    final typingText = conversationTypingText(
+      context, activity, sourceLabels: projection.groupFor(room) != null,
     );
-    final typingText = typing.isEmpty
-        ? ''
-        : typing.first.getLocalizedTypingText(context);
     final draftValues = [
       personal.values['draft:${projection.entityFor(room)}'],
       ...sources.map((source) => personal.values['draft:${source.id}']),
@@ -303,8 +317,14 @@ class _ChatListItemState extends State<ChatListItem> {
         : lastPreview == null || lastPreview.isEmpty
         ? l10n.noMessagesYet
         : lastPreview;
-    return NotionInboxRow(
-      avatar: notionInboxAvatar(personal, projection, room),
+    return Semantics(
+      label: activity.presences.any((presence) => presence.online)
+          ? l10n.currentlyActive : null,
+      child: NotionInboxRow(
+      avatar: ConversationActivityAvatar(
+        activity: activity,
+        child: notionInboxAvatar(personal, projection, room),
+      ),
       networks: widget.showNetworks
           ? notionBadgeNetworks(notionRoomNetworks(projection, room))
           : const [],
@@ -373,6 +393,7 @@ class _ChatListItemState extends State<ChatListItem> {
               },
             )
           : null,
+      ),
     );
   }
 }

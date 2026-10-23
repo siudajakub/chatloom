@@ -61,6 +61,7 @@ import 'package:chatloom/personal/send_warmup.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
+import 'package:chatloom/personal/ui/conversation_activity_widgets.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
@@ -379,6 +380,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) _scheduleVisibilityScan();
+    if (state != AppLifecycleState.resumed) _stopTyping();
   }
 
   // ---------------------------------------------------------------------
@@ -1794,10 +1796,11 @@ class _MergedChatPageState extends State<_MergedChatView>
       _stopTyping();
       return;
     }
+    final sameRoom = identical(_typingRoom, room);
+    if (!sameRoom) _stopTyping();
     _typingCoolDown?.cancel();
     _typingCoolDown = Timer(const Duration(seconds: 2), _stopTyping);
-    if (_typingRoom?.id == room.id) return;
-    _stopTyping();
+    if (sameRoom) return;
     _typingRoom = room;
     _typingTimeout = Timer(const Duration(seconds: 30), () {
       _typingTimeout = null;
@@ -2685,18 +2688,30 @@ class _MergedChatPageState extends State<_MergedChatView>
                   onPressed: () => Navigator.maybePop(context),
                 ),
           titleSpacing: columns ? NotionSpace.xl : 0,
-          title: NotionCompactChatHeader(
-            avatar: personalConversationAvatar(
+          title: ConversationActivityBuilder(
+            client: personal.client,
+            rooms: typingRooms,
+            builder: (context, activity) => NotionCompactChatHeader(
+            avatar: ConversationActivityAvatar(
+              activity: activity,
+              child: personalConversationAvatar(
               personal,
               entityId: 'person:${group.id}',
               avatar: projection.avatarForGroup(group),
               name: displayName,
               size: NotionSize.avatarSm,
             ),
+            ),
             name: displayName,
-            status: ConnectionStatusLine(client: personal.client),
+            status: ConversationActivityStatus(
+              client: personal.client,
+              rooms: typingRooms,
+              activity: activity,
+              sourceLabels: true,
+            ),
             onDetails: () =>
                 showPersonPage(context, personal: personal, group: group),
+          ),
           ),
           actions: [
             PopupMenuButton<String>(

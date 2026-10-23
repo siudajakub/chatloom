@@ -9,6 +9,7 @@ import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
+import 'package:chatloom/personal/ui/conversation_activity_widgets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -23,7 +24,10 @@ class ChatAppBarTitle extends StatelessWidget {
     final personal = PersonalClient.of(room.client);
     final projection = InboxProjection(personal);
     final name = projection.displayName(room);
-    return NotionCompactChatHeader(
+    return ConversationActivityBuilder(
+      client: room.client,
+      rooms: [room],
+      builder: (context, activity) => NotionCompactChatHeader(
       // The partner's member event may load after the page is built.
       avatar: StreamBuilder(
         stream: room.client.onRoomState.stream.where(
@@ -34,15 +38,23 @@ class ChatAppBarTitle extends StatelessWidget {
         ),
         builder: (context, _) => ListenableBuilder(
           listenable: personal,
-          builder: (context, _) =>
-              notionInboxAvatar(personal, projection, room, size: 32),
+          builder: (context, _) => ConversationActivityAvatar(
+            activity: activity,
+            child: notionInboxAvatar(personal, projection, room, size: 32),
+          ),
         ),
       ),
       name: name,
-      status: ChatHeaderSubtitle(room: room),
+      status: ConversationActivityStatus(
+        client: room.client,
+        rooms: [room],
+        activity: activity,
+        fallback: ChatHeaderSubtitle.infoLabel(context, room),
+      ),
       onDetails: () => ChatLoomThemes.isThreeColumnMode(context)
           ? controller.toggleDisplayChatDetailsColumn()
           : context.go('${chatLocation(context, room.id)}/details'),
+      ),
     );
   }
 }
