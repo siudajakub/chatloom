@@ -2975,6 +2975,8 @@ class Client extends MatrixApi {
 
       if (syncRoomUpdate is JoinedRoomUpdate &&
           (room.lastEvent?.type == EventTypes.refreshingLastEvent ||
+              (room.lastEvent != null &&
+                  !roomPreviewLastEvents.contains(room.lastEvent!.type)) ||
               (syncRoomUpdate.timeline?.limited == true &&
                   room.lastEvent == null))) {
         room.lastEvent = Event(

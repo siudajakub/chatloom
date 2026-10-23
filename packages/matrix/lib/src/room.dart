@@ -609,9 +609,14 @@ class Room {
   Future<Event?> refreshLastEvent({
     Duration timeout = const Duration(seconds: 30),
   }) async {
-    final lastEvent = _refreshingLastEvent ??= _refreshLastEvent();
-    _refreshingLastEvent = null;
-    return lastEvent;
+    final pending = _refreshingLastEvent ??= _refreshLastEvent(
+      timeout: timeout,
+    );
+    try {
+      return await pending;
+    } finally {
+      if (identical(_refreshingLastEvent, pending)) _refreshingLastEvent = null;
+    }
   }
 
   Future<Event?>? _refreshingLastEvent;
@@ -622,32 +627,53 @@ class Room {
     if (membership != Membership.join) return null;
 
     final filter = StateFilter(types: client.roomPreviewLastEvents.toList());
-    final result = await client
-        .getRoomEvents(
-          id,
-          Direction.b,
-          limit: 1,
-          filter: jsonEncode(filter.toJson()),
-        )
-        .timeout(timeout);
-    final matrixEvent = result.chunk.firstOrNull;
-    if (matrixEvent == null) {
-      if (lastEvent?.type == EventTypes.refreshingLastEvent) {
+    final previous = lastEvent;
+    Event? event;
+    String? from;
+    final visited = <String>{};
+    final deadline = DateTime.now().add(timeout);
+    do {
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) throw TimeoutException('Room preview');
+      final result = await client
+          .getRoomEvents(
+            id,
+            Direction.b,
+            from: from,
+            limit: 20,
+            filter: jsonEncode(filter.toJson()),
+          )
+          .timeout(remaining);
+      for (final matrixEvent in result.chunk) {
+        var candidate = Event.fromMatrixEvent(
+          matrixEvent,
+          this,
+          status: EventStatus.synced,
+        );
+        if (candidate.type == EventTypes.Encrypted) {
+          final encryption = client.encryption;
+          if (encryption != null) {
+            candidate = await encryption.decryptRoomEvent(candidate);
+          }
+        }
+        // Server filters see the encrypted envelope, not its cleartext type.
+        if (!client.roomPreviewLastEvents.contains(candidate.type)) continue;
+        event = candidate;
+        break;
+      }
+      from = result.end;
+      if (event != null || result.chunk.isEmpty) break;
+    } while (from != null && visited.add(from));
+    // A live send/sync may have advanced the preview during the request.
+    if (!identical(lastEvent, previous)) return lastEvent;
+    if (event == null) {
+      if (lastEvent?.type == EventTypes.refreshingLastEvent ||
+          (lastEvent != null &&
+              !client.roomPreviewLastEvents.contains(lastEvent!.type))) {
         lastEvent = null;
       }
       Logs().d('No last event found for room', id);
       return null;
-    }
-    var event = Event.fromMatrixEvent(
-      matrixEvent,
-      this,
-      status: EventStatus.synced,
-    );
-    if (event.type == EventTypes.Encrypted) {
-      final encryption = client.encryption;
-      if (encryption != null) {
-        event = await encryption.decryptRoomEvent(event);
-      }
     }
     lastEvent = event;
 
