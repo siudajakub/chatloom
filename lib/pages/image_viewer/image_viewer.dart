@@ -26,6 +26,7 @@ Future<void> showImageViewer(
   BuildContext context,
   Event event, {
   Timeline? timeline,
+  List<Event>? mediaEvents,
   Object? heroTag,
   BorderRadius sourceRadius = NotionRadius.mdAll,
 }) {
@@ -36,6 +37,7 @@ Future<void> showImageViewer(
       builder: (_) => ImageViewer(
         event,
         timeline: timeline,
+        mediaEvents: mediaEvents,
         outerContext: context,
         heroTag: heroTag,
         sourceRadius: sourceRadius,
@@ -47,6 +49,9 @@ Future<void> showImageViewer(
 class ImageViewer extends StatefulWidget {
   final Event event;
   final Timeline? timeline;
+
+  /// Explicit local album, preserving source order without synthetic timeline events.
+  final List<Event>? mediaEvents;
   final BuildContext outerContext;
 
   /// Hero tag of the thumbnail [event] was opened from (other pages use
@@ -58,6 +63,7 @@ class ImageViewer extends StatefulWidget {
     this.event, {
     required this.outerContext,
     this.timeline,
+    this.mediaEvents,
     this.heroTag,
     this.sourceRadius = NotionRadius.mdAll,
     super.key,
@@ -173,6 +179,7 @@ class ImageViewerController extends State<ImageViewer>
   void initState() {
     super.initState();
     allEvents =
+        widget.mediaEvents ??
         widget.timeline?.events
             .where(
               (event) => {

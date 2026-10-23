@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
-
 import 'dart:math';
 
 import 'package:chatloom/config/setting_keys.dart';
@@ -16,6 +15,7 @@ import 'package:chatloom/pages/chat/events/video_player.dart';
 import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/personal/instagram_share.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
@@ -35,6 +35,7 @@ import 'cute_events.dart';
 import 'html_message.dart';
 import 'image_bubble.dart';
 import 'inline_loop_video.dart';
+import 'instagram_share_preview.dart';
 import 'link_preview.dart';
 import 'map_bubble.dart';
 import 'message_download_content.dart';
@@ -372,6 +373,9 @@ class MessageContent extends StatelessWidget {
                 !event.isRichMessage && bigEmojis.contains(event.body);
 
             final previews = BridgedLinkPreview.fromContent(event.content);
+            final share = event.messageType == MessageTypes.Text
+                ? InstagramShare.fromText(event.body)
+                : null;
             final text = Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: HtmlMessage(
@@ -393,6 +397,18 @@ class MessageContent extends StatelessWidget {
                 ),
               ),
             );
+            // An Instagram link plays natively; it replaces the bridge's
+            // preview card of the same link.
+            if (share != null) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  InstagramSharePreview(share: share, event: event),
+                  Padding(padding: NotionBubble.padding, child: text),
+                ],
+              );
+            }
             if (previews.isEmpty) return text;
             // The bridge's preview of the first link, under the text.
             return Column(

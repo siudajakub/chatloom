@@ -172,6 +172,9 @@ abstract final class NotionBubble {
   /// to this cap, so wide screens do not show poster-sized thumbnails.
   static const double mediaMaxWidth = 360;
 
+  /// Instagram share previews occupy two thirds of the ordinary media width.
+  static const double shareWidthFraction = 2 / 3;
+
   /// Height/width limits of a media frame: taller media (9:16 reels) is
   /// cropped to 3:4, wider media (panoramas) to 5:2, like Messenger.
   static const double mediaMaxAspect = 4 / 3;

@@ -6,11 +6,14 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/events/html_message.dart';
 import 'package:chatloom/pages/chat/events/image_bubble.dart';
+import 'package:chatloom/pages/chat/events/instagram_share_preview.dart';
 import 'package:chatloom/pages/chat/events/message_content.dart';
 import 'package:chatloom/pages/chat/events/video_player.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:matrix/src/models/timeline_chunk.dart';
@@ -27,6 +30,7 @@ Widget _host(
   double scale = 1,
   TextDirection direction = TextDirection.ltr,
 }) => MaterialApp(
+  debugShowCheckedModeBanner: false,
   theme: NotionTheme.build(Brightness.dark),
   home: Scaffold(
     body: MediaQuery(
@@ -274,6 +278,7 @@ void main() {
       WidgetTester tester,
       Event event, {
       double width = 390,
+      bool compact = false,
     }) async {
       final timeline = Timeline(
         room: room,
@@ -284,6 +289,7 @@ void main() {
         _host(
           ConversationBubble(
             key: const Key('media'),
+            compactMedia: compact,
             outgoing: false,
             media: true,
             body: MessageContent(
@@ -311,6 +317,70 @@ void main() {
       'url': 'mxc://example.invalid/reel',
       'info': {'mimetype': 'video/mp4', 'w': ?w, 'h': ?h},
     };
+
+    testWidgets(
+      'text shares keep their caption and respect disabled thumbnails',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        final old = AppSettings.showThumbnailsInTimeline.value;
+        await AppSettings.showThumbnailsInTimeline.setItem(false);
+        addTearDown(() => AppSettings.showThumbnailsInTimeline.setItem(old));
+        await pumpMedia(
+          tester,
+          media({
+            'msgtype': MessageTypes.Text,
+            'body':
+                'Watch this https://instagram.com/reel/Cexample/?igsh=tracking',
+          }),
+          compact: true,
+        );
+        expect(find.byType(InstagramSharePreview), findsOneWidget);
+        expect(find.text('Open in Instagram'), findsOneWidget);
+        expect(
+          tester.widget<HtmlMessage>(find.byType(HtmlMessage)).html,
+          contains('Watch this'),
+        );
+        expect(tester.takeException(), isNull);
+        await pumpMedia(
+          tester,
+          media({
+            'msgtype': MessageTypes.Text,
+            'body': '> https://instagram.com/reel/Cexample/\n\nJust a reply',
+          }),
+        );
+        expect(find.byType(InstagramSharePreview), findsNothing);
+        debugDefaultTargetPlatformOverride = null;
+      },
+    );
+
+    testWidgets('compact bridged reel keeps its caption and frame', (
+      tester,
+    ) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 620);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final fonts = FontLoader('Roboto');
+      for (final name in ['Regular', 'Medium', 'Bold']) {
+        fonts.addFont(rootBundle.load('assets/notion/fonts/Roboto-$name.ttf'));
+      }
+      await fonts.load();
+      final icons = FontLoader('MaterialIcons');
+      icons.addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+      await icons.load();
+      await pumpMedia(tester, media(reel()), compact: true);
+      expect(
+        tester.getSize(find.byType(EventVideoPlayer)).width,
+        closeTo(_standardMedia(390) * 2 / 3, .01),
+      );
+      expect(find.byType(HtmlMessage), findsNothing);
+      expect(tester.takeException(), isNull);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/instagram-share-compact.png'),
+      );
+    });
 
     testWidgets('a reel fills the standard media width, cropped to 3:4', (
       tester,
@@ -409,6 +479,34 @@ void main() {
     expect(opened, 0);
     expect(tester.takeException(), isNull);
   });
+
+  for (final width in [320.0, 390.0, 720.0]) {
+    for (final outgoing in [false, true]) {
+      testWidgets(
+        'Instagram share uses two thirds at $width, outgoing=$outgoing',
+        (tester) async {
+          await tester.pumpWidget(
+            _host(
+              ConversationBubble(
+                key: const Key('compact-share'),
+                outgoing: outgoing,
+                media: true,
+                compactMedia: true,
+                body: const SizedBox(width: 360, height: 240),
+              ),
+              width: width,
+            ),
+          );
+          final standard = (width * .88).clamp(0, NotionBubble.mediaMaxWidth);
+          expect(
+            tester.getSize(_fill('compact-share')).width,
+            closeTo(standard * 2 / 3, .01),
+          );
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
 
   test('frame rule clamps aspect and height', () {
     expect(

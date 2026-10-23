@@ -144,6 +144,9 @@ class ConversationBubble extends StatelessWidget {
   /// a circular ring with [ConversationSelectionRing].
   final bool chromeless;
 
+  /// Shared Instagram posts and reels use a compact media frame.
+  final bool compactMedia;
+
   const ConversationBubble({
     super.key,
     required this.body,
@@ -161,6 +164,7 @@ class ConversationBubble extends StatelessWidget {
     this.backgroundColor,
     this.maxWidthFraction = NotionBubble.maxWidthFraction,
     this.chromeless = false,
+    this.compactMedia = false,
   }) : assert(maxWidthFraction > 0 && maxWidthFraction <= 1);
 
   /// Peak strength of the jump flash: the bubble's own text colour over its
@@ -226,7 +230,17 @@ class ConversationBubble extends StatelessWidget {
         final ink = ownFill ? colors.outgoingText : colors.text;
         final maxWidth = math.max(
           0.0,
-          math.min(width * fraction, width - (outgoing ? 0 : avatarSlot)),
+          math.min(
+            width *
+                fraction *
+                (compactMedia ? NotionBubble.shareWidthFraction : 1),
+            math.min(
+              width - (outgoing ? 0 : avatarSlot),
+              compactMedia
+                  ? NotionBubble.mediaMaxWidth * NotionBubble.shareWidthFraction
+                  : double.infinity,
+            ),
+          ),
         );
         final surface = chromeless
             // A round shows the jump flash as its selection ring.

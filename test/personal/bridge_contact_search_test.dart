@@ -590,9 +590,10 @@ void main() {
     BeeperProvisioningTransport transport(
       Future<http.Response> Function(http.Request request) handler, {
       String override = '',
+      String homeserver = 'https://matrix.example.invalid',
     }) => BeeperProvisioningTransport(
       httpClient: MockClient(handler),
-      homeserver: Uri.parse('https://matrix.example.invalid'),
+      homeserver: Uri.parse(homeserver),
       userId: '@fictional:example.invalid',
       accessToken: () => 'fictional-token',
       overrideUrl: override,
@@ -626,6 +627,25 @@ void main() {
       expect(body.containsKey('body'), isFalse);
     });
 
+    test('preserves an already scoped homeserver without duplicating routing', () async {
+      late Uri sent;
+      final client = transport(
+        (request) async {
+          sent = request.url;
+          return http.Response(
+            jsonEncode({'status': 200, 'headers': {}, 'body': whoami(_whatsapp)}),
+            200,
+          );
+        },
+        homeserver: 'https://matrix.example.invalid/_hungryserv/fictional',
+      );
+      await BridgeProvisioningApi(client).whoami(_whatsapp);
+      expect(
+        sent.path,
+        '/_hungryserv/fictional/_matrix/asmux/mxauth/appservice/'
+        'fictional/sh-whatsapp/exec/http_proxy',
+      );
+    });
     test('unwraps base64 bodies and maps bridge and proxy errors', () async {
       final ok = transport(
         (request) async => http.Response(

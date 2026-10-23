@@ -15,6 +15,7 @@ import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/instagram_share.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -27,7 +28,8 @@ import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/member_actions_popup_menu_button.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:personal_core/personal_core.dart' show ChatTheme;
+import 'package:personal_core/personal_core.dart'
+    show ChatTheme, isInstagramShare;
 
 import 'message_content.dart';
 import 'message_delivery_status.dart';
@@ -215,6 +217,12 @@ class Message extends StatelessWidget {
           MessageTypes.Sticker,
         }.contains(event.messageType) &&
         !event.redacted;
+    final sharedPost =
+        !display.redacted &&
+        !round &&
+        (isInstagramShare(display.content) ||
+            (display.messageType == MessageTypes.Text &&
+                InstagramShare.fromText(display.body) != null));
     final sender = event.senderFromMemoryOrFallback;
     final canReply = ConversationMessageActions.canReply(
       event,
@@ -412,9 +420,10 @@ class Message extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               ConversationBubble(
+                compactMedia: sharedPost,
                 outgoing: own,
                 groupPosition: position,
-                media: media,
+                media: media || sharedPost,
                 // Rounds and stickers float without a bubble (Telegram).
                 chromeless: round || MessageContent.rendersSticker(display),
                 flash: highlightMarker,

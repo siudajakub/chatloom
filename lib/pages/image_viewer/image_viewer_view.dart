@@ -73,6 +73,7 @@ class ImageViewerView extends StatelessWidget {
                         ) !=
                         null;
                     final canForward =
+                        event.content['chatloom.local_media'] != true &&
                         !event.redacted &&
                         policy.canForward &&
                         (!round ||
@@ -80,6 +81,8 @@ class ImageViewerView extends StatelessWidget {
                               event.room.client,
                             ).canNativeForward(event));
                     final canExport = !event.redacted && policy.canExport;
+                    // Local link assets have no server event that can be forwarded.
+
                     return NotionMediaActionsButton(
                       actions: [
                         NotionMediaAction(

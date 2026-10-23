@@ -511,8 +511,10 @@ class BeeperProvisioningTransport implements BridgeProvisioningTransport {
       port: homeserver.hasPort ? homeserver.port : null,
       pathSegments: [
         ...homeserver.pathSegments.where((s) => s.isNotEmpty),
-        '_hungryserv',
-        user,
+        if (!homeserver.pathSegments.contains('_hungryserv')) ...[
+          '_hungryserv',
+          user,
+        ],
         '_matrix',
         'asmux',
         'mxauth',
