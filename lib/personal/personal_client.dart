@@ -1878,13 +1878,17 @@ class PersonalClient extends ChangeNotifier {
         throw const ImmediateTransportRejected('replyUnavailable');
       }
       try {
-        return await sourceRoom.sendTextEvent(
-          payload['text'] as String,
-          txid: txid,
-          inReplyTo: sourceReply,
-          editEventId: payload['editId'] as String?,
-          threadRootEventId: payload['threadId'] as String?,
-          parseCommands: false,
+        return await PersonalPrivacy.withFrozenRoundReadCutoff(
+          sourceRoom,
+          payload['readUpToEventId'] as String?,
+          () => sourceRoom.sendTextEvent(
+            payload['text'] as String,
+            txid: txid,
+            inReplyTo: sourceReply,
+            editEventId: payload['editId'] as String?,
+            threadRootEventId: payload['threadId'] as String?,
+            parseCommands: false,
+          ),
         );
       } on PersonalCapabilityUnavailable {
         throw const ImmediateTransportRejected('bridge_unavailable');
@@ -1922,6 +1926,7 @@ class PersonalClient extends ChangeNotifier {
     String? threadId,
     ImmediateDurable? onDurable,
   }) async {
+    final readUpToEventId = PersonalPrivacy.frozenReadCutoff(room);
     final outbox = await _immediateOutbox();
     // Every press of send is a new message: the same text twice is two
     // messages, while an attempt left by an earlier process is resumed.
@@ -1932,6 +1937,7 @@ class PersonalClient extends ChangeNotifier {
         'replyId': replyTo?.eventId,
         'editId': editEventId,
         'threadId': threadId,
+        'readUpToEventId': readUpToEventId,
       },
       fresh: true,
       onDurable: onDurable,

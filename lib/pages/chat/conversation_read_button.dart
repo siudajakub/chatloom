@@ -31,7 +31,7 @@ class ConversationReadButton extends StatefulWidget {
 
 class _ConversationReadButtonState extends State<ConversationReadButton> {
   bool _sending = false;
-  StreamSubscription<SyncUpdate>? _sync;
+  final _subscriptions = <StreamSubscription<dynamic>>[];
 
   @override
   void initState() {
@@ -42,28 +42,41 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
   @override
   void didUpdateWidget(ConversationReadButton oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.rooms.firstOrNull?.client != widget.rooms.firstOrNull?.client) {
-      _listen();
-    }
+    _listen();
   }
 
   /// Re-evaluates visibility only when a sync touches one of the sources
-  /// (new message or the own receipt moved); the button alone rebuilds.
+  /// (new message or the own receipt moved) or a source was marked read
+  /// locally; the button alone rebuilds.
   void _listen() {
-    _sync?.cancel();
-    final client = widget.rooms.firstOrNull?.client;
-    _sync = client?.onSync.stream.listen((update) {
-      final joined = update.rooms?.join;
-      if (joined == null || !mounted) return;
-      if (widget.rooms.any((room) => joined.containsKey(room.id))) {
-        setState(() {});
-      }
-    });
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel());
+    }
+    _subscriptions.clear();
+    final ids = {for (final room in widget.rooms) room.id};
+    _subscriptions.add(
+      PersonalPrivacy.readChanges.listen((room) {
+        if (mounted && widget.rooms.any((r) => identical(r, room))) {
+          setState(() {});
+        }
+      }),
+    );
+    for (final client in widget.rooms.map((room) => room.client).toSet()) {
+      _subscriptions.add(
+        client.onSync.stream.listen((update) {
+          final joined = update.rooms?.join;
+          if (joined == null || !mounted) return;
+          if (ids.any(joined.containsKey)) setState(() {});
+        }),
+      );
+    }
   }
 
   @override
   void dispose() {
-    _sync?.cancel();
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel());
+    }
     super.dispose();
   }
 

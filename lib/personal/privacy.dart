@@ -73,9 +73,29 @@ abstract final class PersonalPrivacy {
                 AppSettings.sendPublicReadReceipts.value),
       ),
     );
+    _readCutoffs[room] = eventId;
+    _readChanges.add(room);
   }
 
-  static final _observed = <Room, String>{};
+  static final _readCutoffs = Map<Room, String>.identity();
+  static final _readChanges = StreamController<Room>.broadcast();
+  static Stream<Room> get readChanges => _readChanges.stream;
+
+  /// The event this device last marked [room] read up to, if any.
+  static String? readCutoff(Room room) => _readCutoffs[room];
+
+  static bool hasUnread(Room room) {
+    final latest = room.lastEvent;
+    if (latest == null ||
+        latest.senderId == room.client.userID ||
+        latest.eventId == room.fullyRead ||
+        latest.eventId == _readCutoffs[room]) {
+      return false;
+    }
+    return room.hasNewMessages;
+  }
+
+  static final _observed = Map<Room, String>.identity();
   static String? frozenReadCutoff(Room room) => _observed[room];
   static Future<T> withFrozenRoundReadCutoff<T>(
     Room room,
@@ -110,6 +130,7 @@ abstract final class PersonalPrivacy {
     unawaited(TelegramRoundService.closeFor(client));
     TelegramRoomBinding.forget(client);
     _observed.removeWhere((room, _) => identical(room.client, client));
+    _readCutoffs.removeWhere((room, _) => identical(room.client, client));
     _typingRooms.removeWhere((room) => identical(room.client, client));
   }
 
@@ -340,7 +361,11 @@ abstract final class PersonalPrivacy {
     client.captureOutgoingContext = (room, type) {
       if (!policy.incognito ||
           isJournal(room) ||
-          !{EventTypes.Message, EventTypes.Sticker}.contains(type)) {
+          !{
+            EventTypes.Message,
+            EventTypes.Sticker,
+            EventTypes.Reaction,
+          }.contains(type)) {
         return null;
       }
       final frozen = Zone.current[_roundReadCutoffKey];
@@ -355,7 +380,7 @@ abstract final class PersonalPrivacy {
     };
   }
 
-  static final _typingRooms = <Room>{};
+  static final _typingRooms = Set<Room>.identity();
   static Future<void> setTyping(Room room, bool typing, {int? timeout}) async {
     if (typing && !policy.allowTyping) return;
     if (typing) {

@@ -5,8 +5,10 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/send_error_text.dart';
+import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/send_warmup.dart';
 import 'package:flutter/animation.dart';
@@ -14,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../notion/conversation_test_support.dart';
 import 'outgoing_media_support.dart';
@@ -31,6 +34,7 @@ typedef SentFile = ({
 });
 
 class MediaRoom extends ConversationRoom {
+  final readContexts = <Object?>[];
   final sent = <SentFile>[];
   final log = <String>[];
   final gates = <Completer<String?>>[];
@@ -81,6 +85,9 @@ class MediaRoom extends ConversationRoom {
     String? threadLastEventId,
     bool displayPendingEvent = true,
   }) async {
+    readContexts.add(
+      client.captureOutgoingContext?.call(this, EventTypes.Message),
+    );
     log.add('send:$txid');
     sent.add((
       name: file.name,
@@ -143,6 +150,45 @@ void main() {
   late FakeEchoes echoes;
   setUp(() => OutgoingEcho.debugWriter = echoes = FakeEchoes());
   tearDown(() => OutgoingEcho.debugWriter = null);
+
+  test(
+    'queued media and retries retain the original observed cutoff',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      await AppSettings.init(loadWebConfigFile: false);
+      await AppSettings.personalIncognito.setItem(true);
+      final client = ConversationClient();
+      final room = MediaRoom(client)..holdSends = true;
+      PersonalPrivacy.bind(client);
+      PersonalPrivacy.surfaceUnlocked = true;
+      PersonalPrivacy.observe(room, r'$one');
+      final first = await OutgoingMedia.send(
+        room,
+        _file('a.pdf'),
+        txid: 'freeze-a',
+      );
+      final second = await OutgoingMedia.send(
+        room,
+        _file('b.pdf'),
+        txid: 'freeze-b',
+      );
+      PersonalPrivacy.observe(room, r'$two');
+      await pumpEventQueue();
+      room.gates.first.complete(r'$a');
+      await first.accepted;
+      await pumpEventQueue();
+      expect(room.readContexts, [r'$one', r'$one']);
+      room.gates.last.complete(r'$b');
+      await second.accepted;
+      room.holdSends = false;
+    final retry = await OutgoingMedia.retry(
+      Event.fromMatrixEvent(echoes.events['freeze-b']!, room),
+    );
+      await retry.accepted;
+      expect(room.readContexts.last, r'$one');
+      PersonalPrivacy.forget(client);
+    },
+  );
 
   test('the bubble and its bytes exist before any upload starts', () async {
     final room = MediaRoom(ConversationClient())..holdSends = true;

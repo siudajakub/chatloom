@@ -66,6 +66,8 @@ bool conversationNeedsPublicRead(
       loaded: loaded?.call(room) ?? const [],
     );
     if (target == null || target.senderId == room.client.userID) continue;
+    // Marked read here already (a manual read or an accepted reaction).
+    if (PersonalPrivacy.readCutoff(room) == target.eventId) continue;
     if (room.receiptState.global.ownPublic?.eventId != target.eventId) {
       return true;
     }

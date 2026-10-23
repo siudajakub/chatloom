@@ -5,6 +5,7 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_read_button.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -107,10 +108,88 @@ void main() {
     expect(AppSettings.sendPublicReadReceipts.value, isFalse);
     room.gate!.complete();
     await tester.pumpAndSettle();
+    expect(find.byType(NotionGlassPill), findsNothing);
     // Automatic reads remain suppressed after the manual action.
     await PersonalPrivacy.markRead(room, r'$two', publicReceipt: true);
     expect(room.receipts, hasLength(1));
   });
+
+  testWidgets('accepted reaction hides read button until another message', (
+    tester,
+  ) async {
+    final client = _Client();
+    final room = _Room(client, '!fixture:example.invalid')..incoming(r'$one');
+    PersonalPrivacy.bind(client);
+    PersonalPrivacy.observe(room, r'$one');
+    final cutoff = client.captureOutgoingContext!(room, EventTypes.Reaction);
+    await _mount(tester, [room]);
+    expect(find.byType(NotionGlassPill), findsOneWidget);
+    await client.onOutgoingAccepted!(room, r'$reaction', cutoff);
+    await tester.pumpAndSettle();
+    expect(room.receipts, [(r'$one', r'$one', false)]);
+    expect(find.byType(NotionGlassPill), findsNothing);
+    room.incoming(r'$two');
+    await _mount(tester, [room]);
+    expect(find.byType(NotionGlassPill), findsOneWidget);
+    PersonalPrivacy.forget(client);
+  });
+
+  test(
+    'queued sends keep original cutoff and legacy retries release none',
+    () async {
+      final client = _Client();
+      final room = _Room(client, '!fixture:example.invalid')..incoming(r'$one');
+      PersonalPrivacy.bind(client);
+      PersonalPrivacy.observe(room, r'$one');
+      final original = PersonalPrivacy.frozenReadCutoff(room);
+      room.incoming(r'$two');
+      PersonalPrivacy.observe(room, r'$two');
+      for (final type in [
+        EventTypes.Message,
+        EventTypes.Sticker,
+        EventTypes.Reaction,
+      ]) {
+        final captured = await PersonalPrivacy.withFrozenRoundReadCutoff(
+          room,
+          original,
+          () async => client.captureOutgoingContext!(room, type),
+        );
+        await client.onOutgoingAccepted!(room, r'$sent', captured);
+        expect(room.receipts.last.$1, r'$one');
+        expect(PersonalPrivacy.hasUnread(room), isTrue);
+      }
+      final legacy = await PersonalPrivacy.withFrozenRoundReadCutoff(
+        room,
+        null,
+        () async => client.captureOutgoingContext!(room, EventTypes.Message),
+      );
+      final before = room.receipts.length;
+      await client.onOutgoingAccepted!(room, r'$legacy', legacy);
+      expect(room.receipts, hasLength(before));
+      expect(
+        client.captureOutgoingContext!(room, EventTypes.Redaction),
+        isNull,
+      );
+      PersonalPrivacy.forget(client);
+    },
+  );
+
+  test(
+    'read and observed cutoffs stay isolated between account clients',
+    () async {
+      final first = _Room(_Client(), '!shared:example.invalid')
+        ..incoming(r'$one');
+      final second = _Room(_Client(), '!shared:example.invalid')
+        ..incoming(r'$one');
+      PersonalPrivacy.observe(first, r'$one');
+      expect(PersonalPrivacy.frozenReadCutoff(second), isNull);
+      await PersonalPrivacy.markRead(first, r'$one', manual: true);
+      expect(PersonalPrivacy.hasUnread(first), isFalse);
+      expect(PersonalPrivacy.hasUnread(second), isTrue);
+      PersonalPrivacy.forget(first.client);
+      PersonalPrivacy.forget(second.client);
+    },
+  );
 
   testWidgets('merged sources freeze cutoffs and a partial failure can retry', (
     tester,

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 
+import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
@@ -253,6 +254,7 @@ abstract final class OutgoingMedia {
     OutgoingMediaPrepare? prepare,
   }) async {
     final client = room.client;
+    final readUpToEventId = PersonalPrivacy.frozenReadCutoff(room);
     final id = txid ?? client.generateUniqueTransactionId();
     final key = _jobKey(room, id);
     // The same attempt twice (a repeated tap) is one job and one bubble.
@@ -291,6 +293,7 @@ abstract final class OutgoingMedia {
           ...extra,
         },
         unsigned: {
+          'personal_read_cutoff': readUpToEventId,
           'in_reply_to': ?inReplyTo?.eventId,
           'shrink_image_max_dimension': ?shrinkImageMaxDimension,
           if (extra.isNotEmpty) 'extra_content': extra,
@@ -320,15 +323,19 @@ abstract final class OutgoingMedia {
         // Retry sends what was prepared (the SDK caches the same bytes).
         _hold(room, key, upload, preview);
       }
-      return room.sendFileEvent(
-        upload,
-        txid: id,
-        inReplyTo: inReplyTo,
-        thumbnail: preview,
-        shrinkImageMaxDimension: shrinkImageMaxDimension,
-        extraContent: extra.isEmpty ? null : extra,
-        threadRootEventId: threadRootEventId,
-        threadLastEventId: threadLastEventId,
+      return PersonalPrivacy.withFrozenRoundReadCutoff(
+        room,
+        readUpToEventId,
+        () => room.sendFileEvent(
+          upload,
+          txid: id,
+          inReplyTo: inReplyTo,
+          thumbnail: preview,
+          shrinkImageMaxDimension: shrinkImageMaxDimension,
+          extraContent: extra.isEmpty ? null : extra,
+          threadRootEventId: threadRootEventId,
+          threadLastEventId: threadLastEventId,
+        ),
       );
     });
     return OutgoingMediaTicket(id, accepted);
@@ -416,15 +423,19 @@ abstract final class OutgoingMedia {
     final extra = unsigned['extra_content'];
     final shrink = unsigned['shrink_image_max_dimension'];
     final thread = _thread(event.content);
-    return () => room.sendFileEvent(
-      file,
-      txid: id,
-      inReplyTo: reply,
-      thumbnail: thumbnail,
-      shrinkImageMaxDimension: shrink is int ? shrink : null,
-      extraContent: extra is Map ? extra.cast<String, dynamic>() : null,
-      threadRootEventId: thread?.$1,
-      threadLastEventId: thread?.$2,
+    return () => PersonalPrivacy.withFrozenRoundReadCutoff(
+      room,
+      unsigned['personal_read_cutoff'] as String?,
+      () => room.sendFileEvent(
+        file,
+        txid: id,
+        inReplyTo: reply,
+        thumbnail: thumbnail,
+        shrinkImageMaxDimension: shrink is int ? shrink : null,
+        extraContent: extra is Map ? extra.cast<String, dynamic>() : null,
+        threadRootEventId: thread?.$1,
+        threadLastEventId: thread?.$2,
+      ),
     );
   }
 
