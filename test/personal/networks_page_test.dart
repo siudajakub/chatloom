@@ -522,8 +522,30 @@ void main() {
       expect(find.text('Working normally.'), findsOneWidget);
       // A recent message proves delivery, not a known login: no sign-out.
       expect(find.byKey(const ValueKey('network-sign-out')), findsNothing);
+      final visibility = find.descendant(
+        of: find.byKey(const ValueKey('network-show-in-groups')),
+        matching: find.byType(Switch),
+      );
+      await tester.ensureVisible(visibility);
+      expect(tester.widget<Switch>(visibility).value, isFalse);
+      expect(
+        InboxProjection(
+          fixture.personal,
+        ).rooms([existing], filter: InboxFilter.groups),
+        isEmpty,
+      );
+      await tester.tap(visibility);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(visibility).value, isTrue);
+      expect(
+        InboxProjection(
+          fixture.personal,
+        ).rooms([existing], filter: InboxFilter.groups),
+        [existing],
+      );
       // Telegram groups default to their own view.
       final placement = find.byKey(const ValueKey('network-groups-placement'));
+      await tester.ensureVisible(placement);
       expect(
         find.descendant(of: placement, matching: find.text('Groups')),
         findsWidgets,
@@ -574,10 +596,12 @@ void main() {
       );
       expect(fixture.personal.values['network-policy:telegram'], {
         'groupPlacement': 'inbox',
+        'showInGroups': true,
         'notifications': null,
         'groupNotifications': 'muted',
       });
       expect(fixture.personal.writes, [
+        'network-policy:telegram',
         'network-policy:telegram',
         'network-policy:telegram',
       ]);

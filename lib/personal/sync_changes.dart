@@ -298,6 +298,7 @@ const _fieldLabels = <String, String>{
   'routing': 'Send messages via',
   'nameRoomId': 'Name',
   'groupPlacement': 'Groups',
+  'showInGroups': 'Show in Groups',
   'groupNotifications': 'Group notifications',
   'notifications': 'Notifications',
 };

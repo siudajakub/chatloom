@@ -894,6 +894,20 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
     return [
       const NotionSectionHeader(title: 'Where chats appear'),
       NotionListRow(
+        key: const ValueKey('network-show-in-groups'),
+        leading: const Icon(Icons.filter_list),
+        title: 'Show in Groups',
+        subtitle:
+            'Include ${summary.label} groups in the Groups view. '
+            'Notifications are unchanged.',
+        trailing: Switch.adaptive(
+          value: policy.showInGroups,
+          onChanged: enabled
+              ? (value) => _update({'showInGroups': value})
+              : null,
+        ),
+      ),
+      NotionListRow(
         key: const ValueKey('network-groups-placement'),
         leading: const Icon(Icons.group_outlined),
         title: 'Groups',

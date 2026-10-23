@@ -420,19 +420,60 @@ void main() {
     }
   });
 
-  test('People and Groups filters split exactly along the bridge kind', () {
+  test('Groups excludes Telegram by default while People keeps its DMs', () {
     final projection = InboxProjection(personal);
     final people = projection.rooms(client.rooms, filter: InboxFilter.direct);
     final groups = projection.rooms(client.rooms, filter: InboxFilter.groups);
     for (final c in _cases) {
       final room = rooms[c]!;
       expect(people.contains(room), !c.isGroup, reason: 'People: $c');
-      expect(groups.contains(room), c.isGroup, reason: 'Groups: $c');
+      expect(
+        groups.contains(room),
+        c.isGroup && c.protocol != 'telegram',
+        reason: 'Groups: $c',
+      );
     }
     expect(
       projection.rooms(client.rooms, filter: InboxFilter.technical),
       isEmpty,
     );
+  });
+
+  test('Groups visibility is independent of placement and notifications', () {
+    final projection = InboxProjection(personal);
+    final before = {
+      for (final room in client.rooms)
+        room.id: (
+          projection.placementFor(room),
+          projection.notificationModeFor(room),
+        ),
+    };
+    // A legacy placement preference must still inherit the new default.
+    personal.values['network-policy:telegram'] = {'groupPlacement': 'groups'};
+    expect(
+      projection
+          .rooms(client.rooms, filter: InboxFilter.groups)
+          .any(
+            (room) =>
+                projection.classifier.classify(room).network == 'telegram',
+          ),
+      isFalse,
+    );
+    personal.values['network-policy:telegram']!['showInGroups'] = true;
+    final groups = projection.rooms(client.rooms, filter: InboxFilter.groups);
+    for (final c in _cases) {
+      final room = rooms[c]!;
+      expect(groups.contains(room), c.isGroup, reason: '$c');
+      expect((
+        projection.placementFor(room),
+        projection.notificationModeFor(room),
+      ), before[room.id]);
+    }
+    personal.values['network-policy:whatsapp'] = {'showInGroups': false};
+    final hidden = projection.rooms(client.rooms, filter: InboxFilter.groups);
+    for (final c in _cases.where((c) => c.protocol == 'whatsapp')) {
+      expect(hidden, isNot(contains(rooms[c])));
+    }
   });
 
   test('main list: no Telegram group or channel; other networks keep their '
@@ -460,6 +501,12 @@ void main() {
     personal.values['org:${dm.id}'] = {'pinOrder': 1};
     final projection = InboxProjection(personal);
     expect(projection.metadataFor(channel).isPinned, isTrue);
+    expect(
+      projection.rooms(client.rooms, filter: InboxFilter.groups),
+      isNot(contains(channel)),
+      reason: 'pinning does not bypass the network visibility choice',
+    );
+    personal.values['network-policy:telegram'] = {'showInGroups': true};
     final groups = projection.rooms(client.rooms, filter: InboxFilter.groups);
     expect(groups.first, channel, reason: 'pinned first in Groups');
     final main = projection.rooms(client.rooms);
@@ -503,6 +550,11 @@ void main() {
     expect(projection.groupFor(channel), isNull);
     final main = projection.rooms(client.rooms);
     expect(main.where((r) => r == telegram || r == whatsapp), hasLength(1));
+    expect(
+      projection.rooms(client.rooms, filter: InboxFilter.groups),
+      isNot(contains(channel)),
+    );
+    personal.values['network-policy:telegram'] = {'showInGroups': true};
     expect(
       projection.rooms(client.rooms, filter: InboxFilter.groups),
       contains(channel),

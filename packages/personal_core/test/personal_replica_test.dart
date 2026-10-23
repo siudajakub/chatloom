@@ -72,6 +72,7 @@ void main() {
       const key = 'network-policy:telegram';
       final policy = NetworkPreferences(
         groupPlacement: ChatPlacement.groups,
+        showInGroups: false,
         groupNotifications: PersonalNotificationMode.muted,
       ).toJson();
       await r.queueMetadata(key, policy);
@@ -88,6 +89,12 @@ void main() {
         chat.toJson().cast<String, dynamic>(),
       );
       final restarted = replica(store);
+      expect(
+        NetworkPreferences.fromJson(
+          restarted.values[key]!, 'telegram',
+        ).showInGroups,
+        isFalse,
+      );
       expect(
         NetworkPreferences.fromJson(
           restarted.values[key]!,

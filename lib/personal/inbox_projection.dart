@@ -496,6 +496,13 @@ class InboxProjection {
           .toList(growable: false);
     }
     return visible
+        .where(
+          (record) =>
+              filter != InboxFilter.groups ||
+              record.networks.any(
+                (network) => networkPreferences(network).showInGroups,
+              ),
+        )
         .map((r) => index._representatives[r.representativeRoomId]!)
         .toList(growable: false);
   }

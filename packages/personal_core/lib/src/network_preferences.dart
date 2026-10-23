@@ -14,15 +14,18 @@ T? preferenceEnum<T extends Enum>(Iterable<T> values, Object? value) {
 /// Private display/notification defaults; never a source routing identifier.
 class NetworkPreferences {
   final ChatPlacement groupPlacement;
+  final bool showInGroups;
   final PersonalNotificationMode? notifications;
   final PersonalNotificationMode? groupNotifications;
   const NetworkPreferences({
     this.groupPlacement = ChatPlacement.inbox,
+    this.showInGroups = true,
     this.notifications,
     this.groupNotifications,
   });
 
   factory NetworkPreferences.defaults(String network) => NetworkPreferences(
+    showInGroups: network != 'telegram',
     groupPlacement: network == 'telegram'
         ? ChatPlacement.groups
         : ChatPlacement.inbox,
@@ -32,6 +35,9 @@ class NetworkPreferences {
     Map<String, dynamic> json,
     String network,
   ) => NetworkPreferences(
+    showInGroups: json['showInGroups'] is bool
+        ? json['showInGroups'] as bool
+        : NetworkPreferences.defaults(network).showInGroups,
     groupPlacement:
         preferenceEnum(ChatPlacement.values, json['groupPlacement']) ??
         NetworkPreferences.defaults(network).groupPlacement,
@@ -47,6 +53,7 @@ class NetworkPreferences {
 
   Map<String, dynamic> toJson() => {
     'groupPlacement': groupPlacement.name,
+    'showInGroups': showInGroups,
     'notifications': notifications?.name,
     'groupNotifications': groupNotifications?.name,
   };
