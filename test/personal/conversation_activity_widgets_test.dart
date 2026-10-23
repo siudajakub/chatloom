@@ -7,12 +7,10 @@ import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/connection_status.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/ui/conversation_activity_widgets.dart';
-import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:matrix/matrix_api_lite/model/room_summary.dart';
 
 const _owner = '@owner:example.invalid';
 const _peer = '@peer:example.invalid';
@@ -72,10 +70,11 @@ Room _room(_Client client, String name, {String? network}) {
       'displayname': 'Alex',
     });
   }
-  if (network != null)
+  if (network != null) {
     state('m.bridge', '', {
       'protocol': {'id': network},
     });
+  }
   return room;
 }
 

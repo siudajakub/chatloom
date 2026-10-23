@@ -94,8 +94,9 @@ class ConversationActivity extends ChangeNotifier {
   String? counterpartId(Room room) {
     if (!identical(room.client, client) ||
         room.membership != Membership.join ||
-        room.isSpace)
+        room.isSpace) {
       return null;
+    }
     final kind = ConversationClassifier(client.rooms).classify(room);
     if (kind.isGroup || kind.technical) return null;
     final direct = room.directChatMatrixID;
@@ -115,8 +116,9 @@ class ConversationActivity extends ChangeNotifier {
   List<User> typingUsersFor(Room room) {
     if (!identical(room.client, client) ||
         room.membership != Membership.join ||
-        !_rooms.contains(room))
+        !_rooms.contains(room)) {
       return const [];
+    }
     final until = _typingUntil[room.id];
     if (_failed || until == null || !_now().isBefore(until)) return const [];
     final seen = <String>{};

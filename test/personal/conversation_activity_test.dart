@@ -3,7 +3,6 @@ import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
-import 'package:matrix/matrix_api_lite/model/room_summary.dart';
 
 const _owner = '@owner:example.invalid';
 const _peer = '@peer:example.invalid';
