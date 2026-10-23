@@ -229,6 +229,8 @@ void main() {
       final technical = room(client, 'control', technical: true);
       final personal = _Private(client);
       addTearDown(personal.dispose);
+      // Telegram groups are off the Groups view until the network allows it.
+      personal.values['network-policy:telegram'] = {'showInGroups': true};
       personal.values['org:${group.id}'] = {'pinOrder': 0};
       personal.values['draft:${group.id}'] = {'text': 'Fictional draft'};
       personal.reminders['fixture-reminder'] = {
@@ -312,6 +314,7 @@ void main() {
     personal.values['person:invalid-merge'] = group
         .toJson()
         .cast<String, dynamic>();
+    personal.values['network-policy:telegram'] = {'showInGroups': true};
     final projection = InboxProjection(personal);
     expect(projection.groupFor(second), isNull);
     expect(projection.rooms(client.rooms), [first]);
