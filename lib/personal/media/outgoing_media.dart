@@ -10,6 +10,7 @@ import 'package:matrix/matrix.dart';
 
 import 'send_error_text.dart';
 import 'upload_progress.dart';
+import 'voice_format.dart';
 
 /// Local echoes ChatLoom shows itself, before (or instead of) the SDK's own
 /// send: the same shape the SDK uses (`transaction_id`, the sending status
@@ -392,7 +393,9 @@ abstract final class OutgoingMedia {
       return () => room.sendEvent(content, txid: id);
     }
     final held = _held[key];
-    final MatrixFile file;
+    final info = event.infoMap;
+    final voice = event.content.containsKey('org.matrix.msc3245.voice');
+    MatrixFile file;
     final MatrixImageFile? thumbnail;
     if (held != null) {
       (file, thumbnail) = held;
@@ -406,6 +409,18 @@ abstract final class OutgoingMedia {
         _thumbnailKey(id),
       );
       file = _typedFile(event, bytes);
+      if (voice) {
+        // The recorder's actual container, not a stale or generic label.
+        file = MatrixAudioFile(
+          bytes: bytes,
+          name: file.name,
+          mimeType: voiceRecordingMime(
+            bytes,
+            info.tryGet<String>('mimetype') ?? 'application/octet-stream',
+          ),
+          duration: info.tryGet<int>('duration'),
+        );
+      }
       final preview = event.thumbnailInfoMap;
       thumbnail = thumbnailBytes == null
           ? null
@@ -417,10 +432,20 @@ abstract final class OutgoingMedia {
               height: preview.tryGet<int>('h'),
             );
     }
+    final retryMime = file.mimeType;
     final unsigned = event.unsigned ?? const <String, dynamic>{};
     final replyId = unsigned['in_reply_to'];
     final reply = replyId is String ? await room.getEventById(replyId) : null;
-    final extra = unsigned['extra_content'];
+    final storedExtra = unsigned['extra_content'];
+    final extra = <String, dynamic>{
+      if (storedExtra is Map) ...storedExtra.cast<String, dynamic>(),
+      if (voice) ...{
+        'org.matrix.msc3245.voice': event.content['org.matrix.msc3245.voice'],
+        if (event.content.containsKey('org.matrix.msc1767.audio'))
+          'org.matrix.msc1767.audio': event.content['org.matrix.msc1767.audio'],
+        'info': {...info, 'mimetype': retryMime, 'size': file.bytes.length},
+      },
+    };
     final shrink = unsigned['shrink_image_max_dimension'];
     final thread = _thread(event.content);
     return () => PersonalPrivacy.withFrozenRoundReadCutoff(
@@ -432,7 +457,7 @@ abstract final class OutgoingMedia {
         inReplyTo: reply,
         thumbnail: thumbnail,
         shrinkImageMaxDimension: shrink is int ? shrink : null,
-        extraContent: extra is Map ? extra.cast<String, dynamic>() : null,
+        extraContent: extra.isEmpty ? null : extra,
         threadRootEventId: thread?.$1,
         threadLastEventId: thread?.$2,
       ),

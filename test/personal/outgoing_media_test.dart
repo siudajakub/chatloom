@@ -181,14 +181,51 @@ void main() {
       room.gates.last.complete(r'$b');
       await second.accepted;
       room.holdSends = false;
-    final retry = await OutgoingMedia.retry(
-      Event.fromMatrixEvent(echoes.events['freeze-b']!, room),
-    );
+      final retry = await OutgoingMedia.retry(
+        Event.fromMatrixEvent(echoes.events['freeze-b']!, room),
+      );
       await retry.accepted;
       expect(room.readContexts.last, r'$one');
       PersonalPrivacy.forget(client);
     },
   );
+
+  test('retry upgrades legacy Opus MIME and retains voice metadata', () async {
+    final room = MediaRoom(ConversationClient());
+    final bytes = Uint8List(47);
+    bytes.setRange(0, 4, 'OggS'.codeUnits);
+    bytes[26] = 1;
+    bytes[27] = 19;
+    bytes.setRange(28, 36, 'OpusHead'.codeUnits);
+    final ticket = await OutgoingMedia.send(
+      room,
+      MatrixAudioFile(bytes: bytes, name: 'voice.ogg', mimeType: 'audio/ogg'),
+      txid: 'legacy-voice',
+      extraContent: {
+        'info': {
+          'mimetype': 'audio/ogg',
+          'size': bytes.length,
+          'duration': 2500,
+        },
+        'org.matrix.msc3245.voice': <String, dynamic>{},
+        'org.matrix.msc1767.audio': {
+          'duration': 2500,
+          'waveform': [100, 200],
+        },
+      },
+    );
+    await ticket.accepted;
+    final retry = await OutgoingMedia.retry(
+      Event.fromMatrixEvent(echoes.events['legacy-voice']!, room),
+    );
+    await retry.accepted;
+    final extra = room.sent.last.extra!;
+    expect(extra['info']['mimetype'], 'audio/ogg; codecs=opus');
+    expect(extra['info']['duration'], 2500);
+    expect(extra['org.matrix.msc3245.voice'], isEmpty);
+    expect(extra['org.matrix.msc1767.audio']['waveform'], [100, 200]);
+    expect(room.sent.last.txid, 'legacy-voice');
+  });
 
   test('the bubble and its bytes exist before any upload starts', () async {
     final room = MediaRoom(ConversationClient())..holdSends = true;

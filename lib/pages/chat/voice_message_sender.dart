@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/send_error_text.dart';
+import 'package:chatloom/personal/media/voice_format.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:cross_file/cross_file.dart';
@@ -133,8 +134,12 @@ class VoiceMessageSender {
     }
     if (bytes == null || !current()) return false;
 
-    final mimeType = lookupMimeType(fileName, headerBytes: bytes);
-    final extension = mimeType == null ? null : extensionFromMime(mimeType);
+    final mimeType = voiceRecordingMime(
+      bytes,
+      lookupMimeType(fileName, headerBytes: bytes) ??
+          'application/octet-stream',
+    );
+    final extension = extensionFromMime(mimeType.split(';').first);
     if (extension != null) {
       fileName =
           'voice_message_${DateTime.now().millisecondsSinceEpoch}.$extension';

@@ -7,7 +7,9 @@ import 'dart:async';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/media/stale_recordings.dart';
+import 'package:chatloom/personal/media/voice_format.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -221,6 +223,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
           // Apple's record backend writes Opus in CAF, not in the Ogg
           // container advertised by our voice-message sender. Use AAC/M4A.
           !PlatformInfos.isCupertinoStyle &&
+              preferOpusVoice(RoomCapabilities.declared(room)) &&
               await audioRecorder.isEncoderSupported(AudioEncoder.opus)
           ? AudioEncoder.opus
           : AudioEncoder.aacLc;
