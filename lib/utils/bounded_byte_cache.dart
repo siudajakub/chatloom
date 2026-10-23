@@ -26,6 +26,20 @@ class BoundedByteCache<K> {
     }
   }
 
+  /// The largest retained entry whose key [matches] (marked as recently
+  /// used), or null.
+  Uint8List? largestWhere(bool Function(K key) matches) {
+    K? best;
+    var bestLength = -1;
+    for (final entry in _entries.entries) {
+      if (entry.value.length > bestLength && matches(entry.key)) {
+        best = entry.key;
+        bestLength = entry.value.length;
+      }
+    }
+    return bestLength < 0 ? null : get(best as K);
+  }
+
   void removeWhere(bool Function(K key) matches) {
     for (final key in _entries.keys.where(matches).toList()) {
       _bytes -= _entries.remove(key)!.length;

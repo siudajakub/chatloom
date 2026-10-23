@@ -21,6 +21,19 @@ import 'package:lottie/lottie.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
+/// Where an [MxcImage] stands, for callers that draw their own progress.
+enum MxcImageLoad {
+  /// No frame yet: downloading, decrypting or decoding.
+  loading,
+
+  /// The first frame is on screen.
+  ready,
+
+  /// The media could not be loaded or decoded. Network errors keep retrying
+  /// in the background and may still turn into [ready].
+  failed,
+}
+
 class MxcImage extends StatefulWidget {
   final Uri? uri;
   final Event? event;
@@ -52,11 +65,30 @@ class MxcImage extends StatefulWidget {
   /// original is downloaded and decrypted locally; no thumbnail is asked for.
   final Map<String, Object?>? encryption;
 
+  /// Called after the frame in which the state changes (never during
+  /// build); the widget starts in [MxcImageLoad.loading].
+  final ValueChanged<MxcImageLoad>? onLoadStateChanged;
+
   static void clearCache(String cacheName) =>
       _MxcImageState._imageDataCache.removeWhere((key) => key.$2 == cacheName);
 
   /// Drops parsed Lottie stickers (tests, memory pressure).
   static void clearLottieCache() => _MxcImageState._lottieCache.clear();
+
+  /// Encoded bytes another [MxcImage] already holds in memory for [event]'s
+  /// media (a timeline bubble, the media grid), whatever size it asked for;
+  /// the largest copy wins. Lets the photo viewer start from the picture the
+  /// user just tapped instead of an empty frame.
+  static Uint8List? cachedPreviewOf(Event event) {
+    final client = event.room.client;
+    final transactionId = event.transactionId;
+    return _MxcImageState._imageDataCache.largestWhere(
+      (key) =>
+          identical(key.$1, client) &&
+          (key.$4 == event.eventId ||
+              (transactionId != null && key.$3 == transactionId)),
+    );
+  }
 
   const MxcImage({
     this.uri,
@@ -80,6 +112,7 @@ class MxcImage extends StatefulWidget {
     this.decodeToCover = false,
     this.opacity = 1,
     this.encryption,
+    this.onLoadStateChanged,
     super.key,
   });
 
@@ -121,8 +154,20 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   /// Bytes came from the memory cache before the first frame: render them
   /// directly, without the placeholder cross-fade.
   bool _fromCache = false;
+  MxcImageLoad _reported = MxcImageLoad.loading;
   Client? _dependencyClient;
   double? _dependencyDpr;
+
+  /// Tells [MxcImage.onLoadStateChanged] after this frame, once per change.
+  void _report(MxcImageLoad state) {
+    if (widget.onLoadStateChanged == null || _reported == state) return;
+    final generation = _generation;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _generation || _reported == state) return;
+      _reported = state;
+      widget.onLoadStateChanged?.call(state);
+    });
+  }
 
   bool get _active {
     final state = WidgetsBinding.instance.lifecycleState;
@@ -155,6 +200,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
 
   void _fail(int generation) {
     if (!mounted || generation != _generation) return;
+    _report(MxcImageLoad.failed);
     setState(() => _failed = true);
   }
 
@@ -326,6 +372,10 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     _loading = true;
     try {
       await _load(generation);
+      // No thumbnail, or the attachment is not an image.
+      if (generation == _generation && _imageData == null) {
+        _report(MxcImageLoad.failed);
+      }
     } on IOException catch (_) {
       _scheduleRetry(generation);
     } on http.ClientException catch (_) {
@@ -351,7 +401,9 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   }
 
   void _scheduleRetry(int generation) {
-    if (!mounted || generation != _generation || !_active) return;
+    if (!mounted || generation != _generation) return;
+    _report(MxcImageLoad.failed);
+    if (!_active) return;
     final multiplier = 1 << min(_failures++, 5);
     final delay = Duration(
       microseconds: min(
@@ -372,6 +424,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     _imageData = null;
     _lottie = null;
     _fromCache = false;
+    _reported = MxcImageLoad.loading;
     if (widget.uri != null || widget.event != null) {
       final client = _client();
       final key = _cacheKey(client);
@@ -503,6 +556,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       StackTrace? stackTrace,
     ) {
       Logs().d('Unable to render mxc image', error, stackTrace);
+      _report(MxcImageLoad.failed);
       if (widget.usePlaceholderOnError && widget.placeholder != null) {
         return widget.placeholder!(context);
       }
@@ -547,6 +601,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       int? frame,
       bool wasSynchronouslyLoaded,
     ) {
+      if (frame != null) _report(MxcImageLoad.ready);
       if (wasSynchronouslyLoaded || _fromCache) return child;
       final duration = NotionMotion.reduced(context)
           ? Duration.zero
@@ -614,6 +669,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     // Images fade their first frame in (above); a Lottie sticker fades in
     // once when it arrives.
     if (lottie == null) return clipped;
+    _report(MxcImageLoad.ready);
     return NotionEntrance(
       rise: 0,
       afterRoute: false,

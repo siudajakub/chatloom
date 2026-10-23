@@ -7,6 +7,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/events/round_video_bridge_message.dart';
 import 'package:chatloom/pages/chat/events/round_video_message.dart';
 import 'package:chatloom/pages/image_viewer/pointers_listener.dart';
+import 'package:chatloom/pages/image_viewer/progressive_photo.dart';
 import 'package:chatloom/pages/image_viewer/video_player.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -256,63 +257,61 @@ class ImageViewerView extends StatelessWidget {
       case MessageTypes.Image:
       case MessageTypes.Sticker:
       default:
-        return InteractiveViewer(
+        // The final rectangle is known before the full image loads, so the
+        // hero lands where the photo will be.
+        Widget zoomable(Widget image) => InteractiveViewer(
           minScale: 1.0,
           maxScale: 10.0,
           transformationController: controller.transformFor(event),
           onInteractionStart: controller.onInteractionStart,
           onInteractionUpdate: controller.onInteractionUpdate,
           onInteractionEnd: controller.onInteractionEnds,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              // The final rectangle is known before the full image loads,
-              // so the hero lands where the photo will be; the thumbnail
-              // shows until the full image fades in over it.
-              final info = event.infoMap;
-              final size = event.messageType == MessageTypes.Sticker
-                  ? null
-                  : notionFitMedia(
-                      info['w'] is num ? info['w'] as num : null,
-                      info['h'] is num ? info['h'] as num : null,
-                      constraints.biggest,
-                    );
-              Widget image = MxcImage(
+          child: GestureDetector(
+            // A tap on the photo toggles the chrome (a tap beside it closes
+            // the viewer); a double tap zooms into that point.
+            onTap: controller.toggleChrome,
+            onDoubleTapDown: controller.onDoubleTapDown,
+            onDoubleTap: () => controller.onDoubleTap(event),
+            child: Center(
+              child: NotionMediaHero(
+                tag: controller.heroTagFor(event),
+                sourceRadius: controller.widget.sourceRadius,
+                child: image,
+              ),
+            ),
+          ),
+        );
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final info = event.infoMap;
+            final size = event.messageType == MessageTypes.Sticker
+                ? null
+                : notionFitMedia(
+                    info['w'] is num ? info['w'] as num : null,
+                    info['h'] is num ? info['h'] as num : null,
+                    constraints.biggest,
+                  );
+            if (size != null) {
+              // Opens on the thumbnail the user tapped, sharpens in place.
+              return ProgressivePhoto(
+                key: ValueKey(event.eventId),
+                event: event,
+                size: size,
+                frame: (context, photo) => zoomable(photo),
+              );
+            }
+            // Stickers and photos without dimensions: the layers could not
+            // share one box, so the image shows when it is ready.
+            return zoomable(
+              MxcImage(
                 key: ValueKey(event.eventId),
                 event: event,
                 fit: BoxFit.contain,
                 isThumbnail: false,
                 animated: true,
-                width: size?.width,
-                height: size?.height,
-                placeholder: size == null || !event.hasThumbnail
-                    ? null
-                    : (_) => MxcImage(
-                        event: event,
-                        fit: BoxFit.contain,
-                        isThumbnail: true,
-                        width: size.width,
-                        height: size.height,
-                      ),
-              );
-              if (size != null) {
-                image = SizedBox.fromSize(size: size, child: image);
-              }
-              return GestureDetector(
-                // A tap on the photo toggles the chrome (a tap beside it
-                // closes the viewer); a double tap zooms into that point.
-                onTap: controller.toggleChrome,
-                onDoubleTapDown: controller.onDoubleTapDown,
-                onDoubleTap: () => controller.onDoubleTap(event),
-                child: Center(
-                  child: NotionMediaHero(
-                    tag: controller.heroTagFor(event),
-                    sourceRadius: controller.widget.sourceRadius,
-                    child: image,
-                  ),
-                ),
-              );
-            },
-          ),
+              ),
+            );
+          },
         );
     }
   }
