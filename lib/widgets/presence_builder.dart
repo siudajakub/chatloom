@@ -28,6 +28,9 @@ class PresenceBuilder extends StatefulWidget {
 class _PresenceBuilderState extends State<PresenceBuilder> {
   CachedPresence? _presence;
   StreamSubscription<CachedPresence>? _sub;
+  Client? _client;
+  String? _userId;
+  int _generation = 0;
 
   void _updatePresence(CachedPresence? presence) {
     if (!mounted) return;
@@ -37,20 +40,53 @@ class _PresenceBuilderState extends State<PresenceBuilder> {
   }
 
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bind();
+  }
+
+  @override
+  void didUpdateWidget(covariant PresenceBuilder oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _bind();
+  }
+
+  void _bind() {
     final client = widget.client ?? Matrix.of(context).client;
     final userId = widget.userId;
+    if (identical(client, _client) && userId == _userId) return;
+    _client = client;
+    _userId = userId;
+    _presence = null;
+    final generation = ++_generation;
+    unawaited(_sub?.cancel());
+    _sub = null;
     if (userId != null) {
-      client.fetchCurrentPresence(userId).then(_updatePresence);
+      var live = false;
       _sub = client.onPresenceChanged.stream
           .where((presence) => presence.userid == userId)
-          .listen(_updatePresence);
+          .listen((presence) {
+            if (generation != _generation) return;
+            live = true;
+            _updatePresence(presence);
+          });
+      // Opening a profile must not cause a new presence query. A slower
+      // database result also must not overwrite a newer sync event/account.
+      unawaited(
+        client.fetchCurrentPresence(userId, fetchOnlyFromCached: true).then((
+          presence,
+        ) {
+          if (mounted && generation == _generation && !live) {
+            _updatePresence(presence);
+          }
+        }, onError: (Object _) {}),
+      );
     }
   }
 
   @override
   void dispose() {
+    _generation++;
     _sub?.cancel();
     super.dispose();
   }
