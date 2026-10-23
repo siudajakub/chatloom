@@ -140,7 +140,9 @@ class NotionInboxRow extends StatelessWidget {
           child: _SelectedBackground(
             selected: selected,
             color: colors.selected,
-            restColor: hasUnread && !muted ? palette.accentTint : null,
+            restColor: hasUnread && !muted && !selected
+                ? palette.accentTint
+                : null,
             child: Material(
               type: MaterialType.transparency,
               borderRadius: NotionRadius.rowAll,
@@ -488,7 +490,7 @@ class _SelectedBackground extends StatefulWidget {
   final bool selected;
   final Color color;
 
-  /// Painted while not selected (the unread tint), crossfading with [color].
+  /// The resting background under the selection (the unread tint).
   final Color? restColor;
   final Widget child;
 
@@ -527,53 +529,45 @@ class _SelectedBackgroundState extends State<_SelectedBackground>
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
-    return CustomPaint(
-      painter: _SelectionPainter(
-        animation:
-            controller ??
-            (widget.selected
-                ? kAlwaysCompleteAnimation
-                : kAlwaysDismissedAnimation),
-        color: widget.color,
-        restColor: widget.restColor,
+    return DecoratedBox(
+      key: const ValueKey('notion_inbox_row_tint'),
+      decoration: BoxDecoration(
+        color: widget.restColor ?? Colors.transparent,
+        borderRadius: NotionRadius.rowAll,
       ),
-      child: widget.child,
+      child: CustomPaint(
+        painter: _SelectionPainter(
+          animation:
+              controller ??
+              (widget.selected
+                  ? kAlwaysCompleteAnimation
+                  : kAlwaysDismissedAnimation),
+          color: widget.color,
+        ),
+        child: widget.child,
+      ),
     );
   }
 }
 
 class _SelectionPainter extends CustomPainter {
-  _SelectionPainter({
-    required this.animation,
-    required this.color,
-    this.restColor,
-  }) : super(repaint: animation);
+  _SelectionPainter({required this.animation, required this.color})
+    : super(repaint: animation);
 
   final Animation<double> animation;
   final Color color;
-  final Color? restColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     final t = animation.value;
-    final rect = NotionRadius.rowAll.toRRect(Offset.zero & size);
-    final rest = restColor;
-    if (rest != null && t < 1) {
-      canvas.drawRRect(
-        rect,
-        Paint()..color = rest.withValues(alpha: rest.a * (1 - t)),
-      );
-    }
     if (t <= 0) return;
     canvas.drawRRect(
-      rect,
+      NotionRadius.rowAll.toRRect(Offset.zero & size),
       Paint()..color = color.withValues(alpha: color.a * t),
     );
   }
 
   @override
   bool shouldRepaint(_SelectionPainter old) =>
-      old.color != color ||
-      old.restColor != restColor ||
-      !identical(old.animation, animation);
+      old.color != color || !identical(old.animation, animation);
 }

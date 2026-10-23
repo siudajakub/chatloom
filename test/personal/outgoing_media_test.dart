@@ -178,8 +178,9 @@ void main() {
       await first.accepted;
       await pumpEventQueue();
       expect(room.readContexts, [r'$one', r'$one']);
-      room.gates.last.complete(r'$b');
-      await second.accepted;
+      // The second send fails; its retry still uses the original cutoff.
+      room.gates.last.completeError(StateError('fictional connection loss'));
+      await expectLater(second.accepted, throwsA(anything));
       room.holdSends = false;
       final retry = await OutgoingMedia.retry(
         Event.fromMatrixEvent(echoes.events['freeze-b']!, room),
@@ -191,7 +192,8 @@ void main() {
   );
 
   test('retry upgrades legacy Opus MIME and retains voice metadata', () async {
-    final room = MediaRoom(ConversationClient());
+    final room = MediaRoom(ConversationClient())
+      ..failures.add(StateError('fictional connection loss'));
     final bytes = Uint8List(47);
     bytes.setRange(0, 4, 'OggS'.codeUnits);
     bytes[26] = 1;
@@ -214,7 +216,7 @@ void main() {
         },
       },
     );
-    await ticket.accepted;
+    await expectLater(ticket.accepted, throwsA(anything));
     final retry = await OutgoingMedia.retry(
       Event.fromMatrixEvent(echoes.events['legacy-voice']!, room),
     );

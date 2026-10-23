@@ -205,7 +205,9 @@ Future<void> _syncIfIdle(Client client) async {
   if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
     return;
   }
-  await client.oneShotSync(timeout: Duration.zero);
+  // Restart instead of joining a long poll that may be minutes old; the
+  // caller bounds the wait.
+  await client.restartSync(timeout: Duration.zero);
 }
 
 /// Sends [input] typed into the notification of [roomId] and updates that

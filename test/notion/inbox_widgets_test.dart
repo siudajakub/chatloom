@@ -61,19 +61,20 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      Color background() =>
-          (tester
-                      .widget<AnimatedContainer>(
-                        find
-                            .descendant(
-                              of: find.byType(NotionInboxRow),
-                              matching: find.byType(AnimatedContainer),
-                            )
-                            .first,
-                      )
-                      .decoration!
-                  as BoxDecoration)
-              .color!;
+      // The resting tint; a selection paints over it (and hides it).
+      Color background() {
+        final tint =
+            (tester
+                        .widget<DecoratedBox>(
+                          find.byKey(const ValueKey('notion_inbox_row_tint')),
+                        )
+                        .decoration
+                    as BoxDecoration)
+                .color!;
+        return tint == Colors.transparent
+            ? NotionTheme.build(brightness).scaffoldBackgroundColor
+            : tint;
+      }
       await row();
       final read = background();
       expect(
