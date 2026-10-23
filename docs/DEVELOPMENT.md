@@ -57,3 +57,8 @@ flutter build apk --release --target-platform android-arm64 \
 Unit, widget and golden tests use fictional fixtures only. They do not prove
 end-to-end encryption, push delivery or native behaviour on a real account;
 record those checks separately for each device and network.
+
+## Feature notes
+
+- [Instagram link media](instagram-link-media.md): optional bridge contract,
+  integration behavior and current acceptance limits.

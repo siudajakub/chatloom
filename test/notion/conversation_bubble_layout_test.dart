@@ -7,6 +7,7 @@ import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/events/html_message.dart';
 import 'package:chatloom/pages/chat/events/image_bubble.dart';
 import 'package:chatloom/pages/chat/events/instagram_share_preview.dart';
+import 'package:chatloom/pages/chat/events/link_preview.dart';
 import 'package:chatloom/pages/chat/events/message_content.dart';
 import 'package:chatloom/pages/chat/events/video_player.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -351,6 +352,35 @@ void main() {
         );
         expect(find.byType(InstagramSharePreview), findsNothing);
         debugDefaultTargetPlatformOverride = null;
+      },
+    );
+
+    testWidgets(
+      'preserves ordinary bridged previews and avoids duplicate Instagram cards',
+      (tester) async {
+        Map<String, Object?> linked(String url) => {
+          'msgtype': MessageTypes.Text,
+          'body': 'Look $url',
+          BridgedLinkPreview.contentKey: [
+            {'matched_url': url, 'og:title': 'Fictional shared article'},
+          ],
+        };
+        await pumpMedia(
+          tester,
+          media(linked('https://example.invalid/article')),
+        );
+        expect(find.byType(LinkPreviewAttachment), findsOneWidget);
+        expect(find.byType(InstagramSharePreview), findsNothing);
+        expect(tester.takeException(), isNull);
+
+        await pumpMedia(
+          tester,
+          media(linked('https://instagram.com/reel/Example/')),
+          compact: true,
+        );
+        expect(find.byType(InstagramSharePreview), findsOneWidget);
+        expect(find.byType(LinkPreviewAttachment), findsNothing);
+        expect(tester.takeException(), isNull);
       },
     );
 
