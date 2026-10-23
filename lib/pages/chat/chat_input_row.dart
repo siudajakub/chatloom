@@ -58,6 +58,10 @@ class ChatInputRow extends StatefulWidget {
   static const double height = 56.0;
   const ChatInputRow(this.controller, {super.key});
 
+  /// Forces the phone attachment sheet (true) or the desktop menu (false).
+  @visibleForTesting
+  static bool? debugAttachSheet;
+
   @override
   State<ChatInputRow> createState() => _ChatInputRowState();
 }
@@ -96,10 +100,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
     final matrix = Matrix.of(context);
     void pick(AddPopupMenuActions choice) =>
         controller.onAddPopupMenuButtonSelected(choice);
-    final run = await showComposerMenu<VoidCallback>(
-      anchor,
-      semanticLabel: 'Attach',
-      entries: [
+    final entries = <ComposerMenuEntry<VoidCallback>>[
         ComposerMenuEntry(
           () => pick(AddPopupMenuActions.gallery),
           Icons.photo_library_outlined,
@@ -154,11 +155,52 @@ class _ChatInputRowState extends State<ChatInputRow> {
             'Send from another account',
           ),
         ],
-      ],
-    );
+    ];
+    final run = _attachSheet
+        ? await _showAttachSheet(entries)
+        : await showComposerMenu<VoidCallback>(
+            anchor,
+            semanticLabel: 'Attach',
+            entries: entries,
+          );
     if (!mounted || run == null) return;
     run();
   }
+
+  /// Phones pick attachments from a sheet at the bottom of the screen.
+  ///
+  /// An anchored menu was positioned from the "+" button's rect at the
+  /// moment of the tap. With the keyboard open, the menu route takes focus,
+  /// the keyboard closes and the composer drops by the keyboard height, but
+  /// the menu stays at the old position high above it. A bottom sheet does
+  /// not depend on the button or the keyboard insets.
+  bool get _attachSheet =>
+      ChatInputRow.debugAttachSheet ?? PlatformInfos.isMobile;
+
+  Future<VoidCallback?> _showAttachSheet(
+    List<ComposerMenuEntry<VoidCallback>> entries,
+  ) => showNotionSheet<VoidCallback>(
+    // Above the whole app, like the menu.
+    context: Navigator.of(context, rootNavigator: true).context,
+    title: 'Attach',
+    builder: (sheetContext) => SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final entry in entries)
+            if (entry.isDivider)
+              const NotionGlassDivider(vertical: false)
+            else
+              NotionGlassMenuRow(
+                leading: Icon(entry.icon, size: NotionSize.icon),
+                title: entry.label!,
+                onTap: () => Navigator.of(sheetContext).pop(entry.value),
+              ),
+        ],
+      ),
+    ),
+  );
 
   /// The composer's "+": the attach menu, unavailable while editing.
   Widget _attachButton() {
@@ -440,6 +482,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
     );
   }
 }
+
 
 class _AccountMenuEntry extends StatelessWidget {
   final Client client;

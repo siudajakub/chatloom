@@ -82,7 +82,6 @@ import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
-import 'package:file_picker/file_picker.dart' show FileType;
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -2239,17 +2238,8 @@ class _MergedChatPageState extends State<_MergedChatView>
     switch (choice) {
       case AddPopupMenuActions.gallery:
         unawaited(
-          _attachMedia(
-            () => PlatformInfos.isMobile
-                ? _picking(
-                    ImagePicker().pickMultipleMedia(requestFullMetadata: false),
-                  )
-                : selectFiles(
-                    context,
-                    allowMultiple: true,
-                    type: FileType.media,
-                  ),
-          ),
+          // The system photo picker on phones, media files elsewhere.
+          _attachMedia(() => selectPhotosOrVideos(context)),
         );
       case AddPopupMenuActions.file:
         unawaited(

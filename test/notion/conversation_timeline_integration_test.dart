@@ -314,6 +314,9 @@ void main() {
   testWidgets(
     'ordinary plus opens the attach menu directly; emoji stays one tap',
     (tester) async {
+      // The desktop anchored menu; phones use the sheet (test below).
+      ChatInputRow.debugAttachSheet = false;
+      addTearDown(() => ChatInputRow.debugAttachSheet = null);
       final client = ConversationClient();
       final room = ConversationRoom(client, '!input:example.invalid');
       final controller = _ComposerController(room);
@@ -369,6 +372,61 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.emojiOpens, 1);
       expect(tester.state(find.byType(EditableText)), same(editor));
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.sendController.dispose();
+      controller.inputFocus.dispose();
+      controller.scrollController.dispose();
+    },
+  );
+  testWidgets(
+    'phone attach sheet stays at the bottom when the keyboard closes',
+    (tester) async {
+      ChatInputRow.debugAttachSheet = true;
+      addTearDown(() => ChatInputRow.debugAttachSheet = null);
+      // The soft keyboard is open: the composer sits above it.
+      tester.view.viewInsets = const FakeViewPadding(bottom: 900);
+      addTearDown(tester.view.resetViewInsets);
+      final client = ConversationClient();
+      final room = ConversationRoom(client, '!sheet:example.invalid');
+      final controller = _ComposerController(room);
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('dev.fluttercommunity.plus/wakelock'),
+        (_) async => null,
+      );
+      await mountConversation(
+        tester,
+        Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: ChatInputRow(controller),
+          ),
+        ),
+        client,
+      );
+      await tester.tap(find.byTooltip('Attach media or a file'));
+      await tester.pumpAndSettle();
+      final sheet = find.byType(BottomSheet);
+      expect(sheet, findsOneWidget);
+      final screen = tester.view.physicalSize / tester.view.devicePixelRatio;
+      final open = tester.getRect(sheet);
+      expect(open.bottom, moreOrLessEquals(screen.height, epsilon: 1));
+      // The sheet route takes focus and the keyboard closes; the composer
+      // drops, the sheet must not stay where the composer was.
+      tester.view.resetViewInsets();
+      await tester.pumpAndSettle();
+      expect(tester.getRect(sheet), open);
+      expect(find.text('Photo or video'), findsOneWidget);
+      expect(
+        find.text(
+          L10n.of(tester.element(find.byType(ChatInputRow))).sendFile,
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Photo or video'));
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(controller.attachments, [AddPopupMenuActions.gallery]);
+      expect(find.byType(ChatInputRow), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       controller.sendController.dispose();
       controller.inputFocus.dispose();

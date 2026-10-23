@@ -16,6 +16,7 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/utils/background_startup_recovery.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/error_reporter.dart';
+import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/flutter_error_routing.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
@@ -73,6 +74,8 @@ void main(List<String> args) => runZonedGuarded(() async {
   // widget bindings are initialized already.
   WidgetsFlutterBinding.ensureInitialized();
   PersonalPerformanceProbe.install();
+  // Gallery picks (attachments, avatars) use the system photo picker.
+  useSystemPhotoPicker();
   PersonalPerformanceProbe.startupPhase('binding');
 
   PersonalPrivacy.installLogging();

@@ -1856,11 +1856,8 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
-  Future<void> openGalleryAction() => _pickAttachments(
-    () => AppLock.of(
-      context,
-    ).pauseWhile(ImagePicker().pickMultipleMedia(requestFullMetadata: false)),
-  );
+  Future<void> openGalleryAction() =>
+      _pickAttachments(() => selectPhotosOrVideos(context));
 
   Future<void> openCameraAction() => _pickAttachments(() async {
     final file = await AppLock.of(
