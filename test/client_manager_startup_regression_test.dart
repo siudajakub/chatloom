@@ -2,11 +2,13 @@
 import 'dart:async';
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/init_with_restore.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
+import 'package:matrix/src/utils/cached_stream_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeClient implements Client {
@@ -14,6 +16,10 @@ class _FakeClient implements Client {
   final String clientName;
   bool loggedIn = false;
   _FakeClient(this.clientName);
+  @override
+  final onPresenceChanged = CachedStreamController<CachedPresence>();
+  @override
+  final onSyncStatus = CachedStreamController<SyncStatusUpdate>();
 
   @override
   bool isLogged() => loggedIn;
@@ -48,6 +54,90 @@ void main() {
     });
     return SharedPreferences.getInstance();
   }
+
+  test(
+    'presence capture precedes alternate initialization and start is idempotent',
+    () async {
+      final store = await savedAccounts(['saved']);
+      final client = _FakeClient('saved')..loggedIn = true;
+      final startup = ClientStartup(
+        store: store,
+        clientFactory: (_, _) async => client,
+        initializeClient: (_, _) async {
+          client.onPresenceChanged.add(
+            CachedPresence(
+              PresenceType.online,
+              null,
+              null,
+              true,
+              '@peer:example.invalid',
+            ),
+          );
+          await Future<void>.delayed(Duration.zero);
+        },
+      );
+      await startup.restore();
+      final ledger = ConversationActivityReceipts.of(client);
+      expect(ledger.observed.keys, contains('@peer:example.invalid'));
+      ConversationActivityReceipts.start(client);
+      startup.dispose();
+      expect(
+        ledger.observed,
+        isNotEmpty,
+        reason: 'published clients survive coordinator disposal',
+      );
+      ConversationActivityReceipts.stop(client);
+      client.onPresenceChanged.add(
+        CachedPresence(
+          PresenceType.online,
+          null,
+          null,
+          true,
+          '@later:example.invalid',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        ledger.observed,
+        isEmpty,
+        reason: 'one stop releases an idempotent pin',
+      );
+    },
+  );
+
+  test(
+    'failed initialization releases receipt capture and retry reattaches it',
+    () async {
+      final store = await savedAccounts(['saved']);
+      final client = _FakeClient('saved')..loggedIn = true;
+      var fail = true;
+      final startup = ClientStartup(
+        store: store,
+        clientFactory: (_, _) async => client,
+        initializeClient: (_, _) async {
+          client.onPresenceChanged.add(
+            CachedPresence(
+              PresenceType.online,
+              null,
+              null,
+              true,
+              '@peer:example.invalid',
+            ),
+          );
+          await Future<void>.delayed(Duration.zero);
+          if (fail) throw StateError('synthetic initialization failure');
+        },
+      );
+      await startup.restore();
+      final ledger = ConversationActivityReceipts.of(client);
+      expect(ledger.observed, isEmpty);
+      fail = false;
+      await startup.restore();
+      expect(ledger.observed, isNotEmpty);
+      startup.dispose();
+      ConversationActivityReceipts.stop(client);
+    },
+  );
 
   test(
     'background restore disables every sync loop before initialization',

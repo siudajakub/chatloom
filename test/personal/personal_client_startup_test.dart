@@ -27,6 +27,10 @@ class _Client implements Client {
   @override
   final onTimelineEvent = CachedStreamController<Event>();
   @override
+  final onPresenceChanged = CachedStreamController<CachedPresence>();
+  @override
+  final onSyncStatus = CachedStreamController<SyncStatusUpdate>();
+  @override
   Future<dynamic>? get userDeviceKeysLoading => null;
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

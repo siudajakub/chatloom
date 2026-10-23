@@ -25,6 +25,7 @@ class ConversationActivityBuilder extends StatefulWidget {
   final Client client;
   final Iterable<Room> rooms;
   final Widget Function(BuildContext, ConversationActivity) builder;
+
   /// Test clock for deterministic expiry; production uses the current time.
   final DateTime Function()? now;
 
@@ -43,8 +44,11 @@ class _ConversationActivityBuilderState
     _create();
   }
 
-  void _create() => _activity =
-      ConversationActivity(client: widget.client, rooms: widget.rooms, now: widget.now);
+  void _create() => _activity = ConversationActivity(
+    client: widget.client,
+    rooms: widget.rooms,
+    now: widget.now,
+  );
 
   @override
   void didUpdateWidget(ConversationActivityBuilder oldWidget) {
@@ -78,11 +82,12 @@ String conversationTypingText(
   final entries = activity.typing;
   if (entries.isEmpty) return '';
   final l10n = L10n.of(context);
-  final users = entries.map((entry) => entry.user).toList();
+  final users = conversationTypingUsers(activity);
   final first = users.first;
   final String text;
   if (AppConfig.hideTypingUsernames) {
-    text = users.length == 1 &&
+    text =
+        users.length == 1 &&
             activity.counterpartId(entries.first.room) == first.id
         ? l10n.isTyping
         : l10n.numUsersTyping(users.length);
@@ -104,10 +109,18 @@ String conversationTypingText(
   if (!sourceLabels) return text;
   final classifier = ConversationClassifier(entries.map((entry) => entry.room));
   final labels = entries
-      .map((entry) => notionNetworkLabel(classifier.classify(entry.room).network))
+      .map(
+        (entry) => notionNetworkLabel(classifier.classify(entry.room).network),
+      )
       .toSet();
   return '$text · ${labels.join(', ')}';
 }
+
+/// One Matrix identity can type in several merged sources simultaneously.
+/// Keep source entries for attribution, but show that identity only once.
+List<User> conversationTypingUsers(ConversationActivity activity) => {
+  for (final entry in activity.typing) entry.user.id: entry.user,
+}.values.toList();
 
 /// Problems win over typing and actual, attributable presence. Silence never
 /// becomes "offline", and a bridged puppet's Matrix presence is not remote
@@ -141,7 +154,9 @@ class ConversationActivityStatus extends StatelessWidget {
         label ??= rooms.map(bridges.problemFor).nonNulls.firstOrNull?.title;
         if (label == null && !connection.raw.offline) {
           final typing = conversationTypingText(
-            context, activity, sourceLabels: sourceLabels,
+            context,
+            activity,
+            sourceLabels: sourceLabels,
           );
           if (typing.isNotEmpty) {
             label = typing;
@@ -149,8 +164,9 @@ class ConversationActivityStatus extends StatelessWidget {
             final presences = activity.presences
               ..sort((a, b) {
                 if (a.online != b.online) return a.online ? -1 : 1;
-                return (b.lastActive ?? DateTime(0))
-                    .compareTo(a.lastActive ?? DateTime(0));
+                return (b.lastActive ?? DateTime(0)).compareTo(
+                  a.lastActive ?? DateTime(0),
+                );
               });
             final presence = presences.firstOrNull;
             if (presence != null) {
@@ -162,8 +178,9 @@ class ConversationActivityStatus extends StatelessWidget {
                       presence.lastActive!.localizedTime(context),
                     );
               if (label != null && sourceLabels) {
-                final network = ConversationClassifier([presence.room])
-                    .classify(presence.room).network;
+                final network = ConversationClassifier([
+                  presence.room,
+                ]).classify(presence.room).network;
                 label = '$label · ${notionNetworkLabel(network)}';
               }
             }

@@ -145,3 +145,26 @@ The floating dock's language is now the standard surface (DESIGN.md "Glass" and 
 - `NotionGlassSurface(..., overlay:, repaintBoundary: true)` — `overlay` uses `overlayTint` and blurs only while its route is settled.
 - `NotionGlassPanel(child:, borderRadius:, padding:, tint:, overlay: true, blur: true)`, `NotionGlassMenuRow(title:, leading:, trailing:, selected:, onTap:, style:, semanticsLabel:)`, `NotionGlassDivider(vertical: true)`, `NotionGlassPill(icon:, label:, onPressed:, tooltip:, selected:, blur: false, trailing:)` — `notion_glass.dart`; `NotionPillTabIndicator(color:, inset:)` — `notion_theme.dart`.
 - Behaviour changes: `NotionDialog`, `showNotionSheet` and `showModalActionPopup` present glass panels; `NotionScaffold(children:)` scrolls under a glass header; the network selector is a glass panel with `NotionGlassMenuRow`s. Theme: buttons, chips, icon buttons, FAB, segmented buttons, search bars and navigation indicators are pills; inputs use `fieldAll`; menus/snackbars `lg` + hairline; dialogs `xl`; sheets `sheetTop` (xl); dialogs and sheets use the dock's `surface` fill; tabs show a pill indicator without the divider.
+
+
+## Conversation activity — 2026-10-23
+
+`lib/personal/ui/conversation_activity_widgets.dart` supplies
+`ConversationActivityBuilder(client:, rooms:, builder:)`,
+`ConversationActivityStatus(client:, rooms:, activity:, sourceLabels:)` and
+`ConversationActivityAvatar(activity:, child:)`. The builder owns and disposes
+its model; its narrow updates do not rebuild timeline message rows. Typing is
+received from every selected room and deduplicated by Matrix user for display;
+source labels retain every originating network. Problems take precedence over
+activity. `NotionCompactChatHeader` now preserves child status semantics.
+
+`ConversationActivity` uses the existing sync streams with one-shot expiry.
+`ConversationActivityReceipts` records session receipt times once per client,
+pinned before initialization by ClientManager/ClientStartup; PersonalClient is
+an idempotent fallback owner. No polling, HTTP presence requests or additional
+persistent store. Online has a conservative five-minute freshness limit.
+Native Matrix presence is eligible by default; bridged puppet presence is
+excluded without independently verified native provenance. Unknown is hidden,
+never synthesized as offline. Legacy profile presence uses the same policy.
+
+Implementation and verification: `docs/personal/conversation-activity-implementation-2026-10-23.md`.

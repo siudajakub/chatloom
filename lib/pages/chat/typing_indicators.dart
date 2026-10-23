@@ -39,7 +39,9 @@ class _TypingIndicatorsState extends State<TypingIndicators> {
     const avatarSize = Avatar.defaultSize / 2;
 
     final rooms = controller.typingRooms;
-    final roomSignature = (rooms.map((room) => room.id).toList()..sort()).join('|');
+    final roomSignature = (rooms.map((room) => room.id).toList()..sort()).join(
+      '|',
+    );
     if (!identical(_shownClient, controller.room.client) ||
         _shownRooms != roomSignature) {
       _shown = const [];
@@ -51,84 +53,88 @@ class _TypingIndicatorsState extends State<TypingIndicators> {
       rooms: rooms,
       builder: (context, activity) {
         final ownId = controller.room.client.userID;
-        final typingUsers = activity.typing.map((entry) => entry.user).toList();
+        final typingUsers = conversationTypingUsers(activity);
         if (typingUsers.isNotEmpty) _shown = typingUsers;
         final users = _shown;
         final newest = controller.conversationEvents?.firstOrNull;
 
         return Semantics(
           liveRegion: true,
-          label: conversationTypingText(context, activity, sourceLabels: rooms.length > 1),
+          label: conversationTypingText(
+            context,
+            activity,
+            sourceLabels: rooms.length > 1,
+          ),
           child: Container(
-          width: double.infinity,
-          alignment: Alignment.center,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: ChatLoomThemes.maxTimelineWidth,
-            ),
-            child: NotionSizeReveal(
-              visible: typingUsers.isNotEmpty,
-              alignment: newest != null && newest.senderId == ownId
-                  ? Alignment.topRight
-                  : Alignment.topLeft,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: NotionSpace.xs,
-                  vertical: NotionSpace.xxs,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      alignment: Alignment.center,
-                      height: avatarSize,
-                      width: Avatar.defaultSize,
-                      child: Stack(
-                        children: [
-                          if (users.isNotEmpty)
-                            NotionPop(
-                              key: ValueKey(users.first.id),
-                              child: Avatar(
-                                size: avatarSize,
-                                client: controller.room.client,
-                                mxContent: users.first.avatarUrl,
-                                name: users.first.calcDisplayname(),
-                              ),
-                            ),
-                          if (users.length == 2)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 16),
-                              child: NotionPop(
-                                key: ValueKey(users.last.id),
+            width: double.infinity,
+            alignment: Alignment.center,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: ChatLoomThemes.maxTimelineWidth,
+              ),
+              child: NotionSizeReveal(
+                visible: typingUsers.isNotEmpty,
+                alignment: newest != null && newest.senderId == ownId
+                    ? Alignment.topRight
+                    : Alignment.topLeft,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: NotionSpace.xs,
+                    vertical: NotionSpace.xxs,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        alignment: Alignment.center,
+                        height: avatarSize,
+                        width: Avatar.defaultSize,
+                        child: Stack(
+                          children: [
+                            if (users.isNotEmpty)
+                              NotionPop(
+                                key: ValueKey(users.first.id),
                                 child: Avatar(
                                   size: avatarSize,
                                   client: controller.room.client,
-                                  mxContent: users.last.avatarUrl,
-                                  name: users.last.calcDisplayname(),
+                                  mxContent: users.first.avatarUrl,
+                                  name: users.first.calcDisplayname(),
                                 ),
                               ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Material(
-                      color: theme.colorScheme.surfaceContainerHigh,
-                      borderRadius: const BorderRadius.all(
-                        Radius.circular(AppConfig.borderRadius),
-                      ),
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: NotionSpace.sm,
-                          vertical: NotionSpace.xxs,
+                            if (users.length == 2)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 16),
+                                child: NotionPop(
+                                  key: ValueKey(users.last.id),
+                                  child: Avatar(
+                                    size: avatarSize,
+                                    client: controller.room.client,
+                                    mxContent: users.last.avatarUrl,
+                                    name: users.last.calcDisplayname(),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                        child: NotionTypingDots(),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      Material(
+                        color: theme.colorScheme.surfaceContainerHigh,
+                        borderRadius: const BorderRadius.all(
+                          Radius.circular(AppConfig.borderRadius),
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: NotionSpace.sm,
+                            vertical: NotionSpace.xxs,
+                          ),
+                          child: NotionTypingDots(),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
           ),
         );
       },

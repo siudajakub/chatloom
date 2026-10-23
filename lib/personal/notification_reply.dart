@@ -198,8 +198,9 @@ Future<bool> replyNeedsTrustReview(Room room) async {
 
 /// Device lists come with sync. While the app is not in the foreground no sync
 /// loop runs (and a notification action's own client has none), so catch up
-/// once, bounded, before encrypting. A failure still sends to known devices,
-/// like the composer while offline.
+/// once, bounded, before checking permissions/trust and encrypting. Restart a
+/// pending long-poll rather than waiting behind a socket from an old network.
+/// A failure still sends to known devices, like the composer while offline.
 Future<void> _syncIfIdle(Client client) async {
   if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
     return;
@@ -302,14 +303,12 @@ Future<NotificationReplyOutcome> _reply(
   var sending = false;
   try {
     if (locked) return NotificationReplyOutcome.locked;
-    if (!room.canSendDefaultMessages) return NotificationReplyOutcome.notSent;
-    if (await budget.wait(
-      () => (debugNotificationReplyNeedsReview ?? replyNeedsTrustReview)(room),
-    )) {
-      return NotificationReplyOutcome.needsReview;
-    }
+    // A shade reply can run hours after the last foreground sync. Refresh
+    // membership, power levels and device identities before deciding whether
+    // sending is allowed. Checking first can reject a send using stale state
+    // and leave it in the draft without ever attempting the outbox.
     // The catch-up is optional: skipped or cut short when the send needs
-    // the time. A failure still sends to known devices.
+    // the time. A failure still decides on the known state.
     final syncTime = budget.remaining - _sendReserve;
     if (syncTime > Duration.zero) {
       try {
@@ -319,6 +318,12 @@ Future<NotificationReplyOutcome> _reply(
               : const Duration(seconds: 8),
         );
       } catch (_) {}
+    }
+    if (!room.canSendDefaultMessages) return NotificationReplyOutcome.notSent;
+    if (await budget.wait(
+      () => (debugNotificationReplyNeedsReview ?? replyNeedsTrustReview)(room),
+    )) {
+      return NotificationReplyOutcome.needsReview;
     }
     sending = true;
     final result = await budget.wait(() => personal.sendImmediate(room, text));

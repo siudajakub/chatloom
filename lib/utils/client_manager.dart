@@ -7,6 +7,7 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/composer_commands.dart';
+import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/diagnostics.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/performance_probe_client.dart';
@@ -154,6 +155,7 @@ abstract class ClientManager {
       client.syncPresence = PresenceType.offline;
     }
     PersonalPrivacy.bind(client);
+    ConversationActivityReceipts.start(client);
     return client;
   }
 
@@ -306,7 +308,11 @@ class ClientStartup extends ChangeNotifier {
         try {
           final client = entry.client ??= await _factory(entry._name, store);
           PersonalPerformanceProbe.startupPhase('client_created');
-          if (_disposed) return;
+          if (_disposed) {
+            _stopUnpublishedActivity(entry);
+            return;
+          }
+          ConversationActivityReceipts.start(client);
           if (!backgroundSync) {
             client.backgroundSync = false;
             client.syncPresence = PresenceType.offline;
@@ -340,7 +346,10 @@ class ClientStartup extends ChangeNotifier {
                 client.userDeviceKeysLoading!,
             ]);
           }
-          if (_disposed) return;
+          if (_disposed) {
+            _stopUnpublishedActivity(entry);
+            return;
+          }
           PersonalPerformanceProbe.startupPhase('client_available');
           entry.available = true;
           entry.failure = null;
@@ -350,6 +359,7 @@ class ClientStartup extends ChangeNotifier {
           }
           notifyListeners();
         } catch (error) {
+          _stopUnpublishedActivity(entry);
           if (_disposed) return;
           entry.failure = PersonalDiagnostic.from(
             error is ClientInitException ? error.originalException : error,
@@ -369,6 +379,7 @@ class ClientStartup extends ChangeNotifier {
           .toList();
       if (loggedOut.isNotEmpty && loggedOut.length < accounts.length) {
         for (final entry in loggedOut) {
+          ConversationActivityReceipts.stop(entry.client!);
           accounts.remove(entry);
           clients.remove(entry.client);
         }
@@ -386,6 +397,20 @@ class ClientStartup extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    for (final entry in accounts.where((entry) => !entry.available)) {
+      _stopUnpublishedActivity(entry);
+    }
     super.dispose();
+  }
+
+  void _stopUnpublishedActivity(ClientStartupAccount entry) {
+    final client = entry.client;
+    if (client != null &&
+        !clients.contains(client) &&
+        !accounts.any(
+          (other) => other.available && identical(other.client, client),
+        )) {
+      ConversationActivityReceipts.stop(client);
+    }
   }
 }

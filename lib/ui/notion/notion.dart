@@ -234,7 +234,7 @@ class NotionCompactChatHeader extends StatelessWidget {
   final String name;
   final VoidCallback? onDetails;
 
-  /// Optional line under the name (connection status, `NotionStatusLine`).
+  /// Optional connection/activity line; its semantics remain accessible.
   final Widget? status;
   const NotionCompactChatHeader({
     super.key,
@@ -248,10 +248,10 @@ class NotionCompactChatHeader extends StatelessWidget {
     container: true,
     button: true,
     label: 'Chat details for $name',
-    excludeSemantics: true,
     enabled: onDetails != null,
     onTap: onDetails,
     child: InkWell(
+      excludeFromSemantics: true,
       onTap: onDetails,
       borderRadius: NotionRadius.pillAll,
       child: ConstrainedBox(
@@ -264,20 +264,22 @@ class NotionCompactChatHeader extends StatelessWidget {
               color: Theme.of(context).dividerColor,
             ),
             const SizedBox(width: 12),
-            avatar,
+            ExcludeSemantics(child: avatar),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
+                  ExcludeSemantics(
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   ?status,

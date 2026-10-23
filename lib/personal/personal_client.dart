@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/diagnostics.dart';
 import 'package:chatloom/personal/disappearing_state.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
@@ -95,6 +96,7 @@ class PersonalClient extends ChangeNotifier {
   }
 
   PersonalClient._(this.client) : _openStore = PersonalStore.open {
+    ConversationActivityReceipts.start(client);
     _watchOwnMedia();
   }
   @visibleForTesting
@@ -102,6 +104,7 @@ class PersonalClient extends ChangeNotifier {
     this.client, {
     required Future<PersonalStore> Function() openStore,
   }) : _openStore = openStore {
+    ConversationActivityReceipts.start(client);
     _watchOwnMedia();
   }
 
@@ -320,6 +323,7 @@ class PersonalClient extends ChangeNotifier {
       problem == null;
   bool get workerOnline =>
       ready && (workerReadiness?.freshAt(DateTime.now()) ?? false);
+
   /// Full background-service details, for the tap-through sheet and
   /// diagnostics; rows show [workerStatus] instead.
   String get workerReadinessDescription => !ready
@@ -337,6 +341,7 @@ class PersonalClient extends ChangeNotifier {
         ? heartbeat.transcriptionStatus(now)
         : heartbeat.status(now);
   }
+
   ConversationRef ref(Room r) => ConversationRef(
     accountId: client.userID!,
     roomId: r.id,
@@ -2141,6 +2146,7 @@ class PersonalClient extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    ConversationActivityReceipts.stop(client);
     _ownMediaWatch?.cancel();
     if (identical(_instances[client], this)) _instances.remove(client);
     cancelAutoTranscriptionTimers();

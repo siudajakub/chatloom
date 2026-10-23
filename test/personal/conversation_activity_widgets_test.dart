@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/bridge_health.dart';
@@ -8,6 +10,9 @@ import 'package:chatloom/personal/connection_status.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/ui/conversation_activity_widgets.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -79,6 +84,17 @@ Room _room(_Client client, String name, {String? network}) {
 }
 
 void main() {
+  setUpAll(() async {
+    final text = FontLoader('Roboto');
+    for (final weight in ['Regular', 'Medium', 'Bold']) {
+      text.addFont(rootBundle.load('assets/notion/fonts/Roboto-$weight.ttf'));
+    }
+    await text.load();
+    final icons = FontLoader('MaterialIcons');
+    icons.addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+    await icons.load();
+  });
+
   late _Client client;
   late ConnectionStatusMonitor connection;
   late StreamController<SyncStatusUpdate> statuses;
@@ -182,6 +198,8 @@ void main() {
     await tester.pumpWidget(host([whatsapp, signal], sources: true));
     await tester.pumpAndSettle();
     expect(find.textContaining('WhatsApp, Signal'), findsWidgets);
+    expect(find.textContaining('Alex and Alex'), findsNothing);
+    expect(find.text('is typing · WhatsApp, Signal'), findsWidgets);
     client.onPresenceChanged.add(
       CachedPresence(PresenceType.online, null, null, true, _peer),
     );
@@ -216,4 +234,137 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('capture real activity header states at narrow large text', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      const captureKey = ValueKey('conversation-activity-capture');
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 240);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      final native = _room(client, 'native-capture');
+      final whatsapp = _room(client, 'wa-capture', network: 'whatsapp');
+      final signal = _room(client, 'signal-capture', network: 'signal');
+
+      Widget captureHost(List<Room> rooms, {bool large = false}) => MaterialApp(
+        theme: NotionTheme.build(Brightness.dark),
+        localizationsDelegates: L10n.localizationsDelegates,
+        supportedLocales: L10n.supportedLocales,
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(large ? 2 : 1)),
+          child: child!,
+        ),
+        home: RepaintBoundary(
+          key: captureKey,
+          child: Scaffold(
+            body: Padding(
+              padding: const EdgeInsets.all(NotionSpace.md),
+              child: ConversationActivityBuilder(
+                client: client,
+                rooms: rooms,
+                now: () => now,
+                builder: (context, activity) => Align(
+                  alignment: Alignment.topCenter,
+                  child: NotionCompactChatHeader(
+                    avatar: ConversationActivityAvatar(
+                      activity: activity,
+                      child: const NotionInitialAvatar(name: 'Alex'),
+                    ),
+                    name: 'Alex',
+                    status: ConversationActivityStatus(
+                      client: client,
+                      rooms: rooms,
+                      activity: activity,
+                      sourceLabels: rooms.length > 1,
+                    ),
+                    onDetails: () {},
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      Future<void> capture(String name) async {
+        final directory = Platform.environment['CONVERSATION_CAPTURE_DIR'];
+        if (directory == null) return;
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(captureKey),
+        );
+        await tester.runAsync(() async {
+          final image = await boundary.toImage(pixelRatio: 2);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          final file = File('$directory/$name.png');
+          await file.parent.create(recursive: true);
+          await file.writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+      }
+
+      await tester.pumpWidget(captureHost([native]));
+      await tester.pumpAndSettle();
+      client.onPresenceChanged.add(
+        CachedPresence(PresenceType.online, null, null, true, _peer),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Currently active'), findsOneWidget);
+      expect(find.bySemanticsLabel(RegExp('Currently active')), findsWidgets);
+      await capture('native-header-online');
+
+      final typing = BasicEvent(
+        type: 'm.typing',
+        content: {
+          'user_ids': [_peer],
+        },
+      );
+      for (final room in [whatsapp, signal]) {
+        room.ephemerals['m.typing'] = typing;
+      }
+      await tester.pumpWidget(captureHost([whatsapp, signal]));
+      await tester.pumpAndSettle();
+      expect(find.text('is typing · WhatsApp, Signal'), findsOneWidget);
+      expect(
+        find.bySemanticsLabel(RegExp('is typing · WhatsApp, Signal')),
+        findsWidgets,
+      );
+      expect(
+        find.byKey(const ValueKey('conversation-online-dot')),
+        findsNothing,
+      );
+      await capture('merged-header-typing');
+
+      tester.view.physicalSize = const Size(320, 240);
+      await tester.pumpWidget(captureHost([whatsapp, signal], large: true));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final narrowStatus = tester.renderObject<RenderParagraph>(
+        find.text('is typing · WhatsApp, Signal'),
+      );
+      expect(narrowStatus.didExceedMaxLines, isTrue);
+      expect(
+        find.bySemanticsLabel(RegExp('is typing · WhatsApp, Signal')),
+        findsWidgets,
+      );
+      await capture('merged-header-narrow-large-text');
+
+      signal.ephemerals.remove('m.typing');
+      await tester.pumpWidget(captureHost([signal]));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('WhatsApp'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('conversation-online-dot')),
+        findsNothing,
+      );
+      await capture('header-source-switch');
+      await tester.pumpWidget(const SizedBox());
+    } finally {
+      semantics.dispose();
+    }
+  });
 }

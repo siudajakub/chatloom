@@ -31,6 +31,10 @@ class _Client implements Client {
   @override
   final onTimelineEvent = CachedStreamController<Event>();
   @override
+  final onPresenceChanged = CachedStreamController<CachedPresence>();
+  @override
+  final onSyncStatus = CachedStreamController<SyncStatusUpdate>();
+  @override
   bool get encryptionEnabled => false;
   @override
   Future<dynamic>? userDeviceKeysLoading = Future<void>.value();

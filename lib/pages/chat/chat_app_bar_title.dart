@@ -28,32 +28,32 @@ class ChatAppBarTitle extends StatelessWidget {
       client: room.client,
       rooms: [room],
       builder: (context, activity) => NotionCompactChatHeader(
-      // The partner's member event may load after the page is built.
-      avatar: StreamBuilder(
-        stream: room.client.onRoomState.stream.where(
-          (u) =>
-              u.roomId == room.id &&
-              (u.state.type == EventTypes.RoomMember ||
-                  u.state.type == EventTypes.RoomAvatar),
-        ),
-        builder: (context, _) => ListenableBuilder(
-          listenable: personal,
-          builder: (context, _) => ConversationActivityAvatar(
-            activity: activity,
-            child: notionInboxAvatar(personal, projection, room, size: 32),
+        // The partner's member event may load after the page is built.
+        avatar: StreamBuilder(
+          stream: room.client.onRoomState.stream.where(
+            (u) =>
+                u.roomId == room.id &&
+                (u.state.type == EventTypes.RoomMember ||
+                    u.state.type == EventTypes.RoomAvatar),
+          ),
+          builder: (context, _) => ListenableBuilder(
+            listenable: personal,
+            builder: (context, _) => ConversationActivityAvatar(
+              activity: activity,
+              child: notionInboxAvatar(personal, projection, room, size: 32),
+            ),
           ),
         ),
-      ),
-      name: name,
-      status: ConversationActivityStatus(
-        client: room.client,
-        rooms: [room],
-        activity: activity,
-        fallback: ChatHeaderSubtitle.infoLabel(context, room),
-      ),
-      onDetails: () => ChatLoomThemes.isThreeColumnMode(context)
-          ? controller.toggleDisplayChatDetailsColumn()
-          : context.go('${chatLocation(context, room.id)}/details'),
+        name: name,
+        status: ConversationActivityStatus(
+          client: room.client,
+          rooms: [room],
+          activity: activity,
+          fallback: ChatHeaderSubtitle.infoLabel(context, room),
+        ),
+        onDetails: () => ChatLoomThemes.isThreeColumnMode(context)
+            ? controller.toggleDisplayChatDetailsColumn()
+            : context.go('${chatLocation(context, room.id)}/details'),
       ),
     );
   }

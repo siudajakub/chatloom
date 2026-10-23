@@ -5,6 +5,7 @@
 
 import 'dart:async';
 
+import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -27,17 +28,12 @@ class PresenceBuilder extends StatefulWidget {
 
 class _PresenceBuilderState extends State<PresenceBuilder> {
   CachedPresence? _presence;
-  StreamSubscription<CachedPresence>? _sub;
+  final _subscriptions = <StreamSubscription<dynamic>>[];
+  ConversationActivityReceipts? _receipts;
+  Timer? _expiry;
   Client? _client;
   String? _userId;
-  int _generation = 0;
-
-  void _updatePresence(CachedPresence? presence) {
-    if (!mounted) return;
-    setState(() {
-      _presence = presence;
-    });
-  }
+  static const _freshness = Duration(minutes: 5);
 
   @override
   void didChangeDependencies() {
@@ -58,36 +54,60 @@ class _PresenceBuilderState extends State<PresenceBuilder> {
     _client = client;
     _userId = userId;
     _presence = null;
-    final generation = ++_generation;
-    unawaited(_sub?.cancel());
-    _sub = null;
+    _detach();
     if (userId != null) {
-      var live = false;
-      _sub = client.onPresenceChanged.stream
-          .where((presence) => presence.userid == userId)
-          .listen((presence) {
-            if (generation != _generation) return;
-            live = true;
-            _updatePresence(presence);
-          });
-      // Opening a profile must not cause a new presence query. A slower
-      // database result also must not overwrite a newer sync event/account.
-      unawaited(
-        client.fetchCurrentPresence(userId, fetchOnlyFromCached: true).then((
-          presence,
-        ) {
-          if (mounted && generation == _generation && !live) {
-            _updatePresence(presence);
-          }
-        }, onError: (Object _) {}),
+      final receipts = ConversationActivityReceipts.of(client)..retain();
+      _receipts = receipts;
+      void changed([Object? _]) {
+        if (mounted && identical(_receipts, receipts)) {
+          setState(_refresh);
+        }
+      }
+
+      _subscriptions.add(
+        receipts.changes
+            .where((id) => id == null || id == userId)
+            .listen(changed),
       );
+      _subscriptions.add(client.onRoomState.stream.listen(changed));
+      _refresh();
     }
+  }
+
+  // The same provenance and receipt times as chat headers, with no HTTP or
+  // database query when opening a profile or recycling a participant avatar.
+  void _refresh() {
+    _expiry?.cancel();
+    final receipts = _receipts;
+    final userId = _userId;
+    if (receipts == null || userId == null) return;
+    _presence = receipts.safeNativePresence(userId);
+    final observation = receipts.observed[userId];
+    if (_presence != null && observation != null) {
+      final remaining = observation.$2
+          .add(_freshness)
+          .difference(DateTime.now());
+      if (remaining > Duration.zero) {
+        _expiry = Timer(remaining, () {
+          if (mounted) setState(_refresh);
+        });
+      }
+    }
+  }
+
+  void _detach() {
+    _expiry?.cancel();
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel());
+    }
+    _subscriptions.clear();
+    _receipts?.release();
+    _receipts = null;
   }
 
   @override
   void dispose() {
-    _generation++;
-    _sub?.cancel();
+    _detach();
     super.dispose();
   }
 

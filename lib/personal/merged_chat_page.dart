@@ -2682,26 +2682,26 @@ class _MergedChatPageState extends State<_MergedChatView>
             client: personal.client,
             rooms: typingRooms,
             builder: (context, activity) => NotionCompactChatHeader(
-            avatar: ConversationActivityAvatar(
-              activity: activity,
-              child: personalConversationAvatar(
-              personal,
-              entityId: 'person:${group.id}',
-              avatar: projection.avatarForGroup(group),
+              avatar: ConversationActivityAvatar(
+                activity: activity,
+                child: personalConversationAvatar(
+                  personal,
+                  entityId: 'person:${group.id}',
+                  avatar: projection.avatarForGroup(group),
+                  name: displayName,
+                  size: NotionSize.avatarSm,
+                ),
+              ),
               name: displayName,
-              size: NotionSize.avatarSm,
+              status: ConversationActivityStatus(
+                client: personal.client,
+                rooms: typingRooms,
+                activity: activity,
+                sourceLabels: true,
+              ),
+              onDetails: () =>
+                  showPersonPage(context, personal: personal, group: group),
             ),
-            ),
-            name: displayName,
-            status: ConversationActivityStatus(
-              client: personal.client,
-              rooms: typingRooms,
-              activity: activity,
-              sourceLabels: true,
-            ),
-            onDetails: () =>
-                showPersonPage(context, personal: personal, group: group),
-          ),
           ),
           actions: [
             PopupMenuButton<String>(

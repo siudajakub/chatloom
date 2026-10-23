@@ -5,6 +5,7 @@ import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
+import 'package:matrix/src/utils/cached_stream_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _DelayedClient implements Client {
@@ -13,6 +14,10 @@ class _DelayedClient implements Client {
   @override
   final Future<void> roomsLoading;
   _DelayedClient(this.clientName, this.roomsLoading);
+  @override
+  final onPresenceChanged = CachedStreamController<CachedPresence>();
+  @override
+  final onSyncStatus = CachedStreamController<SyncStatusUpdate>();
   @override
   bool isLogged() => true;
   @override

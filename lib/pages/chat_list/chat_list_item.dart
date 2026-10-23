@@ -171,6 +171,21 @@ class ChatListItem extends StatefulWidget {
 
 class _ChatListItemState extends State<ChatListItem> {
   String? _senderRequested;
+  final _previewRepairs = <String, String>{};
+
+  void _repairPreview(Room room) {
+    final event = room.lastEvent;
+    if (event == null ||
+        room.client.roomPreviewLastEvents.contains(event.type) ||
+        event.type == EventTypes.refreshingLastEvent ||
+        _previewRepairs[room.id] == event.eventId) {
+      return;
+    }
+    _previewRepairs[room.id] = event.eventId;
+    room.refreshLastEvent().then((_) {
+      if (mounted) setState(() {});
+    }, onError: (_) {});
+  }
 
   /// Newest incoming event seen by this row; when a newer one arrives the
   /// row flashes once (it usually just moved to the top). Starts with the
@@ -216,9 +231,8 @@ class _ChatListItemState extends State<ChatListItem> {
     return ConversationActivityBuilder(
       client: room.client,
       rooms: sources,
-      builder: (context, activity) => _buildRow(
-        context, personal, projection, sources, activity,
-      ),
+      builder: (context, activity) =>
+          _buildRow(context, personal, projection, sources, activity),
     );
   }
 
@@ -231,13 +245,18 @@ class _ChatListItemState extends State<ChatListItem> {
   ) {
     final room = widget.room;
     final metadata = projection.metadataFor(room);
+    for (final source in sources) {
+      _repairPreview(source);
+    }
     final events =
         sources.map((source) => source.lastEvent).whereType<Event>().toList()
           ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
     final lastEvent = events.firstOrNull;
     final name = projection.displayName(room);
     final typingText = conversationTypingText(
-      context, activity, sourceLabels: projection.groupFor(room) != null,
+      context,
+      activity,
+      sourceLabels: projection.groupFor(room) != null,
     );
     final draftValues = [
       personal.values['draft:${projection.entityFor(room)}'],
@@ -319,82 +338,87 @@ class _ChatListItemState extends State<ChatListItem> {
         : lastPreview;
     return Semantics(
       label: activity.presences.any((presence) => presence.online)
-          ? l10n.currentlyActive : null,
+          ? l10n.currentlyActive
+          : null,
       child: NotionInboxRow(
-      avatar: ConversationActivityAvatar(
-        activity: activity,
-        child: notionInboxAvatar(
-          personal, projection, room, size: NotionSize.avatarLg,
+        avatar: ConversationActivityAvatar(
+          activity: activity,
+          child: notionInboxAvatar(
+            personal,
+            projection,
+            room,
+            size: NotionSize.avatarLg,
+          ),
         ),
-      ),
-      networks: widget.showNetworks
-          ? notionBadgeNetworks(notionRoomNetworks(projection, room))
-          : const [],
-      name: name,
-      preview: preview,
-      time: lastEvent?.originServerTs.localizedTimeShort(context),
-      unreadCount: projection.unreadCount(room),
-      unread: sources.any((source) => source.isUnread),
-      mentioned: !invite && sources.any((source) => source.highlightCount > 0),
-      muted: metadata.muted || nativeLimited,
-      notificationLabel: notificationLabel,
-      selected: widget.activeChat,
-      draft: draft != null || conflict,
-      redacted: lastEvent?.redacted == true && draft == null && !showsTyping,
-      typing: showsTyping,
-      pinned: metadata.isPinned,
-      failed: showsFailed && !showsTyping,
-      // Sending keeps its delayed spinner; a failure its danger mark.
-      delivery: invite || conflict || draft != null
-          ? null
-          : switch (delivery) {
-              DeliveryProgress.sent ||
-              DeliveryProgress.delivered ||
-              DeliveryProgress.read => delivery.tick,
-              _ => null,
-            },
-      previewLeading: showsFailed && !showsTyping
-          ? null
-          : lastEvent?.status.isSending == true
-          // Only a send that takes noticeably long shows a spinner.
-          ? const NotionDelayedSpinner(size: 12, strokeWidth: 1.5)
-          : lastEvent?.relationshipType == RelationshipTypes.thread
-          ? const Icon(Icons.forum_outlined, size: 12)
-          : null,
-      highlight: _highlight == 0 && widget.flash == 0
-          ? null
-          : (_highlight, widget.flash),
-      highlightOnMount: widget.flashOnMount,
-      onTap: widget.onTap,
-      onLongPress: widget.onLongPress == null
-          ? null
-          : () => widget.onLongPress!(context),
-      action: widget.onForget != null
-          ? IconButton(
-              icon: const Icon(Icons.delete_outlined),
-              tooltip: l10n.delete,
-              onPressed: widget.onForget,
-            )
-          : room.membership == Membership.invite
-          ? IconButton(
-              tooltip: l10n.declineInvitation,
-              icon: const Icon(Icons.close, size: 20),
-              onPressed: () async {
-                final consent = await showOkCancelAlertDialog(
-                  context: context,
-                  title: l10n.declineInvitation,
-                  message: l10n.areYouSure,
-                  okLabel: l10n.yes,
-                  isDestructive: true,
-                );
-                if (consent != OkCancelResult.ok || !context.mounted) return;
-                await showFutureLoadingDialog(
-                  context: context,
-                  future: room.leave,
-                );
+        networks: widget.showNetworks
+            ? notionBadgeNetworks(notionRoomNetworks(projection, room))
+            : const [],
+        name: name,
+        preview: preview,
+        time: lastEvent?.originServerTs.localizedTimeShort(context),
+        unreadCount: projection.unreadCount(room),
+        unread: sources.any((source) => source.isUnread),
+        mentioned:
+            !invite && sources.any((source) => source.highlightCount > 0),
+        muted: metadata.muted || nativeLimited,
+        notificationLabel: notificationLabel,
+        selected: widget.activeChat,
+        draft: draft != null || conflict,
+        redacted: lastEvent?.redacted == true && draft == null && !showsTyping,
+        typing: showsTyping,
+        pinned: metadata.isPinned,
+        failed: showsFailed && !showsTyping,
+        // Sending keeps its delayed spinner; a failure its danger mark.
+        delivery: invite || conflict || draft != null
+            ? null
+            : switch (delivery) {
+                DeliveryProgress.sent ||
+                DeliveryProgress.delivered ||
+                DeliveryProgress.read => delivery.tick,
+                _ => null,
               },
-            )
-          : null,
+        previewLeading: showsFailed && !showsTyping
+            ? null
+            : lastEvent?.status.isSending == true
+            // Only a send that takes noticeably long shows a spinner.
+            ? const NotionDelayedSpinner(size: 12, strokeWidth: 1.5)
+            : lastEvent?.relationshipType == RelationshipTypes.thread
+            ? const Icon(Icons.forum_outlined, size: 12)
+            : null,
+        highlight: _highlight == 0 && widget.flash == 0
+            ? null
+            : (_highlight, widget.flash),
+        highlightOnMount: widget.flashOnMount,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress == null
+            ? null
+            : () => widget.onLongPress!(context),
+        action: widget.onForget != null
+            ? IconButton(
+                icon: const Icon(Icons.delete_outlined),
+                tooltip: l10n.delete,
+                onPressed: widget.onForget,
+              )
+            : room.membership == Membership.invite
+            ? IconButton(
+                tooltip: l10n.declineInvitation,
+                icon: const Icon(Icons.close, size: 20),
+                onPressed: () async {
+                  final consent = await showOkCancelAlertDialog(
+                    context: context,
+                    title: l10n.declineInvitation,
+                    message: l10n.areYouSure,
+                    okLabel: l10n.yes,
+                    isDestructive: true,
+                  );
+                  if (consent != OkCancelResult.ok || !context.mounted) return;
+                  await showFutureLoadingDialog(
+                    context: context,
+                    future: room.leave,
+                  );
+                },
+              )
+            : null,
       ),
     );
   }

@@ -1,33 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'dart:async';
-
 import 'package:chatloom/widgets/presence_builder.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
+const _peer = '@peer:example.invalid';
+
 class _Database implements DatabaseApi {
   @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Presence display must not query database');
 }
 
 class _Client extends Client {
-  _Client(String name) : super(name, database: _Database());
-  final requests = <(String, bool, Completer<CachedPresence>)>[];
+  _Client(super.clientName) : super(database: _Database()) {
+    final room = Room(id: '!native:example.invalid', client: this);
+    rooms.add(room);
+    room.setState(
+      Event(
+        room: room,
+        type: EventTypes.RoomMember,
+        stateKey: _peer,
+        senderId: _peer,
+        eventId: r'$fixture',
+        originServerTs: DateTime.utc(2026),
+        content: {'membership': 'join'},
+      ),
+    );
+  }
+  @override
+  String get userID => '@owner:example.invalid';
 
   @override
   Future<CachedPresence> fetchCurrentPresence(
     String userId, {
     bool fetchOnlyFromCached = false,
-  }) {
-    final result = Completer<CachedPresence>();
-    requests.add((userId, fetchOnlyFromCached, result));
-    return result.future;
-  }
+  }) => throw StateError('Presence display must not fetch');
 }
-
-CachedPresence _presence(String id, PresenceType type) =>
-    CachedPresence(type, null, null, null, id);
 
 Widget _host(Client client, String userId) => MaterialApp(
   home: PresenceBuilder(
@@ -42,60 +51,91 @@ Widget _host(Client client, String userId) => MaterialApp(
 );
 
 void main() {
-  testWidgets('cache-only lookup cannot overwrite live presence', (
+  testWidgets('profile ignores cached online and receives live sync', (
     tester,
   ) async {
     final client = _Client('presence-cache');
-    await tester.pumpWidget(_host(client, '@peer:example.invalid'));
-    expect(client.requests.single.$2, isTrue);
+    // ignore: deprecated_member_use
+    client.presences[_peer] = CachedPresence(
+      PresenceType.online,
+      null,
+      null,
+      true,
+      _peer,
+    );
+    await tester.pumpWidget(_host(client, _peer));
+    expect(find.text('unknown'), findsOneWidget);
     client.onPresenceChanged.add(
-      _presence('@peer:example.invalid', PresenceType.online),
+      CachedPresence(PresenceType.online, null, null, true, _peer),
     );
-    await tester.pump();
-    client.requests.single.$3.complete(
-      _presence('@peer:example.invalid', PresenceType.offline),
-    );
-    await tester.pump();
-    expect(find.text('@peer:example.invalid:online'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('$_peer:online'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('same widget rebinds account and ignores late old result', (
+  testWidgets('recycled profile rebinds account and ignores old events', (
     tester,
   ) async {
     final first = _Client('presence-first');
     final second = _Client('presence-second');
-    const peer = '@peer:example.invalid';
-    await tester.pumpWidget(_host(first, peer));
-    await tester.pumpWidget(_host(second, peer));
-    second.requests.single.$3.complete(
-      _presence(peer, PresenceType.unavailable),
+    await tester.pumpWidget(_host(first, _peer));
+    first.onPresenceChanged.add(
+      CachedPresence(PresenceType.online, null, null, true, _peer),
     );
-    await tester.pump();
-    first.requests.single.$3.complete(_presence(peer, PresenceType.online));
-    first.onPresenceChanged.add(_presence(peer, PresenceType.online));
-    await tester.pump();
-    expect(find.text('$peer:unavailable'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('$_peer:online'), findsOneWidget);
+    await tester.pumpWidget(_host(second, _peer));
+    expect(find.text('unknown'), findsOneWidget);
+    second.onPresenceChanged.add(
+      CachedPresence(PresenceType.unavailable, 10000, null, false, _peer),
+    );
+    first.onPresenceChanged.add(
+      CachedPresence(PresenceType.online, null, null, true, _peer),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('$_peer:unavailable'), findsOneWidget);
     await tester.pumpWidget(_host(second, '@next:example.invalid'));
     expect(find.text('unknown'), findsOneWidget);
-    expect(second.requests.length, 2);
     await tester.pumpWidget(const SizedBox.shrink());
-    second.requests.last.$3.complete(
-      _presence('@next:example.invalid', PresenceType.online),
+    second.onPresenceChanged.add(
+      CachedPresence(PresenceType.online, null, null, true, _peer),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('failed cache lookup preserves unknown without error', (
+  testWidgets('profile suppresses bridge ghosts and reacts to disconnect', (
     tester,
   ) async {
-    final client = _Client('presence-error');
-    await tester.pumpWidget(_host(client, '@peer:example.invalid'));
-    client.requests.single.$3.completeError(StateError('cache unavailable'));
-    await tester.pump();
+    final client = _Client('presence-bridge');
+    await tester.pumpWidget(_host(client, _peer));
+    client.onPresenceChanged.add(
+      CachedPresence(PresenceType.online, null, null, true, _peer),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('$_peer:online'), findsOneWidget);
+    client.onSyncStatus.add(const SyncStatusUpdate(SyncStatus.error));
+    await tester.pumpAndSettle();
     expect(find.text('unknown'), findsOneWidget);
-    expect(tester.takeException(), isNull);
+    final room = client.rooms.single;
+    room.setState(
+      Event(
+        room: room,
+        type: 'm.bridge',
+        stateKey: '',
+        senderId: client.userID,
+        eventId: r'$bridge',
+        originServerTs: DateTime.utc(2026),
+        content: {
+          'protocol': {'id': 'telegram'},
+        },
+      ),
+    );
+    client.onPresenceChanged.add(
+      CachedPresence(PresenceType.online, null, null, true, _peer),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('unknown'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }

@@ -13,6 +13,7 @@ import 'package:chatloom/personal/notification_reply.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/push_helper.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
@@ -60,6 +61,16 @@ class _Plugin implements FlutterLocalNotificationsPlugin {
 }
 
 class _Client extends ConversationClient {
+  int syncRestarts = 0;
+  Object? syncFailure;
+
+  @override
+  Future<void> restartSync({Duration? timeout}) async {
+    expect(timeout, Duration.zero);
+    syncRestarts++;
+    if (syncFailure != null) throw syncFailure!;
+  }
+
   @override
   bool isLogged() => true;
 }
@@ -153,6 +164,8 @@ void main() {
   });
 
   tearDown(() {
+    TestWidgetsFlutterBinding.ensureInitialized()
+        .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     debugAppLockConfigured = null;
     debugNotificationReplyPersonalOf = null;
     debugNotificationReplyNeedsReview = null;
@@ -180,6 +193,27 @@ void main() {
     expect(plugin.shown, isEmpty);
   });
 
+  test(
+    'a background reply restarts sync instead of waiting on an old poll',
+    () async {
+      debugNotificationReplySync = null;
+      TestWidgetsFlutterBinding.ensureInitialized()
+          .handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      expect(await reply(), NotificationReplyOutcome.sent);
+      expect(client.syncRestarts, 1);
+    },
+  );
+
+  test('a catch-up network failure still attempts the durable send', () async {
+    debugNotificationReplySync = null;
+    client.syncFailure = TimeoutException('Synthetic network change');
+    TestWidgetsFlutterBinding.ensureInitialized()
+        .handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    expect(await reply(), NotificationReplyOutcome.sent);
+    expect(client.syncRestarts, 1);
+    expect(personal.sends, hasLength(1));
+  });
+
   test('an existing draft is kept: the reply joins it while sending and the '
       'draft returns to its earlier text afterwards', () async {
     personal.values['draft:${room.id}'] = {
@@ -193,6 +227,41 @@ void main() {
     ]);
     expect(personal.sends.single.text, _reply);
   });
+
+  test(
+    'refreshes stale send permissions before rejecting a shade reply',
+    () async {
+      room.sendingAllowed = false;
+      debugNotificationReplySync = (_) async {
+        expect(draft(), _reply, reason: 'Keep the reply before network work');
+        room.sendingAllowed = true;
+      };
+
+      expect(await reply(), NotificationReplyOutcome.sent);
+      expect(personal.sends.single.text, _reply);
+      expect(draft(), '');
+    },
+  );
+
+  test('checks refreshed device trust before sending', () async {
+    var refreshed = false;
+    debugNotificationReplySync = (_) async => refreshed = true;
+    debugNotificationReplyNeedsReview = (_) async => !refreshed;
+
+    expect(await reply(), NotificationReplyOutcome.sent);
+    expect(personal.sends, hasLength(1));
+  });
+
+  test(
+    'a permission revoked during catch-up keeps the draft without sending',
+    () async {
+      debugNotificationReplySync = (_) async => room.sendingAllowed = false;
+
+      expect(await reply(), NotificationReplyOutcome.notSent);
+      expect(personal.sends, isEmpty);
+      expect(draft(), _reply);
+    },
+  );
 
   for (final (state, outcome) in [
     (ImmediateSendState.failed, NotificationReplyOutcome.notSent),
