@@ -129,10 +129,17 @@ Days are separated by a centred `ConversationDayChip` (opaque `surface`
 pill, `captionMuted`). While the user scrolls, the same chip floats under
 the header with the day of the topmost message; it fades (so it is opaque,
 not glass), stays `ConversationMotion.dateHold` (0.5 s) after the list is
-idle and hides while that day's own chip is right under it. Unread messages
+idle and hides while that day's own chip is right under it. Tapping either
+chip opens `showNotionDatePicker` and jumps to that day's first message
+(Telegram). Unread messages
 start under a "N unread messages" `ConversationUnreadDivider`; a chat with
-unread messages opens with it just under the header, and the jump button
-goes there first.
+unread messages opens with it just under the header (a read marker beyond
+the loaded page loads the history around it), and the jump button goes
+there first. While the chat has unread mentions an accent "@" pill with a
+count sits above the jump button (`ConversationMentionButton`). In-chat
+search turns the header into the search field and the composer slot into
+the "3 of 17" bar (`lib/pages/chat/conversation_search.dart`); each step
+scrolls the open timeline and flashes the hit.
 
 Text on colours you do not control (private chat palettes, chat
 backgrounds) goes through `NotionContrast`: `on(bg)` for body text,
@@ -235,6 +242,7 @@ in new code; read `context.notion` instead.
 | `NotionDeliveryTick(state:, color:, readColor:)` | ticks of an own message beside its time and before the time of an inbox row whose last message is own (Telegram): clock sending, ✓ sent, ✓✓ delivered to the network, ✓✓ in the accent once read. Metadata colour except read; a state change fades once (`NotionLazySwitcher`), no ticker on first build; failures keep their own "Not sent" line (`notion_delivery_tick.dart`) |
 | `ConversationBubble(quote:)`, `ConversationReplyQuote`, `ConversationReplyCaption`, `ConversationMetaChip` | message bubbles and Messenger-style replies (`lib/pages/chat/conversation_bubble.dart`, see Message bubbles) |
 | `NotionTextField(label:, hint:, helper:, error:, ...)` | text input with the label above |
+| `showNotionDatePicker(context:, initialDate:, firstDate:, lastDate:)`, `NotionDatePicker` | a month calendar in a Notion sheet; picking a day closes it and returns the day (jump to date in a conversation) |
 | `NotionCompactChatHeader`, `NotionInitialAvatar` | chat header, letter avatar |
 | `NotionReactionChip`, `NotionReactionOverlap`, `NotionReactionBar`, `NotionReactionBurst` | reaction pills under a bubble, the long-press reaction pill, the double-tap burst (`notion_reactions.dart`, tokens `NotionReactions.*`) |
 | `NotionGlassSurface`, `NotionGlassBar`, `NotionGlassScope` | glass chrome and overlays (see Glass) |

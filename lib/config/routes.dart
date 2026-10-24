@@ -14,7 +14,6 @@ import 'package:chatloom/pages/chat_encryption_settings/chat_encryption_settings
 import 'package:chatloom/pages/chat_list/chat_list.dart';
 import 'package:chatloom/pages/chat_members/chat_members.dart';
 import 'package:chatloom/pages/chat_permissions_settings/chat_permissions_settings.dart';
-import 'package:chatloom/pages/chat_search/chat_search_page.dart';
 import 'package:chatloom/pages/device_settings/device_settings.dart';
 import 'package:chatloom/pages/intro/intro_page_presenter.dart';
 import 'package:chatloom/pages/invitation_selection/invitation_selection.dart';
@@ -514,15 +513,6 @@ abstract class AppRoutes {
     },
     redirect: loggedOutRedirect,
     routes: [
-      GoRoute(
-        path: 'search',
-        pageBuilder: (context, state) => defaultPageBuilder(
-          context,
-          state,
-          ChatSearchPage(roomId: state.pathParameters['roomid']!),
-        ),
-        redirect: loggedOutRedirect,
-      ),
       GoRoute(
         path: 'encryption',
         pageBuilder: (context, state) =>

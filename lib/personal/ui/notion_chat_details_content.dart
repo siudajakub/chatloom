@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/pages/chat/conversation_navigation.dart'
+    show ConversationJumpTargets;
+import 'package:chatloom/pages/chat/conversation_search.dart'
+    show ConversationSearchResultRow;
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
+import 'package:chatloom/personal/bridge_contact_search.dart' show searchFold;
+import 'package:chatloom/personal/local_message_search.dart';
 import 'package:chatloom/personal/merged_chat_page.dart' show SourceChatPage;
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -315,11 +321,21 @@ void _openEvent(BuildContext context, Event event, {List<Event>? media}) {
   } else {
     // Reuse the actual source conversation for protected/round/audio
     // playback, with its consent and capability controls. Never create a
-    // new player here.
+    // new player here. The chat this page was opened from takes it back
+    // (FX-03): it is popped to and jumps there, instead of a second chat page.
+    if (ConversationJumpTargets.open(context, event)) return;
     Navigator.of(context).push<void>(
       MaterialPageRoute(builder: (_) => SourceChatPage(source: source)),
     );
   }
+}
+
+/// A message search hit: the open chat below shows it in place; without
+/// one it opens like shared content.
+void _openMessage(BuildContext context, Event event) {
+  if (!PersonalPrivacy.surfaceUnlocked || event.redacted) return;
+  if (ConversationJumpTargets.open(context, event)) return;
+  _openEvent(context, event);
 }
 
 class NotionConversationContentPage extends StatefulWidget {
@@ -483,14 +499,17 @@ class _NotionConversationContentPageState
       '${widget.rooms.length > 1 ? '${event.room.getLocalizedDisplayname()} · ' : ''}${event.originServerTs.toLocal().toString().substring(0, 16)}';
   @override
   Widget build(BuildContext context) {
-    final query = _query.text.trim().toLowerCase();
+    // Folded like every other search: "lukasz" finds "Łukasz", each word
+    // must occur.
+    final terms = localSearchTerms(_query.text);
     final events = _history.events
         .where(sharedVisible)
         .where(
           (e) =>
-              query.isEmpty ||
-              '${e.body} ${sharedLinks(e).join(' ')}'.toLowerCase().contains(
-                query,
+              terms.isEmpty ||
+              localTextMatches(
+                searchFold('${e.body} ${sharedLinks(e).join(' ')}'),
+                terms,
               ),
         )
         .toList();
@@ -601,11 +620,9 @@ class _NotionConversationContentPageState
                         index: widget.initialMedia ? _tab : 1,
                         children: [
                           _mediaGrid(events),
-                          _list(
-                            widget.initialMedia
-                                ? events.where(sharedFile).toList()
-                                : events,
-                          ),
+                          widget.initialMedia
+                              ? _list(events.where(sharedFile).toList())
+                              : _messages(events, terms),
                           ListView.builder(
                             key: const PageStorageKey('content-links'),
                             padding: const EdgeInsets.all(20),
@@ -682,6 +699,33 @@ class _NotionConversationContentPageState
       _footer(),
     ],
   );
+
+  /// Message search hits: sender, date and the matching words in bold
+  /// (Telegram's results); a tap shows the message in its chat.
+  Widget _messages(List<Event> events, List<String> terms) => ListView.builder(
+    key: const PageStorageKey('content-messages'),
+    padding: const EdgeInsets.symmetric(
+      horizontal: NotionSpace.sm,
+      vertical: NotionSpace.md,
+    ),
+    itemCount: events.length + 1,
+    itemBuilder: (context, index) {
+      if (index == events.length) return _end(events.isEmpty);
+      final event = events[index];
+      return _entering(
+        event.eventId,
+        ConversationSearchResultRow(
+          hit: LocalMessageHit(event: event, text: event.body),
+          terms: terms,
+          sourceLabel: widget.rooms.length > 1
+              ? event.room.getLocalizedDisplayname()
+              : null,
+          onTap: () => _openMessage(context, event),
+        ),
+      );
+    },
+  );
+
   Widget _list(List<Event> events) => ListView.builder(
     key: const PageStorageKey('content-files'),
     padding: const EdgeInsets.all(20),

@@ -62,7 +62,18 @@ abstract interface class ConversationTimelineSource {
   // Newer history of a fragmented (jumped-to) timeline.
   bool get canLoadFuture;
   bool get isLoadingFuture;
-  Future<void> requestFuture();
+
+  /// [quiet]: an automatic load; a failure leaves "Load more" without an
+  /// error message.
+  Future<void> requestFuture({bool quiet = false});
+
+  /// Whether reaching the newest loaded row should load newer messages by
+  /// itself (a chat opened around its first unread message).
+  bool get autoLoadFuture;
+
+  /// Jump to date: asks for a day (starting at [around]) and shows its
+  /// first message. The day chips and the floating date pill call it.
+  Future<void> pickJumpDate([DateTime? around]);
 
   // Row callbacks.
   void replyAction({Event? replyTo});

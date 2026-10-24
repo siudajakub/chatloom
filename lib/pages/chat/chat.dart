@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
@@ -21,6 +22,8 @@ import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/composer_send_later.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/pages/chat/conversation_navigation.dart';
+import 'package:chatloom/pages/chat/conversation_search.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
@@ -66,14 +69,12 @@ import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
-import 'package:chatloom/widgets/notion_room_actions.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
 import 'package:collection/collection.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -350,6 +351,14 @@ class ChatController extends State<ChatPageWithRoom>
   @override
   bool get canLoadFuture => timeline?.canRequestFuture ?? false;
 
+  bool _futureFailed = false;
+
+  /// A chat opened around its first unread message loads newer messages as
+  /// the user reads down (Telegram), until a load fails.
+  @override
+  bool get autoLoadFuture =>
+      canLoadFuture && !isLoadingFuture && !_futureFailed;
+
   @override
   bool get isLoadingFuture => timeline?.isRequestingFuture ?? false;
 
@@ -494,7 +503,7 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   @override
-  Future<void> requestFuture() async {
+  Future<void> requestFuture({bool quiet = false}) async {
     final timeline = this.timeline;
     if (timeline == null) return;
     Logs().v('Requesting future...');
@@ -503,12 +512,17 @@ class ChatController extends State<ChatPageWithRoom>
 
     try {
       await timeline.requestFuture(historyCount: _loadHistoryCount);
+      _futureFailed = false;
     } catch (error, stack) {
       // The SDK leaves its flag set after a failure, which would keep the
       // "load newer" button spinning forever.
       timeline.isRequestingFuture = false;
+      // Automatic loading stops until the user taps "Load more".
+      _futureFailed = true;
       if (!mounted) return;
       setTimelineState(() {});
+      // An automatic load fails silently: "Load more" stays for a retry.
+      if (quiet) return;
       await ErrorReporter.action(
         context,
         action: ErrorAction.load,
@@ -733,7 +747,7 @@ class ChatController extends State<ChatPageWithRoom>
       MacDesktopCommands.bindChat(
         this,
         MacChatCommands(
-          searchInChat: () => performNotionRoomAction(context, room, 'search'),
+          searchInChat: openSearch,
           scrollToTop: () {
             if (!scrollController.hasClients) return;
             scrollController.jumpTo(scrollController.position.maxScrollExtent);
@@ -750,6 +764,13 @@ class ChatController extends State<ChatPageWithRoom>
         ),
       );
     }
+    // A search hit in Chat details comes back here instead of a new page.
+    ConversationJumpTargets.register(
+      this,
+      covers: (room) =>
+          room.id == roomId && identical(room.client, this.room.client),
+      jump: (event) => scrollToEventId(event.eventId),
+    );
     _loadDraft();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -892,10 +913,18 @@ class ChatController extends State<ChatPageWithRoom>
             .indexWhere((e) => e.eventId == readMarkerEventId);
       }
 
+      // Still not loaded (a busy group): open on the history around the
+      // read marker, as Telegram does, instead of at the newest message.
+      if (readMarkerEventId.isNotEmpty && readMarkerEventIndex == -1) {
+        readMarkerEventIndex = await _loadAroundReadMarker();
+        if (!mounted || timeline == null) return;
+      }
+
       if (readMarkerEventIndex > 1) {
         Logs().v('Open at the first unread message');
         await _openAtUnread();
       } else if (readMarkerEventId.isNotEmpty && readMarkerEventIndex == -1) {
+        // The context could not load: offer the way up instead.
         _showScrollUpMaterialBanner(readMarkerEventId);
       }
 
@@ -914,6 +943,28 @@ class ChatController extends State<ChatPageWithRoom>
   /// Unread rows from which a freshly opened chat is positioned while
   /// invisible; fewer usually fit on the first screen.
   static const int _holdUnreadRows = 6;
+
+  /// Replaces the timeline by the history around the read marker (the
+  /// event-context path of [scrollToEventId]) while the list stays hidden.
+  /// Returns the marker's row index in it, or -1 when the context did not
+  /// load (the live timeline is kept then).
+  Future<int> _loadAroundReadMarker() async {
+    timelineHold.value = true;
+    setTimelineState(() {
+      timeline?.cancelSubscriptions();
+      timeline = null;
+      _scrolledUp = false;
+      _loadTimeline(eventContextId: readMarkerEventId);
+    });
+    await loadTimelineFuture;
+    if (!mounted || timeline == null) return -1;
+    return timeline!.events
+        .filterByVisibleInGui(
+          exceptionEventId: readMarkerEventId,
+          threadId: activeThreadId,
+        )
+        .indexWhere((e) => e.eventId == readMarkerEventId);
+  }
 
   /// The oldest unread row (above which "N unread messages" sits), or -1.
   int _firstUnreadRow() {
@@ -945,7 +996,7 @@ class ChatController extends State<ChatPageWithRoom>
     if (!mounted || !scrollController.hasClients) return;
     if (scrollController.position.pixels > 0) {
       _unreadJumpEventId = eventId;
-      newBelow.value = conversationUnreadCount(
+      final loaded = conversationUnreadCount(
         rows,
         conversationReadMarkerRow(
           rows,
@@ -953,58 +1004,24 @@ class ChatController extends State<ChatPageWithRoom>
           timelineEvents: timeline?.events,
         ),
       );
+      // A context timeline holds only part of the unread run.
+      newBelow.value = timeline?.allowNewEvent == false
+          ? math.max(loaded, room.notificationCount)
+          : loaded;
     }
   }
 
   /// Scrolls so the row of [eventId] (the oldest unread message, with the
   /// "N unread messages" divider on top) sits right under the glass header.
   /// [animate]: glide like the jump button; otherwise jump (opening).
-  Future<bool> _revealUnread(String eventId, {required bool animate}) async {
+  Future<bool> _revealUnread(String eventId, {required bool animate}) {
     final index =
         conversationEvents?.indexWhere((e) => e.eventId == eventId) ?? -1;
-    if (index < 0 || !scrollController.hasClients) return false;
-    if (!scrollController.isIndexStateInLayoutRange(index)) {
-      await scrollController.scrollToIndex(
-        index,
-        duration: NotionMotion.short,
-        preferPosition: AutoScrollPosition.end,
-      );
-      if (!mounted || !scrollController.hasClients) return false;
-    }
-    final target = _underHeaderOffset(index);
-    if (target == null) return false;
-    if (animate && !ConversationMotion.reduced(context)) {
-      await scrollController.animateTo(
-        target,
-        duration: NotionMotion.long,
-        curve: NotionMotion.emphasized,
-      );
-    } else {
-      scrollController.jumpTo(target);
-    }
-    return true;
-  }
-
-  /// Scroll offset that puts the top of row [index] just under the header
-  /// (and pinned bar) drawn over the list, clamped to the list's extent.
-  double? _underHeaderOffset(int index) {
-    final box = scrollController.tagMap[index]?.context.findRenderObject();
-    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
-    final viewport = RenderAbstractViewport.maybeOf(box);
-    if (viewport == null) return null;
-    final position = scrollController.position;
-    // The reversed list's trailing edge is its top.
-    final reveal = viewport.getOffsetToReveal(box, 1).offset;
-    final header =
-        position.context.storageContext
-            .getInheritedWidgetOfExactType<MediaQuery>()
-            ?.data
-            .padding
-            .top ??
-        0;
-    return (reveal + header + NotionSpace.xs).clamp(
-      position.minScrollExtent,
-      position.maxScrollExtent,
+    return conversationRevealRow(
+      context,
+      scrollController,
+      index,
+      animate: animate,
     );
   }
 
@@ -1039,6 +1056,180 @@ class ChatController extends State<ChatPageWithRoom>
   void _showScrollUpMaterialBanner(String eventId) => setState(() {
     scrollUpBannerEventId = eventId;
   });
+
+  /// "First unread": the read marker could not be loaded on open.
+  void jumpToFirstUnread() {
+    final eventId = scrollUpBannerEventId;
+    if (eventId == null) return;
+    discardScrollUpBannerEventId();
+    unawaited(scrollToEventId(eventId));
+  }
+
+  // -------------------------------------------------------------------------
+  // In-chat search (FX-03).
+
+  ConversationSearchController? _search;
+  bool _searchShown = false;
+
+  /// Created on the first search; most chats are never searched.
+  ConversationSearchController get search =>
+      _search ??= ConversationSearchController(
+        rooms: () => [room],
+        loaded: () => timeline?.events ?? const <Event>[],
+        jump: (event) => scrollToEventId(event.eventId),
+      )..addListener(_searchChanged);
+
+  bool get searchActive => _search?.active ?? false;
+
+  /// Only entering and leaving search rebuild the page (header, composer
+  /// slot); typing and stepping rebuild the search widgets alone.
+  void _searchChanged() {
+    final shown = searchActive;
+    if (shown == _searchShown || !mounted) return;
+    _searchShown = shown;
+    setState(() {});
+  }
+
+  /// ⌘F, the ⋯ menu's "Search conversation": the header becomes the field.
+  void openSearch() {
+    if (!mounted) return;
+    if (activeThreadId != null) closeThread();
+    if (showEmojiPicker) hideEmojiPicker();
+    inputFocus.unfocus();
+    search.open();
+  }
+
+  void closeSearch() => _search?.close();
+
+  // -------------------------------------------------------------------------
+  // Unread mentions (FX-11).
+
+  final Set<String> _handledMentions = {};
+
+  /// Mentions this page already went to (the "@" count subtracts them).
+  final ValueNotifier<int> mentionsHandled = ValueNotifier(0);
+
+  /// The "@" button: the oldest unread message that mentions the user,
+  /// paging back (up to five pages) while the read marker is not loaded.
+  Future<void> jumpToMention() async {
+    final marker = readMarkerEventId.isEmpty
+        ? room.fullyRead
+        : readMarkerEventId;
+    int markerRow() {
+      final rows = conversationEvents ?? const <Event>[];
+      return conversationReadMarkerRow(
+        rows,
+        marker,
+        timelineEvents: timeline?.events,
+      );
+    }
+
+    for (var page = 0; page < 5 && markerRow() < 0; page++) {
+      if (!canLoadHistory || historyError != null) break;
+      await requestHistory();
+      if (!mounted) return;
+    }
+    final rows = conversationEvents ?? const <Event>[];
+    final mentions = conversationUnreadMentions(
+      rows,
+      markerRow(),
+      highlighted: conversationHighlights,
+      handled: _handledMentions,
+    );
+    if (mentions.isEmpty) {
+      // The server still counts mentions this device cannot find: settle
+      // the count and show the first unread message instead.
+      mentionsHandled.value = math.max(
+        mentionsHandled.value,
+        room.highlightCount,
+      );
+      final unread = _firstUnreadRow();
+      if (unread >= 0) {
+        await _revealUnread(rows[unread].eventId, animate: true);
+      }
+      return;
+    }
+    final target = mentions.first;
+    _handledMentions.add(target.eventId);
+    mentionsHandled.value = _handledMentions.length;
+    await scrollToEventId(target.eventId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Jump to date (FX-11).
+
+  /// The day chip, the floating date pill and the search bar's calendar.
+  @override
+  Future<void> pickJumpDate([DateTime? around]) async {
+    final day = await pickConversationDay(context, around ?? DateTime.now());
+    if (day == null || !mounted) return;
+    await jumpToDay(day);
+  }
+
+  /// Shows the first message of [day] (or the next one after it) right
+  /// under the header: from the loaded rows, else the history around the
+  /// server's event for that time, else paging back.
+  Future<void> jumpToDay(DateTime day) async {
+    if (await _revealDay(day)) return;
+    final start = DateTime(day.year, day.month, day.day);
+    String? eventId;
+    try {
+      eventId = (await room.client.getEventByTimestamp(
+        room.id,
+        start.millisecondsSinceEpoch,
+        Direction.f,
+      )).eventId;
+    } catch (_) {
+      // Older servers lack the endpoint: page back below.
+    }
+    if (!mounted) return;
+    if (eventId != null && _rowIndexFor(eventId) < 0) {
+      timelineHold.value = true;
+      try {
+        setTimelineState(() {
+          timeline?.cancelSubscriptions();
+          timeline = null;
+          _scrolledUp = false;
+          _loadTimeline(eventContextId: eventId);
+        });
+        await loadTimelineFuture;
+        if (!mounted) return;
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
+        if (await _revealDay(day)) return;
+      } finally {
+        if (mounted) timelineHold.value = false;
+      }
+    }
+    for (var page = 0; page < 10 && canLoadHistory; page++) {
+      if (historyError != null) break;
+      await requestHistory();
+      if (!mounted) return;
+      if (await _revealDay(day)) return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Couldn’t load messages from that day.')),
+    );
+  }
+
+  Future<bool> _revealDay(DateTime day) async {
+    final rows = conversationEvents;
+    if (rows == null || rows.isEmpty) return false;
+    if (!conversationRowsReachDay(rows, day) && canLoadHistory) return false;
+    final index = conversationRowForDay(rows, day);
+    if (index < 0) {
+      // After the newest message: the bottom of the chat.
+      await scrollDown();
+      return true;
+    }
+    return conversationRevealRow(
+      context,
+      scrollController,
+      index,
+      animate: true,
+    );
+  }
 
   @override
   String? animateInEventId;
@@ -1193,8 +1384,11 @@ class ChatController extends State<ChatPageWithRoom>
         onUpdate: updateView,
         onInsert: _insert,
       );
+      // Only the read marker gets the "First unread" way back; any other
+      // jump simply stays at the newest messages.
       if (mounted &&
           generation == _timelineLoadGeneration &&
+          eventContextId == readMarkerEventId &&
           (e is TimeoutException || e is IOException)) {
         _showScrollUpMaterialBanner(eventContextId);
       }
@@ -1258,9 +1452,6 @@ class ChatController extends State<ChatPageWithRoom>
 
     // We only set read marker if we are at the bottom
     if (_scrolledUp && setOnLatestEvent) return;
-
-    // We do not set read marker if we offer user the scroll up banner
-    if (scrollUpBannerEventId != null) return;
 
     // We do not set read marker if timeline is empty
     final timeline = this.timeline;
@@ -1356,6 +1547,10 @@ class ChatController extends State<ChatPageWithRoom>
   void dispose() {
     _rejections?.dispose();
     MacDesktopCommands.unbindChat(this);
+    ConversationJumpTargets.unregister(this);
+    _search?.removeListener(_searchChanged);
+    _search?.dispose();
+    mentionsHandled.dispose();
     _timelineLoadGeneration++;
     WidgetsBinding.instance.removeObserver(this);
     timeline?.cancelSubscriptions();
@@ -1866,9 +2061,7 @@ class ChatController extends State<ChatPageWithRoom>
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              'Couldn’t send the attachments. Your draft is kept.',
-            ),
+            content: Text('Couldn’t send the attachments. Your draft is kept.'),
           ),
         );
       }
@@ -2282,7 +2475,7 @@ class ChatController extends State<ChatPageWithRoom>
 
     if (eventIndex == -1) {
       if (!loadContextIfMissing) {
-        _showScrollUpMaterialBanner(eventId);
+        if (eventId == readMarkerEventId) _showScrollUpMaterialBanner(eventId);
         return;
       }
       setTimelineState(() {
@@ -2869,6 +3062,7 @@ class ChatController extends State<ChatPageWithRoom>
                       roomId: roomId,
                       embeddedCloseButton: IconButton(
                         icon: const Icon(Icons.close),
+                        tooltip: 'Close details',
                         onPressed: toggleDisplayChatDetailsColumn,
                       ),
                     ),

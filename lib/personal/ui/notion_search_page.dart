@@ -8,6 +8,7 @@ import 'package:chatloom/pages/chat_list/inbox_controller.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/bridge_start_chat.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/local_message_search.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/person_merge.dart' show personSearchText;
@@ -99,6 +100,38 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
   final _messagesMemo = PersonalSearchMemo<List<SearchMessageCandidate>>();
   final _resultsMemo = PersonalSearchMemo<UnifiedSearchResults>();
 
+  /// Messages stored on this device (FX-04): read on the first query, then
+  /// filtered per query off the typing path; dropped with the page.
+  DeviceMessageSearch? _device;
+
+  DeviceMessageSearch get _deviceSearch =>
+      _device ??= DeviceMessageSearch(rooms: _searchableRooms)
+        ..addListener(_deviceChanged);
+
+  void _deviceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Joined, non-technical chats, the most recently active first.
+  List<Room> _searchableRooms() {
+    final index = widget.inbox.index;
+    final projection = index.projection;
+    final rooms = [
+      for (final room in index.rooms)
+        if (room.membership == Membership.join &&
+            !PersonalPrivacy.isJournal(room) &&
+            !projection.classifier.classify(room).technical)
+          room,
+    ];
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+    rooms.sort(
+      (a, b) => (b.lastEvent?.originServerTs ?? epoch).compareTo(
+        a.lastEvent?.originServerTs ?? epoch,
+      ),
+    );
+    return rooms;
+  }
+
   Client get _client => widget.personal.client;
   BridgeDirectory get _directory => widget.directory;
 
@@ -110,7 +143,10 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       if (!mounted) return;
       // whoami + capabilities only: no query leaves the device.
       unawaited(_directory.probe(_bridges()));
-      if (_applied.isNotEmpty) _loadContacts();
+      if (_applied.isNotEmpty) {
+        _loadContacts();
+        _deviceSearch.search(_applied);
+      }
     });
   }
 
@@ -155,6 +191,8 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     _releaseInbox?.call();
     _releaseInbox = null;
     _typing?.cancel();
+    _device?.removeListener(_deviceChanged);
+    _device?.dispose();
     _directory.removeListener(_directoryChanged);
     _query.dispose();
     _focus.dispose();
@@ -184,6 +222,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       _expanded.clear();
     });
     if (text.isNotEmpty) _loadContacts();
+    if (text.isNotEmpty || _device != null) _deviceSearch.search(text);
   }
 
   void _close() => Navigator.of(context).maybePop();
@@ -266,17 +305,59 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       });
 
   UnifiedSearchResults _results() => _resultsMemo.resolve(
-    (_applied, _generation, _directory, _directory.revision),
+    (
+      _applied,
+      _generation,
+      _directory,
+      _directory.revision,
+      _device?.query == _applied ? _device?.hits : null,
+    ),
     () => mergeUnifiedSearch(
       query: _applied,
       chats: _chats(),
       people: _people(),
       bridges: _bridges(),
       remote: _directory.stateOf,
-      messages: _messages(),
+      messages: [..._messages(), ..._deviceMessages()],
       roomExists: (id) => _client.getRoomById(id) != null,
     ),
   );
+
+  /// The device's hits for the applied query (not yet the latest messages
+  /// of [_messages], which may repeat them), as message candidates.
+  List<SearchMessageCandidate> _deviceMessages() {
+    final device = _device;
+    if (device == null || device.query != _applied) return const [];
+    final latest = {for (final m in _messages()) m.eventId};
+    final projection = widget.inbox.projection;
+    final terms = localSearchTerms(_applied);
+    final result = <SearchMessageCandidate>[];
+    for (final hit in device.hits) {
+      if (latest.contains(hit.eventId)) continue;
+      final room = _client.getRoomById(hit.roomId);
+      if (room == null) continue;
+      final snippet = localSnippet(hit.text, terms);
+      final own = hit.senderId == _client.userID;
+      final sender = own
+          ? 'You'
+          : room.isDirectChatForDisplay
+          ? null
+          : room
+                .unsafeGetUserFromMemoryOrFallback(hit.senderId)
+                .calcDisplayname();
+      result.add(
+        SearchMessageCandidate(
+          roomId: hit.roomId,
+          eventId: hit.eventId,
+          chatName: projection.displayName(room),
+          text: hit.text,
+          preview: sender == null ? snippet : '$sender: $snippet',
+          time: hit.time,
+        ),
+      );
+    }
+    return result;
+  }
 
   final _recentMemo = PersonalSearchMemo<List<Room>>();
 
@@ -504,7 +585,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
   List<_Item> _items(UnifiedSearchResults results) {
     final query = _applied;
     final items = <_Item>[];
-    if (results.isEmpty && !_anyChecking()) {
+    if (results.isEmpty && !_anyChecking() && !(_device?.searching ?? false)) {
       items.add(
         _Item(
           'empty',
@@ -582,15 +663,33 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     }
     final hidden = results.messages.length - NotionSearchPage.messageLimit;
     if (!all && hidden > 0) items.add(_more('messages', 'Show $hidden more'));
+    if (_device?.searching ?? false) {
+      items.add(
+        _Item(
+          'device-searching',
+          (context) => Padding(
+            padding: const EdgeInsets.symmetric(vertical: NotionSpace.xs),
+            child: Row(
+              children: [
+                const NotionDelayedSpinner(size: NotionSize.iconSm),
+                const SizedBox(width: NotionSpace.xs),
+                Text(
+                  'Searching messages on this device…',
+                  style: context.notion.typography.footnoteMuted,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     items.add(
       _Item(
         'history',
         (context) => NotionListRow(
           leading: const Icon(Icons.manage_search, size: NotionSize.icon),
           title: 'Search message history for “$query”',
-          subtitle: results.messages.isEmpty
-              ? 'Only the latest message of each chat is searched here.'
-              : 'Older messages of a chat you choose',
+          subtitle: 'Older messages of a chat you choose, from the server',
           onTap: _searchHistory,
         ),
       ),

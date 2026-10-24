@@ -14,7 +14,9 @@ import 'package:chatloom/pages/chat/chat_app_bar_list_tile.dart';
 import 'package:chatloom/pages/chat/chat_app_bar_title.dart';
 import 'package:chatloom/pages/chat/chat_event_list.dart';
 import 'package:chatloom/pages/chat/chat_wallpaper.dart';
+import 'package:chatloom/pages/chat/conversation_navigation.dart';
 import 'package:chatloom/pages/chat/conversation_read_button.dart';
+import 'package:chatloom/pages/chat/conversation_search.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
 import 'package:chatloom/pages/chat/pinned_events.dart';
 import 'package:chatloom/pages/chat/reply_display.dart';
@@ -52,8 +54,11 @@ class ChatView extends StatelessWidget {
 
     final accountConfig = Matrix.of(context).client.applicationAccountConfig;
 
-    return PopScope(
+    final searching = controller.searchActive;
+
+    final page = PopScope(
       canPop:
+          !searching &&
           !controller.showEmojiPicker &&
           // Telegram: back cancels a reply or edit before leaving the chat.
           controller.replyEvent == null &&
@@ -61,7 +66,10 @@ class ChatView extends StatelessWidget {
           controller.activeThreadId == null,
       onPopInvokedWithResult: (pop, _) async {
         if (pop) return;
-        if (controller.showEmojiPicker) {
+        if (searching) {
+          // Telegram: back leaves the search before the chat.
+          controller.closeSearch();
+        } else if (controller.showEmojiPicker) {
           // Telegram: back closes the panel without opening the keyboard.
           controller.hideEmojiPicker();
         } else if (controller.replyEvent != null ||
@@ -122,9 +130,6 @@ class ChatView extends StatelessWidget {
                   activeThreadId == null) {
                 appbarBottomHeight += ChatAppBarListTile.fixedHeight;
               }
-              if (scrollUpBannerEventId != null && activeThreadId == null) {
-                appbarBottomHeight += ChatAppBarListTile.fixedHeight;
-              }
               final chatBackground = InboxProjection.snapshot(
                 PersonalClient.of(controller.room.client),
               ).metadataFor(controller.room).theme?.backgroundColor;
@@ -149,7 +154,13 @@ class ChatView extends StatelessWidget {
                     bottom: BorderSide(color: theme.colorScheme.outlineVariant),
                   ),
                   automaticallyImplyLeading: false,
-                  leading: activeThreadId != null
+                  leading: searching
+                      ? IconButton(
+                          icon: const Icon(Icons.chevron_left),
+                          tooltip: 'Close search',
+                          onPressed: controller.closeSearch,
+                        )
+                      : activeThreadId != null
                       ? IconButton(
                           icon: const Icon(Icons.close),
                           onPressed: controller.closeThread,
@@ -163,10 +174,23 @@ class ChatView extends StatelessWidget {
                           tooltip: 'Back',
                           onPressed: () => Navigator.maybePop(context),
                         ),
-                  titleSpacing: ChatLoomThemes.isColumnMode(context) ? 24 : 0,
-                  title: ChatAppBarTitle(controller),
+                  titleSpacing:
+                      ChatLoomThemes.isColumnMode(context) && !searching
+                      ? 24
+                      : 0,
+                  title: NotionFadeThrough(
+                    child: searching
+                        ? ConversationSearchField(
+                            key: const ValueKey('search'),
+                            search: controller.search,
+                          )
+                        : ChatAppBarTitle(
+                            controller,
+                            key: const ValueKey('title'),
+                          ),
+                  ),
                   actions: [
-                    if (!controller.room.isArchived) ...[
+                    if (!controller.room.isArchived && !searching) ...[
                       RoomPersonalButton(
                         room: scheduledSource,
                         composer: controller.sendController,
@@ -214,29 +238,6 @@ class ChatView extends StatelessWidget {
                               ),
                             ),
                           ),
-                        if (scrollUpBannerEventId != null &&
-                            activeThreadId == null)
-                          ChatAppBarListTile(
-                            leading: IconButton(
-                              color: theme.colorScheme.onSurfaceVariant,
-                              icon: const Icon(Icons.close),
-                              tooltip: L10n.of(context).close,
-                              onPressed: () {
-                                controller.discardScrollUpBannerEventId();
-                                controller.setReadMarker();
-                              },
-                            ),
-                            title: L10n.of(context).jumpToLastReadMessage,
-                            trailing: TextButton(
-                              onPressed: () {
-                                controller.scrollToEventId(
-                                  scrollUpBannerEventId,
-                                );
-                                controller.discardScrollUpBannerEventId();
-                              },
-                              child: Text(L10n.of(context).jump),
-                            ),
-                          ),
                       ],
                     ),
                   ),
@@ -264,6 +265,13 @@ class ChatView extends StatelessWidget {
                             ),
                           timelineBody,
                           ChatBridgeNotice(room: controller.room),
+                          if (searching)
+                            Positioned.fill(
+                              child: ConversationSearchResults(
+                                search: controller.search,
+                                bottomInset: controller.composerInset,
+                              ),
+                            ),
                           Positioned(
                             bottom: 0,
                             left: 0,
@@ -277,85 +285,99 @@ class ChatView extends StatelessWidget {
                                   constraints: const BoxConstraints(
                                     maxWidth: ChatLoomThemes.maxTimelineWidth,
                                   ),
-                                  child: controller.room.isExtinct
-                                      ? ElevatedButton.icon(
-                                          icon: const Icon(Icons.chevron_right),
-                                          label: Text(
-                                            L10n.of(context).enterNewChat,
-                                          ),
-                                          onPressed:
-                                              controller.goToNewRoomAction,
-                                        )
-                                      : controller
-                                                .room
-                                                .canSendDefaultMessages &&
-                                            controller.room.membership ==
-                                                Membership.join
-                                      ? ConversationTint(
-                                          color: theme
-                                              .colorScheme
-                                              .surfaceContainer,
-                                          borderRadius: BorderRadius.circular(
-                                            NotionTokens.radius,
-                                          ),
-                                          child:
-                                              controller
-                                                      .room
-                                                      .isAbandonedDMRoom ==
-                                                  true
-                                              ? Row(
-                                                  mainAxisAlignment:
-                                                      .spaceEvenly,
-                                                  children: [
-                                                    TextButton.icon(
-                                                      style: TextButton.styleFrom(
-                                                        padding:
-                                                            const EdgeInsets.all(
-                                                              16,
-                                                            ),
-                                                        foregroundColor: theme
-                                                            .colorScheme
-                                                            .error,
+                                  child: ConversationSearchComposerSwitch(
+                                    searching: searching,
+                                    bar: (context) => ConversationSearchBar(
+                                      search: controller.search,
+                                      onPickDate: controller.pickJumpDate,
+                                    ),
+                                    composer: controller.room.isExtinct
+                                        ? ElevatedButton.icon(
+                                            icon: const Icon(
+                                              Icons.chevron_right,
+                                            ),
+                                            label: Text(
+                                              L10n.of(context).enterNewChat,
+                                            ),
+                                            onPressed:
+                                                controller.goToNewRoomAction,
+                                          )
+                                        : controller
+                                                  .room
+                                                  .canSendDefaultMessages &&
+                                              controller.room.membership ==
+                                                  Membership.join
+                                        ? ConversationTint(
+                                            color: theme
+                                                .colorScheme
+                                                .surfaceContainer,
+                                            borderRadius: BorderRadius.circular(
+                                              NotionTokens.radius,
+                                            ),
+                                            child:
+                                                controller
+                                                        .room
+                                                        .isAbandonedDMRoom ==
+                                                    true
+                                                ? Row(
+                                                    mainAxisAlignment:
+                                                        .spaceEvenly,
+                                                    children: [
+                                                      TextButton.icon(
+                                                        style: TextButton.styleFrom(
+                                                          padding:
+                                                              const EdgeInsets.all(
+                                                                16,
+                                                              ),
+                                                          foregroundColor: theme
+                                                              .colorScheme
+                                                              .error,
+                                                        ),
+                                                        icon: const Icon(
+                                                          Icons
+                                                              .archive_outlined,
+                                                        ),
+                                                        onPressed: controller
+                                                            .leaveChat,
+                                                        label: Text(
+                                                          L10n.of(
+                                                            context,
+                                                          ).leave,
+                                                        ),
                                                       ),
-                                                      icon: const Icon(
-                                                        Icons.archive_outlined,
+                                                      TextButton.icon(
+                                                        style: TextButton.styleFrom(
+                                                          padding:
+                                                              const EdgeInsets.all(
+                                                                16,
+                                                              ),
+                                                        ),
+                                                        icon: const Icon(
+                                                          Icons.forum_outlined,
+                                                        ),
+                                                        onPressed: controller
+                                                            .recreateChat,
+                                                        label: Text(
+                                                          L10n.of(
+                                                            context,
+                                                          ).reopenChat,
+                                                        ),
                                                       ),
-                                                      onPressed:
-                                                          controller.leaveChat,
-                                                      label: Text(
-                                                        L10n.of(context).leave,
+                                                    ],
+                                                  )
+                                                : Column(
+                                                    mainAxisSize: .min,
+                                                    children: [
+                                                      ReplyDisplay(controller),
+                                                      ChatInputRow(controller),
+                                                      ChatEmojiPicker(
+                                                        controller,
                                                       ),
-                                                    ),
-                                                    TextButton.icon(
-                                                      style: TextButton.styleFrom(
-                                                        padding:
-                                                            const EdgeInsets.all(
-                                                              16,
-                                                            ),
-                                                      ),
-                                                      icon: const Icon(
-                                                        Icons.forum_outlined,
-                                                      ),
-                                                      onPressed: controller
-                                                          .recreateChat,
-                                                      label: Text(
-                                                        L10n.of(
-                                                          context,
-                                                        ).reopenChat,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                )
-                                              : Column(
-                                                  mainAxisSize: .min,
-                                                  children: [
-                                                    ReplyDisplay(controller),
-                                                    ChatInputRow(controller),
-                                                    ChatEmojiPicker(controller),
-                                                  ],
-                                                ),
-                                        )
-                                      : SizedBox.shrink(),
+                                                    ],
+                                                  ),
+                                          )
+                                        : SizedBox.shrink(),
+                                  ),
                                 ),
                               ),
                             ),
@@ -370,7 +392,22 @@ class ChatView extends StatelessWidget {
                               endInset: bottomSheetPadding + NotionSpace.xs,
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
+                                  ConversationFirstUnreadButton(
+                                    visible:
+                                        scrollUpBannerEventId != null &&
+                                        activeThreadId == null &&
+                                        !searching,
+                                    onPressed: controller.jumpToFirstUnread,
+                                  ),
+                                  if (activeThreadId == null)
+                                    ConversationMentionButton(
+                                      rooms: [controller.room],
+                                      handled: controller.mentionsHandled,
+                                      onPressed: () =>
+                                          unawaited(controller.jumpToMention()),
+                                    ),
                                   ValueListenableBuilder<bool>(
                                     valueListenable:
                                         controller.jumpButtonVisible,
@@ -420,6 +457,8 @@ class ChatView extends StatelessWidget {
         },
       ),
     );
+    // The ⋯ menu's "Search conversation" opens this page's search mode.
+    return ConversationSearchScope(open: controller.openSearch, child: page);
   }
 }
 

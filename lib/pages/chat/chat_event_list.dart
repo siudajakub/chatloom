@@ -89,6 +89,18 @@ class _ChatEventListState extends State<ChatEventList>
   Set<int> _dayStarts = const {};
 
   final ValueNotifier<String?> _pillLabel = ValueNotifier(null);
+
+  /// The timeline the user last scrolled by hand. Newer messages load by
+  /// themselves only after that (reading down), never while the chat
+  /// positions itself after a jump or on opening.
+  Timeline? _userScrolled;
+
+  /// The day of the pill's label, for its tap (jump to date).
+  DateTime? _pillDay;
+
+  /// The pill takes taps from its fade-in until it has faded out; flipped
+  /// at those two moments only, never per frame.
+  final ValueNotifier<bool> _pillTappable = ValueNotifier(false);
   final ProxyAnimation _pillOpacity = ProxyAnimation(kAlwaysDismissedAnimation);
   AnimationController? _pillShow, _pillHide;
   CurvedAnimation? _pillFadeOut;
@@ -210,6 +222,9 @@ class _ChatEventListState extends State<ChatEventList>
   bool _onScroll(ScrollNotification notification) {
     if (notification.depth != 0) return false;
     if (notification is UserScrollNotification) {
+      if (_rows.isNotEmpty && notification.direction != ScrollDirection.idle) {
+        _userScrolled = controller.timelineFor(_rows.first);
+      }
       if (notification.direction == ScrollDirection.idle) {
         _hidePill();
       } else {
@@ -239,6 +254,7 @@ class _ChatEventListState extends State<ChatEventList>
         // Faded out: the next scroll fades the pill in again.
         _pillShow?.value = 0;
         _pillHide?.value = 0;
+        _pillTappable.value = false;
       });
     }
     hide
@@ -270,6 +286,7 @@ class _ChatEventListState extends State<ChatEventList>
     } else {
       show.forward();
     }
+    _pillTappable.value = true;
     _schedulePillScan();
   }
 
@@ -326,6 +343,7 @@ class _ChatEventListState extends State<ChatEventList>
         topmost = index;
       }
     }
+    _pillDay = topmost == null ? null : _rows[topmost].originServerTs;
     _pillLabel.value = topmost == null || separatorNearTop
         ? null
         : _rows[topmost].originServerTs.localizedDate(context);
@@ -343,6 +361,7 @@ class _ChatEventListState extends State<ChatEventList>
     _pillShow?.dispose();
     _pillHide?.dispose();
     _pillLabel.dispose();
+    _pillTappable.dispose();
     super.dispose();
   }
 
@@ -458,6 +477,18 @@ class _ChatEventListState extends State<ChatEventList>
                   fallback: defaultInset,
                 );
                 if (controller.canLoadFuture) {
+                  final timeline = events.isEmpty
+                      ? null
+                      : controller.timelineFor(events.first);
+                  if (controller.autoLoadFuture &&
+                      timeline != null &&
+                      identical(timeline, _userScrolled)) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted && controller.autoLoadFuture) {
+                        controller.requestFuture(quiet: true);
+                      }
+                    });
+                  }
                   return Column(
                     mainAxisSize: .min,
                     children: [
@@ -589,6 +620,8 @@ class _ChatEventListState extends State<ChatEventList>
                           ),
                           child: ConversationDayChip(
                             label: event.originServerTs.localizedDate(context),
+                            onTap: () =>
+                                controller.pickJumpDate(event.originServerTs),
                           ),
                         ),
                       if (i == firstUnread)
@@ -651,7 +684,10 @@ class _ChatEventListState extends State<ChatEventList>
           top: MediaQuery.paddingOf(context).top + NotionSpace.xs,
           left: 0,
           right: 0,
-          child: IgnorePointer(
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _pillTappable,
+            builder: (context, tappable, child) =>
+                IgnorePointer(ignoring: !tappable, child: child),
             child: ExcludeSemantics(
               child: FadeTransition(
                 opacity: _pillOpacity,
@@ -663,6 +699,8 @@ class _ChatEventListState extends State<ChatEventList>
                         : ConversationDayChip(
                             key: const ValueKey('conversation-date-pill'),
                             label: label,
+                            // Telegram: the floating date opens the calendar.
+                            onTap: () => controller.pickJumpDate(_pillDay),
                           ),
                   ),
                 ),
@@ -755,30 +793,45 @@ class _ConversationListGateState extends State<ConversationListGate> {
 /// with secondary text, so it reads over wallpapers and private palettes.
 class ConversationDayChip extends StatelessWidget {
   final String label;
-  const ConversationDayChip({super.key, required this.label});
+
+  /// Jump to date (Telegram): the chip opens the calendar.
+  final VoidCallback? onTap;
+  const ConversationDayChip({super.key, required this.label, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final notion = context.notion;
-    return Center(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: notion.colors.surface,
-          borderRadius: NotionRadius.pillAll,
+    final chip = DecoratedBox(
+      decoration: BoxDecoration(
+        color: notion.colors.surface,
+        borderRadius: NotionRadius.pillAll,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: NotionSpace.sm,
+          vertical: NotionSpace.xxs,
         ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: NotionSpace.sm,
-            vertical: NotionSpace.xxs,
-          ),
-          child: Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: notion.typography.captionMuted,
-          ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: notion.typography.captionMuted,
         ),
       ),
+    );
+    final onTap = this.onTap;
+    return Center(
+      child: onTap == null
+          ? chip
+          : Semantics(
+              button: true,
+              hint: 'Jump to date',
+              child: NotionPressable(
+                scale: NotionMotion.pressButton,
+                onTap: onTap,
+                child: chip,
+              ),
+            ),
     );
   }
 }

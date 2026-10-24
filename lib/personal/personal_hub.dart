@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/conversation_search.dart'
+    show ConversationSearchScope;
 import 'package:chatloom/personal/automatic_push.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/conversation_mute.dart';
@@ -589,6 +591,9 @@ class RoomPersonalButton extends StatelessWidget {
       return;
     }
     if (kind == 'source.search') {
+      // Telegram: the open conversation searches in place (its header
+      // becomes the field); elsewhere the content page searches.
+      if (ConversationSearchScope.maybeOpen(context)) return;
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
           builder: (_) => NotionConversationContentPage(

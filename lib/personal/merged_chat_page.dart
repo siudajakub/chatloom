@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
@@ -19,7 +20,9 @@ import 'package:chatloom/pages/chat/conversation_drop_target.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/pages/chat/conversation_navigation.dart';
 import 'package:chatloom/pages/chat/conversation_read_button.dart';
+import 'package:chatloom/pages/chat/conversation_search.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/conversation_source_picker.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
@@ -67,7 +70,6 @@ import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/conversation_activity_widgets.dart';
-import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
 import 'package:chatloom/personal/ui/person_page.dart';
@@ -331,7 +333,7 @@ class _MergedChatPageState extends State<_MergedChatView>
       MacDesktopCommands.bindChat(
         this,
         MacChatCommands(
-          searchInChat: () => unawaited(_quickAction('source.search')),
+          searchInChat: _openSearch,
           scrollToTop: () {
             if (!scrollController.hasClients) return;
             scrollController.jumpTo(scrollController.position.maxScrollExtent);
@@ -347,6 +349,22 @@ class _MergedChatPageState extends State<_MergedChatView>
         ),
       );
     }
+    // A search hit in the person's details comes back here.
+    ConversationJumpTargets.register(
+      this,
+      covers: (room) =>
+          identical(room.client, personal.client) &&
+          group.members.any((m) => m.roomId == room.id),
+      jump: _jumpToHit,
+    );
+    // A busy source opens at its first unread message: keep the list
+    // invisible until it is positioned (as the ordinary chat does).
+    _hold.value = group.members.any((member) {
+      final room = personal.client.getRoomById(member.roomId);
+      return room != null &&
+          room.hasNewMessages &&
+          room.notificationCount >= _holdUnreadRows;
+    });
     _load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -657,6 +675,7 @@ class _MergedChatPageState extends State<_MergedChatView>
           'A source could not be opened. The send network remains unchanged.';
     }
     if (!mounted) return;
+    final firstLoad = !_readMarkerResolved;
     _resolveReadMarker();
     _applyInitialSource();
     setState(() => loading = false);
@@ -664,7 +683,176 @@ class _MergedChatPageState extends State<_MergedChatView>
       ..mark('timeline')
       ..markAfterFrame('rows');
     _scheduleVisibilityScan();
+    if (firstLoad && _pendingEvent == null) {
+      unawaited(_openAtUnread());
+    } else {
+      _hold.value = false;
+    }
     unawaited(_revealPendingEvent());
+  }
+
+  // ---------------------------------------------------------------------
+  // Opening position, mentions, dates and search (FX-03, FX-10, FX-11).
+
+  /// Unread rows from which the list is positioned while invisible.
+  static const int _holdUnreadRows = 6;
+
+  /// True while the list is laid out but invisible (see [ChatEventList]).
+  final ValueNotifier<bool> _hold = ValueNotifier(false);
+
+  /// Telegram: a conversation with unread messages opens with the "N unread
+  /// messages" divider right under the header; the jump button counts them.
+  Future<void> _openAtUnread() async {
+    try {
+      final marker = readMarkerEventId;
+      if (marker == null) return;
+      final markerRow = _rows.indexWhere((e) => e.eventId == marker);
+      final unread = conversationUnreadCount(_rows, markerRow);
+      // A short run fits on the first screen: stay at the newest message.
+      if (unread <= 0 || markerRow < 1) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      if (!await conversationRevealRow(
+        context,
+        scrollController,
+        markerRow - 1,
+        animate: false,
+      )) {
+        return;
+      }
+      if (!mounted || !scrollController.hasClients) return;
+      if (scrollController.offset > 0) {
+        setState(() {
+          _scrolledUp = scrollController.offset > 120;
+          _newBelow = unread;
+        });
+      }
+    } finally {
+      if (mounted) _hold.value = false;
+    }
+  }
+
+  final Set<String> _handledMentions = {};
+  final ValueNotifier<int> _mentionsHandled = ValueNotifier(0);
+
+  /// The "@" button: the oldest unread mention across the sources.
+  Future<void> _jumpToMention() async {
+    int markerRow() {
+      final marker = readMarkerEventId;
+      return marker == null ? -1 : _rows.indexWhere((e) => e.eventId == marker);
+    }
+
+    for (var page = 0; page < 3 && markerRow() < 0; page++) {
+      if (readMarkerEventId == null || !_hasMore || historyError != null) {
+        break;
+      }
+      await requestHistory();
+      if (!mounted) return;
+    }
+    final mentions = conversationUnreadMentions(
+      _rows,
+      markerRow(),
+      highlighted: conversationHighlights,
+      handled: _handledMentions,
+    );
+    if (mentions.isEmpty) {
+      _mentionsHandled.value = math.max(
+        _mentionsHandled.value,
+        _readSources.fold<int>(0, (sum, room) => sum + room.highlightCount),
+      );
+      return;
+    }
+    final target = mentions.first;
+    _handledMentions.add(target.eventId);
+    _mentionsHandled.value = _handledMentions.length;
+    await scrollToEventId(target.eventId);
+  }
+
+  @override
+  Future<void> pickJumpDate([DateTime? around]) async {
+    final day = await pickConversationDay(context, around ?? DateTime.now());
+    if (day == null || !mounted) return;
+    // Merged history pages per source; a day further back than ten pages
+    // is said instead of loading without end.
+    for (var page = 0; page <= 10; page++) {
+      if (conversationRowsReachDay(_rows, day) || !_hasMore) {
+        final index = conversationRowForDay(_rows, day);
+        if (index < 0) {
+          await _jumpToLatest();
+        } else {
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted) return;
+          await conversationRevealRow(
+            context,
+            scrollController,
+            index,
+            animate: true,
+          );
+        }
+        return;
+      }
+      if (historyError != null) break;
+      await requestHistory();
+      if (!mounted) return;
+    }
+    _notify('Couldn’t load messages from that day.');
+  }
+
+  ConversationSearchController? _search;
+  bool _searchShown = false;
+
+  ConversationSearchController get _searchController =>
+      _search ??= ConversationSearchController(
+        rooms: () => [for (final t in timelines.values) t.room],
+        loaded: () => [for (final t in timelines.values) ...t.events],
+        jump: _jumpToHit,
+      )..addListener(_searchChanged);
+
+  bool get _searching => _search?.active ?? false;
+
+  void _searchChanged() {
+    final shown = _searching;
+    if (shown == _searchShown || !mounted) return;
+    _searchShown = shown;
+    setState(() {});
+  }
+
+  void _openSearch() {
+    if (!mounted || timelines.isEmpty) return;
+    if (showEmojiPicker) hideEmojiPicker();
+    inputFocus.unfocus();
+    _searchController.open();
+  }
+
+  /// A search hit: scrolls to it, paging the merged history back while it
+  /// is older than what is loaded; further back, its source chat offers it.
+  Future<void> _jumpToHit(Event event) async {
+    for (var page = 0; page < 8; page++) {
+      if (_rows.any((e) => e.eventId == event.eventId)) {
+        await WidgetsBinding.instance.endOfFrame;
+        if (mounted) await scrollToEventId(event.eventId);
+        return;
+      }
+      if (!_hasMore || historyError != null) break;
+      await requestHistory();
+      if (!mounted) return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('This message is older than the loaded history.'),
+        action: SnackBarAction(
+          label: 'Open',
+          onPressed: () => context.go(
+            personSourceChatLocation(
+              group.id,
+              event.room.id,
+              eventId: event.eventId,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// `merged_open.*` probe points, from this page's creation (the tap).
@@ -1200,10 +1388,13 @@ class _MergedChatPageState extends State<_MergedChatView>
   bool get canLoadFuture => false;
 
   @override
+  bool get autoLoadFuture => false;
+
+  @override
   bool get isLoadingFuture => false;
 
   @override
-  Future<void> requestFuture() async {}
+  Future<void> requestFuture({bool quiet = false}) async {}
 
   @override
   void mentionSender(Event event) =>
@@ -2497,14 +2688,8 @@ class _MergedChatPageState extends State<_MergedChatView>
       return;
     }
     if (action == 'source.search') {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (_) => NotionConversationContentPage(
-            rooms: timelines.values.map((t) => t.room).toList(),
-            name: InboxProjection.snapshot(personal).personName(group),
-          ),
-        ),
-      );
+      // Telegram: the conversation searches in place.
+      _openSearch();
       return;
     }
     if (action == 'schedule') {
@@ -2675,6 +2860,11 @@ class _MergedChatPageState extends State<_MergedChatView>
   void dispose() {
     _rejections?.dispose();
     MacDesktopCommands.unbindChat(this);
+    ConversationJumpTargets.unregister(this);
+    _search?.removeListener(_searchChanged);
+    _search?.dispose();
+    _hold.dispose();
+    _mentionsHandled.dispose();
     _generation++;
     if (_savedDraftText != sendController.text && editEvent == null) {
       try {
@@ -2736,15 +2926,19 @@ class _MergedChatPageState extends State<_MergedChatView>
         : 0.0;
     final bottomHeight =
         (notice == null ? 0.0 : ChatAppBarListTile.fixedHeight) + hintHeight;
+    final searching = _searching;
     final page = PopScope(
       canPop:
+          !searching &&
           !showEmojiPicker &&
           // Telegram: back cancels a reply or edit before leaving the chat.
           replyEvent == null &&
           editEvent == null,
       onPopInvokedWithResult: (pop, _) {
         if (pop) return;
-        if (showEmojiPicker) {
+        if (searching) {
+          _search?.close();
+        } else if (showEmojiPicker) {
           // Telegram: back closes the panel without opening the keyboard.
           hideEmojiPicker();
         } else if (replyEvent != null || editEvent != null) {
@@ -2764,57 +2958,69 @@ class _MergedChatPageState extends State<_MergedChatView>
           // UI-20: the glass bar draws its own translucent hairline (like
           // the dock) instead of an opaque AppBar border.
           automaticallyImplyLeading: false,
-          leading: columns
+          leading: searching
+              ? IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  tooltip: 'Close search',
+                  onPressed: () => _search?.close(),
+                )
+              : columns
               ? null
               : NotionIconButton(
                   icon: Icons.chevron_left,
                   label: 'Back',
                   onPressed: () => Navigator.maybePop(context),
                 ),
-          titleSpacing: columns ? NotionSpace.xl : 0,
-          title: ConversationActivityBuilder(
-            client: personal.client,
-            rooms: typingRooms,
-            builder: (context, activity) => NotionCompactChatHeader(
-              avatar: ConversationActivityAvatar(
-                activity: activity,
-                child: personalConversationAvatar(
-                  personal,
-                  entityId: 'person:${group.id}',
-                  avatar: projection.avatarForGroup(group),
-                  name: displayName,
-                  size: NotionSize.avatarSm,
-                ),
-              ),
-              name: displayName,
-              status: ConversationActivityStatus(
-                client: personal.client,
-                rooms: typingRooms,
-                activity: activity,
-                sourceLabels: true,
-              ),
-              onDetails: () =>
-                  showPersonPage(context, personal: personal, group: group),
-            ),
-          ),
-          actions: [
-            Builder(
-              builder: (anchor) => NotionMenuButton<String>(
-                label: 'Conversation actions',
-                icon: Icons.more_horiz,
-                alignEnd: true,
-                entries: () => conversationQuickActions(
-                  merged: true,
-                  editing: editEvent != null,
-                  mute: conversationMuteState(
-                    context,
-                    personal,
-                    'person:${group.id}',
+          titleSpacing: columns && !searching ? NotionSpace.xl : 0,
+          title: searching
+              ? ConversationSearchField(search: _searchController)
+              : ConversationActivityBuilder(
+                  client: personal.client,
+                  rooms: typingRooms,
+                  builder: (context, activity) => NotionCompactChatHeader(
+                    avatar: ConversationActivityAvatar(
+                      activity: activity,
+                      child: personalConversationAvatar(
+                        personal,
+                        entityId: 'person:${group.id}',
+                        avatar: projection.avatarForGroup(group),
+                        name: displayName,
+                        size: NotionSize.avatarSm,
+                      ),
+                    ),
+                    name: displayName,
+                    status: ConversationActivityStatus(
+                      client: personal.client,
+                      rooms: typingRooms,
+                      activity: activity,
+                      sourceLabels: true,
+                    ),
+                    onDetails: () => showPersonPage(
+                      context,
+                      personal: personal,
+                      group: group,
+                    ),
                   ),
                 ),
-                onSelected: (action) => _quickAction(action, anchor: anchor),
+          actions: [
+            if (!searching)
+              Builder(
+                builder: (anchor) => NotionMenuButton<String>(
+                  label: 'Conversation actions',
+                  icon: Icons.more_horiz,
+                  alignEnd: true,
+                  entries: () => conversationQuickActions(
+                    merged: true,
+                    editing: editEvent != null,
+                    mute: conversationMuteState(
+                      context,
+                      personal,
+                      'person:${group.id}',
+                    ),
+                  ),
+                  onSelected: (action) => _quickAction(action, anchor: anchor),
+                ),
               ),
-            ),
           ],
           bottom: bottomHeight == 0
               ? null
@@ -2923,10 +3129,18 @@ class _MergedChatPageState extends State<_MergedChatView>
                       // subtree unless something the rows render changed.
                       _MergedListGate(
                         revision: (_listRevision, anyRoom.id, theme),
-                        child: ChatEventList(controller: this),
+                        child: ChatEventList(controller: this, hold: _hold),
                       ),
                       // The send target's bridge (merged chats send per source).
                       ChatBridgeNotice(room: room),
+                      if (searching)
+                        Positioned.fill(
+                          child: ConversationSearchResults(
+                            search: _searchController,
+                            bottomInset: composerInset,
+                            sourceLabel: sourceLabelFor,
+                          ),
+                        ),
                       Positioned(
                         bottom: 0,
                         left: 0,
@@ -2942,16 +3156,23 @@ class _MergedChatPageState extends State<_MergedChatView>
                               constraints: const BoxConstraints(
                                 maxWidth: ChatLoomThemes.maxTimelineWidth,
                               ),
-                              child: ConversationTint(
-                                color: theme.colorScheme.surfaceContainer,
-                                borderRadius: NotionRadius.mdAll,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    ReplyDisplay(this),
-                                    ChatInputRow(this),
-                                    ChatEmojiPicker(this),
-                                  ],
+                              child: ConversationSearchComposerSwitch(
+                                searching: searching,
+                                bar: (context) => ConversationSearchBar(
+                                  search: _searchController,
+                                  onPickDate: pickJumpDate,
+                                ),
+                                composer: ConversationTint(
+                                  color: theme.colorScheme.surfaceContainer,
+                                  borderRadius: NotionRadius.mdAll,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      ReplyDisplay(this),
+                                      ChatInputRow(this),
+                                      ChatEmojiPicker(this),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -2970,7 +3191,13 @@ class _MergedChatPageState extends State<_MergedChatView>
                               NotionSpace.xs,
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
+                              ConversationMentionButton(
+                                rooms: _readSources,
+                                handled: _mentionsHandled,
+                                onPressed: () => unawaited(_jumpToMention()),
+                              ),
                               ConversationJumpButton(
                                 visible: _scrolledUp,
                                 count: _newBelow,
@@ -2996,25 +3223,28 @@ class _MergedChatPageState extends State<_MergedChatView>
     // One backdrop read for the glass header and composer (DESIGN.md "Glass").
     // Desktop parity with ordinary chats: files dropped on the conversation
     // and ⌘V media open the attachment dialog for the selected source.
-    return BackdropGroup(
-      child: Actions(
-        actions: PlatformInfos.isWeb
-            ? const {}
-            : <Type, Action<Intent>>{
-                PasteTextIntent: CallbackAction<PasteTextIntent>(
-                  onInvoke: (_) => _pasteFromClipboard(),
-                ),
-                // Mac: Esc in the composer, nothing left to cancel, is Back.
-                DismissIntent: ComposerBackAction(
-                  composer: inputFocus,
-                  enabled: PlatformInfos.isMacOS,
-                  onBack: () => unawaited(Navigator.maybePop(context)),
-                ),
-              },
-        child: ConversationDropTarget(
-          enabled: composerEnabled && anyRoom != null,
-          onFiles: (files) => unawaited(_attachMedia(() async => files)),
-          child: page,
+    return ConversationSearchScope(
+      open: _openSearch,
+      child: BackdropGroup(
+        child: Actions(
+          actions: PlatformInfos.isWeb
+              ? const {}
+              : <Type, Action<Intent>>{
+                  PasteTextIntent: CallbackAction<PasteTextIntent>(
+                    onInvoke: (_) => _pasteFromClipboard(),
+                  ),
+                  // Mac: Esc in the composer, nothing left to cancel, is Back.
+                  DismissIntent: ComposerBackAction(
+                    composer: inputFocus,
+                    enabled: PlatformInfos.isMacOS,
+                    onBack: () => unawaited(Navigator.maybePop(context)),
+                  ),
+                },
+          child: ConversationDropTarget(
+            enabled: composerEnabled && anyRoom != null,
+            onFiles: (files) => unawaited(_attachMedia(() async => files)),
+            child: page,
+          ),
         ),
       ),
     );
