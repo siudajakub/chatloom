@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/ui/contact_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
@@ -57,7 +58,8 @@ class ChatMembersView extends StatelessWidget {
       title: l10n.countParticipants(roomCount),
       onBack: () => Navigator.of(context).maybePop(),
       actions: [
-        if (room.canInvite)
+        if (room.canInvite &&
+            RoomCapabilities.memberActionAllowed(room, 'invite'))
           NotionIconButton(
             icon: Icons.person_add_outlined,
             label: l10n.invite,
