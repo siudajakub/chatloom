@@ -622,7 +622,8 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             title: 'Permissions',
             onTap: () => context.push('/rooms/${room.id}/details/permissions'),
           ),
-          if (room.canInvite)
+          if (room.canInvite &&
+              RoomCapabilities.memberActionAllowed(room, 'invite'))
             NotionListRow(
               leading: const Icon(Icons.person_add_outlined),
               title: 'Invite to this chat',
@@ -630,17 +631,17 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             ),
         ],
         if (room.topic.isNotEmpty ||
-            room.canChangeStateEvent(EventTypes.RoomTopic))
+            _canChangeOnNetwork(room, EventTypes.RoomTopic))
           NotionListRow(
             leading: const Icon(Icons.description_outlined),
             title: 'Network description',
             subtitle: room.topic.isEmpty ? 'No description' : room.topic,
-            onTap: room.canChangeStateEvent(EventTypes.RoomTopic)
+            onTap: _canChangeOnNetwork(room, EventTypes.RoomTopic)
                 ? widget.controller?.setTopicAction
                 : null,
           ),
         if (!room.isDirectChatForDisplay &&
-            room.canChangeStateEvent(EventTypes.RoomName))
+            _canChangeOnNetwork(room, EventTypes.RoomName))
           NotionListRow(
             leading: const Icon(Icons.edit_outlined),
             title: 'Rename group',
@@ -648,7 +649,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             onTap: widget.controller?.setDisplaynameAction,
           ),
         if (!room.isDirectChatForDisplay &&
-            room.canChangeStateEvent(EventTypes.RoomAvatar))
+            _canChangeOnNetwork(room, EventTypes.RoomAvatar))
           NotionListRow(
             leading: const Icon(Icons.photo_camera_outlined),
             title: 'Change group photo',
@@ -763,6 +764,13 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
 }
 
 /// Ties source details to the originating account after an account switch.
+/// Whether the user may change the room state [type] (name, topic,
+/// avatar) and the bridge carries the change to the network (BR-09): a
+/// WhatsApp or Telegram DM takes none, Slack no avatar, Telegram no topic.
+/// Otherwise the change would show only in ChatLoom.
+bool _canChangeOnNetwork(Room room, String type) =>
+    room.canChangeStateEvent(type) && RoomCapabilities.stateAllowed(room, type);
+
 class _SourceDetailsPage extends StatelessWidget {
   final Room room;
   const _SourceDetailsPage({required this.room});

@@ -186,10 +186,85 @@ class BridgeMediaRequest {
 /// Interprets declarations, not proof that a real bridged send succeeded.
 /// An absent event is unknown; a valid file map's omitted message type or
 /// unmatched MIME is explicitly rejected by the bridgev2 schema.
+///
+/// A declaration with an `id` is a complete bridgev2 `RoomFeatures` value:
+/// every support level is `omitzero` (mautrix-go `event/capabilities.go`), so
+/// an omitted level there is the bridge saying 0, "unsupported" (BR-02).
+/// Only a state without `id` (absent, redacted, a hand-written fixture)
+/// leaves omitted levels unknown.
 class BridgeRoomCapabilities {
   final Map<String, Object?>? _state;
   final bool malformed;
   BridgeRoomCapabilities._(this._state, this.malformed);
+
+  /// Whether the state is a complete bridgev2 declaration (has its `id`).
+  bool get complete {
+    final id = _state?['id'];
+    return id is String && id.isNotEmpty;
+  }
+
+  /// The longest text message the network takes (`max_text_length`, in
+  /// characters as the network counts them), or null when none is declared.
+  int? get maxTextLength {
+    final value = _state?['max_text_length'];
+    return value is int && value > 0 ? value : null;
+  }
+
+  /// The declared level at [key] of the room-level features (for example
+  /// `poll_hidden_votes`), with the omitted-means-unsupported rule.
+  BridgeCapabilityEvidence level(String key) {
+    if (_state == null) {
+      return _unknown(malformed ? 'malformedState' : 'missingState');
+    }
+    return _declaredLevel(_state[key]);
+  }
+
+  /// Whether the bridge carries a change of the room state [eventType]
+  /// (`m.room.name`, `m.room.topic`, `m.room.avatar`) to the network
+  /// (`state[eventType].level`).
+  BridgeCapabilityEvidence stateEvidence(String eventType) => _entryLevel(
+    'state',
+    eventType,
+    (entry) => entry is Map ? entry['level'] : entry,
+  );
+
+  /// Whether the bridge carries the member action [action] (`invite`,
+  /// `kick`, `ban`, `leave`, `revoke_invite`) to the network
+  /// (`member_actions[action]`).
+  BridgeCapabilityEvidence memberActionEvidence(String action) =>
+      _entryLevel('member_actions', action, (entry) => entry);
+
+  BridgeCapabilityEvidence _entryLevel(
+    String mapKey,
+    String key,
+    Object? Function(Object? entry) levelOf,
+  ) {
+    if (_state == null) {
+      return _unknown(malformed ? 'malformedState' : 'missingState');
+    }
+    final map = _state[mapKey];
+    if (map == null) {
+      return complete
+          ? _blocked('unsupportedFallback', level: 0)
+          : _unknown('missingOrMalformedLevel');
+    }
+    if (map is! Map) return _unknown('missingOrMalformedLevel');
+    final entry = map[key];
+    if (entry == null) {
+      return complete
+          ? _blocked('unsupportedFallback', level: 0)
+          : _unknown('missingOrMalformedLevel');
+    }
+    if (entry is Map && !entry.containsKey('level')) {
+      // `StateFeatures.level` has no omitzero: a level-less entry is malformed.
+      return _unknown('missingOrMalformedLevel');
+    }
+    return _level(levelOf(entry));
+  }
+
+  /// [_level], reading an omitted level of a complete declaration as 0.
+  BridgeCapabilityEvidence _declaredLevel(Object? level) =>
+      level == null && complete ? _level(0) : _level(level);
 
   factory BridgeRoomCapabilities.fromState(Object? content) {
     if (content == null) return BridgeRoomCapabilities._(null, false);
@@ -227,7 +302,6 @@ class BridgeRoomCapabilities {
     Duration? messageAge,
     int? editCount,
     String? reaction,
-    int? reactionCount,
     String? disappearingType,
     int? disappearingTimerMs,
     int? pollOptions,
@@ -261,8 +335,19 @@ class BridgeRoomCapabilities {
     final key = feature == BridgeFeature.location
         ? 'location_message'
         : feature.name;
-    var result = _level(_state[key]);
-    if (!result.result.allowed) return result;
+    var result = _declaredLevel(_state[key]);
+    if (!result.result.allowed) {
+      final reason = _featureUnsupported(feature);
+      if (result.result.status != CapabilityStatus.unavailable ||
+          reason == null) {
+        return result;
+      }
+      return BridgeCapabilityEvidence(
+        CapabilityResult(CapabilityStatus.unavailable, reason),
+        supportLevel: result.supportLevel,
+        reasonCode: result.reasonCode,
+      );
+    }
     final limits = <String, int>{};
     final keys = switch (feature) {
       BridgeFeature.edit => ['edit_max_age', 'edit_max_count'],
@@ -302,11 +387,11 @@ class BridgeRoomCapabilities {
       if (reaction != null && allowed is List && !allowed.contains(reaction)) {
         return _blocked('reactionNotAllowed', limits: limits);
       }
-      if (reactionCount != null &&
-          limits['reaction_count'] != null &&
-          reactionCount >= limits['reaction_count']!) {
-        return _blocked('reactionLimit', limits: limits);
-      }
+      // `reaction_count` is not a refusal: bridgev2 keeps the newest
+      // `reaction_count - 1` earlier reactions of the sender and removes the
+      // rest itself (`portal.go` `handleMatrixReaction`), the way WhatsApp,
+      // Messenger and Telegram replace a reaction. The limit is exposed in
+      // [BridgeCapabilityEvidence.limits] for the client to mirror (BR-01).
     }
     if (feature == BridgeFeature.poll &&
         ((pollOptions != null &&
@@ -327,6 +412,7 @@ class BridgeRoomCapabilities {
 
   BridgeCapabilityEvidence _media(String type, BridgeMediaRequest? request) {
     final files = _state!['file'];
+    if (files == null && complete) return _blocked('mediaTypeRejected');
     if (files is! Map) return _unknown('missingMediaDeclaration');
     if (!files.containsKey(type)) return _blocked('mediaTypeRejected');
     final config = files[type];
@@ -422,10 +508,14 @@ class BridgeRoomCapabilities {
   BridgeCapabilityEvidence _disappearing(String? type, int? timer) {
     final state = _state!['state'];
     final entry = state is Map ? state['com.beeper.disappearing_timer'] : null;
+    if (entry == null && complete && (state == null || state is Map)) {
+      return _blocked('timerUnsupported');
+    }
     if (entry is! Map) return _unknown('missingTimerStatePermission');
     final level = _level(entry['level']);
     if (!level.result.allowed) return level;
     final config = _state['disappearing_timer'];
+    if (config == null && complete) return _blocked('timerUnsupported');
     if (config is! Map) return _unknown('missingTimerDeclaration');
     final types = config['types'];
     if (types is! List ||
@@ -460,6 +550,20 @@ class BridgeRoomCapabilities {
       r'^[a-z0-9!#$&^_.+-]+/(?:\*|[a-z0-9!#$&^_.+-]+)$',
     ).hasMatch(base);
   }
+
+  /// What the person reads when the network does not support [feature].
+  static String? _featureUnsupported(BridgeFeature feature) =>
+      switch (feature) {
+        BridgeFeature.reply => "Replies aren't supported on this network.",
+        BridgeFeature.reaction => "Reactions aren't supported on this network.",
+        BridgeFeature.edit => "Editing isn't supported on this network.",
+        BridgeFeature.delete => "Deleting isn't supported on this network.",
+        BridgeFeature.poll => "Polls aren't supported on this network.",
+        BridgeFeature.thread => "Threads aren't supported on this network.",
+        BridgeFeature.location =>
+          "Sharing a location isn't supported on this network.",
+        _ => null,
+      };
 
   static BridgeCapabilityEvidence _level(Object? level) {
     if (level is! int || level < -2 || level > 2) {
@@ -503,8 +607,7 @@ class BridgeRoomCapabilities {
     'missingState' => 'The bridge has not confirmed support for this feature.',
     'rejected' => 'The bridge rejects this feature.',
     'dropped' => 'The bridge drops this feature.',
-    'unsupportedFallback' =>
-      'The bridge may use a simplified fallback for this feature.',
+    'unsupportedFallback' => "This isn't supported on this network.",
     'mediaTypeRejected' => "The bridge doesn't support this attachment type.",
     'mimeRejected' ||
     'noSupportedMime' => "The bridge doesn't support this file format.",
@@ -516,7 +619,6 @@ class BridgeRoomCapabilities {
     'messageTooOld' => "It's too late to change this message.",
     'editLimit' => 'No more edits are allowed for this message.',
     'reactionNotAllowed' => "This reaction isn't supported in this chat.",
-    'reactionLimit' => 'Reaction limit reached for this message.',
     'pollLimit' => 'The poll exceeds the option count or length limit.',
     'timerUnsupported' ||
     'noAllowedTimers' => "The bridge doesn't support disappearing messages.",

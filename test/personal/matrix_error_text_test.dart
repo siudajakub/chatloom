@@ -289,6 +289,8 @@ void main() {
       'rate limited by Slack':
           'WhatsApp asks you to slow down. Wait a moment and try again.',
       'message is too long for Slack': 'This message is too long for WhatsApp.',
+      // Telegram fork `humanise` (MESSAGE_TOO_LONG).
+      'Message was too long': 'This message is too long for WhatsApp.',
       'server rejected message: blocked':
           'WhatsApp didn’t accept this message.',
       'failed to convert message: bad html':

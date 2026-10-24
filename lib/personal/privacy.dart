@@ -309,7 +309,12 @@ abstract final class PersonalPrivacy {
         if (type.contains('poll')) BridgeFeature.poll,
         if (relation is Map && relation['rel_type'] == RelationshipTypes.edit)
           BridgeFeature.edit,
-        if (reply is Map) BridgeFeature.reply,
+        // A thread message's `m.in_reply_to` is the thread's own fallback
+        // (bridgev2 reads it as a reply only when the network has threads).
+        if (reply is Map &&
+            !(relation['rel_type'] == RelationshipTypes.thread &&
+                relation['is_falling_back'] == true))
+          BridgeFeature.reply,
         if (relation is Map && relation['rel_type'] == RelationshipTypes.thread)
           BridgeFeature.thread,
         ...switch (content['msgtype']) {
@@ -333,11 +338,36 @@ abstract final class PersonalPrivacy {
           _ => <BridgeFeature>{},
         },
       };
+      // A poll's option count and longest option, for `poll_max_options`
+      // and `poll_option_max_length` (WhatsApp: 12 options of 100).
+      final poll = type == PollEventContent.startType
+          ? content[PollEventContent.startType]
+          : null;
+      final answers = poll is Map ? poll['answers'] : null;
+      final optionTexts = answers is List
+          ? [
+              for (final answer in answers)
+                if (answer is Map &&
+                    answer[PollEventContent.mTextJsonKey] is String)
+                  answer[PollEventContent.mTextJsonKey] as String,
+            ]
+          : null;
       for (final feature in features) {
         final capability = RoomCapabilities.forFeature(
           feature,
           room,
           event: event,
+          pollOptions: feature == BridgeFeature.poll && optionTexts != null
+              ? optionTexts.length
+              : null,
+          longestPollOption:
+              feature == BridgeFeature.poll &&
+                  optionTexts != null &&
+                  optionTexts.isNotEmpty
+              ? optionTexts
+                    .map((text) => text.runes.length)
+                    .reduce((a, b) => a > b ? a : b)
+              : null,
           media: mime == null
               ? null
               : BridgeMediaRequest(

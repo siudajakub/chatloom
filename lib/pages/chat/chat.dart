@@ -48,9 +48,9 @@ import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/personal/send_warmup.dart';
+import 'package:chatloom/personal/text_split.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
@@ -1393,6 +1393,9 @@ class ChatController extends State<ChatPageWithRoom>
 
   bool _personalSending = false;
   bool get personalSending => _personalSending;
+
+  /// Over-long texts go as several messages once the user agrees (BR-05).
+  final _longText = LongMessageSplitter();
   bool _attachmentPending = false;
   bool get attachmentPending => _attachmentPending;
   @override
@@ -1449,6 +1452,16 @@ class ChatController extends State<ChatPageWithRoom>
         PersonalPrivacy.surfaceUnlocked &&
         PersonalPrivacy.surfaceGeneration == privacyGeneration;
     if (frozenText.trim().isEmpty) return;
+    // Longer than the network takes: offered as several messages (BR-05).
+    final toSend = _longText.prepare(
+      context,
+      frozenRoom,
+      frozenText,
+      editing: frozenEdit != null,
+      command: composerCommandOf(frozenRoom.client, frozenText) != null,
+      resend: () => unawaited(send()),
+    );
+    if (toSend == null) return;
     for (final feature in [
       if (frozenReply != null) BridgeFeature.reply,
       if (frozenEdit != null) BridgeFeature.edit,
@@ -1495,7 +1508,7 @@ class ChatController extends State<ChatPageWithRoom>
 
     final sent = _SentComposer(
       room: frozenRoom,
-      text: frozenText,
+      text: toSend,
       reply: frozenReply,
       edit: frozenEdit,
       pendingText: frozenPendingText,
@@ -1523,7 +1536,7 @@ class ChatController extends State<ChatPageWithRoom>
     Future<bool>? draft;
     final outcome = personal.sendImmediate(
       frozenRoom,
-      frozenText,
+      toSend,
       replyTo: frozenReply,
       editEventId: frozenEdit?.eventId,
       threadId: frozenThread,
@@ -1547,6 +1560,18 @@ class ChatController extends State<ChatPageWithRoom>
       outcome.then<void>((_) {}, onError: (Object _) {}),
     ]);
     unawaited(_finishSend(personal, sent, outcome, () => draft));
+    // The next part of a split text, once this one is durable.
+    _longText.continueWith(sendController.text, (rest) {
+      if (!mounted || !identical(room, frozenRoom)) return;
+      setState(() {
+        sendController.value = TextEditingValue(
+          text: rest,
+          selection: TextSelection.collapsed(offset: rest.length),
+        );
+        _inputTextIsEmpty = rest.isEmpty;
+      });
+      unawaited(send());
+    });
   }
 
   /// After the outbox persisted [sent]: empties the composer (keeping only
@@ -2533,10 +2558,7 @@ class ChatController extends State<ChatPageWithRoom>
             : sendFileAction(type: FileType.media);
         return;
       case AddPopupMenuActions.poll:
-        showAdaptiveBottomSheet(
-          context: context,
-          builder: (context) => StartPollBottomSheet(room: room),
-        );
+        unawaited(StartPollBottomSheet.show(context, room));
         return;
       case AddPopupMenuActions.photoCamera:
         openCameraAction();

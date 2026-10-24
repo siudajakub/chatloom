@@ -397,7 +397,8 @@ final List<(RegExp, String Function(String net))> _bridgeTexts = [
         'again.',
   ),
   (
-    RegExp(r'^message is too long'),
+    // Telegram fork `humanise`: "Message was too long" (MESSAGE_TOO_LONG).
+    RegExp(r'^message (is|was) too long'),
     (net) => 'This message is too long for $net.',
   ),
   (

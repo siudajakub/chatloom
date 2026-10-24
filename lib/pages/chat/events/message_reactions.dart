@@ -51,6 +51,9 @@ class _MessageReactionsState extends State<MessageReactions> {
   /// changes for this message.
   Set<String> _pending = const {};
 
+  /// Own reactions hidden because a newer one replaces them (BR-01).
+  Set<String> _replaced = const {};
+
   Event get event => widget.event;
   Timeline get timeline => widget.timeline;
   bool get strict => widget.strict;
@@ -69,6 +72,7 @@ class _MessageReactionsState extends State<MessageReactions> {
       _listen();
     } else {
       _pending = _computePending();
+      _replaced = _computeReplaced();
     }
   }
 
@@ -77,7 +81,13 @@ class _MessageReactionsState extends State<MessageReactions> {
     _manager = ConversationMessageActions.coordinator(event)
       ..addListener(_changed);
     _pending = _computePending();
+    _replaced = _computeReplaced();
   }
+
+  Set<String> _computeReplaced() => _manager!
+      .replacedFor(ConversationMessageActions.scope(event))
+      .keys
+      .toSet();
 
   Set<String> _computePending() {
     final manager = _manager!;
@@ -92,8 +102,14 @@ class _MessageReactionsState extends State<MessageReactions> {
   void _changed() {
     if (!mounted) return;
     final pending = _computePending();
-    if (pending.length != _pending.length || !pending.containsAll(_pending)) {
-      setState(() => _pending = pending);
+    final replaced = _computeReplaced();
+    bool same(Set<String> a, Set<String> b) =>
+        a.length == b.length && a.containsAll(b);
+    if (!same(pending, _pending) || !same(replaced, _replaced)) {
+      setState(() {
+        _pending = pending;
+        _replaced = replaced;
+      });
     }
   }
 
@@ -116,6 +132,8 @@ class _MessageReactionsState extends State<MessageReactions> {
       // A reaction the SDK gave up sending was never given; the footer
       // says so and offers Retry.
       if (e.status.isError) continue;
+      // Replaced by the user's newer reaction; the bridge is removing it.
+      if (_replaced.contains(e.eventId)) continue;
       final key = e.content
           .tryGetMap<String, Object?>('m.relates_to')
           ?.tryGet<String>('key');

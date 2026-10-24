@@ -60,6 +60,7 @@ import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/personal/send_warmup.dart';
+import 'package:chatloom/personal/text_split.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
@@ -72,7 +73,6 @@ import 'package:chatloom/personal/ui/person_sheets.dart'
     show personSourceActivity;
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/account_config.dart';
-import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
@@ -291,6 +291,9 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   bool showEmojiPicker = false;
   bool loading = true, sending = false;
+
+  /// Over-long texts go as several messages once the user agrees (BR-05).
+  final _longText = LongMessageSplitter();
   Timer? _draftTimer;
 
   /// Persistent state shown under the header (unavailable sources, a draft
@@ -1851,10 +1854,24 @@ class _MergedChatPageState extends State<_MergedChatView>
     final editAtSend = editEvent;
     final privacyGeneration = PersonalPrivacy.surfaceGeneration;
     final draftKey = 'draft:person:${group.id}';
+    final sourceRoom = personal.client.getRoomById(frozen.conversation.roomId);
+    // Longer than the source network takes: offered as several messages
+    // (BR-05).
+    final toSend = sourceRoom == null
+        ? text
+        : _longText.prepare(
+            context,
+            sourceRoom,
+            text,
+            editing: editAtSend != null,
+            command: false,
+            resend: () => unawaited(send()),
+          );
+    if (toSend == null) return;
     final sent = _MergedSent(
       target: frozen,
       draftKey: draftKey,
-      text: text,
+      text: toSend,
       reply: replyAtSend,
       edit: editAtSend,
       pendingText: _pendingText,
@@ -1895,7 +1912,7 @@ class _MergedChatPageState extends State<_MergedChatView>
         probe,
         () => personal.sendImmediate(
           room,
-          text,
+          toSend,
           replyTo: replyAtSend,
           editEventId: editAtSend?.eventId,
           onDurable: (attempt) {
@@ -1937,6 +1954,18 @@ class _MergedChatPageState extends State<_MergedChatView>
     if (pending != null) {
       unawaited(_finishSend(sent, pending, () => draft));
     }
+    // The next part of a split text, once this one is durable.
+    _longText.continueWith(sendController.text, (rest) {
+      if (!_stillHere() || target.conversation != frozen.conversation) return;
+      setState(() {
+        sendController.value = TextEditingValue(
+          text: rest,
+          selection: TextSelection.collapsed(offset: rest.length),
+        );
+        _inputEmpty = rest.isEmpty;
+      });
+      unawaited(send());
+    });
   }
 
   /// Empties the composer after the outbox persisted [sent] (keeping only
@@ -2258,10 +2287,7 @@ class _MergedChatPageState extends State<_MergedChatView>
           ),
         );
       case AddPopupMenuActions.poll:
-        showAdaptiveBottomSheet(
-          context: context,
-          builder: (context) => StartPollBottomSheet(room: room),
-        );
+        unawaited(StartPollBottomSheet.show(context, room));
       case AddPopupMenuActions.photoCamera:
         inputFocus.unfocus();
         unawaited(

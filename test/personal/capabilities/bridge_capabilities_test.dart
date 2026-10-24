@@ -310,10 +310,121 @@ void main() {
     blocked,
     'Disallowed reaction allowed',
   );
+  // BR-01: bridgev2 replaces the oldest reaction itself; the count is a
+  // limit the client mirrors, never a refusal.
+  final counted = reaction.evidence(BridgeFeature.reaction, reaction: '👍');
+  status(counted, available, 'Reaction count refused a replacement');
+  check(counted.limits['reaction_count'] == 1, 'Reaction count not exposed');
+
+  // BR-02: a complete declaration (bridgev2 always sends its `id`) omits
+  // what it does not support (`omitzero`): omitted means 0, unsupported.
+  final telegramLike = BridgeRoomCapabilities.fromState({
+    'id': 'fixture.capabilities+dm',
+    'reply': 2,
+    'location_message': 2,
+    'max_text_length': 4096,
+    'state': {
+      'com.beeper.disappearing_timer': {'level': 2},
+    },
+  });
+  check(telegramLike.complete, 'Declaration with id not complete');
+  for (final feature in [BridgeFeature.poll, BridgeFeature.thread]) {
+    final omitted = telegramLike.evidence(feature);
+    status(omitted, blocked, 'Omitted level allowed ${feature.name}');
+    check(
+      omitted.result.reason.contains('supported on this network') &&
+          !omitted.result.reason.contains('bridge'),
+      'Unsupported reason not worded per feature',
+    );
+  }
   status(
-    reaction.evidence(BridgeFeature.reaction, reaction: '👍', reactionCount: 1),
+    telegramLike.evidence(BridgeFeature.location),
+    available,
+    'Declared location refused',
+  );
+  status(
+    telegramLike.evidence(BridgeFeature.upload),
     blocked,
-    'Reaction count bypass',
+    'Omitted file map allowed uploads',
+  );
+  check(telegramLike.maxTextLength == 4096, 'max_text_length lost');
+  check(
+    BridgeRoomCapabilities.fromState({'reply': 2}).maxTextLength == null,
+    'max_text_length invented',
+  );
+  status(
+    telegramLike.level('poll_hidden_votes'),
+    blocked,
+    'Omitted poll level allowed',
+  );
+  status(
+    telegramLike.stateEvidence('m.room.name'),
+    blocked,
+    'Omitted room-name state allowed',
+  );
+  status(
+    telegramLike.stateEvidence('com.beeper.disappearing_timer'),
+    available,
+    'Declared state refused',
+  );
+  status(
+    telegramLike.memberActionEvidence('kick'),
+    blocked,
+    'Omitted member actions allowed',
+  );
+  final groupLike = BridgeRoomCapabilities.fromState({
+    'id': 'fixture.capabilities+group',
+    'state': {
+      'm.room.name': {'level': 2},
+      'm.room.topic': {'level': 0},
+    },
+    'member_actions': {'invite': 2, 'ban': 2},
+  });
+  status(
+    groupLike.stateEvidence('m.room.name'),
+    available,
+    'Group rename refused',
+  );
+  status(
+    groupLike.stateEvidence('m.room.topic'),
+    blocked,
+    'Explicit 0 topic allowed',
+  );
+  status(groupLike.memberActionEvidence('invite'), available, 'Invite refused');
+  status(
+    groupLike.memberActionEvidence('kick'),
+    blocked,
+    'Undeclared kick allowed',
+  );
+  status(
+    groupLike.evidence(BridgeFeature.disappearing),
+    blocked,
+    'Undeclared disappearing timer allowed',
+  );
+  // Without `id` (redacted, empty or hand-written state) omitted stays
+  // unknown, so ordinary chats keep offering it.
+  for (final partial in [
+    <String, Object?>{},
+    {'id': ''},
+    {'reply': 2},
+  ]) {
+    final caps = BridgeRoomCapabilities.fromState(partial);
+    status(caps.evidence(BridgeFeature.poll), unknown, 'Partial state refused');
+    status(
+      caps.stateEvidence('m.room.name'),
+      unknown,
+      'Partial state refused rename',
+    );
+    status(
+      caps.memberActionEvidence('kick'),
+      unknown,
+      'Partial state refused kick',
+    );
+  }
+  status(
+    BridgeRoomCapabilities.fromState(null).stateEvidence('m.room.name'),
+    unknown,
+    'Missing state refused rename',
   );
   status(
     BridgeRoomCapabilities.fromState({
@@ -428,6 +539,7 @@ void main() {
   );
   stdout.writeln(
     'PASS bridge capabilities: missing/malformed/partial state, '
-    'state keys, MIME precedence, codec evidence, limits, timers and GIFs',
+    'complete declarations, state keys, MIME precedence, codec evidence, '
+    'limits, timers, room state, member actions and GIFs',
   );
 }

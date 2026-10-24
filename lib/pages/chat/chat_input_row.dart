@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/pages/chat/recording_input_row.dart';
 import 'package:chatloom/pages/chat/recording_view_model.dart';
 import 'package:chatloom/pages/chat/voice_record_button.dart';
+import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/round_video/round_availability.dart'
     show RoundAvailability;
@@ -48,6 +49,28 @@ import 'input_bar.dart';
   return (
     voice: voice,
     round: voice && !holdingVoice && (round?.canRecord ?? false),
+  );
+}
+
+/// Which attach-menu entries [room]'s network takes (BR-03, FX-12):
+/// Telegram's and Messenger's menus offer only what the chat can receive.
+/// Everything stays for a room without a bridge declaration (native
+/// Matrix); a complete declaration refuses what it omits (no polls outside
+/// WhatsApp, no location on Messenger, Instagram or Slack).
+@visibleForTesting
+({bool media, bool file, bool photo, bool video, bool location, bool poll})
+composerAttachOffers(Room room) {
+  bool offers(BridgeFeature feature) =>
+      RoomCapabilities.composerOffers(room, feature);
+  final photo = offers(BridgeFeature.image);
+  final video = offers(BridgeFeature.video);
+  return (
+    media: photo || video,
+    file: offers(BridgeFeature.upload),
+    photo: photo,
+    video: video,
+    location: offers(BridgeFeature.location),
+    poll: offers(BridgeFeature.poll),
   );
 }
 
@@ -100,62 +123,79 @@ class _ChatInputRowState extends State<ChatInputRow> {
     final matrix = Matrix.of(context);
     void pick(AddPopupMenuActions choice) =>
         controller.onAddPopupMenuButtonSelected(choice);
-    final entries = <ComposerMenuEntry<VoidCallback>>[
+    final offers = composerAttachOffers(controller.room);
+    final listed = <ComposerMenuEntry<VoidCallback>>[
+      if (offers.media)
         ComposerMenuEntry(
           () => pick(AddPopupMenuActions.gallery),
           Icons.photo_library_outlined,
           'Photo or video',
         ),
+      if (offers.file)
         ComposerMenuEntry(
           () => pick(AddPopupMenuActions.file),
           Icons.attachment_outlined,
           l10n.sendFile,
         ),
-        if (PlatformInfos.isMobile) ...[
-          const ComposerMenuEntry.divider(),
+      if (PlatformInfos.isMobile && (offers.photo || offers.video)) ...[
+        const ComposerMenuEntry.divider(),
+        if (offers.photo)
           ComposerMenuEntry(
             () => pick(AddPopupMenuActions.photoCamera),
             Icons.camera_alt_outlined,
             l10n.takeAPhoto,
           ),
+        if (offers.video)
           ComposerMenuEntry(
             () => pick(AddPopupMenuActions.videoCamera),
             Icons.videocam_outlined,
             l10n.recordAVideo,
           ),
-        ],
+      ],
+      if ((PlatformInfos.isMobile && offers.location) || offers.poll)
         const ComposerMenuEntry.divider(),
-        if (PlatformInfos.isMobile)
-          ComposerMenuEntry(
-            () => pick(AddPopupMenuActions.location),
-            Icons.gps_fixed_outlined,
-            l10n.shareLocation,
-          ),
+      if (PlatformInfos.isMobile && offers.location)
+        ComposerMenuEntry(
+          () => pick(AddPopupMenuActions.location),
+          Icons.gps_fixed_outlined,
+          l10n.shareLocation,
+        ),
+      if (offers.poll)
         ComposerMenuEntry(
           () => pick(AddPopupMenuActions.poll),
           Icons.poll_outlined,
           l10n.startPoll,
         ),
-        if (controller.canRecordRoundSilently) ...[
-          const ComposerMenuEntry.divider(),
-          ComposerMenuEntry(
-            () => pick(AddPopupMenuActions.roundVideoSilent),
-            Icons.notifications_off_outlined,
-            'Record a round video silently',
-          ),
-        ],
-        if (controller.allowsAccountSwitch &&
-            matrix.isMultiAccount &&
-            matrix.hasComplexBundles &&
-            matrix.currentBundle!.length > 1) ...[
-          const ComposerMenuEntry.divider(),
-          ComposerMenuEntry(
-            _pickAccount,
-            Icons.switch_account_outlined,
-            'Send from another account',
-          ),
-        ],
+      if (controller.canRecordRoundSilently) ...[
+        const ComposerMenuEntry.divider(),
+        ComposerMenuEntry(
+          () => pick(AddPopupMenuActions.roundVideoSilent),
+          Icons.notifications_off_outlined,
+          'Record a round video silently',
+        ),
+      ],
+      if (controller.allowsAccountSwitch &&
+          matrix.isMultiAccount &&
+          matrix.hasComplexBundles &&
+          matrix.currentBundle!.length > 1) ...[
+        const ComposerMenuEntry.divider(),
+        ComposerMenuEntry(
+          _pickAccount,
+          Icons.switch_account_outlined,
+          'Send from another account',
+        ),
+      ],
     ];
+    // No divider at an edge or after another (hidden entries).
+    final entries = <ComposerMenuEntry<VoidCallback>>[];
+    for (final entry in listed) {
+      if (entry.isDivider && (entries.isEmpty || entries.last.isDivider)) {
+        continue;
+      }
+      entries.add(entry);
+    }
+    if (entries.isNotEmpty && entries.last.isDivider) entries.removeLast();
+    if (entries.isEmpty) return;
     final run = _attachSheet
         ? await _showAttachSheet(entries)
         : await showComposerMenu<VoidCallback>(
@@ -482,7 +522,6 @@ class _ChatInputRowState extends State<ChatInputRow> {
     );
   }
 }
-
 
 class _AccountMenuEntry extends StatelessWidget {
   final Client client;

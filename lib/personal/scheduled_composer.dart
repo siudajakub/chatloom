@@ -161,7 +161,12 @@ class FrozenScheduledComposer {
       this.threadRootEventId == threadRootEventId &&
       this.threadLastEventId == threadLastEventId;
 
-  Map<String, dynamic> content(Map<String, dynamic> original) {
+  /// The scheduled event content for [original]. [reply] false leaves the
+  /// reply out (the later parts of a split text, BR-05); a thread stays.
+  Map<String, dynamic> content(
+    Map<String, dynamic> original, {
+    bool reply = true,
+  }) {
     validateCurrent();
     final result = Map<String, dynamic>.from(
       jsonDecode(jsonEncode(original)) as Map,
@@ -169,20 +174,21 @@ class FrozenScheduledComposer {
     if (result.containsKey('m.relates_to')) {
       throw SendLaterProblem('The scheduled content already has a relation.');
     }
-    if (_replyId != null || threadRootEventId != null) {
+    final replyId = reply ? _replyId : null;
+    if (replyId != null || threadRootEventId != null) {
       result['m.relates_to'] = <String, dynamic>{
         if (threadRootEventId != null) ...{
           'event_id': threadRootEventId,
           'rel_type': RelationshipTypes.thread,
-          'is_falling_back': _replyId == null,
+          'is_falling_back': replyId == null,
         },
-        if (_replyId != null)
-          'm.in_reply_to': {'event_id': _replyId}
+        if (replyId != null)
+          'm.in_reply_to': {'event_id': replyId}
         else if (threadLastEventId != null)
           'm.in_reply_to': {'event_id': threadLastEventId},
       };
     }
-    if (_replySender != null && _replySender != _account) {
+    if (reply && _replySender != null && _replySender != _account) {
       final mentions = result['m.mentions'];
       final existing = mentions is Map ? mentions['user_ids'] : null;
       result['m.mentions'] = <String, dynamic>{

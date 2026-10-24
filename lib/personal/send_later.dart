@@ -10,6 +10,7 @@ import 'package:chatloom/personal/personal_hub.dart'
     show schedulePersonalAttachment;
 import 'package:chatloom/personal/reminder_list.dart';
 import 'package:chatloom/personal/scheduled_composer.dart';
+import 'package:chatloom/personal/text_split.dart';
 import 'package:chatloom/personal/ui/due_time_picker.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:go_router/go_router.dart';
@@ -176,6 +177,7 @@ Future<void> runSendLater(
   final router = GoRouter.maybeOf(context);
   final localizations = MaterialLocalizations.of(context);
   final use24h = MediaQuery.alwaysUse24HourFormatOf(context);
+  var partCount = 1;
   try {
     final frozen = freeze();
     // The sheet opens at once; private sync is checked when it is needed.
@@ -212,21 +214,34 @@ Future<void> runSendLater(
       if (text.trim().isEmpty) {
         throw SendLaterProblem('Write a message before scheduling it.');
       }
-      final id = const Uuid().v4();
-      await personal.schedule(
-        ScheduledSend(
-          id: id,
-          target: frozen.target,
-          dueAt: choice.at,
-          content: frozen.content({'msgtype': 'm.text', 'body': text}),
-          transactionId: 'schedule-$id',
-        ),
-      );
+      // Longer than the network takes: scheduled as consecutive parts, a
+      // second apart so they arrive in order (BR-05). Each part is its own
+      // job on the Scheduled page.
+      final limit = maxTextLengthOf(frozen.room);
+      final parts = limit == null || text.length <= limit
+          ? [text]
+          : splitLongText(text, limit);
+      for (var i = 0; i < parts.length; i++) {
+        final id = const Uuid().v4();
+        await personal.schedule(
+          ScheduledSend(
+            id: id,
+            target: frozen.target,
+            dueAt: choice.at.add(Duration(seconds: i)),
+            content: frozen.content({
+              'msgtype': 'm.text',
+              'body': parts[i],
+            }, reply: i == 0),
+            transactionId: 'schedule-$id',
+          ),
+        );
+      }
       await onTextScheduled();
+      partCount = parts.length;
     }
     _say(
       messenger,
-      'Scheduled · ${reminderWhen(choice.at, clock(), localizations, use24h: use24h)}',
+      '${partCount > 1 ? 'Scheduled as $partCount messages' : 'Scheduled'} · ${reminderWhen(choice.at, clock(), localizations, use24h: use24h)}',
       action: router == null
           ? null
           : SnackBarAction(

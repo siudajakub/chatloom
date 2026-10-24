@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/report_policy.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/permission_slider_dialog.dart';
@@ -25,6 +26,10 @@ Future<void> showMemberActionsPopupMenu({
   final scaffoldMessenger = ScaffoldMessenger.of(context);
   final displayname = user.calcDisplayname();
   final isMe = user.room.client.userID == user.id;
+  // The bridge carries these to the network (BR-09): Telegram groups have
+  // no kick, WhatsApp and Messenger DMs no member actions at all.
+  final networkKicks = RoomCapabilities.memberActionAllowed(user.room, 'kick');
+  final networkBans = RoomCapabilities.memberActionAllowed(user.room, 'ban');
 
   const defaultPowerLevels = {0, 50, 100, 9007199254740991};
 
@@ -95,14 +100,14 @@ Future<void> showMemberActionsPopupMenu({
               : '${user.powerLevel}',
           icon: Icons.manage_accounts_outlined,
         ),
-      if (user.canKick)
+      if (user.canKick && networkKicks)
         NotionMenuEntry(
           value: _MemberActions.kick,
           label: l10n.kickFromChat,
           icon: Icons.person_remove_outlined,
           destructive: true,
         ),
-      if (user.canBan && user.membership != Membership.ban)
+      if (user.canBan && networkBans && user.membership != Membership.ban)
         NotionMenuEntry(
           value: _MemberActions.ban,
           label: l10n.banFromChat,

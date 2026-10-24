@@ -33,6 +33,13 @@ typedef ConversationReactionKey = ({
   bool removal,
 });
 
+/// An own reaction hidden while the reaction [by] replaces it; [emoji] is
+/// the hidden one.
+typedef ConversationReactionReplacement = ({
+  ConversationReactionKey by,
+  String emoji,
+});
+
 /// The message a set of reaction intents belongs to.
 typedef ConversationReactionScope = ({
   String? account,
@@ -89,6 +96,10 @@ class ConversationReactionCoordinator extends ChangeNotifier {
     required Future<void> Function() remove,
     required bool Function(Object) definitiveFailure,
     bool removeExisting = false,
+
+    /// Runs once the intent is pending, before the transport (the
+    /// optimistic part of a replacement).
+    VoidCallback? onStart,
   }) async {
     final present = exists();
     if (!removeExisting) reconcile(key, present: confirmed?.call() ?? false);
@@ -108,6 +119,7 @@ class ConversationReactionCoordinator extends ChangeNotifier {
         notifyListeners();
         return ConversationReactionResult.denied;
       }
+      onStart?.call();
       if (removeExisting && present) {
         await remove();
         // A stale aggregate may still contain the removed reaction. Keep a
@@ -161,6 +173,61 @@ class ConversationReactionCoordinator extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// Own reactions a newer one replaces, hidden at once (BR-01): on a
+  /// network that keeps `reaction_count` reactions per person (WhatsApp,
+  /// Messenger, Instagram: one; Telegram: one, three with Premium) the
+  /// bridge redacts the oldest ones itself about a second later. Old
+  /// reaction event ID → the replacing intent and the old emoji. Bounded;
+  /// an entry leaves when the bridge's redaction arrives or the replacing
+  /// reaction did not stick.
+  final _replaced = <String, ConversationReactionReplacement>{};
+  static const _replacedCap = 256;
+
+  /// Whether the own reaction [eventId] is hidden behind a replacement.
+  bool isReplaced(String eventId) => _replaced.containsKey(eventId);
+
+  /// Hidden own reactions of one message, by event ID.
+  Map<String, ConversationReactionReplacement> replacedFor(
+    ConversationReactionScope scope,
+  ) => _replaced.isEmpty
+      ? const {}
+      : {
+          for (final entry in _replaced.entries)
+            if (entry.value.by.event == scope.event &&
+                entry.value.by.room == scope.room &&
+                entry.value.by.account == scope.account)
+              entry.key: entry.value,
+        };
+
+  /// Whether [emoji] of one message is hidden behind a replacement.
+  bool replacing(ConversationReactionScope scope, String emoji) =>
+      replacedFor(scope).values.any((value) => value.emoji == emoji);
+
+  /// Hides [old] (event ID → emoji) while [by] replaces them.
+  void hideReplaced(Map<String, String> old, ConversationReactionKey by) {
+    if (old.isEmpty) return;
+    for (final entry in old.entries) {
+      _replaced[entry.key] = (by: by, emoji: entry.value);
+    }
+    while (_replaced.length > _replacedCap) {
+      _replaced.remove(_replaced.keys.first);
+    }
+    notifyListeners();
+  }
+
+  /// Shows the reactions [by] was replacing again (it failed or was
+  /// refused), or forgets the hidden ones in [eventIds] (their redaction
+  /// arrived).
+  void restoreReplaced({
+    ConversationReactionKey? by,
+    Iterable<String>? eventIds,
+  }) {
+    final before = _replaced.length;
+    if (by != null) _replaced.removeWhere((_, value) => value.by == by);
+    if (eventIds != null) eventIds.forEach(_replaced.remove);
+    if (_replaced.length != before) notifyListeners();
+  }
 }
 
 /// SDK adapter shared by ordinary/merged, menu, chips and touch gestures.
@@ -207,6 +274,8 @@ abstract final class ConversationMessageActions {
             // An echo the SDK gave up on was never given.
             !e.status.isError &&
             e.senderId == event.room.client.userID &&
+            // Replaced by a newer reaction; the bridge is removing it.
+            !coordinator(event).isReplaced(e.eventId) &&
             e.content
                     .tryGetMap<String, Object?>('m.relates_to')
                     ?.tryGet<String>('key') ==
@@ -222,7 +291,8 @@ abstract final class ConversationMessageActions {
     ))
       if (!e.redacted &&
           !e.status.isError &&
-          e.senderId == event.room.client.userID)
+          e.senderId == event.room.client.userID &&
+          !coordinator(event).isReplaced(e.eventId))
         ?e.content
             .tryGetMap<String, Object?>('m.relates_to')
             ?.tryGet<String>('key'),
@@ -245,6 +315,7 @@ abstract final class ConversationMessageActions {
 
   static void reconcile(Event event, Timeline timeline) {
     final manager = coordinator(event);
+    _reconcileReplaced(manager, event, timeline);
     for (final tracked in manager.keysFor(scope(event)).toList()) {
       final own = ownReactions(event, timeline, tracked.emoji);
       if (tracked.removal) {
@@ -287,6 +358,79 @@ abstract final class ConversationMessageActions {
         }
       }
     }
+  }
+
+  /// Forgets hidden reactions the bridge removed, and shows them again when
+  /// the reaction that replaced them failed or is gone (refused by the
+  /// network and reverted, or removed by the user).
+  static void _reconcileReplaced(
+    ConversationReactionCoordinator manager,
+    Event event,
+    Timeline timeline,
+  ) {
+    final hidden = manager.replacedFor(scope(event));
+    if (hidden.isEmpty) return;
+    final own = {
+      for (final e in event.aggregatedEvents(
+        timeline,
+        RelationshipTypes.reaction,
+      ))
+        if (e.senderId == event.room.client.userID) e.eventId: e,
+    };
+    final removed = [
+      for (final id in hidden.keys)
+        if (own[id] == null || own[id]!.redacted) id,
+    ];
+    if (removed.isNotEmpty) manager.restoreReplaced(eventIds: removed);
+    for (final by in {for (final value in hidden.values) value.by}) {
+      final state = manager.state(by);
+      final stuck =
+          state == ConversationReactionState.failed ||
+          (state == ConversationReactionState.idle &&
+              ownReactions(event, timeline, by.emoji).isEmpty);
+      if (stuck) manager.restoreReplaced(by: by);
+    }
+  }
+
+  /// The own reactions a new [emoji] replaces on [event] (oldest first):
+  /// where the network keeps `reaction_count` reactions per person, the
+  /// ones beyond `reaction_count - 1` newer ones, exactly what bridgev2
+  /// removes. Empty without a declared limit (native Matrix rooms).
+  static Map<String, String> _replacedBy(
+    Event event,
+    Timeline timeline,
+    String emoji,
+  ) {
+    final limit = RoomCapabilities.evidenceForFeature(
+      BridgeFeature.reaction,
+      event.room,
+      event: event,
+      reaction: emoji,
+    ).limits['reaction_count'];
+    if (limit == null || limit <= 0) return const {};
+    final own =
+        event
+            .aggregatedEvents(timeline, RelationshipTypes.reaction)
+            .where(
+              (e) =>
+                  !e.redacted &&
+                  !e.status.isError &&
+                  e.eventId.startsWith(r'$') &&
+                  e.senderId == event.room.client.userID &&
+                  !coordinator(event).isReplaced(e.eventId),
+            )
+            .toList()
+          ..sort((a, b) => a.originServerTs.compareTo(b.originServerTs));
+    final excess = own.length - limit + 1;
+    if (excess <= 0) return const {};
+    return {
+      for (final e in own.take(excess))
+        e.eventId:
+            e.content
+                .tryGetMap<String, Object?>('m.relates_to')
+                ?.tryGet<String>('key') ??
+            '',
+    };
   }
 
   static List<Event> _errorEchoes(
@@ -452,19 +596,12 @@ abstract final class ConversationMessageActions {
     Event event,
     Timeline timeline,
     String emoji,
-  ) {
-    final room = event.room;
-    return RoomCapabilities.forFeature(
-      BridgeFeature.reaction,
-      room,
-      event: event,
-      reaction: emoji,
-      reactionCount: event
-          .aggregatedEvents(timeline, RelationshipTypes.reaction)
-          .where((e) => !e.redacted && e.senderId == room.client.userID)
-          .length,
-    );
-  }
+  ) => RoomCapabilities.forFeature(
+    BridgeFeature.reaction,
+    event.room,
+    event: event,
+    reaction: emoji,
+  );
 
   static bool canReact(
     Event event,
@@ -503,6 +640,7 @@ abstract final class ConversationMessageActions {
   }) {
     final manager = coordinator(event);
     if (manager.keysFor(scope(event)).any(manager.unresolved)) return false;
+    if (manager.replacing(scope(event), emoji)) return false;
     return ownReactions(event, timeline, emoji).isEmpty &&
         canReact(event, timeline, emoji, strict: strict);
   }
@@ -592,7 +730,10 @@ abstract final class ConversationMessageActions {
     final unresolvedSource = manager
         .keysFor(scope(event))
         .any(manager.unresolved);
-    if (unresolvedSource) {
+    // The emoji being replaced is still on the network until the bridge's
+    // redaction arrives (about a second): giving it again now would be a
+    // duplicate the server refuses.
+    if (unresolvedSource || manager.replacing(scope(event), emoji)) {
       _notice(
         context,
         'Waiting for the source network to confirm the reaction.',
@@ -600,6 +741,12 @@ abstract final class ConversationMessageActions {
       return false;
     }
     final removing = toggle && present();
+    // A network that keeps one reaction per person (or a few) replaces the
+    // oldest: hide it now, like WhatsApp and Messenger; the bridge redacts
+    // it once the new one is through (BR-01).
+    final replacing = removing || present()
+        ? const <String, String>{}
+        : _replacedBy(event, timeline, emoji);
     if (removing) {
       (_removalEvidence[manager] ??= {})[removingKey] = (
         timeline: timeline,
@@ -648,7 +795,13 @@ abstract final class ConversationMessageActions {
         return status != null && status >= 400 && status < 500;
       },
       removeExisting: removing,
+      onStart: replacing.isEmpty
+          ? null
+          : () => manager.hideReplaced(replacing, addingKey),
     );
+    if (replacing.isNotEmpty && result != ConversationReactionResult.added) {
+      manager.restoreReplaced(by: addingKey);
+    }
     reconcile(event, timeline);
     if (context.mounted) {
       switch (result) {
@@ -702,7 +855,8 @@ class ConversationReactionReconciler {
 
   void didBuild(BuildContext context, Event event, Timeline timeline) {
     final manager = ConversationMessageActions.coordinator(event);
-    if (manager.keysFor(ConversationMessageActions.scope(event)).isEmpty) {
+    final scope = ConversationMessageActions.scope(event);
+    if (manager.keysFor(scope).isEmpty && manager.replacedFor(scope).isEmpty) {
       _signature = null;
       return;
     }

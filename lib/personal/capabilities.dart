@@ -88,7 +88,6 @@ abstract final class RoomCapabilities {
     BridgeMediaRequest? media,
     int? editCount,
     String? reaction,
-    int? reactionCount,
     String? disappearingType,
     int? disappearingTimerMs,
     int? pollOptions,
@@ -101,7 +100,6 @@ abstract final class RoomCapabilities {
     media: media,
     editCount: editCount,
     reaction: reaction,
-    reactionCount: reactionCount,
     disappearingType: disappearingType,
     disappearingTimerMs: disappearingTimerMs,
     pollOptions: pollOptions,
@@ -116,7 +114,6 @@ abstract final class RoomCapabilities {
     BridgeMediaRequest? media,
     int? editCount,
     String? reaction,
-    int? reactionCount,
     String? disappearingType,
     int? disappearingTimerMs,
     int? pollOptions,
@@ -161,7 +158,6 @@ abstract final class RoomCapabilities {
           : DateTime.now().difference(event.originServerTs),
       editCount: editCount,
       reaction: reaction,
-      reactionCount: reactionCount,
       disappearingType: disappearingType,
       disappearingTimerMs: disappearingTimerMs,
       pollOptions: pollOptions,
@@ -205,6 +201,32 @@ abstract final class RoomCapabilities {
     }
     return declaration;
   }
+
+  /// Whether the composer offers [feature] (an attach-menu entry) in
+  /// [room]: everything the room's bridge does not refuse. A complete
+  /// declaration refuses what it omits (BR-02); rooms without one (native
+  /// Matrix) keep every entry.
+  static bool composerOffers(Room room, BridgeFeature feature) =>
+      declared(room).evidence(feature).result.status !=
+      CapabilityStatus.unavailable;
+
+  /// The longest text message [room]'s network takes, or null (no limit
+  /// declared).
+  static int? maxTextLength(Room room) => declared(room).maxTextLength;
+
+  /// Whether a change of the room state [eventType] (name, topic, avatar)
+  /// reaches [room]'s network, or the bridge does not say it doesn't. The
+  /// Matrix power level is the caller's check.
+  static bool stateAllowed(Room room, String eventType) =>
+      declared(room).stateEvidence(eventType).result.status !=
+      CapabilityStatus.unavailable;
+
+  /// Whether the member action [action] (`invite`, `kick`, `ban`) reaches
+  /// [room]'s network, or the bridge does not say it doesn't. The Matrix
+  /// power level is the caller's check.
+  static bool memberActionAllowed(Room room, String action) =>
+      declared(room).memberActionEvidence(action).result.status !=
+      CapabilityStatus.unavailable;
 
   static BridgeCapabilityEvidence _denied(String reason) =>
       BridgeCapabilityEvidence(
