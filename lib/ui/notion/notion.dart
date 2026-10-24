@@ -21,6 +21,7 @@ export 'notion_link_preview.dart';
 export 'notion_loops.dart';
 export 'notion_media_viewer.dart';
 export 'notion_media_playback_controls.dart';
+export 'notion_menu.dart';
 export 'notion_modal_routes.dart';
 export 'notion_motion.dart';
 export 'notion_pressable.dart';

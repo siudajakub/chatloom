@@ -13,6 +13,7 @@ import 'package:chatloom/personal/personal_hub.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
+import 'package:chatloom/ui/notion/notion.dart' show NotionGlassMenuRow;
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/rendering.dart';
@@ -306,9 +307,12 @@ void main() {
           await tester.pumpAndSettle();
         }
         if (state == 'menu') {
-          await tester.tap(find.byType(PopupMenuButton<String>));
+          await tester.tap(find.byTooltip('Conversation options'));
           await tester.pumpAndSettle();
-          expect(find.byType(PopupMenuItem<String>), findsNWidgets(5));
+          // Search, Send later, Remind me, Mark as read, (Mute… when
+          // joined), Chat details: glass rows, no Material popup.
+          expect(find.byType(NotionGlassMenuRow), findsAtLeastNWidgets(5));
+          expect(find.byType(PopupMenuItem<String>), findsNothing);
         }
         if (state == 'profile') {
           expect(find.byType(NotionChatDetailsPage), findsOneWidget);

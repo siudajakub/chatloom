@@ -124,7 +124,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.tap(find.byTooltip('Conversation options'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Send later'));
     await tester.pumpAndSettle();

@@ -374,12 +374,16 @@ class NotionGlassMenuRow extends StatelessWidget {
   final VoidCallback? onTap;
   final TextStyle? style;
 
+  /// A second, muted line under [title] (e.g. a language's native name).
+  final String? subtitle;
+
   /// Announced instead of [title]; the row's content is one semantics node.
   final String? semanticsLabel;
 
   const NotionGlassMenuRow({
     super.key,
     required this.title,
+    this.subtitle,
     this.semanticsLabel,
     this.leading,
     this.trailing,
@@ -396,7 +400,8 @@ class NotionGlassMenuRow extends StatelessWidget {
       child: Semantics(
         button: onTap != null,
         selected: selected,
-        label: semanticsLabel ?? title,
+        label:
+            semanticsLabel ?? (subtitle == null ? title : '$title, $subtitle'),
         child: Material(
           color: selected ? colors.selected : Colors.transparent,
           shape: NotionShapes.row,
@@ -424,7 +429,23 @@ class NotionGlassMenuRow extends StatelessWidget {
                         const SizedBox(width: NotionSpace.sm),
                       ],
                       Expanded(
-                        child: Text(title, style: style ?? NotionType.callout),
+                        child: subtitle == null
+                            ? Text(title, style: style ?? NotionType.callout)
+                            : Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: style ?? NotionType.callout,
+                                  ),
+                                  Text(
+                                    subtitle!,
+                                    style:
+                                        context.notion.typography.footnoteMuted,
+                                  ),
+                                ],
+                              ),
                       ),
                       if (trailing != null) ...[
                         const SizedBox(width: NotionSpace.xs - 2),

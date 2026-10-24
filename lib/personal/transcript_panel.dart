@@ -260,6 +260,41 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
     _languageOverride = language;
   });
 
+  /// Transcript ⋯: Transcribe again (then its language) and Copy.
+  Future<void> _menu(BuildContext anchor, String text, String? language) async {
+    final action = await showNotionMenu<String>(
+      anchor,
+      semanticLabel: 'Transcript options',
+      entries: const [
+        NotionMenuEntry(
+          key: ValueKey('transcript-again'),
+          value: 'again',
+          label: 'Transcribe again',
+          icon: Icons.refresh_rounded,
+        ),
+        NotionMenuEntry(
+          key: ValueKey('transcript-copy'),
+          value: 'copy',
+          label: 'Copy',
+          icon: Icons.copy_rounded,
+        ),
+      ],
+    );
+    if (!mounted || !anchor.mounted) return;
+    switch (action) {
+      case 'copy':
+        await _copyTranscript(text);
+      case 'again':
+        final choice = await showTranscriptionLanguageMenu(
+          anchor,
+          selected: language,
+        );
+        if (choice == null || !mounted) return;
+        _selectLanguage(choice.code);
+        await _request(choice.code);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.event.redacted) return const SizedBox.shrink();
@@ -504,36 +539,10 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
                 ),
               ),
             ),
-            MenuAnchor(
-              menuChildren: [
-                SubmenuButton(
-                  key: const ValueKey('transcript-again'),
-                  leadingIcon: const Icon(
-                    Icons.refresh_rounded,
-                    size: NotionSize.icon,
-                  ),
-                  menuChildren: notionTranscriptionLanguageItems(
-                    selected: job.language,
-                    onSelected: (language) {
-                      _selectLanguage(language);
-                      _request(language);
-                    },
-                  ),
-                  child: const Text('Transcribe again'),
-                ),
-                MenuItemButton(
-                  key: const ValueKey('transcript-copy'),
-                  leadingIcon: const Icon(
-                    Icons.copy_rounded,
-                    size: NotionSize.icon,
-                  ),
-                  onPressed: () async {
-                    await _copyTranscript(text);
-                  },
-                  child: const Text('Copy'),
-                ),
-              ],
-              builder: (context, controller, _) => IconButton(
+            // A glass menu; "Transcribe again" opens the language list as a
+            // second step in the same place (no cascading submenu on a phone).
+            Builder(
+              builder: (anchor) => IconButton(
                 key: const ValueKey('transcript-menu'),
                 tooltip: 'Transcript options',
                 style: IconButton.styleFrom(
@@ -541,8 +550,7 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
                   minimumSize: const Size.square(32),
                   tapTargetSize: MaterialTapTargetSize.padded,
                 ),
-                onPressed: () =>
-                    controller.isOpen ? controller.close() : controller.open(),
+                onPressed: () => _menu(anchor, text, job.language),
                 icon: const Icon(
                   Icons.more_horiz_rounded,
                   size: NotionSize.icon,

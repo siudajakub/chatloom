@@ -36,6 +36,7 @@ import 'package:chatloom/pages/chat/undecryptable_fix_sheet.dart';
 import 'package:chatloom/pages/chat/voice_message_sender.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/conversation_mute.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
@@ -2150,7 +2151,7 @@ class _MergedChatPageState extends State<_MergedChatView>
           identical(replyEvent, sourceReply);
       final files = await pick();
       if (!mounted || files.isEmpty || !isCurrent()) return;
-      final result = await showAdaptiveDialog<AttachmentSendResult>(
+      final result = await showNotionCustomDialog<AttachmentSendResult>(
         context: context,
         builder: (c) => SendFileDialog(
           files: files,
@@ -2277,7 +2278,7 @@ class _MergedChatPageState extends State<_MergedChatView>
           }),
         );
       case AddPopupMenuActions.location:
-        showAdaptiveDialog(
+        showNotionCustomDialog<void>(
           context: context,
           builder: (c) => SendLocationDialog(room: room),
         );
@@ -2395,7 +2396,17 @@ class _MergedChatPageState extends State<_MergedChatView>
   // ---------------------------------------------------------------------
   // Header actions.
 
-  Future<void> _quickAction(String action) async {
+  Future<void> _quickAction(String action, {BuildContext? anchor}) async {
+    if (action == 'mute' || action == 'unmute') {
+      await runConversationMute(
+        anchor != null && anchor.mounted ? anchor : context,
+        personal,
+        'person:${group.id}',
+        unmute: action == 'unmute',
+        isCurrent: _stillHere,
+      );
+      return;
+    }
     if (action == 'read') {
       await _allRead();
       return;
@@ -2665,19 +2676,18 @@ class _MergedChatPageState extends State<_MergedChatView>
         extendBodyBehindAppBar: true,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
-          flexibleSpace: const NotionGlassBar(),
+          flexibleSpace: const NotionGlassBar(hairlineBottom: true),
           toolbarHeight: NotionTokens.headerHeight,
           elevation: 0,
           scrolledUnderElevation: 0,
-          shape: Border(
-            bottom: BorderSide(color: theme.colorScheme.outlineVariant),
-          ),
+          // UI-20: the glass bar draws its own translucent hairline (like
+          // the dock) instead of an opaque AppBar border.
           automaticallyImplyLeading: false,
           leading: columns
               ? null
-              : IconButton(
-                  icon: const Icon(Icons.chevron_left),
-                  tooltip: 'Back',
+              : NotionIconButton(
+                  icon: Icons.chevron_left,
+                  label: 'Back',
                   onPressed: () => Navigator.maybePop(context),
                 ),
           titleSpacing: columns ? NotionSpace.xl : 0,
@@ -2707,13 +2717,21 @@ class _MergedChatPageState extends State<_MergedChatView>
             ),
           ),
           actions: [
-            PopupMenuButton<String>(
-              tooltip: 'Conversation actions',
-              icon: const Icon(Icons.more_horiz),
-              onSelected: _quickAction,
-              itemBuilder: (_) => conversationQuickActions(
-                merged: true,
-                editing: editEvent != null,
+            Builder(
+              builder: (anchor) => NotionMenuButton<String>(
+                label: 'Conversation actions',
+                icon: Icons.more_horiz,
+                alignEnd: true,
+                entries: () => conversationQuickActions(
+                  merged: true,
+                  editing: editEvent != null,
+                  mute: conversationMuteState(
+                    context,
+                    personal,
+                    'person:${group.id}',
+                  ),
+                ),
+                onSelected: (action) => _quickAction(action, anchor: anchor),
               ),
             ),
           ],

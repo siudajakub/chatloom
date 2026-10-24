@@ -124,31 +124,24 @@ class ComposerActionTray extends StatelessWidget {
     );
   }
 
-  /// Themed menu (`menuTheme`/`menuButtonTheme`), like the transcript menu.
+  /// The glass menu (`NotionMenuButton`), like the "+" attach menu beside it.
   Widget _overflow(BuildContext context, List<ComposerAction> hidden) =>
       SizedBox.square(
         dimension: ComposerTrayLayout.slot,
-        child: MenuAnchor(
-          alignmentOffset: const Offset(0, NotionSpace.xxs),
-          menuChildren: [
+        child: NotionMenuButton<ComposerAction>(
+          icon: Icons.more_horiz,
+          label: 'More actions',
+          keyPrefix: 'composer-tray',
+          entries: () => [
             for (final action in hidden)
-              MenuItemButton(
-                leadingIcon: Icon(action.icon, size: NotionSize.icon),
-                // 48dp rows like the other composer targets.
-                style: MenuItemButton.styleFrom(
-                  minimumSize: const Size(0, NotionSize.touchTarget),
-                ),
-                onPressed: action.onPressed == null ? null : () => _use(action),
-                child: Text(action.label),
+              NotionMenuEntry(
+                value: action,
+                label: action.label,
+                icon: action.icon,
+                enabled: action.onPressed != null,
               ),
           ],
-          builder: (context, controller, _) => NotionIconButton(
-            icon: Icons.more_horiz,
-            label: 'More actions',
-            selected: controller.isOpen,
-            onPressed: () =>
-                controller.isOpen ? controller.close() : controller.open(),
-          ),
+          onSelected: _use,
         ),
       );
 

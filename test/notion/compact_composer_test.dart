@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/ui/notion/notion.dart' show NotionGlassMenuRow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -489,8 +490,9 @@ void main() {
     expect(tester.getSize(find.byType(TextField)).width, greaterThan(40));
     await tester.tap(find.byTooltip('More actions'));
     await tester.pumpAndSettle();
-    // A themed Notion menu, not a PopupMenuButton with ListTiles.
-    expect(find.byType(MenuItemButton), findsNWidgets(2));
+    // The glass Notion menu, not a Material menu with ListTiles.
+    expect(find.byType(NotionGlassMenuRow), findsNWidgets(2));
+    expect(find.byType(MenuItemButton), findsNothing);
     expect(find.byType(ListTile), findsNothing);
     expect(find.text('Send from another account'), findsOneWidget);
     await tester.tap(find.text('Send from another account'));

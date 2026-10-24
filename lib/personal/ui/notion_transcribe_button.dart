@@ -21,44 +21,35 @@ String notionTranscriptionLanguageName(String? language) => language == null
     ? 'Automatic'
     : transcriptionLanguages[language] ?? language.toUpperCase();
 
-/// Menu entries for every supported transcription language, with a check
-/// mark on [selected]. Shared by the split button and the transcript menu.
-List<Widget> notionTranscriptionLanguageItems({
-  required String? selected,
-  required ValueChanged<String?> onSelected,
-}) => [
+/// A chosen transcription language; [code] null is automatic. A record so
+/// that "Automatic" differs from a dismissed menu.
+typedef TranscriptionLanguageChoice = ({String? code});
+
+/// Glass menu entries ([showNotionMenu]) for every supported transcription
+/// language, with a check on [selected]. Shared by the split button and the
+/// transcript menu; keys are `transcription-language-<code|auto>`.
+List<NotionMenuEntry<TranscriptionLanguageChoice>>
+notionTranscriptionLanguageEntries({required String? selected}) => [
   for (final language in <String?>[null, ...transcriptionLanguages.keys])
-    MenuItemButton(
+    NotionMenuEntry<TranscriptionLanguageChoice>(
       key: ValueKey('transcription-language-${language ?? 'auto'}'),
-      leadingIcon: SizedBox.square(
-        dimension: 18,
-        child: language == selected
-            ? const Icon(Icons.check_rounded, size: 18)
-            : null,
-      ),
-      style: MenuItemButton.styleFrom(minimumSize: const Size(184, 48)),
-      onPressed: () => onSelected(language),
-      child: Semantics(
-        selected: language == selected,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(notionTranscriptionLanguageName(language)),
-            if (notionTranscriptionNativeNames[language] case final native?)
-              Builder(
-                builder: (context) => Text(
-                  native,
-                  style: NotionType.caption.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
+      value: (code: language),
+      label: notionTranscriptionLanguageName(language),
+      subtitle: notionTranscriptionNativeNames[language],
+      selected: language == selected,
     ),
 ];
+
+/// Opens the language menu at [anchorContext]; null when dismissed.
+Future<TranscriptionLanguageChoice?> showTranscriptionLanguageMenu(
+  BuildContext anchorContext, {
+  required String? selected,
+}) => showNotionMenu<TranscriptionLanguageChoice>(
+  anchorContext,
+  semanticLabel: 'Transcription language',
+  width: 220,
+  entries: notionTranscriptionLanguageEntries(selected: selected),
+);
 
 /// Outlined split pill: the left segment starts (or retries) a manual
 /// transcription; the right segment picks its language. Running jobs use
@@ -136,13 +127,8 @@ class NotionTranscribeSplitButton extends StatelessWidget {
       ),
     );
 
-    final trailing = MenuAnchor(
-      alignmentOffset: const Offset(0, 4),
-      menuChildren: notionTranscriptionLanguageItems(
-        selected: language,
-        onSelected: (value) => onLanguageSelected?.call(value),
-      ),
-      builder: (context, controller, _) => TextButton(
+    final trailing = Builder(
+      builder: (anchor) => TextButton(
         key: const ValueKey('transcribe-language'),
         style: segment(endShape).copyWith(
           padding: const WidgetStatePropertyAll(
@@ -154,7 +140,13 @@ class NotionTranscribeSplitButton extends StatelessWidget {
         ),
         onPressed: onLanguageSelected == null
             ? null
-            : () => controller.isOpen ? controller.close() : controller.open(),
+            : () async {
+                final choice = await showTranscriptionLanguageMenu(
+                  anchor,
+                  selected: language,
+                );
+                if (choice != null) onLanguageSelected?.call(choice.code);
+              },
         child: Semantics(
           label:
               'Transcription language: ${notionTranscriptionLanguageName(language)}',

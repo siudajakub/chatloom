@@ -6,18 +6,23 @@ import 'dart:ui' as ui;
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/automatic_push.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/conversation_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/reminder_list.dart' show reminderWhen;
 import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/send_later.dart' show runSendLater;
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart'
+    show notionNetworkLabel;
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/personal/ui/people_section.dart';
 import 'package:chatloom/personal/ui/reminders_page.dart'
     show requestConversationReminder;
+import 'package:chatloom/personal/ui/scheduled_page.dart';
 import 'package:chatloom/personal/ui/sync_changes_section.dart';
 import 'package:chatloom/personal/ui/transcription_settings.dart';
 import 'package:chatloom/personal/ui/worker_status_row.dart';
@@ -35,10 +40,11 @@ import 'package:mime/mime.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:uuid/uuid.dart';
 
-
 export 'package:chatloom/personal/ui/reminders_page.dart'
     show requestConversationReminder;
 
+/// A one-field text dialog (Developer settings' gateway URL), in the
+/// Notion glass dialog. Returns the text on Save, null on Cancel.
 Future<String?> personalText(
   BuildContext context,
   String title, {
@@ -46,44 +52,29 @@ Future<String?> personalText(
 }) async {
   final c = TextEditingController(text: initial);
   try {
-    return await showNotionCustomDialog<String>(
+    return await showNotionDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: TextField(controller: c, autofocus: true, maxLines: 3),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, c.text),
-            child: const Text('Save'),
-          ),
-        ],
+      title: title,
+      content: NotionTextField(
+        controller: c,
+        autofocus: true,
+        maxLines: 3,
+        minLines: 1,
       ),
+      actions: (context) => [
+        NotionButton.ghost(
+          label: 'Cancel',
+          onPressed: () => Navigator.pop(context),
+        ),
+        NotionButton.primary(
+          label: 'Save',
+          onPressed: () => Navigator.pop(context, c.text),
+        ),
+      ],
     );
   } finally {
     c.dispose();
   }
-}
-
-Future<DateTime?> personalDate(BuildContext context) async {
-  final now = DateTime.now();
-  final date = await showDatePicker(
-    context: context,
-    firstDate: now,
-    lastDate: now.add(const Duration(days: 365)),
-    initialDate: now,
-  );
-  if (date == null || !context.mounted) return null;
-  final time = await showTimePicker(
-    context: context,
-    initialTime: TimeOfDay.fromDateTime(now.add(const Duration(minutes: 10))),
-  );
-  return time == null
-      ? null
-      : DateTime(date.year, date.month, date.day, time.hour, time.minute);
 }
 
 /// The selected room is frozen before either picker opens. No source message is
@@ -181,33 +172,41 @@ Future<bool> schedulePersonalAttachment(
   final capability = RoomCapabilities.forFeature(feature, room, media: media);
   if (!capability.allowed) throw SendLaterProblem(capability.reason);
   if (!context.mounted) return false;
-  final due = dueAt ?? await personalDate(context);
+  // Without a time from Send later: the same one-tap times and Date/Time
+  // rows as Send later and Remind me (not the stock date + time pickers).
+  final due =
+      dueAt ??
+      (await showScheduledEditor(
+        context,
+        chatName: InboxProjection(personal).displayName(room),
+        title: 'Schedule an attachment',
+        saveLabel: 'Continue',
+      ))?.at;
   if (due == null || !context.mounted) return false;
   if (!due.isAfter(DateTime.now())) {
     throw SendLaterProblem('That time has passed. Choose a new time.');
   }
-  final confirmed = dueAt != null
-      ? true
-      : await showNotionCustomDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Schedule an attachment'),
-            content: Text(
-              '${file.name}\n${(bytes.length / 1024 / 1024).toStringAsFixed(1)} MB\n${target.conversation.network} · ${due.toLocal()}${frozen.contextLabel == null ? '' : '\n${frozen.contextLabel}'}',
+  final confirmed =
+      dueAt != null ||
+      await showNotionConfirmDialog(
+        context: context,
+        title: 'Schedule an attachment',
+        message: [
+          '${file.name} · ${(bytes.length / 1024 / 1024).toStringAsFixed(1)} MB',
+          [
+            notionNetworkLabel(target.conversation.network),
+            reminderWhen(
+              due,
+              DateTime.now(),
+              MaterialLocalizations.of(context),
+              use24h: MediaQuery.alwaysUse24HourFormatOf(context),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Schedule'),
-              ),
-            ],
-          ),
-        );
-  if (confirmed != true) return false;
+          ].join(' · '),
+          ?frozen.contextLabel,
+        ].join('\n'),
+        confirmLabel: 'Schedule',
+      );
+  if (!confirmed) return false;
   frozen.validateCurrent();
   if (personal.client.getRoomById(target.conversation.roomId) != room ||
       !RoomCapabilities.forFeature(feature, room, media: media).allowed) {
@@ -518,109 +517,8 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                 PeopleSettingsSection(personal: personal, run: run),
               ],
               PersonalSettingsSection.scheduled => <Widget>[
-                for (final e in personal.schedules.entries)
-                  ListTile(
-                    title: Text(
-                      (e.value['content'] as Map?)?['body'] as String? ??
-                          'Message',
-                    ),
-                    subtitle: Text(
-                      '${e.value['state']} · ${e.value['dueAt']}\n${scheduledSourceSummary(e.value)}',
-                    ),
-                    trailing: PopupMenuButton<String>(
-                      popUpAnimationStyle: NotionMotion.menuStyle,
-                      enabled:
-                          personal.ready &&
-                          {
-                            'queued',
-                            'paused',
-                            'waitingKeys',
-                          }.contains(e.value['state']) &&
-                          e.value['attempted'] != true &&
-                          !personal.pending.values.any(
-                            (op) => op.entityId == e.key,
-                          ),
-                      onSelected: (kind) => run(() async {
-                        final owner = personal;
-                        bool current() =>
-                            mounted &&
-                            identical(owner, personal) &&
-                            identical(Matrix.of(context).client, owner.client);
-                        if (!current()) return;
-                        if (kind == 'update') {
-                          final content = Map<String, dynamic>.from(
-                            e.value['content'] as Map,
-                          );
-                          if ({
-                            'm.text',
-                            'm.notice',
-                          }.contains(content['msgtype'])) {
-                            final text = await personalText(
-                              context,
-                              'Message text',
-                              initial: content['body'] as String? ?? '',
-                            );
-                            if (text == null ||
-                                text.trim().isEmpty ||
-                                !context.mounted) {
-                              return;
-                            }
-                            if (!current()) return;
-                            content['body'] = text;
-                          }
-                          if (!context.mounted) return;
-                          final due = await personalDate(context);
-                          if (due == null ||
-                              !due.isAfter(DateTime.now()) ||
-                              !current())
-                            return;
-                          final job = ScheduledSend.fromJson({
-                            ...e.value,
-                            'dueAt': due.toUtc().toIso8601String(),
-                            'content': content,
-                          });
-                          await owner.command(
-                            'schedule.update',
-                            e.key,
-                            job.toJson().cast<String, dynamic>(),
-                            baseRevision: e.value['revision'] as int? ?? 0,
-                          );
-                        } else {
-                          await owner.command('schedule.$kind', e.key, {
-                            'id': e.key,
-                          }, baseRevision: e.value['revision'] as int? ?? 0);
-                        }
-                      }),
-                      itemBuilder: (_) => [
-                        const PopupMenuItem(
-                          value: 'sendNow',
-                          child: Text('Send now'),
-                        ),
-                        PopupMenuItem(
-                          value: 'update',
-                          enabled: {
-                            'queued',
-                            'paused',
-                          }.contains(e.value['state']),
-                          child: Text('Edit time or message'),
-                        ),
-                        const PopupMenuItem(
-                          value: 'cancel',
-                          child: Text('Cancel'),
-                        ),
-                      ],
-                    ),
-                  ),
-                if (personal.schedules.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(top: NotionSpace.xl),
-                    child: NotionEmptyState(
-                      icon: Icons.schedule_outlined,
-                      title: 'No scheduled messages',
-                      message:
-                          'In a chat, open the conversation tools and choose Send later.',
-                    ),
-                  ),
+                // Sections, human states and times, glass menus (UI-04).
+                ScheduledMessagesSection(personal: personal, run: run),
               ],
               PersonalSettingsSection.transcriptions => <Widget>[
                 TranscriptionSettingsSection(personal: personal, run: run),
@@ -662,14 +560,23 @@ class RoomPersonalButton extends StatelessWidget {
     this.includeChatSettings = false,
   });
   @override
-  Widget build(BuildContext context) => PopupMenuButton<String>(
-    popUpAnimationStyle: NotionMotion.menuStyle,
-    tooltip: includeChatSettings
-        ? 'Conversation options'
-        : 'Conversation tools',
-    icon: Icon(includeChatSettings ? Icons.more_horiz : Icons.more_time),
-    itemBuilder: (_) =>
-        conversationQuickActions(editing: isEditing?.call() == true),
+  Widget build(BuildContext context) => NotionMenuButton<String>(
+    label: includeChatSettings ? 'Conversation options' : 'Conversation tools',
+    icon: includeChatSettings ? Icons.more_horiz : Icons.more_time,
+    alignEnd: true,
+    entries: () {
+      final p = PersonalClient.of(room.client);
+      return conversationQuickActions(
+        editing: isEditing?.call() == true,
+        mute: room.membership == Membership.join
+            ? conversationMuteState(
+                context,
+                p,
+                InboxProjection(p).entityFor(room),
+              )
+            : null,
+      );
+    },
     onSelected: (kind) => run(context, kind),
   );
 
@@ -699,6 +606,19 @@ class RoomPersonalButton extends StatelessWidget {
       return;
     }
     final p = PersonalClient.of(room.client);
+    if (kind == 'mute' || kind == 'unmute') {
+      await runConversationMute(
+        context,
+        p,
+        InboxProjection(p).entityFor(room),
+        unmute: kind == 'unmute',
+        isCurrent: () =>
+            context.mounted &&
+            isCurrentSource?.call() != false &&
+            identical(Matrix.of(context).client, room.client),
+      );
+      return;
+    }
     if (kind == 'schedule') {
       await _sendLater(context, p);
       return;
@@ -805,46 +725,61 @@ class RoomPersonalButton extends StatelessWidget {
   }
 }
 
-/// The same short menu is used by ordinary and merged conversations.
-List<PopupMenuEntry<String>> conversationQuickActions({
+/// The same short menu is used by ordinary and merged conversations
+/// (glass `showNotionMenu` rows keyed `menu-<value>`). [mute] adds Mute… /
+/// Unmute; a timed mute shows its end under Unmute (FX-07).
+List<NotionMenuEntry<String>> conversationQuickActions({
   bool editing = false,
   bool merged = false,
+  ConversationMuteState? mute,
 }) => [
-  const PopupMenuItem(
+  const NotionMenuEntry(
+    key: ValueKey('menu-source.search'),
     value: 'source.search',
-    child: ListTile(
-      leading: Icon(Icons.search_outlined),
-      title: Text('Search conversation'),
-    ),
+    label: 'Search conversation',
+    icon: Icons.search_outlined,
   ),
-  PopupMenuItem(
+  NotionMenuEntry(
+    key: const ValueKey('menu-schedule'),
     value: 'schedule',
     enabled: !editing,
-    child: ListTile(
-      leading: const Icon(Icons.schedule_outlined),
-      title: Text(editing ? 'Send later (finish editing first)' : 'Send later'),
-    ),
+    label: editing ? 'Send later (finish editing first)' : 'Send later',
+    icon: Icons.schedule_outlined,
   ),
-  const PopupMenuItem(
+  const NotionMenuEntry(
+    key: ValueKey('menu-reminder'),
     value: 'reminder',
-    child: ListTile(
-      leading: Icon(Icons.alarm_outlined),
-      title: Text('Remind me'),
-    ),
+    label: 'Remind me',
+    icon: Icons.alarm_outlined,
   ),
-  PopupMenuItem(
+  NotionMenuEntry(
+    key: const ValueKey('menu-read'),
     value: 'read',
-    child: ListTile(
-      leading: const Icon(Icons.mark_chat_read_outlined),
-      title: Text(merged ? 'Mark all sources as read' : 'Mark as read'),
-    ),
+    label: merged ? 'Mark all sources as read' : 'Mark as read',
+    icon: Icons.mark_chat_read_outlined,
   ),
-  const PopupMenuDivider(),
-  const PopupMenuItem(
+  if (mute != null)
+    mute.muted
+        ? NotionMenuEntry(
+            key: const ValueKey('menu-unmute'),
+            value: 'unmute',
+            label: 'Unmute',
+            subtitle: mute.until,
+            icon: Icons.notifications_active_outlined,
+            enabled: mute.canChange,
+          )
+        : NotionMenuEntry(
+            key: const ValueKey('menu-mute'),
+            value: 'mute',
+            label: 'Mute…',
+            icon: Icons.notifications_off_outlined,
+            enabled: mute.canChange,
+          ),
+  const NotionMenuEntry.divider(),
+  const NotionMenuEntry(
+    key: ValueKey('menu-source.details'),
     value: 'source.details',
-    child: ListTile(
-      leading: Icon(Icons.info_outline),
-      title: Text('Chat details'),
-    ),
+    label: 'Chat details',
+    icon: Icons.info_outline,
   ),
 ];

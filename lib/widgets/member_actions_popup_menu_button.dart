@@ -23,198 +23,105 @@ Future<void> showMemberActionsPopupMenu({
 }) async {
   final l10n = L10n.of(context);
   final scaffoldMessenger = ScaffoldMessenger.of(context);
-  final theme = Theme.of(context);
   final displayname = user.calcDisplayname();
   final isMe = user.room.client.userID == user.id;
 
-  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-
-  final button = context.findRenderObject() as RenderBox;
-
-  final position = RelativeRect.fromRect(
-    Rect.fromPoints(
-      button.localToGlobal(const Offset(0, -65), ancestor: overlay),
-      button.localToGlobal(
-        button.size.bottomRight(Offset.zero) + const Offset(-50, 0),
-        ancestor: overlay,
-      ),
-    ),
-    Offset.zero & overlay.size,
-  );
-
   const defaultPowerLevels = {0, 50, 100, 9007199254740991};
 
-  final action = await showMenu<_MemberActions>(
-    context: context,
-    popUpAnimationStyle: NotionMotion.menuStyle,
-    position: position,
-    items: <PopupMenuEntry<_MemberActions>>[
-      PopupMenuItem(
+  // ChatLoom: the glass Notion menu, anchored to the tapped avatar/row.
+  final action = await showNotionMenu<_MemberActions>(
+    context,
+    semanticLabel: displayname,
+    keyPrefix: 'member-menu',
+    entries: [
+      NotionMenuEntry(
         value: _MemberActions.info,
-        child: Row(
-          spacing: 12.0,
-          children: [
-            Avatar(name: displayname, size: 30, mxContent: user.avatarUrl),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 200),
-              child: Text(
-                displayname,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
+        label: displayname,
+        leading: Avatar(
+          name: displayname,
+          size: NotionSize.iconMd,
+          mxContent: user.avatarUrl,
         ),
       ),
+      const NotionMenuEntry.divider(),
       if (onMention != null)
-        PopupMenuItem(
+        NotionMenuEntry(
           value: _MemberActions.mention,
-          child: Row(
-            children: [
-              const Icon(Icons.alternate_email_outlined),
-              const SizedBox(width: 18),
-              Text(L10n.of(context).mention),
-            ],
-          ),
+          label: l10n.mention,
+          icon: Icons.alternate_email_outlined,
         ),
       if (user.membership == Membership.knock)
-        PopupMenuItem(
+        NotionMenuEntry(
           value: _MemberActions.approve,
-          child: Row(
-            children: [
-              const Icon(Icons.how_to_reg_outlined),
-              const SizedBox(width: 18),
-              Text(L10n.of(context).approve),
-            ],
-          ),
+          label: l10n.approve,
+          icon: Icons.how_to_reg_outlined,
         ),
       if (user.canChangeUserPowerLevel) ...[
         if (user.powerLevel.level < 100)
-          PopupMenuItem(
+          NotionMenuEntry(
             value: _MemberActions.makeAdmin,
-            child: Row(
-              children: [
-                const Icon(Icons.admin_panel_settings_outlined),
-                const SizedBox(width: 18),
-                Text(L10n.of(context).makeAdmin),
-              ],
-            ),
+            label: l10n.makeAdmin,
+            icon: Icons.admin_panel_settings_outlined,
           ),
         if (user.powerLevel.level < 50)
-          PopupMenuItem(
+          NotionMenuEntry(
             value: _MemberActions.makeModerator,
-            child: Row(
-              children: [
-                const Icon(Icons.add_moderator_outlined),
-                const SizedBox(width: 18),
-                Text(L10n.of(context).makeModerator),
-              ],
-            ),
+            label: l10n.makeModerator,
+            icon: Icons.add_moderator_outlined,
           ),
         if (user.powerLevel.role == PowerLevelRole.admin)
-          PopupMenuItem(
+          NotionMenuEntry(
             value: _MemberActions.removeAdmin,
-            child: Row(
-              children: [
-                const Icon(Icons.remove_moderator_outlined),
-                const SizedBox(width: 18),
-                Text(L10n.of(context).removeAdminRights),
-              ],
-            ),
+            label: l10n.removeAdminRights,
+            icon: Icons.remove_moderator_outlined,
           )
         else if (user.powerLevel.role == PowerLevelRole.moderator)
-          PopupMenuItem(
+          NotionMenuEntry(
             value: _MemberActions.removeModerator,
-            child: Row(
-              children: [
-                const Icon(Icons.remove_moderator_outlined),
-                const SizedBox(width: 18),
-                Text(L10n.of(context).removeModeratorRights),
-              ],
-            ),
+            label: l10n.removeModeratorRights,
+            icon: Icons.remove_moderator_outlined,
           ),
       ],
       if (user.canChangeUserPowerLevel ||
           !defaultPowerLevels.contains(user.powerLevel.level))
-        PopupMenuItem(
+        NotionMenuEntry(
           value: _MemberActions.setPowerLevel,
           enabled: user.canChangeUserPowerLevel,
-          child: Row(
-            children: [
-              const Icon(Icons.manage_accounts_outlined),
-              const SizedBox(width: 18),
-              Text(
-                user.canChangeUserPowerLevel
-                    ? L10n.of(context).setPowerLevel
-                    : L10n.of(context).powerLevel,
-              ),
-              if (!defaultPowerLevels.contains(user.powerLevel.level))
-                Text(' (${user.powerLevel})'),
-            ],
-          ),
+          label: user.canChangeUserPowerLevel
+              ? l10n.setPowerLevel
+              : l10n.powerLevel,
+          subtitle: defaultPowerLevels.contains(user.powerLevel.level)
+              ? null
+              : '${user.powerLevel}',
+          icon: Icons.manage_accounts_outlined,
         ),
       if (user.canKick)
-        PopupMenuItem(
+        NotionMenuEntry(
           value: _MemberActions.kick,
-          child: Row(
-            children: [
-              Icon(
-                Icons.person_remove_outlined,
-                color: theme.colorScheme.onErrorContainer,
-              ),
-              const SizedBox(width: 18),
-              Text(
-                L10n.of(context).kickFromChat,
-                style: TextStyle(color: theme.colorScheme.onErrorContainer),
-              ),
-            ],
-          ),
+          label: l10n.kickFromChat,
+          icon: Icons.person_remove_outlined,
+          destructive: true,
         ),
       if (user.canBan && user.membership != Membership.ban)
-        PopupMenuItem(
+        NotionMenuEntry(
           value: _MemberActions.ban,
-          child: Row(
-            children: [
-              Icon(
-                Icons.block_outlined,
-                color: theme.colorScheme.onErrorContainer,
-              ),
-              const SizedBox(width: 18),
-              Text(
-                L10n.of(context).banFromChat,
-                style: TextStyle(color: theme.colorScheme.onErrorContainer),
-              ),
-            ],
-          ),
+          label: l10n.banFromChat,
+          icon: Icons.block_outlined,
+          destructive: true,
         ),
       if (user.canBan && user.membership == Membership.ban)
-        PopupMenuItem(
+        NotionMenuEntry(
           value: _MemberActions.unban,
-          child: Row(
-            children: [
-              const Icon(Icons.warning),
-              const SizedBox(width: 18),
-              Text(L10n.of(context).unbanFromChat),
-            ],
-          ),
+          label: l10n.unbanFromChat,
+          icon: Icons.warning_amber_outlined,
         ),
       // Native Matrix only: a bridged report reaches Beeper (CS-24).
       if (!isMe && canReportUser(user.room.client, user.id, room: user.room))
-        PopupMenuItem(
+        NotionMenuEntry(
           value: _MemberActions.report,
-          child: Row(
-            children: [
-              Icon(
-                Icons.gavel_outlined,
-                color: theme.colorScheme.onErrorContainer,
-              ),
-              const SizedBox(width: 18),
-              Text(
-                L10n.of(context).reportUser,
-                style: TextStyle(color: theme.colorScheme.onErrorContainer),
-              ),
-            ],
-          ),
+          label: l10n.reportUser,
+          icon: Icons.gavel_outlined,
+          destructive: true,
         ),
     ],
   );

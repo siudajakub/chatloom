@@ -238,6 +238,7 @@ in new code; read `context.notion` instead.
 | `NotionReactionChip`, `NotionReactionOverlap`, `NotionReactionBar`, `NotionReactionBurst` | reaction pills under a bubble, the long-press reaction pill, the double-tap burst (`notion_reactions.dart`, tokens `NotionReactions.*`) |
 | `NotionGlassSurface`, `NotionGlassBar`, `NotionGlassScope` | glass chrome and overlays (see Glass) |
 | `NotionGlassPanel`, `NotionGlassMenuRow`, `NotionGlassDivider`, `NotionGlassPill` | the dock's language: glass menus, dialogs, sheets, pill buttons (see Glass) |
+| `showNotionMenu(context, entries:, anchor:, position:, alignEnd:)` + `NotionMenuEntry(value:, label:, icon:/leading:, subtitle:, enabled:, destructive:, selected:)` / `.divider()`; `NotionMenuButton(icon:, label:, entries:, onSelected:)` | every menu: header ⋯, overflow, row and composer menus. A glass panel of `NotionGlassMenuRow`s that grows from its anchor (the button, or a desktop click `position`), below it near the top of the screen and above it near the bottom; the same panel on phone and desktop; Escape/back/outside tap dismiss. A second step (Mute… → durations, Transcribe again → language) opens a new menu at the same anchor instead of a cascading submenu. Never `PopupMenuButton`/`showMenu`/`MenuAnchor` in new code (`notion_menu.dart`) |
 | `NotionLinkPreviewCard(title:, description:, site:, image:, fill:, textColor:, mutedColor:, onTap:)` | a bridged link preview inside a text bubble: opaque card, image on top (1:1 to 16:9), site, title, description; colours from the bubble, no blur, never fetches the URL (`notion_link_preview.dart`) |
 | `NotionMediaPlaybackControls`, `NotionMediaActionsButton` | Focused media transport over `stageScrim`: play/pause, time, seek, speed; secondary actions in one menu. Data and callbacks only; `seekControl` accepts a voice waveform instead of the slider. |
 | `NotionSwipeAction(startToEnd:, endToStart:, child:)` + `NotionSwipeActionSide(icon:, label:, onCommit:)` | Telegram-style row swipe (inbox: archive / mark read): the row follows the finger over an opaque `accentTint` pill whose icon scales in, arms at 30 % of the width with one `NotionHaptics.selection()`, commits on release and springs back (`snappy`, instant under reduced motion); touch only, never from the back-gesture edges, off under a screen reader (custom semantics actions instead); no controller until the first swipe (`notion_swipe_action.dart`) |
@@ -262,7 +263,7 @@ surfaces that stay still while content moves beneath them:
 | Top header (inbox, conversation, merged chat, every `NotionScaffold` list page) | `NotionGlassBar` (inbox in a `PinnedHeaderSliver`; `AppBar(backgroundColor: Colors.transparent, flexibleSpace: NotionGlassBar())` with `extendBodyBehindAppBar: true`) |
 | Floating bottom dock (inbox) | `NotionGlassSurface(dock: true, borderRadius: NotionGlass.dockRadius, border: ...)` inset from the edges |
 | Composer strip (conversation) | `NotionGlassBar` behind the input row |
-| Menus and popovers (network selector) | `NotionGlassPanel` inside `showNotionPopover` |
+| Menus and popovers (network selector, `showNotionMenu`) | `NotionGlassPanel` inside `showNotionPopover` |
 | Dialogs | `NotionDialog` (a `NotionGlassPanel` with `NotionGlass.dialogRadius`) |
 | Bottom sheets and action sheets | `showNotionSheet`, `showModalActionPopup` (a `NotionGlassPanel` with `NotionGlass.sheetRadius`) |
 | Floating pills over content | `NotionGlassPill(blur: true)` |
@@ -321,7 +322,7 @@ the dock's `surface` fill, opaque.
 | `NotionGlassBar(hairlineTop:, hairlineBottom:)` | full-width header and composer strip |
 | `NotionGlassPanel(child:, borderRadius:, padding:, overlay:, blur:)` | menus, popovers, dialogs, sheets: tint + hairline + ink-ready `Material` |
 | `NotionGlassReveal`, `NotionRevealClip` | the popover entrance: provided by `NotionPopoverRoute`, consumed by the first overlay surface below it (clip grows from the anchor, content fades, blur steady) |
-| `NotionGlassMenuRow(leading:, title:, trailing:, selected:, onTap:)` | a 48 pt row in a glass menu with a rounded, inset highlight |
+| `NotionGlassMenuRow(leading:, title:, subtitle:, trailing:, selected:, onTap:)` | a 48 pt row in a glass menu with a rounded, inset highlight; `subtitle` is a muted second line |
 | `NotionGlassDivider(vertical:)` | the dock's 1 × 36 separator; `vertical: false` is the inset hairline between menu sections |
 | `NotionGlassPill(icon:, label:, onPressed:, selected:, blur:)` | a dock-style pill button: content presses inside the ink, the pill never scales |
 | `NotionPillTabIndicator(color:)` | the theme's tab indicator: a pill behind the selected tab |

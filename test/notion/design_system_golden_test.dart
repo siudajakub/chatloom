@@ -610,6 +610,86 @@ Widget _glass(NotionGlassMode mode) => NotionGlassScope(
 
 /// The dock's language on overlays: a glass menu panel and glass pills over
 /// scrolled content, forced on.
+/// `showNotionMenu` opened from a header ⋯: glass rows with an icon, a
+/// subtitle, a disabled, a selected and a destructive row.
+class _OpenMenu extends StatefulWidget {
+  const _OpenMenu();
+  @override
+  State<_OpenMenu> createState() => _OpenMenuState();
+}
+
+class _OpenMenuState extends State<_OpenMenu> {
+  final _button = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final anchor = _button.currentContext;
+      if (anchor == null) return;
+      showNotionMenu<String>(
+        anchor,
+        entries: const [
+          NotionMenuEntry(
+            value: 'search',
+            label: 'Search conversation',
+            icon: Icons.search_outlined,
+          ),
+          NotionMenuEntry(
+            value: 'later',
+            label: 'Send later (finish editing first)',
+            icon: Icons.schedule_outlined,
+            enabled: false,
+          ),
+          NotionMenuEntry(
+            value: 'unmute',
+            label: 'Unmute',
+            subtitle: 'Muted until Today · 14:30',
+            icon: Icons.notifications_active_outlined,
+          ),
+          NotionMenuEntry(
+            value: 'pl',
+            label: 'Polish',
+            subtitle: 'Polski',
+            selected: true,
+          ),
+          NotionMenuEntry.divider(),
+          NotionMenuEntry(
+            value: 'leave',
+            label: 'Leave chat',
+            icon: Icons.logout,
+            destructive: true,
+          ),
+        ],
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Conversation'),
+      actions: [
+        NotionIconButton(
+          key: _button,
+          icon: Icons.more_horiz,
+          label: 'Conversation options',
+          onPressed: _noop,
+        ),
+      ],
+    ),
+    body: ListView(
+      children: [
+        for (var i = 0; i < 8; i++)
+          NotionListRow(
+            title: 'Conversation number $i',
+            subtitle: 'Content behind the menu',
+          ),
+      ],
+    ),
+  );
+}
+
 Widget _glassOverlays() => NotionGlassScope(
   mode: NotionGlassMode.on,
   child: Scaffold(
@@ -890,6 +970,19 @@ void main() {
       tester,
       'glass-overlays-light',
       _glassOverlays(),
+      brightness: Brightness.light,
+    ),
+  );
+  testWidgets(
+    'menu',
+    (tester) => _golden(tester, 'menu-dark', const _OpenMenu()),
+  );
+  testWidgets(
+    'menu light',
+    (tester) => _golden(
+      tester,
+      'menu-light',
+      const _OpenMenu(),
       brightness: Brightness.light,
     ),
   );
