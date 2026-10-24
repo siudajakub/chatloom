@@ -6,7 +6,6 @@
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
-import 'package:chatloom/widgets/pulsating_widget.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -434,10 +433,6 @@ void main() {
     for (final (name, widget) in [
       ('typing dots', const NotionTypingDots()),
       ('pulse', const NotionPulse(child: SizedBox.square(dimension: 40))),
-      (
-        'legacy PulsatingWidget',
-        const PulsatingWidget(child: SizedBox.square(dimension: 40)),
-      ),
     ]) {
       testWidgets('$name runs, stops under TickerMode off and reduced motion', (
         tester,

@@ -243,13 +243,6 @@ class BackgroundPush {
     _changed();
   }
 
-  void invalidateRegistration() {
-    _registrationRetry.reset();
-    _registration.invalidate();
-    _pusherPhases.clear();
-    _changed();
-  }
-
   Future<void> _queueFirebaseRegistration(Client client) {
     final token = _fcmToken;
     if (token == null || token.isEmpty) return Future<void>.value();
@@ -284,7 +277,6 @@ class BackgroundPush {
         (await L10n.delegate.load(AppConfig.appLocale));
   }
 
-  final pendingTests = <String, Completer<void>>{};
   bool firebaseEnabled = false;
 
   final firebase = FcmSharedIsolate();
@@ -332,7 +324,6 @@ class BackgroundPush {
       await _flutterLocalNotificationsPlugin.initialize(
         settings: const InitializationSettings(
           android: AndroidInitializationSettings('notifications_icon'),
-          iOS: DarwinInitializationSettings(),
         ),
         onDidReceiveNotificationResponse: (response) async {
           // A warm tap arrives here; Android also keeps it as the activity's
@@ -525,7 +516,6 @@ class BackgroundPush {
       final completed = await registerCurrentPush(
         current: current,
         prepare: () async {
-          if (PlatformInfos.isIOS) await firebase.requestPermission();
           if (PlatformInfos.isAndroid && !isIntegrationTest) {
             permissionGranted =
                 await _flutterLocalNotificationsPlugin
@@ -926,7 +916,6 @@ class BackgroundPush {
     // Query the native cache on every setup: a rotation may have happened
     // while this isolate was stopped. A newer callback wins over this read.
     try {
-      if (PlatformInfos.isIOS) await firebase.requestPermission();
       Object? failure;
       for (var i = 0; i < 5; i++) {
         final revision = _registration.revision;

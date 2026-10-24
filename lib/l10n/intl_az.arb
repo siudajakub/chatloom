@@ -1,7 +1,0 @@
-{
-    "remove": "çıxarın",
-    "@remove": {
-        "type": "String",
-        "placeholders": {}
-    }
-}

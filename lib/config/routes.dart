@@ -563,15 +563,6 @@ abstract class AppRoutes {
             ),
             redirect: loggedOutRedirect,
           ),
-          GoRoute(
-            path: 'invite',
-            pageBuilder: (context, state) => defaultPageBuilder(
-              context,
-              state,
-              InvitationSelection(roomId: state.pathParameters['roomid']!),
-            ),
-            redirect: loggedOutRedirect,
-          ),
         ],
         redirect: loggedOutRedirect,
       ),

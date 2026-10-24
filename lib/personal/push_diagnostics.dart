@@ -258,10 +258,6 @@ class PushDiagnosticsSnapshot {
   int count(PushOutcome outcome) => counters[outcome.name] ?? 0;
   int received(PushKind kind) => counters['received.${kind.name}'] ?? 0;
 
-  /// The newest push handled with [outcome] among [recent], if any.
-  PushDiagnosticsEntry? lastWith(Set<PushOutcome> outcomes) =>
-      recent.where((entry) => outcomes.contains(entry.outcome)).firstOrNull;
-
   /// Recent pushes that started the app.
   Iterable<PushDiagnosticsEntry> get coldStarts =>
       recent.where((entry) => entry.cold);

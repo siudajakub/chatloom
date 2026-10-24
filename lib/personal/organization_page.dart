@@ -273,11 +273,11 @@ Future<bool> pickAndUploadPrivateAvatar(
   );
   if (selection == null) return false;
   final length = await selection.length();
-  if (length == null || length <= 0 || length > 2 * 1024 * 1024) {
+  if (length == null || length <= 0 || length > privateAvatarMaxBytes) {
     throw ArgumentError('Avatar must be an image under 2 MiB');
   }
   final bytes = await selection.readAsBytes();
-  if (bytes.isEmpty || bytes.length > 2 * 1024 * 1024) {
+  if (bytes.isEmpty || bytes.length > privateAvatarMaxBytes) {
     throw ArgumentError('Avatar must be an image under 2 MiB');
   }
   await uploadPrivateAvatar(personal, entity, bytes);
@@ -441,7 +441,7 @@ Future<void> uploadPrivateAvatar(
   )) {
     throw StateError('Unsafe journal membership');
   }
-  if (input.isEmpty || input.length > 2 * 1024 * 1024) {
+  if (input.isEmpty || input.length > privateAvatarMaxBytes) {
     throw ArgumentError('Image size unsupported');
   }
   final mime = lookupMimeType('avatar', headerBytes: input);

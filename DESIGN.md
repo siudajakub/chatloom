@@ -455,8 +455,8 @@ morphs its glyph; `NotionIconButton(selected:)` tweens its background;
 icon and staggers its text; tab indicators move elastically.
 `ChatLoomThemes.animationDuration`/`animationCurve` point at `short`/`standard`,
 so the ~56 legacy `Animated*` widgets got the new timing for free.
-`PulsatingWidget` and `TypingAnimation` are shims over `NotionPulse` and
-`NotionTypingDots`.
+Use `NotionPulse` and `NotionTypingDots` directly; the old FluffyChat
+`PulsatingWidget`/`TypingAnimation` shims are gone.
 
 ### Page motion and predictive back
 

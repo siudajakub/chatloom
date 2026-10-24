@@ -8,6 +8,7 @@ rendered with ffmpeg's librsvg decoder; WebP is not used by the repo.
 
 Usage: python3 scripts/render-chatloom-logo.py [--svg-only]
 Re-running is idempotent. Replace the geometry/colours below to redesign.
+This script is the only icon source; do not use flutter_launcher_icons.
 """
 
 from __future__ import annotations

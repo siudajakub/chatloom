@@ -91,9 +91,6 @@ class MatrixState extends State<Matrix> {
 
   bool get isMultiAccount => widget.clients.length > 1;
 
-  int getClientIndexByMatrixId(String matrixId) =>
-      widget.clients.indexWhere((client) => client.userID == matrixId);
-
   void setActiveClient(Client? cl) {
     if (cl != client) {
       PersonalPrivacy.invalidatePlayedIntents();
@@ -494,7 +491,6 @@ class MatrixState extends State<Matrix> {
             linux: LinuxInitializationSettings(
               defaultActionName: ChatLoomNotificationActions.open.name,
             ),
-            windows: ClientManager.windowsNotificationSettings,
             macOS: const DarwinInitializationSettings(),
           ),
           onDidReceiveNotificationResponse: (response) => notificationTap(

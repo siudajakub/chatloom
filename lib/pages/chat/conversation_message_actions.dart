@@ -55,8 +55,6 @@ class ConversationReactionCoordinator extends ChangeNotifier {
   ConversationReactionState state(Object key) =>
       _states[key] ?? ConversationReactionState.idle;
 
-  Iterable<Object> get trackedKeys => _states.keys.toList(growable: false);
-
   static const _unresolved = {
     ConversationReactionState.pending,
     ConversationReactionState.awaitingEcho,

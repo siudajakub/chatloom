@@ -21,7 +21,6 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
-import 'package:chatloom/utils/platform_infos.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/rendering.dart' show ScrollCacheExtent, ScrollDirection;
@@ -465,9 +464,7 @@ class _ChatEventListState extends State<ChatEventList>
               ? const ScrollCacheExtent.viewport(1.0)
               : const ScrollCacheExtent.pixels(250),
           controller: controller.scrollController,
-          keyboardDismissBehavior: PlatformInfos.isIOS
-              ? ScrollViewKeyboardDismissBehavior.onDrag
-              : ScrollViewKeyboardDismissBehavior.manual,
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
           childrenDelegate: SliverChildBuilderDelegate(
             (BuildContext context, int i) {
               // Footer to display typing indicator and read receipts:

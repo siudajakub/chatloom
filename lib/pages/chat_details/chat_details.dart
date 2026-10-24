@@ -34,11 +34,6 @@ class ChatDetails extends StatefulWidget {
 }
 
 class ChatDetailsController extends State<ChatDetails> {
-  bool displaySettings = false;
-
-  void toggleDisplaySettings() =>
-      setState(() => displaySettings = !displaySettings);
-
   String? get roomId => widget.roomId;
 
   Future<void> setDisplaynameAction() async {
@@ -165,8 +160,6 @@ class ChatDetailsController extends State<ChatDetails> {
       future: () => room!.setAvatar(file),
     );
   }
-
-  static const fixedWidth = 360.0;
 
   @override
   Widget build(BuildContext context) => ChatDetailsView(this);

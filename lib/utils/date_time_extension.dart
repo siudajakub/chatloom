@@ -181,11 +181,6 @@ extension DateTimeExtension on DateTime {
     };
     final l10n24h = languages24Hour.contains(locale);
 
-    // https://github.com/krille-chan/fluffychat/pull/1457#discussion_r1836817914
-    if (PlatformInfos.isIOS) {
-      return mediaQuery24h || l10n24h;
-    }
-
     return l10n24h;
   }
 }

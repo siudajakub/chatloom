@@ -59,7 +59,7 @@ COPY = {
 }
 PATHS = (
  'lib/personal/capabilities.dart', 'lib/personal/privacy.dart', 'lib/personal/personal_client.dart',
- 'lib/personal/round_video/round_outbox_panel.dart', 'lib/personal/round_video/round_record_button.dart', 'lib/personal/round_video/telegram_round_service.dart',
+ 'lib/personal/round_video/round_record_button.dart', 'lib/personal/round_video/telegram_round_service.dart',
  'lib/utils/matrix_sdk_extensions/event_extension.dart', 'lib/utils/push_helper.dart', 'lib/widgets/local_notifications_extension.dart',
  'lib/utils/error_reporter.dart', 'lib/pages/bootstrap/widgets/restore_bootstrap_view.dart',
 )

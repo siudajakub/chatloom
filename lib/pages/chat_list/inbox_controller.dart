@@ -142,9 +142,6 @@ class InboxController extends ChangeNotifier {
 
   bool get _pending => _all || _touched || _changed.isNotEmpty;
 
-  /// True while the last sync attempt failed (shows the offline banner).
-  bool get syncFailed => _failed;
-
   /// True until the first sync finished.
   bool get loading => client.prevBatch == null && !_failed;
 

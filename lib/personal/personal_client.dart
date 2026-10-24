@@ -179,7 +179,6 @@ class PersonalClient extends ChangeNotifier {
   Room? journal;
   String? problem;
   WorkerReadiness? workerReadiness;
-  DateTime? get heartbeatAt => workerReadiness?.receivedAt;
   final _emptyValues = <String, Map<String, dynamic>>{};
   final _emptyRevisions = <String, int>{};
   final _emptyTranscripts = <String, TranscriptionJob>{};

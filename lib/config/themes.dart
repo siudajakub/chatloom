@@ -21,18 +21,6 @@ abstract class ChatLoomThemes {
   static bool isThreeColumnMode(BuildContext context) =>
       MediaQuery.sizeOf(context).width > ChatLoomThemes.columnWidth * 3.5;
 
-  static LinearGradient backgroundGradient(BuildContext context, int alpha) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return LinearGradient(
-      begin: Alignment.topCenter,
-      colors: [
-        colorScheme.surface.withAlpha(alpha),
-        colorScheme.surface.withAlpha(alpha),
-        colorScheme.surface.withAlpha(alpha),
-        colorScheme.surface.withAlpha(alpha),
-      ],
-    );
-  }
 
   /// Legacy timing used by FluffyChat widgets; now the Notion motion tokens
   /// (`NotionMotion.short`, `NotionMotion.standard`). New code uses

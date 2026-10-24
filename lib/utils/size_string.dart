@@ -19,7 +19,7 @@ extension SizeString on num {
       size = (size * 10).round() / 10;
       return '$size MB';
     }
-    size = size / 1000 * 1000 * 1000 * 1000;
+    size = size / (1000 * 1000 * 1000);
     size = (size * 10).round() / 10;
     return '$size GB';
   }

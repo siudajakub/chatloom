@@ -26,9 +26,6 @@ mixin _NotionLoop<T extends StatefulWidget>
 
   bool _rested = false;
 
-  /// The loop ran for [loopCap] and now shows its static frame.
-  bool get loopRested => _rested;
-
   void syncLoop() {
     final run = loopEnabled && !_rested && !NotionMotion.reduced(context);
     if (run && !loop.isAnimating) {

@@ -384,7 +384,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
         pendingLease = lease;
         file = lease.file;
 
-        if ((Platform.isIOS || Platform.isMacOS) &&
+        if (Platform.isMacOS &&
             matrixFile.mimeType.toLowerCase() == 'audio/ogg') {
           Logs().v('Remux Ogg voice audio for the native Apple player');
           final convertedFile = pendingLease.derivedFile('.caf');

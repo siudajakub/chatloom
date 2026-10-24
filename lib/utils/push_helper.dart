@@ -808,9 +808,6 @@ Future<void> _showMessageNotification({
             reply: _offersReply(replyRoom, previews: previews, test: test),
             quiet: quiet,
           ),
-          iOS: DarwinNotificationDetails(
-            threadIdentifier: thread.threadIdentifier,
-          ),
           macOS: DarwinNotificationDetails(
             threadIdentifier: thread.threadIdentifier,
           ),
@@ -904,9 +901,6 @@ Future<void> _showFallback(
               test: target.test,
             ),
             quiet: target.quiet,
-          ),
-          iOS: DarwinNotificationDetails(
-            threadIdentifier: thread.threadIdentifier,
           ),
         ),
         payload: ChatLoomPushPayload(
@@ -1024,7 +1018,7 @@ Future<void> _clearReadNotifications(
 
 void updateAppBadge(int unreadCount) {
   if (!PlatformInfos.supportsSystemNotifications) return;
-  if (PlatformInfos.isAndroid || PlatformInfos.isMacOS || PlatformInfos.isIOS) {
+  if (PlatformInfos.isAndroid || PlatformInfos.isMacOS) {
     // A launcher without badge support must not fail push handling.
     unawaited(
       (unreadCount == 0

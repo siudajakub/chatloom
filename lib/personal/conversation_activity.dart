@@ -312,8 +312,6 @@ class ConversationActivity extends ChangeNotifier {
     return ids is List ? ids.whereType<String>() : const [];
   }
 
-  bool typingFor(Room room) => typingUsersFor(room).isNotEmpty;
-
   List<ConversationTypingUser> get typing => [
     for (final room in _rooms)
       for (final user in typingUsersFor(room))

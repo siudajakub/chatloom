@@ -108,7 +108,7 @@ void main(List<String> args) => runZonedGuarded(() async {
     PersonalPerformanceProbe.startupPhase('crypto');
   }
 
-  Logs().nativeColors = !PlatformInfos.isIOS;
+  Logs().nativeColors = true;
 
   // If the app starts in detached mode, we assume that it is in
   // background fetch mode for processing push notifications. This is

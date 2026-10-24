@@ -13,28 +13,29 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 abstract class PlatformInfos {
   static bool get isWeb => kIsWeb;
+  /// Linux is no app target any more; it stays only because `flutter test`
+  /// and the devbox run on a Linux host, which counts as desktop there.
   static bool get isLinux => !kIsWeb && Platform.isLinux;
-  static bool get isWindows => !kIsWeb && Platform.isWindows;
   static bool get isMacOS => !kIsWeb && Platform.isMacOS;
+
+  /// Always false on ChatLoom's targets. Kept only for the fail-closed
+  /// storage builders (`flutter_matrix_dart_sdk_database/`), which change
+  /// together with their storage tests.
   static bool get isIOS => !kIsWeb && Platform.isIOS;
   static bool get isAndroid => !kIsWeb && Platform.isAndroid;
 
-  static bool get isCupertinoStyle => isIOS || isMacOS;
+  static bool get isCupertinoStyle => isMacOS;
 
-  static bool get isMobile => isAndroid || isIOS;
+  static bool get isMobile => isAndroid;
 
-  /// For desktops which don't support ChachedNetworkImage yet
-  static bool get isBetaDesktop => isWindows || isLinux;
-
-  static bool get isDesktop => isLinux || isWindows || isMacOS;
+  static bool get isDesktop => isLinux || isMacOS;
 
   /// The private macOS client intentionally runs without system notifications.
   static bool get supportsSystemNotifications => !isMacOS;
 
   static bool get usesTouchscreen => !isMobile;
 
-  static bool get supportsVideoPlayer =>
-      !PlatformInfos.isWindows && !PlatformInfos.isLinux;
+  static bool get supportsVideoPlayer => !PlatformInfos.isLinux;
 
   /// ChatLoom's photo encoder (`lib/personal/media/photo_encoder.dart`):
   /// one quality profile on Android and macOS (the SDK's pure-Dart fallback

@@ -22,7 +22,6 @@ import geolocator_apple
 import just_audio
 import light_compressor_v2
 import local_auth_darwin
-import managed_configurations
 import package_info_plus
 import pasteboard
 import record_macos
@@ -53,7 +52,6 @@ func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   JustAudioPlugin.register(with: registry.registrar(forPlugin: "JustAudioPlugin"))
   LightCompressorPlugin.register(with: registry.registrar(forPlugin: "LightCompressorPlugin"))
   LocalAuthPlugin.register(with: registry.registrar(forPlugin: "LocalAuthPlugin"))
-  ManagedConfigurationsPlugin.register(with: registry.registrar(forPlugin: "ManagedConfigurationsPlugin"))
   FPPPackageInfoPlusPlugin.register(with: registry.registrar(forPlugin: "FPPPackageInfoPlusPlugin"))
   PasteboardPlugin.register(with: registry.registrar(forPlugin: "PasteboardPlugin"))
   RecordMacOsPlugin.register(with: registry.registrar(forPlugin: "RecordMacOsPlugin"))

@@ -31,6 +31,7 @@ import 'package:chatloom/personal/ui/worker_status_row.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/background_push.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/size_string.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/notion_room_actions.dart';
 import 'package:file_picker/file_picker.dart';
@@ -194,7 +195,7 @@ Future<bool> schedulePersonalAttachment(
         context: context,
         title: 'Schedule an attachment',
         message: [
-          '${file.name} · ${(bytes.length / 1024 / 1024).toStringAsFixed(1)} MB',
+          '${file.name} · ${bytes.length.sizeString}',
           [
             notionNetworkLabel(target.conversation.network),
             reminderWhen(

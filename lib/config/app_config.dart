@@ -9,8 +9,6 @@ import 'package:chatloom/ui/notion/notion_tokens.dart';
 
 abstract class AppConfig {
   static const double messageFontSize = 16.0;
-  static const bool allowOtherHomeservers = true;
-  static const bool enableRegistration = true;
   static const bool hideTypingUsernames = false;
 
   static const String inviteLinkPrefix = 'https://matrix.to/#/';
@@ -30,11 +28,7 @@ abstract class AppConfig {
   static const double columnWidth = 360.0;
 
   static const String appId = 'pl.personal.chat';
-  static const String appOpenUrlScheme = 'pl.personal.chat';
   static const String appSsoUrlScheme = 'pl.personal.chat.auth';
-  // Identifies the notification activation callback on Windows. Never change!
-  static const String windowsNotificationGuid =
-      '4894dfda-c70a-4ebc-b139-acae55f3988d';
 
   /// User-visible product name. Never use it in storage keys or other
   /// persisted identifiers; see [legacyStorageAppName].
@@ -54,8 +48,6 @@ abstract class AppConfig {
       'October 2026). FluffyChat © 2019-Present Christian Kußowski and the '
       'FluffyChat contributors. Licensed under the GNU Affero General Public '
       'License v3.0 or later.';
-
-  static const Set<String> defaultReactions = {'👍', '❤️', '😂', '😮', '😢'};
 
   static const String mainIsolatePortName = 'main_isolate';
   static const String pushIsolatePortName = 'push_isolate';

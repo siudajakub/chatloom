@@ -133,13 +133,6 @@ class ImageViewerController extends State<ImageViewer>
   /// Top bar and arrows; a tap on the media toggles them.
   final ValueNotifier<bool> chromeVisible = ValueNotifier(true);
 
-  /// Swipe distance (logical px) or speed (px/s) that closes the viewer.
-  static const double dismissDistance = NotionDismissDrag.defaultDistance;
-  static const double dismissVelocity = NotionDismissDrag.defaultVelocity;
-
-  /// Vertical offset of the media while it is swiped away.
-  ValueNotifier<double> get dismissOffset => dismiss.offset;
-
   /// Hero tag of [event]'s media.
   Object heroTagFor(Event event) {
     final builder = widget.heroTagFor;

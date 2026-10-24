@@ -467,12 +467,6 @@ class StickerLibrary extends ChangeNotifier {
     }
   }
 
-  /// Caches pack content (from an import preview) without installing it.
-  void cachePack(String key, ImagePackContent content) {
-    _packCache.put(key, content, _now);
-    unawaited(_writeCache());
-  }
-
   @visibleForTesting
   int get pendingCount => _pending.length;
 

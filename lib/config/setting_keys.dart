@@ -9,7 +9,6 @@ import 'package:async/async.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:managed_configurations/managed_configurations.dart';
 import 'package:matrix/matrix_api_lite/utils/logs.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -177,11 +176,8 @@ enum AppSettings<T> {
       await store.setBool(AppSettings.sendOnEnter.key, !PlatformInfos.isMobile);
     }
 
-    // Load configuration from config.json file or MDM:
-    if (PlatformInfos.isMobile) {
-      _platformConfiguration =
-          await ManagedConfigurations().getManagedConfigurations;
-    } else if (kIsWeb && loadWebConfigFile) {
+    // Web builds may preset settings from a config.json next to the app.
+    if (kIsWeb && loadWebConfigFile) {
       try {
         final configJsonString = utf8.decode(
           (await http.get(Uri.parse('config.json'))).bodyBytes,

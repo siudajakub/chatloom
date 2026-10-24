@@ -154,7 +154,6 @@ class NetworkSummary {
 
   String get label => notionNetworkLabel(network);
   NetworkStatus get status => networkStatusOf(health);
-  bool get hasProblem => health?.state.isProblem ?? false;
 
   /// One line under the name: the problem, else the account and chats.
   String get subtitle {

@@ -47,9 +47,6 @@ extension IsStateExtension on Event {
       // a message the user just deleted disappears at once
       !MessageDeletions.hides(this);
 
-  bool get isState =>
-      !const {EventTypes.Message, EventTypes.Sticker}.contains(type);
-
   /// Runs of these fold into one "more events" line. Encrypted events are
   /// messages waiting for a key, never folded state.
   bool get isCollapsedState => !const {

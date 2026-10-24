@@ -33,7 +33,6 @@ abstract final class NotionReactions {
   /// One emoji cell of the bar (a 44 pt circle; the bar is 52 pt high).
   static const double barSlot = 44;
   static const double barPadding = NotionSpace.xxs;
-  static const double barHeight = barSlot + 2 * barPadding;
   static const double barEmoji = 28;
 
   /// A hovered emoji (slide to react) grows and rises out of the bar.
@@ -75,9 +74,6 @@ abstract final class NotionReactions {
     final bar = bouncyCurve.duration;
     return emojis > bar ? emojis : bar;
   }
-
-  /// Bar width for [slots] cells.
-  static double barWidth(int slots) => slots * barSlot + 2 * barPadding;
 
   /// Compares reaction keys without the emoji presentation selector, so a
   /// network's `❤` matches the picker's `❤️`.

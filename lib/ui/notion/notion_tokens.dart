@@ -118,7 +118,6 @@ abstract final class NotionSize {
   static const double border = 1;
   static const double dialogMaxWidth = 420;
   static const double contentMaxWidth = 720;
-  static const double propertyLabelWidth = 100;
 }
 
 /// Message bubble geometry (Messenger-like). A one-line bubble is about

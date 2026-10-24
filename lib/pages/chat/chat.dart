@@ -219,8 +219,6 @@ class ChatController extends State<ChatPageWithRoom>
         MessageTypes.File,
       }.contains(event.messageType);
 
-  final Set<String> unfolded = {};
-
   @override
   Event? replyEvent;
 
@@ -1603,12 +1601,10 @@ class ChatController extends State<ChatPageWithRoom>
   });
 
   bool _personalSending = false;
-  bool get personalSending => _personalSending;
 
   /// Over-long texts go as several messages once the user agrees (BR-05).
   final _longText = LongMessageSplitter();
   bool _attachmentPending = false;
-  bool get attachmentPending => _attachmentPending;
   @override
   Future<void> send() async {
     if (_personalSending || _attachmentPending) return;
@@ -2889,8 +2885,6 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   final ValueNotifier<double?> composerInset = ValueNotifier(null);
-
-  double? get inputBarHeight => composerInset.value;
 
   /// Follows the composer's measured height. Only the list's spacer and the
   /// jump button listen: a growing reply preview or field never rebuilds

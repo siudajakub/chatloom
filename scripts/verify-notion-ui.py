@@ -30,7 +30,6 @@ MARKER = HARNESS / '.notion-ui-harness'
 # Every lib/ui/notion/*.dart file is added in prepare(); new primitives need no
 # edit here. Motion packages (flutter_animate, skeletonizer) are pinned below.
 SOURCES = (
- 'lib/widgets/pulsating_widget.dart',
  'lib/personal/encryption/key_recovery_stage.dart',
  'lib/pages/chat/events/waiting_message_view.dart', 'lib/pages/chat/undecryptable_chat_hint.dart',
  'lib/personal/ui/inbox_health_notice.dart',

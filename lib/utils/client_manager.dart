@@ -195,13 +195,6 @@ abstract class ClientManager {
     client.backgroundSync = visible;
   }
 
-  static WindowsInitializationSettings get windowsNotificationSettings =>
-      WindowsInitializationSettings(
-        appName: AppSettings.applicationName.value,
-        appUserModelId: AppConfig.appId,
-        guid: AppConfig.windowsNotificationGuid,
-      );
-
   static Future<void> sendInitNotification(String title, String body) async {
     if (!PlatformInfos.supportsSystemNotifications) return;
     if (kIsWeb) {
@@ -214,11 +207,9 @@ abstract class ClientManager {
     await flutterLocalNotificationsPlugin.initialize(
       settings: InitializationSettings(
         android: const AndroidInitializationSettings('notifications_icon'),
-        iOS: const DarwinInitializationSettings(),
         linux: LinuxInitializationSettings(
           defaultActionName: ChatLoomNotificationActions.open.name,
         ),
-        windows: windowsNotificationSettings,
         macOS: const DarwinInitializationSettings(),
       ),
     );
@@ -234,7 +225,6 @@ abstract class ClientManager {
           importance: Importance.high,
           priority: Priority.max,
         ),
-        iOS: DarwinNotificationDetails(sound: 'notification.caf'),
       ),
     );
   }

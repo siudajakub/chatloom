@@ -280,20 +280,6 @@ class InboxProjection {
     return result;
   }
 
-  Set<String> labelsFor(Room room) {
-    final entity = entityFor(room);
-    final group = groupFor(room);
-    return {
-      if (personal.values.containsKey('labels:$entity'))
-        ..._legacyLabels(entity)
-      else ...[
-        ...metadataForEntity(entity).labelIds,
-        if (group != null)
-          for (final member in group.members) ..._legacyLabels(member.roomId),
-      ],
-    }.where(personal.values.containsKey).toSet();
-  }
-
   Iterable<String> _legacyLabels(String entity) {
     final value = personal.values['labels:$entity']?['labels'];
     return value is List ? value.whereType<String>() : const [];
@@ -347,9 +333,6 @@ class InboxProjection {
       group,
     ).fold(0, (count, r) => count + r.notificationCount);
   }
-
-  bool get hasDraftConflicts =>
-      personal.conflicts.keys.any((k) => k.startsWith('draft:'));
 
   List<Room> rooms(
     Iterable<Room> input, {

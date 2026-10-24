@@ -16,6 +16,7 @@ import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/size_string.dart';
 import 'package:chatloom/utils/url_launcher.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
@@ -740,7 +741,7 @@ class _NotionConversationContentPageState
       final info = event.content['info'];
       final duration = _durationOf(event);
       final size = info is Map && info['size'] is num
-          ? ' · ${((info['size'] as num) / 1024).ceil()} KB'
+          ? ' · ${(info['size'] as num).sizeString}'
           : '';
       return _entering(
         event.eventId,

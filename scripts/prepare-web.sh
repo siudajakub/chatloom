@@ -24,12 +24,3 @@ grep -qF "assets/vodozemac/${version}/" pubspec.yaml || "$SED" -i "\|- assets/so
 
 flutter pub get
 dart compile js ./web/native_executor.dart -o ./web/native_executor.js -m
-
-# Download native_imaging for web:
-version=$(yq ".dependencies.native_imaging" < pubspec.yaml)
-version=$(printf "%s" "$version" | tr -d '"^')
-curl -L "https://github.com/famedly/dart_native_imaging/releases/download/v${version}/native_imaging.zip" > native_imaging.zip
-unzip native_imaging.zip
-mv js/* web/
-rmdir js
-rm native_imaging.zip
