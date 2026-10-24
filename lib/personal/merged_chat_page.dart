@@ -49,6 +49,7 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/media/media_export_actions.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/network_rejections.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/person_group_identity.dart';
@@ -1791,7 +1792,8 @@ class _MergedChatPageState extends State<_MergedChatView>
       ...mediaExportMenuActions(
         this.context,
         display,
-        canSave: _canSave(display),
+        // View-once media is never saved from ChatLoom (BR-10).
+        canSave: _canSave(display) && !isViewLimited(display),
       ),
       // Raw message source: developer options only (CS-23).
       if (DeveloperOptions.enabled)
