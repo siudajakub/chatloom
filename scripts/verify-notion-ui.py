@@ -35,6 +35,7 @@ SOURCES = (
  'lib/personal/ui/inbox_health_notice.dart',
  'lib/personal/ui/notion_transcribe_button.dart',
  'lib/personal/ui/notion_inbox_page.dart', 'lib/personal/ui/notion_inbox_row.dart',
+ 'lib/personal/ui/notion_inbox_view_chips.dart', 'lib/personal/ui/notion_inbox_network_badge.dart',
  'lib/personal/ui/notion_inbox_pins.dart', 'lib/personal/ui/notion_inbox_dock.dart',
  'lib/personal/ui/notion_network_filter.dart', 'lib/personal/ui/notion_network_selector.dart',
  'lib/personal/ui/notion_search_controls.dart',
@@ -46,11 +47,47 @@ SOURCES = (
  'lib/pages/chat/conversation_motion.dart', 'lib/pages/chat/conversation_message_gestures.dart',
  'lib/pages/chat/compact_composer.dart', 'lib/pages/chat/conversation_source_picker.dart',
  'lib/pages/chat/composer_action_tray.dart', 'lib/pages/chat/voice_record_button.dart',
+ 'lib/pages/chat/conversation_service_chip.dart',
  'lib/config/themes.dart', 'lib/widgets/layouts/two_column_layout.dart',
 )
 
 # UI motion packages; only lib/ui/notion imports them (design lint).
 MOTION_PACKAGES = ('flutter_animate', 'skeletonizer')
+
+# A directive runs to its ';'; every quoted string in it is a URI (conditional imports too).
+DIRECTIVE = re.compile(r'^(?:import|export|part)\s+([^;]*);', re.M)
+URI = re.compile(r'''['"]([^'"]+)['"]''')
+# Tests that read app sources at runtime (File('lib/...dart')) depend on them too.
+SOURCE_LITERAL = re.compile(r'''['"](lib/[^'"$]+\.dart)['"]''')
+
+def local_closure(start, packages):
+ """Files reachable from start through imports/exports/parts, and what cannot resolve.
+
+ package:chatloom maps to lib/, package:personal_core is copied whole; any other
+ package must be in the harness dependency graph. Returns (files, unresolved).
+ """
+ seen, unresolved, stack = set(), set(), [start]
+ while stack:
+  relative = stack.pop()
+  if relative in seen:
+   continue
+  seen.add(relative)
+  path = ROOT / relative
+  if not path.is_file():
+   unresolved.add(relative)
+   continue
+  for uri in (uri for match in DIRECTIVE.finditer(path.read_text()) for uri in URI.findall(match.group(1))):
+   if uri.startswith('dart:'):
+    continue
+   if uri.startswith('package:'):
+    package, _, rest = uri[len('package:'):].partition('/')
+    if package == 'chatloom':
+     stack.append('lib/' + rest)
+    elif package != 'personal_core' and package not in packages:
+     unresolved.add(uri)
+    continue
+   stack.append(os.path.normpath(str(Path(relative).parent / uri)))
+ return seen, unresolved
 
 def write(relative, data):
  target = HARNESS / relative
@@ -89,32 +126,30 @@ def prepare(flutter):
  # metadata_actions.dart reaches into the app graph (PersonalClient).
  sources = [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'lib/ui/notion').glob('*.dart')) if path.name != 'metadata_actions.dart']
  sources += list(SOURCES)
- # SDK/controller suites run with native hooks through run-personal-app-tests.py.
- full_graph_only = {'two_column_accessibility_test.dart',
-                    'attachment_flow_test.dart',
-                    'composer_ux_integration_test.dart',
-                    'dialog_motion_test.dart',
-                    'inbox_motion_test.dart',
-                    'conversation_message_actions_test.dart',
-                    'conversation_timeline_integration_test.dart',
-                    'conversation_ux_capture_test.dart',
-                    'content_interactions_test.dart',
-                    'content_transport_test.dart',
-                    'inbox_resource_lifecycle_test.dart',
-                    'inbox_startup_lifecycle_test.dart',
-                    'profile_content_capture_test.dart',
-                    'page_transitions_test.dart',
-                    'predictive_back_test.dart',
-                    'composer_send_test.dart',
-                    'conversation_bubble_layout_test.dart',
-                    'conversation_message_menu_test.dart',
-                    'composer_record_buttons_test.dart',
-                    # Wave 4: they import app code outside the harness
-                    # (inbox controller, outgoing media, chat list view).
-                    'desktop_column_layout_test.dart',
-                    'inbox_controller_latency_test.dart',
-                    'send_status_test.dart'}
- sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion').glob('*_test.dart')) if not path.name.endswith(('_controller_test.dart', '_adapter_test.dart')) and path.name not in full_graph_only]
+ # Presenter sources must be self-contained: a missing import is a SOURCES gap.
+ packages = visited | {'flutter', 'flutter_test'}
+ allowed = set(sources)
+ for name in list(sources):
+  files, unresolved = local_closure(name, packages)
+  gaps = sorted(unresolved | {f for f in files if f.startswith('lib/') and f not in allowed})
+  if gaps:
+   raise RuntimeError(f'{name} imports outside the harness; add pure-UI files to SOURCES: ' + ', '.join(gaps))
+ # A test/notion suite is harness-eligible only if its whole import closure
+ # resolves here (harness sources, test/notion helpers, harness packages) and
+ # every lib/*.dart path literal it reads at runtime is a harness source.
+ # Suites reaching the matrix SDK, providers, plugins or app controllers run
+ # with native hooks in the full app suite (run-personal-app-tests.py) instead.
+ full_graph_only = []
+ for path in sorted((ROOT / 'test/notion').glob('*_test.dart')):
+  name = str(path.relative_to(ROOT))
+  files, unresolved = local_closure(name, packages)
+  files |= set(SOURCE_LITERAL.findall(path.read_text()))
+  outside = {f for f in files if f.startswith('lib/') and f not in allowed}
+  if unresolved or outside:
+   full_graph_only.append(path.name)
+   continue
+  sources += sorted(f for f in files if f.startswith('test/') and f not in sources)
+ print(f'Harness skips {len(full_graph_only)} full-app suites (run by the app suite): ' + ', '.join(full_graph_only), flush=True)
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'assets/notion').rglob('*')) if path.is_file()]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'test/notion/goldens').rglob('*.png'))]
  sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / 'packages/personal_core/lib').rglob('*.dart'))]
