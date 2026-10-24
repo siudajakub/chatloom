@@ -4,6 +4,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/personal/connection_status.dart';
+import 'package:chatloom/personal/disappearing_label.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -99,8 +100,17 @@ class ChatHeaderSubtitle extends StatelessWidget {
     };
   }
 
-  /// The resting line: network of a direct chat, member count of a group.
+  /// The resting line: network of a direct chat, member count of a group,
+  /// and the network's disappearing-message timer ("WhatsApp · ⏱ 1 day",
+  /// FX-13) like WhatsApp's and Telegram's chat headers.
   static String? infoLabel(BuildContext context, Room room) {
+    final info = _info(context, room);
+    final timer = disappearingTimerLabel(room);
+    if (timer == null) return info;
+    return info == null ? '⏱ $timer' : '$info · ⏱ $timer';
+  }
+
+  static String? _info(BuildContext context, Room room) {
     if (room.isDirectChatForDisplay) {
       final network = notionNetworkLabel(PersonalClient.networkOf(room));
       return network == 'Other' ? null : network;

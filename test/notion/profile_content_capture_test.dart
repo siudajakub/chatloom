@@ -282,12 +282,13 @@ void main() {
           await tester.pumpAndSettle();
         }
         if (state == 'sources') {
+          // A row every chat has (the capabilities row is bridged-only).
           await tester.scrollUntilVisible(
-            find.text('Conversation capabilities'),
+            find.text('Participants'),
             250,
             scrollable: find.byType(Scrollable).first,
           );
-          await tester.ensureVisible(find.text('Conversation capabilities'));
+          await tester.ensureVisible(find.text('Participants'));
           await tester.pumpAndSettle();
         }
         if (state == 'partial') {

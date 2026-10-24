@@ -14,6 +14,7 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/conversation_content_controller.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_glass_header.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/size_string.dart';
@@ -355,8 +356,14 @@ class NotionConversationContentPage extends StatefulWidget {
 }
 
 class _NotionConversationContentPageState
-    extends State<NotionConversationContentPage> {
+    extends State<NotionConversationContentPage>
+    with SingleTickerProviderStateMixin {
   final _query = TextEditingController();
+  // The theme's sliding pill tabs (UI-22), as in chat search.
+  late final TabController _tabs = TabController(length: 3, vsync: this)
+    ..addListener(() {
+      if (_tab != _tabs.index && mounted) setState(() => _tab = _tabs.index);
+    });
   late ConversationContentController _history;
   late String _scopeKey;
   late Client _account;
@@ -428,6 +435,7 @@ class _NotionConversationContentPageState
       _autoSignature = null;
       _query.clear();
       _tab = 0;
+      _tabs.index = 0;
       _account = Matrix.of(context).client;
       _createHistory();
     }
@@ -440,6 +448,7 @@ class _NotionConversationContentPageState
     }
     _history.dispose();
     _query.dispose();
+    _tabs.dispose();
     super.dispose();
   }
 
@@ -519,144 +528,114 @@ class _NotionConversationContentPageState
         for (final url in sharedLinks(event)) (event, url),
     ];
     return Scaffold(
-      appBar: AppBar(
+      extendBodyBehindAppBar: true,
+      appBar: notionGlassAppBar(
         title: Text(
           widget.initialMedia ? 'Shared content' : 'Search this conversation',
-          style: const TextStyle(fontSize: 17),
         ),
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 960),
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(widget.name, style: const TextStyle(fontSize: 13)),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _query,
-                      onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(
-                        hintText: widget.initialMedia
-                            ? 'Search loaded content'
-                            : 'Search local messages',
-                        prefixIcon: const Icon(Icons.search_outlined),
-                        suffixIcon: _query.text.isEmpty
-                            ? null
-                            : IconButton(
-                                tooltip: 'Clear search',
-                                icon: const Icon(Icons.close),
-                                onPressed: () {
-                                  _query.clear();
-                                  setState(() {});
-                                },
-                              ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (widget.initialMedia)
-                Row(
-                  children: [
-                    for (final (index, title) in [
-                      'Media',
-                      'Files',
-                      'Links',
-                    ].indexed)
-                      Expanded(
-                        child: Semantics(
-                          selected: index == _tab,
-                          child: TextButton(
-                            onPressed: () => setState(() => _tab = index),
-                            child: Column(
-                              children: [
-                                Text(
-                                  title,
-                                  style: TextStyle(
-                                    fontWeight: index == _tab
-                                        ? FontWeight.w600
-                                        : FontWeight.w400,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                // The underline grows from the centre into
-                                // the selected tab and shrinks out of the
-                                // previous one.
-                                AnimatedScale(
-                                  duration: NotionMotion.of(
-                                    context,
-                                    NotionMotion.medium,
-                                  ),
-                                  curve: index == _tab
-                                      ? NotionMotion.emphasized
-                                      : NotionMotion.exitFast,
-                                  scale: index == _tab ? 1 : 0,
-                                  child: Container(
-                                    height: 2,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              _ProgressLine(visible: _history.busy),
-              Expanded(
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: _scroll,
-                  child: _FadeOnChange(
-                    value: widget.initialMedia ? _tab : 1,
-                    child: NotionEntranceScope(
-                      child: IndexedStack(
-                        index: widget.initialMedia ? _tab : 1,
-                        children: [
-                          _mediaGrid(events),
-                          widget.initialMedia
-                              ? _list(events.where(sharedFile).toList())
-                              : _messages(events, terms),
-                          ListView.builder(
-                            key: const PageStorageKey('content-links'),
-                            padding: const EdgeInsets.all(20),
-                            itemCount: links.length + 1,
-                            itemBuilder: (context, index) {
-                              if (index == links.length) {
-                                return _end(links.isEmpty);
-                              }
-                              final (event, url) = links[index];
-                              return _entering(
-                                '${event.eventId}|$url',
-                                NotionListRow(
-                                  leading: const Icon(Icons.link_outlined),
-                                  title: Uri.parse(url).host,
-                                  subtitle:
-                                      '$url\n${_linkContext(event)} · ${_date(event)}',
-                                  onTap: () {
-                                    if (PersonalPrivacy.surfaceUnlocked &&
-                                        !event.redacted) {
-                                      UrlLauncher(context, url).launchUrl();
-                                    }
+      body: NotionBelowGlassHeader(
+        child: Center(
+          child: ConstrainedBox(
+            // The media grid may use a wide window; message results keep the
+            // reading width of every other page.
+            constraints: BoxConstraints(
+              maxWidth: widget.initialMedia ? 960 : NotionSize.contentMaxWidth,
+            ),
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.name, style: const TextStyle(fontSize: 13)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _query,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          hintText: widget.initialMedia
+                              ? 'Search loaded content'
+                              : 'Search local messages',
+                          prefixIcon: const Icon(Icons.search_outlined),
+                          suffixIcon: _query.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: 'Clear search',
+                                  icon: const Icon(Icons.close),
+                                  onPressed: () {
+                                    _query.clear();
+                                    setState(() {});
                                   },
                                 ),
-                              );
-                            },
-                          ),
-                        ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (widget.initialMedia)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: NotionSpace.inset,
+                    ),
+                    child: TabBar(
+                      controller: _tabs,
+                      tabs: const [
+                        Tab(text: 'Media'),
+                        Tab(text: 'Files'),
+                        Tab(text: 'Links'),
+                      ],
+                    ),
+                  ),
+                _ProgressLine(visible: _history.busy),
+                Expanded(
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _scroll,
+                    child: _FadeOnChange(
+                      value: widget.initialMedia ? _tab : 1,
+                      child: NotionEntranceScope(
+                        child: IndexedStack(
+                          index: widget.initialMedia ? _tab : 1,
+                          children: [
+                            _mediaGrid(events),
+                            widget.initialMedia
+                                ? _list(events.where(sharedFile).toList())
+                                : _messages(events, terms),
+                            ListView.builder(
+                              key: const PageStorageKey('content-links'),
+                              padding: const EdgeInsets.all(20),
+                              itemCount: links.length + 1,
+                              itemBuilder: (context, index) {
+                                if (index == links.length) {
+                                  return _end(links.isEmpty);
+                                }
+                                final (event, url) = links[index];
+                                return _entering(
+                                  '${event.eventId}|$url',
+                                  NotionListRow(
+                                    leading: const Icon(Icons.link_outlined),
+                                    title: Uri.parse(url).host,
+                                    subtitle:
+                                        '$url\n${_linkContext(event)} · ${_date(event)}',
+                                    onTap: () {
+                                      if (PersonalPrivacy.surfaceUnlocked &&
+                                          !event.redacted) {
+                                        UrlLauncher(context, url).launchUrl();
+                                      }
+                                    },
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

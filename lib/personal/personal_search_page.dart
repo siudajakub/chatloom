@@ -4,8 +4,12 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart'
+    show notionNetworkLabel;
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_choice.dart';
+import 'package:chatloom/ui/notion/notion_glass_header.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
@@ -401,6 +405,12 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
     return hits..sort(PersonalSearchHit.compare);
   }
 
+  /// A result's text, at most three lines' worth (the row does not clip).
+  static String _short(String text) {
+    final line = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return line.length > 240 ? '${line.substring(0, 240)}…' : line;
+  }
+
   String _dateLabel(DateTime? value, String empty) => value == null
       ? empty
       : MaterialLocalizations.of(context).formatShortDate(value);
@@ -432,289 +442,323 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
         beforeDay,
       );
       return Scaffold(
-        appBar: AppBar(title: const Text('Search conversations')),
-        body: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 800),
-            // The filters scroll in at most half the height, so the page
-            // never overflows with the keyboard up and results stay visible
-            // while typing.
-            child: LayoutBuilder(
-              builder: (context, constraints) => Column(
-                children: [
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: constraints.maxHeight / 2,
-                    ),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              children: [
-                                DropdownButtonFormField<String>(
-                                  initialValue: selected?.key,
-                                  isExpanded: true,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Person or conversation',
-                                  ),
-                                  items: [
-                                    for (final item in scopes)
-                                      DropdownMenuItem(
-                                        value: item.key,
-                                        child: Text(
+        extendBodyBehindAppBar: true,
+        appBar: notionGlassAppBar(title: const Text('Search conversations')),
+        body: NotionBelowGlassHeader(
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: NotionSize.contentMaxWidth,
+              ),
+              // The filters scroll in at most half the height, so the page
+              // never overflows with the keyboard up and results stay visible
+              // while typing.
+              child: LayoutBuilder(
+                builder: (context, constraints) => Column(
+                  children: [
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: constraints.maxHeight / 2,
+                      ),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  // Picker row and filter pills instead of
+                                  // Material dropdowns and chips (UI-10).
+                                  NotionPickerRow<String?>(
+                                    key: const ValueKey('search-scope'),
+                                    label: 'Person or conversation',
+                                    icon: Icons.person_search_outlined,
+                                    value: selected?.key,
+                                    options: [
+                                      for (final item in scopes)
+                                        NotionChoice<String?>(
+                                          item.key,
                                           item.name,
-                                          overflow: TextOverflow.ellipsis,
                                         ),
-                                      ),
-                                  ],
-                                  onChanged: busy
-                                      ? null
-                                      : (value) => setState(() {
-                                          selectedScope = value;
-                                          network = null;
-                                        }),
-                                ),
-                                const SizedBox(height: 12),
-                                TextField(
-                                  controller: query,
-                                  onChanged: _typed,
-                                  onSubmitted: (_) {
-                                    _applyTyping();
-                                    _search();
-                                  },
-                                  decoration: const InputDecoration(
-                                    labelText: 'Text, transcript or filename',
-                                    prefixIcon: Icon(Icons.search),
+                                    ],
+                                    onChanged: busy
+                                        ? null
+                                        : (value) => setState(() {
+                                            selectedScope = value;
+                                            network = null;
+                                          }),
                                   ),
-                                ),
-                                const SizedBox(height: 12),
-                                Wrap(
-                                  spacing: 12,
-                                  runSpacing: 8,
-                                  children: [
-                                    DropdownButton<String>(
-                                      hint: const Text('All networks'),
-                                      value: networks.contains(network)
-                                          ? network
-                                          : null,
-                                      items: [
-                                        const DropdownMenuItem(
-                                          value: null,
-                                          child: Text('All networks'),
-                                        ),
-                                        for (final value in networks)
-                                          DropdownMenuItem(
-                                            value: value,
-                                            child: Text(value),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: query,
+                                    onChanged: _typed,
+                                    onSubmitted: (_) {
+                                      _applyTyping();
+                                      _search();
+                                    },
+                                    decoration: const InputDecoration(
+                                      hintText: 'Text, transcript or filename',
+                                      prefixIcon: Icon(Icons.search),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Wrap(
+                                    spacing: NotionSpace.xs,
+                                    runSpacing: NotionSpace.xs,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    children: [
+                                      NotionChoicePill<String?>(
+                                        key: const ValueKey('search-network'),
+                                        title: 'Network',
+                                        value: networks.contains(network)
+                                            ? network
+                                            : null,
+                                        neutral: null,
+                                        options: [
+                                          const NotionChoice<String?>(
+                                            null,
+                                            'All networks',
                                           ),
-                                      ],
-                                      onChanged: busy
-                                          ? null
-                                          : (value) => setState(() {
-                                              network = value;
-                                              loadedScope = null;
-                                              searched = false;
-                                            }),
-                                    ),
-                                    DropdownButton<bool>(
-                                      hint: const Text('Sent & received'),
-                                      value: outgoing,
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: null,
-                                          child: Text('Sent & received'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: true,
-                                          child: Text('Sent'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: false,
-                                          child: Text('Received'),
-                                        ),
-                                      ],
-                                      onChanged: (value) =>
-                                          setState(() => outgoing = value),
-                                    ),
-                                    DropdownButton<String>(
-                                      hint: const Text('All types'),
-                                      value: mediaType,
-                                      items: [
-                                        const DropdownMenuItem(
-                                          value: null,
-                                          child: Text('All types'),
-                                        ),
-                                        for (final entry in const {
-                                          'text': 'Text',
-                                          'image': 'Photos',
-                                          'video': 'Videos',
-                                          'audio': 'Audio',
-                                          'file': 'Files',
-                                        }.entries)
-                                          DropdownMenuItem(
-                                            value: entry.key,
-                                            child: Text(entry.value),
+                                          for (final value in networks)
+                                            NotionChoice<String?>(
+                                              value,
+                                              notionNetworkLabel(value),
+                                            ),
+                                        ],
+                                        onChanged: busy
+                                            ? null
+                                            : (value) => setState(() {
+                                                network = value;
+                                                loadedScope = null;
+                                                searched = false;
+                                              }),
+                                      ),
+                                      NotionChoicePill<bool?>(
+                                        key: const ValueKey('search-direction'),
+                                        title: 'Sent or received',
+                                        value: outgoing,
+                                        neutral: null,
+                                        options: const [
+                                          NotionChoice<bool?>(
+                                            null,
+                                            'Sent & received',
                                           ),
-                                      ],
-                                      onChanged: (value) =>
-                                          setState(() => mediaType = value),
-                                    ),
-                                    FilterChip(
-                                      label: const Text('Bookmarks'),
-                                      selected: bookmarksOnly,
-                                      onSelected: (value) =>
-                                          setState(() => bookmarksOnly = value),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => _date(true),
-                                      child: Text(
-                                        _dateLabel(afterDay, 'From date'),
+                                          NotionChoice<bool?>(true, 'Sent'),
+                                          NotionChoice<bool?>(
+                                            false,
+                                            'Received',
+                                          ),
+                                        ],
+                                        onChanged: (value) =>
+                                            setState(() => outgoing = value),
                                       ),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => _date(false),
-                                      child: Text(
-                                        _dateLabel(beforeDay, 'To date'),
+                                      NotionChoicePill<String?>(
+                                        key: const ValueKey('search-type'),
+                                        title: 'Type',
+                                        value: mediaType,
+                                        neutral: null,
+                                        options: const [
+                                          NotionChoice<String?>(
+                                            null,
+                                            'All types',
+                                          ),
+                                          NotionChoice<String?>('text', 'Text'),
+                                          NotionChoice<String?>(
+                                            'image',
+                                            'Photos',
+                                          ),
+                                          NotionChoice<String?>(
+                                            'video',
+                                            'Videos',
+                                          ),
+                                          NotionChoice<String?>(
+                                            'audio',
+                                            'Audio',
+                                          ),
+                                          NotionChoice<String?>(
+                                            'file',
+                                            'Files',
+                                          ),
+                                        ],
+                                        onChanged: (value) =>
+                                            setState(() => mediaType = value),
                                       ),
-                                    ),
-                                    if (afterDay != null || beforeDay != null)
-                                      IconButton(
-                                        tooltip: 'Clear date range',
-                                        onPressed: () => setState(() {
-                                          afterDay = null;
-                                          beforeDay = null;
-                                        }),
-                                        icon: const Icon(Icons.close),
+                                      NotionGlassPill(
+                                        key: const ValueKey('search-bookmarks'),
+                                        icon: bookmarksOnly
+                                            ? Icons.bookmark
+                                            : Icons.bookmark_outline,
+                                        label: 'Bookmarks',
+                                        selected: bookmarksOnly,
+                                        onPressed: () => setState(
+                                          () => bookmarksOnly = !bookmarksOnly,
+                                        ),
                                       ),
-                                    FilledButton.icon(
+                                      NotionGlassPill(
+                                        icon: Icons.event_outlined,
+                                        label: _dateLabel(
+                                          afterDay,
+                                          'From date',
+                                        ),
+                                        selected: afterDay != null,
+                                        onPressed: () => _date(true),
+                                      ),
+                                      NotionGlassPill(
+                                        icon: Icons.event_outlined,
+                                        label: _dateLabel(beforeDay, 'To date'),
+                                        selected: beforeDay != null,
+                                        onPressed: () => _date(false),
+                                      ),
+                                      if (afterDay != null || beforeDay != null)
+                                        NotionGlassPill(
+                                          icon: Icons.close,
+                                          tooltip: 'Clear date range',
+                                          onPressed: () => setState(() {
+                                            afterDay = null;
+                                            beforeDay = null;
+                                          }),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Align(
+                                    alignment: AlignmentDirectional.centerStart,
+                                    child: NotionButton.primary(
+                                      label: 'Search',
+                                      icon: Icons.search,
                                       onPressed:
                                           busy ||
                                               selected == null ||
                                               _query() == null
                                           ? null
                                           : _search,
-                                      icon: const Icon(Icons.search),
-                                      label: const Text('Search'),
                                     ),
-                                  ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // Quick searches never flash a bar; the slot is reserved.
+                            if (busy)
+                              const NotionDelayedReveal(
+                                placeholder: SizedBox(height: 4),
+                                child: LinearProgressIndicator(),
+                              ),
+                            NotionSizeReveal(
+                              visible: _query() == null,
+                              child: const Padding(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: NotionSpace.md,
                                 ),
-                              ],
-                            ),
-                          ),
-                          // Quick searches never flash a bar; the slot is reserved.
-                          if (busy)
-                            const NotionDelayedReveal(
-                              placeholder: SizedBox(height: 4),
-                              child: LinearProgressIndicator(),
-                            ),
-                          NotionSizeReveal(
-                            visible: _query() == null,
-                            child: const ListTile(
-                              title: Text(
-                                'The start date must be before the end date.',
+                                child: NotionListRow(
+                                  leading: Icon(Icons.event_busy_outlined),
+                                  title:
+                                      'The start date must be before the end date.',
+                                ),
                               ),
                             ),
-                          ),
-                          NotionSizeReveal(
-                            visible: problem != null,
-                            child: ListTile(
-                              leading: const Icon(Icons.info_outline),
-                              title: Text(
-                                _shownProblem = problem ?? _shownProblem ?? '',
+                            NotionSizeReveal(
+                              visible: problem != null,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: NotionSpace.md,
+                                ),
+                                child: NotionListRow(
+                                  leading: const Icon(Icons.info_outline),
+                                  title: _shownProblem =
+                                      problem ?? _shownProblem ?? '',
+                                ),
                               ),
                             ),
-                          ),
-                          ListTile(
-                            title: Text(
-                              loadedScope == selectedScope &&
-                                      loadedScope != null
-                                  ? 'Loaded history: $loaded events, ${timelines.length} sources'
-                                  : 'Choose a person or conversation, then select Search.',
-                            ),
-                            subtitle: const Text(
-                              'Results cover loaded history only. No results does not mean the source network has no matching messages.',
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  // Results fade through when the query or filters change; the
-                  // first screenful of a new result set rises in once.
-                  Expanded(
-                    child: NotionFadeThrough(
-                      alignment: Alignment.topCenter,
-                      child: results.isEmpty
-                          ? NotionEmptyState(
-                              key: ValueKey(('empty', emptyTitle)),
-                              icon: searched && loadedScope == selectedScope
-                                  ? Icons.search_off
-                                  : Icons.manage_search,
-                              title: emptyTitle,
-                            )
-                          : NotionEntranceScope(
-                              key: ValueKey(('results', resultsKey)),
-                              child: ListView.builder(
-                                itemCount: results.length,
-                                itemBuilder: (context, index) {
-                                  final hit = results[index];
-                                  final original = hit.event;
-                                  final display = hit.display;
-                                  final ref = hit.source;
-                                  final transcript = hit.transcript;
-                                  return NotionEntrance(
-                                    playKey: original.eventId,
-                                    rise: NotionMotion.riseList,
-                                    child: ListTile(
-                                      title: Text(
-                                        RoundVideoDescriptor.fromContent(
-                                                  display.content,
-                                                  redacted: display.redacted,
-                                                ) !=
-                                                null
-                                            ? transcript == null
-                                                  ? 'Video message'
-                                                  : 'Video message · $transcript'
-                                            : display.text.isEmpty
-                                            ? transcript ?? 'Attachment'
-                                            : display.text,
-                                        maxLines: 3,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      subtitle: Text(
-                                        '${InboxProjection(personal).displayName(original.room)} · ${PersonalClient.networkOf(original.room)} · ${MaterialLocalizations.of(context).formatShortDate(original.originServerTs.toLocal())}',
-                                      ),
-                                      onTap: () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute<void>(
-                                          builder: (_) =>
-                                              SourceChatPage(source: ref),
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: NotionSpace.md,
+                              ),
+                              child: NotionListRow(
+                                title:
+                                    loadedScope == selectedScope &&
+                                        loadedScope != null
+                                    ? 'Loaded history: $loaded events, ${timelines.length} sources'
+                                    : 'Choose a person or conversation, then select Search.',
+                                subtitle:
+                                    'Results cover loaded history only. No results does not mean the source network has no matching messages.',
                               ),
                             ),
-                    ),
-                  ),
-                  if (loadedScope == selectedScope && more)
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: TextButton(
-                        onPressed: busy || pages >= 10 ? null : _older,
-                        child: Text(
-                          pages >= 10
-                              ? 'Search session limit reached'
-                              : 'Load 50 more events per source',
+                          ],
                         ),
                       ),
                     ),
-                ],
+                    // Results fade through when the query or filters change; the
+                    // first screenful of a new result set rises in once.
+                    Expanded(
+                      child: NotionFadeThrough(
+                        alignment: Alignment.topCenter,
+                        child: results.isEmpty
+                            ? NotionEmptyState(
+                                key: ValueKey(('empty', emptyTitle)),
+                                icon: searched && loadedScope == selectedScope
+                                    ? Icons.search_off
+                                    : Icons.manage_search,
+                                title: emptyTitle,
+                              )
+                            : NotionEntranceScope(
+                                key: ValueKey(('results', resultsKey)),
+                                child: ListView.builder(
+                                  itemCount: results.length,
+                                  itemBuilder: (context, index) {
+                                    final hit = results[index];
+                                    final original = hit.event;
+                                    final display = hit.display;
+                                    final ref = hit.source;
+                                    final transcript = hit.transcript;
+                                    return NotionEntrance(
+                                      playKey: original.eventId,
+                                      rise: NotionMotion.riseList,
+                                      child: NotionListRow(
+                                        title: _short(
+                                          RoundVideoDescriptor.fromContent(
+                                                    display.content,
+                                                    redacted: display.redacted,
+                                                  ) !=
+                                                  null
+                                              ? transcript == null
+                                                    ? 'Video message'
+                                                    : 'Video message · $transcript'
+                                              : display.text.isEmpty
+                                              ? transcript ?? 'Attachment'
+                                              : display.text,
+                                        ),
+                                        subtitle:
+                                            '${InboxProjection(personal).displayName(original.room)} · ${notionNetworkLabel(PersonalClient.networkOf(original.room))} · ${MaterialLocalizations.of(context).formatShortDate(original.originServerTs.toLocal())}',
+                                        onTap: () => Navigator.push(
+                                          context,
+                                          MaterialPageRoute<void>(
+                                            builder: (_) =>
+                                                SourceChatPage(source: ref),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                      ),
+                    ),
+                    if (loadedScope == selectedScope && more)
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: NotionButton.ghost(
+                          label: pages >= 10
+                              ? 'Search session limit reached'
+                              : 'Load 50 more events per source',
+                          onPressed: busy || pages >= 10 ? null : _older,
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),

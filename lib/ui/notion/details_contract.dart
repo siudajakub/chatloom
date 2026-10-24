@@ -15,6 +15,16 @@ class NotionConversationDetailsData {
   final String? status;
   final Widget? sharedContent;
   final List<Widget> sourceRows;
+
+  /// A private mute is active (FX-07): [mute] reads "Muted until Today ·
+  /// 14:30" or "Muted"; null when the chat is not muted.
+  final String? mute;
+
+  /// The chat is in the private archive: the archive row unarchives.
+  final bool archived;
+
+  /// The network's disappearing-message timer ("1 day"), null when off.
+  final String? disappearing;
   const NotionConversationDetailsData({
     required this.name,
     required this.network,
@@ -28,6 +38,9 @@ class NotionConversationDetailsData {
     this.status,
     this.sharedContent,
     this.sourceRows = const [],
+    this.mute,
+    this.archived = false,
+    this.disappearing,
   });
 }
 
@@ -44,6 +57,12 @@ class NotionConversationDetailsActions {
   final VoidCallback? archive;
   final VoidCallback? contact;
   final VoidCallback? overflow;
+
+  /// Mute… / Unmute anchored at the tapped row (a menu of durations).
+  final ValueChanged<BuildContext>? muteFrom;
+
+  /// The header ⋯ menu anchored at its button; wins over [overflow].
+  final ValueChanged<BuildContext>? overflowFrom;
   const NotionConversationDetailsActions({
     this.search,
     this.mute,
@@ -57,5 +76,7 @@ class NotionConversationDetailsActions {
     this.archive,
     this.contact,
     this.overflow,
+    this.muteFrom,
+    this.overflowFrom,
   });
 }

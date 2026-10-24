@@ -233,6 +233,9 @@ void main() {
       await tester.pump();
       final choose = find.widgetWithText(NotionListRow, 'Notifications');
       await tester.scrollUntilVisible(choose, 200);
+      // Centre it: rows scroll under the glass header.
+      await Scrollable.ensureVisible(tester.element(choose), alignment: .5);
+      await tester.pumpAndSettle();
       expect(tester.widget<NotionListRow>(choose).onTap, isNotNull);
       await tester.tap(choose);
       await tester.pumpAndSettle();

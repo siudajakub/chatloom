@@ -8,8 +8,11 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/private_avatar.dart';
+import 'package:chatloom/personal/ui/notion_network_filter.dart'
+    show notionNetworkLabel;
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_glass_header.dart';
 import 'package:chatloom/widgets/cover_resize_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
@@ -118,15 +121,25 @@ class _OrganizationPageState extends State<OrganizationPage> {
       final key = metadata == null ? '' : 'org:${metadata.entityId}';
       final editing = metadata != null && _canEdit(key);
       return Scaffold(
-        appBar: AppBar(title: const Text('Colours & avatar')),
+        extendBodyBehindAppBar: true,
+        appBar: notionGlassAppBar(title: const Text('Colours & avatar')),
         body: Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
+            constraints: const BoxConstraints(
+              maxWidth: NotionSize.contentMaxWidth,
+            ),
             // Rows rise in once; rows that depend on state reveal in place.
             child: NotionEntranceScope(
               child: ListView(
-                padding: const EdgeInsets.only(bottom: 32),
+                // Under the glass header (UI-05); this context is above the
+                // Scaffold, so the header height is added explicitly.
+                padding: EdgeInsets.only(
+                  top:
+                      MediaQuery.paddingOf(context).top +
+                      NotionSize.headerHeight,
+                  bottom: 32,
+                ),
                 children: NotionEntrance.stagger([
                   NotionSizeReveal(
                     visible: _busy,
@@ -237,9 +250,7 @@ class _OrganizationPageState extends State<OrganizationPage> {
                         ListTile(
                           leading: const Icon(Icons.chat_bubble_outline),
                           title: Text(projection.displayName(source)),
-                          subtitle: const Text(
-                            'Colours and avatar',
-                          ),
+                          subtitle: const Text('Colours and avatar'),
                           onTap: () => Navigator.of(context).push<void>(
                             MaterialPageRoute(
                               builder: (_) => OrganizationPage(
@@ -727,13 +738,21 @@ class _DraftConflictPageState extends State<DraftConflictPage> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.personal,
     builder: (context, _) => Scaffold(
-      appBar: AppBar(title: const Text('Choose a draft')),
+      extendBodyBehindAppBar: true,
+      appBar: notionGlassAppBar(title: const Text('Choose a draft')),
       body: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720),
+          constraints: const BoxConstraints(
+            maxWidth: NotionSize.contentMaxWidth,
+          ),
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16 + MediaQuery.paddingOf(context).top + NotionSize.headerHeight,
+              16,
+              16,
+            ),
             children: [
               const Text(
                 'Both versions are kept as copies. The chosen text returns to the composer.',
@@ -770,11 +789,11 @@ class _DraftConflictPageState extends State<DraftConflictPage> {
                 SelectableText(_text('existingValue')),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: TextButton(
+                  child: NotionButton.ghost(
+                    label: 'Use saved version',
                     onPressed: _busy || !widget.personal.ready
                         ? null
                         : () => _resolve(_text('existingValue')),
-                    child: const Text('Use saved version'),
                   ),
                 ),
                 const Divider(height: 32),
@@ -786,11 +805,11 @@ class _DraftConflictPageState extends State<DraftConflictPage> {
                 SelectableText(_text('proposedValue')),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: TextButton(
+                  child: NotionButton.ghost(
+                    label: 'Use other version',
                     onPressed: _busy || !widget.personal.ready
                         ? null
                         : () => _resolve(_text('proposedValue')),
-                    child: const Text('Use other version'),
                   ),
                 ),
                 const Divider(height: 32),
@@ -803,13 +822,14 @@ class _DraftConflictPageState extends State<DraftConflictPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                FilledButton(
+                NotionButton.primary(
+                  label: 'Save combined draft',
                   onPressed: _busy || !widget.personal.ready
                       ? null
                       : () => _resolve(_merged.text),
-                  child: const Text('Save combined draft'),
                 ),
-                TextButton(
+                NotionButton.ghost(
+                  label: 'Refresh both versions',
                   onPressed: _busy
                       ? null
                       : () => setState(() {
@@ -818,7 +838,6 @@ class _DraftConflictPageState extends State<DraftConflictPage> {
                           _merged.text = _text('proposedValue');
                           _error = null;
                         }),
-                  child: const Text('Refresh both versions'),
                 ),
               ],
             ],
@@ -997,84 +1016,92 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
               .toList()
             ..sort();
       return Scaffold(
-        appBar: AppBar(title: const Text('Bookmarks')),
-        body: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: TextField(
-                    controller: _search,
-                    onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search),
-                      hintText: 'Search text, transcripts or filenames',
+        extendBodyBehindAppBar: true,
+        appBar: notionGlassAppBar(title: const Text('Bookmarks')),
+        body: NotionBelowGlassHeader(
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: NotionSize.contentMaxWidth,
+              ),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: TextField(
+                      controller: _search,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: 'Search text, transcripts or filenames',
+                      ),
                     ),
                   ),
-                ),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        ChoiceChip(
-                          label: const Text('All networks'),
-                          selected: _network == null,
-                          onSelected: (_) => setState(() => _network = null),
-                        ),
-                        for (final network in networks)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 8),
-                            child: ChoiceChip(
-                              label: Text(network),
-                              selected: _network == network,
-                              onSelected: (_) =>
-                                  setState(() => _network = network),
-                            ),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      // The inbox's filter pills, with network names (UI-10).
+                      child: Row(
+                        children: [
+                          NotionGlassPill(
+                            label: 'All networks',
+                            selected: _network == null,
+                            onPressed: () => setState(() => _network = null),
                           ),
-                      ],
+                          for (final network in networks)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                left: NotionSpace.xs,
+                              ),
+                              child: NotionGlassPill(
+                                label: notionNetworkLabel(network),
+                                selected: _network == network,
+                                onPressed: () =>
+                                    setState(() => _network = network),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                // Empty, no-match and each network's list fade through;
-                // the first screenful of bookmarks rises in.
-                Expanded(
-                  child: NotionFadeThrough(
-                    child: entries.isEmpty
-                        ? const NotionEmptyState(
-                            key: ValueKey('empty'),
-                            icon: Icons.bookmark_outline,
-                            title: 'No bookmarks',
-                            message:
-                                'Long-press a message and choose Bookmark.',
-                          )
-                        : noMatches || filtered.isEmpty
-                        ? const NotionEmptyState(
-                            key: ValueKey('none'),
-                            icon: Icons.search_off_outlined,
-                            title: 'No matching bookmarks',
-                          )
-                        : NotionEntranceScope(
-                            key: ValueKey('list:$_network'),
-                            child: ListView(
-                              children: [
-                                for (final entry in filtered)
-                                  NotionEntrance(
-                                    key: ValueKey(entry.key),
-                                    playKey: entry.key,
-                                    rise: NotionMotion.riseList,
-                                    child: _bookmark(entry),
-                                  ),
-                              ],
+                  // Empty, no-match and each network's list fade through;
+                  // the first screenful of bookmarks rises in.
+                  Expanded(
+                    child: NotionFadeThrough(
+                      child: entries.isEmpty
+                          ? const NotionEmptyState(
+                              key: ValueKey('empty'),
+                              icon: Icons.bookmark_outline,
+                              title: 'No bookmarks',
+                              message:
+                                  'Long-press a message and choose Bookmark.',
+                            )
+                          : noMatches || filtered.isEmpty
+                          ? const NotionEmptyState(
+                              key: ValueKey('none'),
+                              icon: Icons.search_off_outlined,
+                              title: 'No matching bookmarks',
+                            )
+                          : NotionEntranceScope(
+                              key: ValueKey('list:$_network'),
+                              child: ListView(
+                                children: [
+                                  for (final entry in filtered)
+                                    NotionEntrance(
+                                      key: ValueKey(entry.key),
+                                      playKey: entry.key,
+                                      rise: NotionMotion.riseList,
+                                      child: _bookmark(entry),
+                                    ),
+                                ],
+                              ),
                             ),
-                          ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

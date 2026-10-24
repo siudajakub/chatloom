@@ -6,6 +6,9 @@ import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/pages/chat_details/chat_details.dart';
 import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/conversation_mute.dart';
+import 'package:chatloom/personal/developer_options.dart';
+import 'package:chatloom/personal/disappearing_label.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/organization_page.dart';
@@ -253,11 +256,13 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
   }
 
   /// Archiving is private and reversible: it applies at once with Undo in a
-  /// snackbar (no confirmation, CS-16).
+  /// snackbar (no confirmation, CS-16). An archived chat unarchives from the
+  /// same row (FX-07).
   Future<void> _archive() async {
     final archiveEntity = entity;
     final archiveSources = sources;
     final messenger = ScaffoldMessenger.of(context);
+    final archive = !projection.metadataForEntity(archiveEntity).archived;
     var archived = false;
     await _run(
       () async {
@@ -271,35 +276,38 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         await NotionMetadataActions.setArchived(
           personal,
           archiveEntity,
-          true,
+          archive,
           sources: archiveSources,
         );
         archived = true;
       },
-      failure: 'Could not archive this chat. Check private sync and try again.',
+      failure: archive
+          ? 'Could not archive this chat. Check private sync and try again.'
+          : 'Could not unarchive this chat. Check private sync and try again.',
     );
     if (!archived) return;
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: const Text('Chat archived'),
+          content: Text(archive ? 'Chat archived' : 'Chat unarchived'),
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => NotionMetadataActions.setArchived(
-              personal,
-              archiveEntity,
-              false,
-              sources: archiveSources,
-            ).catchError((Object _) {
-              messenger.showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Couldn’t move the chat back. Check private sync and try again.',
-                  ),
-                ),
-              );
-            }),
+            onPressed: () =>
+                NotionMetadataActions.setArchived(
+                  personal,
+                  archiveEntity,
+                  !archive,
+                  sources: archiveSources,
+                ).catchError((Object _) {
+                  messenger.showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Couldn’t undo. Check private sync and try again.',
+                      ),
+                    ),
+                  );
+                }),
           ),
         ),
       );
@@ -376,117 +384,134 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     );
   }
 
-  Future<void> _sources({bool contact = false}) => showModalBottomSheet<void>(
+  /// The glass sheet of a merged chat's sources (UI-07).
+  Future<void> _sources({bool contact = false}) => showNotionSheet<void>(
     context: context,
-    sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
-    isScrollControlled: true,
-    builder: (context) => SafeArea(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * .8,
-        ),
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: NotionEntrance.stagger(afterRoute: false, [
-                const Text('Choose a source', style: NotionTokens.heading),
-                const SizedBox(height: 8),
-                const Text(
-                  'Network settings apply only to the selected source.',
-                ),
-                if (sources.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'No current sources are available. Their network settings cannot be changed.',
-                    ),
-                  ),
-                for (final source in sources)
-                  NotionListRow(
-                    leading: const Icon(Icons.language_outlined),
-                    title: notionNetworkName(
-                      projection.classifier.classify(source).network,
-                    ),
-                    subtitle: source.getLocalizedDisplayname(),
-                    onTap: () {
-                      Navigator.pop(context);
-                      if (contact) {
-                        _contact(source);
-                      } else {
-                        _sourceDetails(source);
-                      }
-                    },
-                  ),
-              ]),
-            ),
+    title: 'Choose a source',
+    builder: (context) => SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Network settings apply only to the selected source.',
+            style: context.notion.typography.calloutMuted,
           ),
-        ),
+          const SizedBox(height: NotionSpace.xs),
+          if (sources.isEmpty)
+            const NotionEmptyState(
+              icon: Icons.link_off_outlined,
+              title: 'No sources available',
+              message: 'Their network settings cannot be changed now.',
+            ),
+          for (final source in sources)
+            NotionListRow(
+              leading: const Icon(Icons.language_outlined),
+              title: notionNetworkName(
+                projection.classifier.classify(source).network,
+              ),
+              subtitle: source.getLocalizedDisplayname(),
+              onTap: () {
+                Navigator.pop(context);
+                if (contact) {
+                  _contact(source);
+                } else {
+                  _sourceDetails(source);
+                }
+              },
+            ),
+        ],
       ),
     ),
   );
   Future<void> _sourceDetails(Room source) => Navigator.of(context).push<void>(
     MaterialPageRoute(builder: (_) => _SourceDetailsPage(room: source)),
   );
-  Future<void> _overflow() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
-      isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: NotionEntrance.stagger(afterRoute: false, [
-                NotionListRow(
-                  leading: const Icon(Icons.sync_outlined),
-                  title: 'Private tools & sync',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _hub();
-                  },
-                ),
-                if (widget.group != null)
-                  NotionListRow(
-                    leading: const Icon(Icons.language_outlined),
-                    title: 'Source settings',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _sources();
-                    },
-                  ),
-                // Only a native Matrix chat has an address worth sharing; a
-                // bridged DM's ID is the network's ghost account (CS-25).
-                if (widget.room != null &&
-                    projection.classifier.classify(widget.room!).network ==
-                        'matrix') ...[
-                  if (widget.room!.canonicalAlias.isNotEmpty ||
-                      widget.room!.directChatMatrixIDForDisplay != null)
-                    NotionListRow(
-                      leading: const Icon(Icons.qr_code_outlined),
-                      title: 'Share contact',
-                      onTap: () {
-                        Navigator.pop(context);
-                        showQrCodeViewer(
-                          this.context,
-                          widget.room!.canonicalAlias.isNotEmpty
-                              ? widget.room!.canonicalAlias
-                              : widget.room!.directChatMatrixIDForDisplay!,
-                        );
-                      },
-                    ),
-                ],
-              ]),
-            ),
-          ),
+
+  /// The header ⋯: a glass menu at the button (UI-02/UI-07).
+  Future<void> _overflow(BuildContext anchor) async {
+    final room = widget.room;
+    // Only a native Matrix chat has an address worth sharing; a bridged
+    // DM's ID is the network's ghost account (CS-25).
+    final address =
+        room != null && projection.classifier.classify(room).network == 'matrix'
+        ? room.canonicalAlias.isNotEmpty
+              ? room.canonicalAlias
+              : room.directChatMatrixIDForDisplay
+        : null;
+    final choice = await showNotionMenu<String>(
+      anchor,
+      semanticLabel: 'More chat actions',
+      keyPrefix: 'details-menu',
+      entries: [
+        const NotionMenuEntry(
+          value: 'sync',
+          label: 'Private tools & sync',
+          icon: Icons.sync_outlined,
         ),
-      ),
+        if (widget.group != null)
+          const NotionMenuEntry(
+            value: 'sources',
+            label: 'Source settings',
+            icon: Icons.language_outlined,
+          ),
+        if (address != null)
+          const NotionMenuEntry(
+            value: 'share',
+            label: 'Share contact',
+            icon: Icons.qr_code_outlined,
+          ),
+      ],
     );
+    if (!mounted) return;
+    switch (choice) {
+      case 'sync':
+        await _hub();
+      case 'sources':
+        await _sources();
+      case 'share':
+        if (address != null) await showQrCodeViewer(context, address);
+    }
   }
+
+  /// Bridged chats: what "encrypted" means here, instead of the Matrix
+  /// per-device key page (FX-09). Keys and recovery live in Settings.
+  Future<void> _encryptionInfo(Room room, String network) =>
+      showNotionSheet<void>(
+        context: context,
+        title: 'Encryption',
+        builder: (sheet) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              room.encrypted
+                  ? 'Messages are end-to-end encrypted between ChatLoom and '
+                        'your Beeper bridge. On $network they are protected '
+                        'by $network’s own security.'
+                  : 'This chat is not end-to-end encrypted up to Beeper. On '
+                        '$network it is protected by $network’s own security.',
+              style: sheet.notion.typography.callout,
+            ),
+            const SizedBox(height: NotionSpace.xs),
+            Text(
+              'Your encryption keys and recovery are in Settings › Privacy & '
+              'security.',
+              style: sheet.notion.typography.calloutMuted,
+            ),
+            const SizedBox(height: NotionSpace.md),
+            NotionButton(
+              label: 'Open Privacy & security',
+              icon: Icons.lock_outline,
+              expand: true,
+              onPressed: () {
+                Navigator.pop(sheet);
+                context.push('/rooms/settings/security');
+              },
+            ),
+          ],
+        ),
+      );
 
   /// BR-07: bridgev2 drops the user's own leave unless the bridge runs with
   /// `bridge_matrix_leave` (default false), so a bridged chat stays on the
@@ -619,6 +644,14 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               )
               .toSet()
               .join(' · ');
+    // Matrix room administration (join rules, directory, power levels,
+    // per-device keys) only applies to a native Matrix chat; on a bridged
+    // chat it would change nothing on the network or expose the portal
+    // (FX-09). Developer options keep them reachable.
+    final roomNetwork = room == null
+        ? null
+        : projection.classifier.classify(room).network;
+    final matrixAdmin = roomNetwork == 'matrix' || DeveloperOptions.enabled;
     final sourceRows = <Widget>[
       if (group != null) ...[
         const Text(
@@ -648,15 +681,19 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               '${notionNotificationLabel(room.pushRuleState)} · changes affect other clients',
           onTap: _native?.canEdit == true ? () => _notifications(room) : null,
         ),
-        NotionListRow(
-          leading: const Icon(Icons.info_outline),
-          title: 'Conversation capabilities',
-          onTap: () => showConversationCapabilitiesDialog(
-            context,
-            reasonOf: (BridgeFeature feature) =>
-                RoomCapabilities.forFeature(feature, room).reason,
+        // What the bridge says works here, in words; a native Matrix chat
+        // has no bridge to ask.
+        if (roomNetwork != 'matrix' || DeveloperOptions.enabled)
+          NotionListRow(
+            leading: const Icon(Icons.info_outline),
+            title: 'Conversation capabilities',
+            subtitle: 'What works in this chat on $network',
+            onTap: () => showConversationCapabilitiesDialog(
+              context,
+              reasonOf: (BridgeFeature feature) =>
+                  RoomCapabilities.forFeature(feature, room).reason,
+            ),
           ),
-        ),
         if (PlatformInfos.isAndroid &&
             PersonalClient.networkOf(room) == 'telegram')
           _roundVideoRow(room),
@@ -666,19 +703,24 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           subtitle: room.encrypted
               ? 'Encrypted up to Beeper · the network has its own security'
               : 'Not encrypted up to Beeper · the network has its own security',
-          onTap: () => context.push('/rooms/${room.id}/encryption'),
+          onTap: matrixAdmin
+              ? () => context.push('/rooms/${room.id}/encryption')
+              : () => _encryptionInfo(room, network),
         ),
         if (!room.isDirectChatForDisplay) ...[
-          NotionListRow(
-            leading: const Icon(Icons.visibility_outlined),
-            title: 'Access & visibility',
-            onTap: () => context.push('/rooms/${room.id}/details/access'),
-          ),
-          NotionListRow(
-            leading: const Icon(Icons.admin_panel_settings_outlined),
-            title: 'Permissions',
-            onTap: () => context.push('/rooms/${room.id}/details/permissions'),
-          ),
+          if (matrixAdmin) ...[
+            NotionListRow(
+              leading: const Icon(Icons.visibility_outlined),
+              title: 'Access & visibility',
+              onTap: () => context.push('/rooms/${room.id}/details/access'),
+            ),
+            NotionListRow(
+              leading: const Icon(Icons.admin_panel_settings_outlined),
+              title: 'Permissions',
+              onTap: () =>
+                  context.push('/rooms/${room.id}/details/permissions'),
+            ),
+          ],
           if (room.canInvite &&
               RoomCapabilities.memberActionAllowed(room, 'invite'))
             NotionListRow(
@@ -722,6 +764,20 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         ..._networkRows(room, name),
       ],
     ];
+    final mute = metadata.muted
+        ? conversationMuteSubtitle(
+            metadata.mutedUntil,
+            DateTime.now(),
+            MaterialLocalizations.of(context),
+            use24h: MediaQuery.alwaysUse24HourFormatOf(context),
+          )
+        : null;
+    final canMute =
+        mergedValid && canEditChatPreferences(personal, 'org:$entity');
+    final disappearing = sourceRooms
+        .map(disappearingTimerLabel)
+        .nonNulls
+        .firstOrNull;
     final networkAvatar = room != null
         ? projection.avatarFor(room)
         : projection.avatarForGroup(group!);
@@ -768,6 +824,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
                 : null),
         sharedContent: NotionLocalSharedPreview(rooms: sourceRooms),
         sourceRows: sourceRows,
+        mute: mute,
+        archived: metadata.archived,
+        disappearing: disappearing,
       ),
       actions: NotionConversationDetailsActions(
         search: () => Navigator.of(context).push<void>(
@@ -806,10 +865,23 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           ),
         ),
         archive: canEdit ? _archive : null,
+        // "View contact" is a person: a DM or a merged person, never a
+        // group, whose people are under Participants (FX-09).
         contact: room == null
             ? () => _sources(contact: true)
-            : () => _contact(room),
-        overflow: _overflow,
+            : room.isDirectChatForDisplay
+            ? () => _contact(room)
+            : null,
+        muteFrom: canMute
+            ? (anchor) => runConversationMute(
+                anchor,
+                personal,
+                entity,
+                unmute: mute != null,
+                isCurrent: () => mounted && this.entity == entity,
+              )
+            : null,
+        overflowFrom: _overflow,
       ),
     );
   }
@@ -833,15 +905,14 @@ class _SourceDetailsPage extends StatelessWidget {
         active.userID == room.client.userID &&
         active.getRoomById(room.id) != null)
       return ChatDetails(roomId: room.id);
-    return Scaffold(
-      appBar: AppBar(title: const Text('Source settings')),
-      body: const Center(
-        child: Padding(
-          padding: EdgeInsets.all(20),
-          child: Text(
+    return NotionScaffold(
+      title: 'Source settings',
+      onBack: () => Navigator.maybePop(context),
+      body: const NotionEmptyState(
+        icon: Icons.no_accounts_outlined,
+        title: 'Source unavailable',
+        message:
             'This source is unavailable in the current account. Its network settings have not been changed.',
-          ),
-        ),
       ),
     );
   }

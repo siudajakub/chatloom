@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/personal/conversation_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/sync_changes.dart';
@@ -8,6 +9,8 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/personal/ui/sync_changes_section.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_choice.dart';
+import 'package:chatloom/ui/notion/notion_glass_header.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
@@ -140,6 +143,45 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
     }
   }
 
+  /// The private mute with its end (FX-07): Mute… opens the inbox's
+  /// durations at the row, Unmute clears it; both with Undo.
+  Widget _mute(
+    String entity,
+    ConversationMetadata metadata, {
+    required bool enabled,
+  }) {
+    final muted = metadata.muted;
+    return Builder(
+      builder: (context) => NotionListRow(
+        key: const ValueKey('preferences-mute'),
+        leading: Icon(
+          muted
+              ? Icons.notifications_active_outlined
+              : Icons.notifications_off_outlined,
+        ),
+        title: muted ? 'Unmute' : 'Mute…',
+        subtitle: muted
+            ? conversationMuteSubtitle(
+                metadata.mutedUntil,
+                DateTime.now(),
+                MaterialLocalizations.of(context),
+                use24h: MediaQuery.alwaysUse24HourFormatOf(context),
+              )
+            : 'For 1 hour, 8 hours, 1 week or until you unmute',
+        trailing: const SizedBox.shrink(),
+        onTap: enabled
+            ? () => runConversationMute(
+                context,
+                personal,
+                entity,
+                unmute: muted,
+                isCurrent: () => mounted && _active,
+              )
+            : null,
+      ),
+    );
+  }
+
   List<Widget> _conversation(Room room, InboxProjection projection) {
     final entity = projection.entityFor(room);
     final key = 'org:$entity';
@@ -160,10 +202,9 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
         style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
       ),
       ..._syncState({key, for (final source in sources) 'org:${source.id}'}),
+      _mute(entity, metadata, enabled: enabled && !ignored),
       if (group != null)
-        const Text(
-          'Visibility applies to this person in all merged chats.',
-        ),
+        const Text('Visibility applies to this person in all merged chats.'),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
         title: const Text('Ignore chat'),
@@ -218,10 +259,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
         onChanged: enabled && !ignored
             ? (value) => _save(
                 key,
-                metadata
-                    .setLowPriority(value)
-                    .toJson()
-                    .cast<String, dynamic>(),
+                metadata.setLowPriority(value).toJson().cast<String, dynamic>(),
               )
             : null,
       ),
@@ -301,55 +339,68 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
     builder: (context, _) {
       final projection = InboxProjection(personal);
       return Scaffold(
-        appBar: AppBar(title: const Text('Visibility & notifications')),
+        extendBodyBehindAppBar: true,
+        appBar: notionGlassAppBar(
+          title: const Text('Visibility & notifications'),
+        ),
         body: Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 640),
+            constraints: const BoxConstraints(
+              maxWidth: NotionSize.contentMaxWidth,
+            ),
             // Sections rise in once after the push; dependent notes and
             // progress open and close in place.
             child: NotionEntranceScope(
-              child: ListView(
-                padding: const EdgeInsets.all(20),
-                children: NotionEntrance.stagger([
-                  const Text(
-                    'Private settings for ChatLoom. Your other Beeper apps are unchanged.',
+              child: Builder(
+                builder: (context) => ListView(
+                  // The rows scroll under the glass header.
+                  padding: EdgeInsets.fromLTRB(
+                    20,
+                    20 + MediaQuery.paddingOf(context).top,
+                    20,
+                    20,
                   ),
-                  if (kIsWeb)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 16),
-                      child: Text(
-                        'Edit these encrypted preferences in the Android or macOS app.',
-                      ),
-                    )
-                  else if (!_active)
+                  children: NotionEntrance.stagger([
                     const Text(
-                      'The selected account changed. Go back and reopen these settings.',
-                    )
-                  else if (!personal.ready)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 16),
-                      child: Text(
-                        'Connect private sync in Settings › Advanced › Private sync to save these preferences.',
+                      'Private settings for ChatLoom. Your other Beeper apps are unchanged.',
+                    ),
+                    if (kIsWeb)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Text(
+                          'Edit these encrypted preferences in the Android or macOS app.',
+                        ),
+                      )
+                    else if (!_active)
+                      const Text(
+                        'The selected account changed. Go back and reopen these settings.',
+                      )
+                    else if (!personal.ready)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Text(
+                          'Connect private sync in Settings › Advanced › Private sync to save these preferences.',
+                        ),
+                      ),
+                    NotionSizeReveal(
+                      visible: _busy,
+                      duration: NotionMotion.short,
+                      child: const NotionDelayedReveal(
+                        placeholder: SizedBox(height: 4),
+                        child: LinearProgressIndicator(),
                       ),
                     ),
-                  NotionSizeReveal(
-                    visible: _busy,
-                    duration: NotionMotion.short,
-                    child: const NotionDelayedReveal(
-                      placeholder: SizedBox(height: 4),
-                      child: LinearProgressIndicator(),
+                    NotionSizeReveal(
+                      visible: _error != null,
+                      child: NotionFadeThrough(
+                        child: Text(_error ?? '', key: ValueKey(_error)),
+                      ),
                     ),
-                  ),
-                  NotionSizeReveal(
-                    visible: _error != null,
-                    child: NotionFadeThrough(
-                      child: Text(_error ?? '', key: ValueKey(_error)),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  ..._conversation(widget.room, projection),
-                ]),
+                    const SizedBox(height: 20),
+                    ..._conversation(widget.room, projection),
+                  ]),
+                ),
               ),
             ),
           ),
@@ -359,7 +410,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
   );
 }
 
-/// Stacked label/control keeps large text readable on narrow screens.
+/// One private choice of this page, as a picker row.
 class PreferenceChoice extends StatelessWidget {
   final String title;
   final String value;
@@ -372,37 +423,16 @@ class PreferenceChoice extends StatelessWidget {
     required this.choices,
     this.onChanged,
   });
+
+  /// A picker row (Telegram settings): the value on the right, a glass
+  /// sheet of choices on tap (UI-10).
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 12),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(title),
-        DropdownButton<String>(
-          isExpanded: true,
-          style: Theme.of(context).textTheme.bodyLarge,
-          itemHeight: (MediaQuery.textScalerOf(context).scale(18) * 1.5 + 16)
-              .clamp(48.0, double.infinity),
-          value: choices.containsKey(value) ? value : 'inherit',
-          items: [
-            for (final item in choices.entries)
-              DropdownMenuItem(
-                value: item.key,
-                child: Text(
-                  item.value,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-          ],
-          onChanged: onChanged == null
-              ? null
-              : (value) {
-                  if (value != null) onChanged!(value);
-                },
-        ),
-      ],
-    ),
+  Widget build(BuildContext context) => NotionPickerRow<String>(
+    label: title,
+    value: choices.containsKey(value) ? value : 'inherit',
+    options: [
+      for (final item in choices.entries) NotionChoice(item.key, item.value),
+    ],
+    onChanged: onChanged,
   );
 }

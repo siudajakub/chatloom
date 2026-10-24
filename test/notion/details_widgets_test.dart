@@ -110,8 +110,9 @@ void main() {
             ),
           ),
         );
-        await tester.scrollUntilVisible(find.text('View contact'), 240);
-        await tester.ensureVisible(find.text('View contact'));
+        // The last row (View contact appears only with a contact action).
+        await tester.scrollUntilVisible(find.text('Archive chat'), 240);
+        await tester.ensureVisible(find.text('Archive chat'));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
       },

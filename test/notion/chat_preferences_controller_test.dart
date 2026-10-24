@@ -451,12 +451,8 @@ void main() {
         'ChatLoom notifications',
       );
       await tester.ensureVisible(choice);
-      await tester.tap(
-        find.descendant(
-          of: choice,
-          matching: find.byType(DropdownButton<String>),
-        ),
-      );
+      // A picker row: a tap opens the glass sheet of choices (UI-10).
+      await tester.tap(choice);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Mentions only').last);
       await tester.pumpAndSettle();
