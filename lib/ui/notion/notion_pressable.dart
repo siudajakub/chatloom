@@ -178,11 +178,12 @@ class _NotionPressableState extends State<NotionPressable>
         child: child,
       ),
     );
+    // Only tappable pressables get the click cursor; an always-present
+    // region around the Listener broke outer long-press detectors.
+    if (widget.onTap == null) return pressable;
     return MouseRegion(
       opaque: false,
-      cursor: widget.onTap == null
-          ? MouseCursor.defer
-          : SystemMouseCursors.click,
+      cursor: SystemMouseCursors.click,
       child: pressable,
     );
   }
