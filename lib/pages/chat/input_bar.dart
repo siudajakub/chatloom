@@ -8,10 +8,12 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/mention_suggestions.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/utils/markdown_context_builder.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/services.dart';
@@ -410,16 +412,21 @@ class InputBar extends StatelessWidget {
             final data = content.data;
             if (data == null) return;
 
-            final file = MatrixFile(
-              mimeType: content.mimeType,
-              bytes: data,
-              name: content.uri.split('/').last,
+            // Typed (an image is a MatrixImageFile with its size), so the
+            // photo encoder runs: a transparent keyboard sticker stays
+            // transparent, an animated one whole (MD-01).
+            final file = await withImageSize(
+              MatrixFile(
+                mimeType: content.mimeType,
+                bytes: data,
+                name: content.uri.split('/').last,
+              ).detectFileType,
             );
             // Bubble first, upload in the bubble (like every attachment).
             await OutgoingMedia.send(
               room,
               file,
-              shrinkImageMaxDimension: 1600,
+              shrinkImageMaxDimension: MediaQuality.photoMaxSide,
             ).then<void>((_) {}, onError: (Object _) {});
           },
         ),

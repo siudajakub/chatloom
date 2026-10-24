@@ -348,4 +348,66 @@ void main() {
       expect(await sending, r'$sent');
     },
   );
+
+  test('a PNG re-encoded as JPEG is sent as .jpg (MD-01)', () async {
+    final (client, room) = await _setUp();
+    final sending = room.sendFileEvent(
+      MatrixImageFile(
+        bytes: Uint8List(4000),
+        name: 'screenshot.png',
+        mimeType: 'image/png',
+      ),
+      shrinkImageMaxDimension: 2048,
+      txid: 'fixture-rename',
+    );
+    for (var i = 0; i < 200 && client.starts.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(client.starts, contains('screenshot.jpg'));
+    expect(client.starts, isNot(contains('screenshot.png')));
+    for (final gate in client.pending) {
+      gate.complete(Uri.parse('mxc://example.invalid/x'));
+    }
+    expect(await sending, r'$sent');
+  });
+
+  test(
+    'a cancelled send stops its upload and sends no event (MD-17)',
+    () async {
+      final (client, room) = await _setUp();
+      final cancelled = <String>{};
+      client.fileSendCancelled = cancelled.contains;
+      cancelled.add('fixture-cancel');
+      final sending = room.sendFileEvent(
+        MatrixFile(
+          bytes: Uint8List(64),
+          name: 'doc.bin',
+          mimeType: 'application/octet-stream',
+        ),
+        txid: 'fixture-cancel',
+      );
+      // Not retried for the send timeout: the abort ends it at once.
+      await expectLater(sending, completion(isNull));
+      expect(client.starts, isEmpty, reason: 'cancelled before the upload');
+      expect(client.sent, 0);
+
+      cancelled.clear();
+      final running = room.sendFileEvent(
+        MatrixFile(
+          bytes: Uint8List(64),
+          name: 'doc.bin',
+          mimeType: 'application/octet-stream',
+        ),
+        txid: 'fixture-cancel-2',
+      );
+      for (var i = 0; i < 200 && client.starts.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      cancelled.add('fixture-cancel-2');
+      client.gates['doc.bin']!.completeError(StateError('fictional abort'));
+      await expectLater(running, throwsA(isA<StateError>()));
+      expect(client.starts, ['doc.bin'], reason: 'no retry after the abort');
+      expect(client.sent, 0);
+    },
+  );
 }

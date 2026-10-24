@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/stale_recordings.dart';
 import 'package:chatloom/personal/media/voice_format.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -77,8 +78,12 @@ RecordConfig buildVoiceRecordConfig(
   return RecordConfig(
     encoder: encoder,
     sampleRate: opus ? 48000 : 44100,
+    // Opus speech is transparent at 32 kbit/s (MediaQuality, MD-19); AAC
+    // needs more for the same quality.
     bitRate: opus
-        ? (options.highQuality ? 96000 : 64000)
+        ? (options.highQuality
+              ? MediaQuality.voiceOpusHighQualityBitrate
+              : MediaQuality.voiceOpusBitrate)
         : (options.highQuality ? 128000 : 64000),
     numChannels: 1,
     autoGain: options.autoGain,

@@ -161,6 +161,12 @@ class Client extends MatrixApi {
   Future<MatrixVideoThumbnailResponse?> Function(MatrixVideoThumbnailArguments)?
   customVideoThumbnailGenerator;
 
+  /// ChatLoom: whether the user cancelled the file send of a transaction ID
+  /// (the "×" on an upload). `Room.sendFileEvent` then stops: it neither
+  /// retries an aborted upload, nor shows the echo again, nor sends the
+  /// event. Null (the default) keeps upstream behaviour.
+  bool Function(String transactionId)? fileSendCancelled;
+
   /// Optional matrix-content-scanner proxy configuration.
   ///
   /// When set, media URL helpers resolve `mxc://` URIs to scanner URLs, and

@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Fictional offline media. These fixtures never open a picker or contact a server.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/send_file_dialog.dart';
+import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/media/caption_followup.dart';
+import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,6 +36,9 @@ typedef _Send = ({
   Event? reply,
   String? root,
   String? last,
+  String msgtype,
+  int? shrink,
+  Map<String, dynamic>? extra,
 });
 
 class _MediaRoom extends ConversationRoom {
@@ -58,6 +65,9 @@ class _MediaRoom extends ConversationRoom {
       reply: inReplyTo,
       root: threadRootEventId,
       last: threadLastEventId,
+      msgtype: file.msgType,
+      shrink: shrinkImageMaxDimension,
+      extra: extraContent,
     ));
     return response == null
         ? r'$fictional-accepted'
@@ -81,6 +91,31 @@ XFile _file([String name = 'fictional.txt']) => XFile.fromData(
   mimeType: 'text/plain',
 );
 
+const _pixelPng =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+
+/// A photo that counts how often it is read (MD-06).
+class _CountingImage extends XFile {
+  int reads = 0;
+  final String _name;
+  _CountingImage([this._name = 'photo.png'])
+    : super.fromData(
+        base64Decode(_pixelPng),
+        name: _name,
+        path: _name,
+        mimeType: 'image/png',
+      );
+
+  @override
+  String get name => _name;
+
+  @override
+  Future<Uint8List> readAsBytes() {
+    reads++;
+    return super.readAsBytes();
+  }
+}
+
 class _UnreadableImage extends XFile {
   _UnreadableImage()
     : super('/fictional/missing-image.png', mimeType: 'image/png');
@@ -100,6 +135,8 @@ void main() {
     FrozenAttachmentContext? frozen,
     List<XFile>? files,
     ValueChanged<AttachmentSendResult?>? onResult,
+    bool compress = true,
+    String caption = 'Fictional caption',
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -110,13 +147,14 @@ void main() {
           body: Builder(
             builder: (context) => TextButton(
               onPressed: () async {
-                final result = await showDialog<AttachmentSendResult>(
-                  context: context,
-                  builder: (_) => SendFileDialog(
+                final result = await showSendFileDialog(
+                  context,
+                  SendFileDialog(
                     room: room,
                     files: files ?? [_file()],
                     outerContext: context,
-                    initialCaption: 'Fictional caption',
+                    initialCaption: caption,
+                    initialCompress: compress,
                     composeContext: frozen,
                     replyTo: frozen?.replyTo,
                     threadRootEventId: frozen?.threadRootEventId,
@@ -177,11 +215,14 @@ void main() {
       room.response = (_) => accepted.future;
       AttachmentSendResult? result;
       await open(tester, room, onResult: (value) => result = value);
-      final send = tester.widget<TextButton>(
-        find.widgetWithText(TextButton, 'Send'),
+      final send = tester.widget<InkWell>(
+        find.descendant(
+          of: find.byTooltip('Send'),
+          matching: find.byType(InkWell),
+        ),
       );
-      send.onPressed!();
-      send.onPressed!();
+      send.onTap!();
+      send.onTap!();
       await tester.pump();
       // Only the (cached) media limit is awaited; no progress dialog.
       expect(find.byType(SendFileDialog), findsOneWidget);
@@ -221,7 +262,7 @@ void main() {
           threadLastEventId: r'$thread-last',
         ),
       );
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.byTooltip('Send'));
       await tester.pumpAndSettle();
       expect(find.byType(SendFileDialog), findsNothing);
       expect(result?.caption, 'Fictional caption');
@@ -261,7 +302,7 @@ void main() {
           threadLastEventId: r'$last',
         ),
       );
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.byTooltip('Send'));
       await tester.pump();
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
@@ -283,7 +324,7 @@ void main() {
         room,
         frozen: FrozenAttachmentContext(room: room, isCurrent: () => current),
       );
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.byTooltip('Send'));
       await tester.pump();
       current = false;
       client.configGate!.complete(MediaConfig(mUploadSize: 1024 * 1024));
@@ -302,7 +343,7 @@ void main() {
     addTearDown(() => OutgoingEcho.debugWriter = null);
     final room = _MediaRoom(_MediaClient());
     await open(tester, room, files: [_file('one.txt'), _file('two.txt')]);
-    await tester.tap(find.text('Send'));
+    await tester.tap(find.byTooltip('Send'));
     await tester.pumpAndSettle();
     expect(find.byType(SendFileDialog), findsNothing);
     expect(room.sent.map((send) => send.name), ['one.txt', 'two.txt']);
@@ -318,14 +359,14 @@ void main() {
       addTearDown(() => OutgoingEcho.debugWriter = null);
       final room = _MediaRoom(_MediaClient());
       await open(tester, room, files: [_file('one.txt'), _file('two.txt')]);
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.byTooltip('Send'));
       await tester.pumpAndSettle();
       expect(
         find.textContaining('1 of 2 attachments are already in the chat'),
         findsOneWidget,
       );
       expect(find.textContaining('could not be prepared'), findsOneWidget);
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.byTooltip('Send'));
       await tester.pumpAndSettle();
       expect(find.byType(SendFileDialog), findsNothing);
       expect(room.sent.map((send) => send.name), ['one.txt', 'two.txt']);
@@ -343,4 +384,163 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('the preview is full screen with a caption, quality and send', (
+    tester,
+  ) async {
+    final room = _MediaRoom(_MediaClient());
+    await open(tester, room, files: [_CountingImage()]);
+    expect(find.text('Photo'), findsOneWidget);
+    expect(find.text('Fictional caption'), findsOneWidget);
+    expect(find.text('Compressed'), findsOneWidget);
+    expect(find.textContaining('Original'), findsOneWidget);
+    expect(find.byTooltip('Send'), findsOneWidget);
+    expect(find.byTooltip('Cancel'), findsOneWidget);
+    final size = tester.getSize(find.byType(SendFileDialog));
+    expect(size, tester.view.physicalSize / tester.view.devicePixelRatio);
+    await tester.tap(find.byTooltip('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SendFileDialog), findsNothing);
+    expect(room.sent, isEmpty);
+  });
+
+  testWidgets('switching the quality never reads the files again (MD-06)', (
+    tester,
+  ) async {
+    final room = _MediaRoom(_MediaClient());
+    final a = _CountingImage('a.png'), b = _CountingImage('b.png');
+    await open(tester, room, files: [a, b]);
+    final before = a.reads + b.reads;
+    await tester.tap(find.textContaining('Original'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Compressed'));
+    await tester.pumpAndSettle();
+    expect(a.reads + b.reads, before);
+  });
+
+  testWidgets('compressed photos go to the encoder at 2048 px (MD-01)', (
+    tester,
+  ) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final room = _MediaRoom(_MediaClient());
+    await open(tester, room, files: [_CountingImage()]);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    final sent = room.sent.single;
+    expect(sent.msgtype, MessageTypes.Image);
+    expect(sent.shrink, MediaQuality.photoMaxSide);
+  });
+
+  testWidgets('"Original" sends the photo unchanged, as a file (MD-02)', (
+    tester,
+  ) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final room = _MediaRoom(_MediaClient());
+    await open(tester, room, files: [_CountingImage()], compress: false);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    final sent = room.sent.single;
+    expect(sent.msgtype, MessageTypes.File);
+    expect(sent.shrink, isNull);
+  });
+
+  testWidgets('an album carries its caption on the newest item only', (
+    tester,
+  ) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final room = _MediaRoom(_MediaClient());
+    await open(
+      tester,
+      room,
+      files: [_CountingImage('a.png'), _CountingImage('b.png')],
+    );
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(room.sent.map((s) => s.extra?['body']), [null, 'Fictional caption']);
+  });
+
+  testWidgets('an item can be removed before sending', (tester) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final room = _MediaRoom(_MediaClient());
+    await open(
+      tester,
+      room,
+      files: [_CountingImage('a.png'), _CountingImage('b.png')],
+    );
+    expect(find.text('1 of 2'), findsOneWidget);
+    await tester.tap(find.byTooltip('Remove'));
+    await tester.pumpAndSettle();
+    expect(find.text('Photo'), findsOneWidget);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(room.sent.map((s) => s.name), ['b.png']);
+  });
+
+  testWidgets('a caption the network drops follows as its own message', (
+    tester,
+  ) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    final captions = <String>[];
+    CaptionFollowUp.debugSender = (room, text, thread) async =>
+        captions.add(text);
+    addTearDown(() {
+      OutgoingEcho.debugWriter = null;
+      CaptionFollowUp.debugSender = null;
+    });
+    final room = _MediaRoom(_MediaClient())
+      ..state(bridgeFeaturesEventType, {
+        'file': {
+          'm.image': {
+            'mime_types': {'image/*': 2},
+            'caption': -1,
+          },
+        },
+      }, key: 'fixture');
+    await open(tester, room, files: [_CountingImage()]);
+    expect(find.text(CaptionFollowUp.notice), findsOneWidget);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(room.sent.single.extra, isNull, reason: 'no caption on the photo');
+    expect(captions, ['Fictional caption']);
+  });
+
+  testWidgets('a supported caption stays on the media', (tester) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    final captions = <String>[];
+    CaptionFollowUp.debugSender = (room, text, thread) async =>
+        captions.add(text);
+    addTearDown(() {
+      OutgoingEcho.debugWriter = null;
+      CaptionFollowUp.debugSender = null;
+    });
+    final room = _MediaRoom(_MediaClient())
+      ..state(bridgeFeaturesEventType, {
+        'file': {
+          'm.image': {
+            'mime_types': {'image/*': 2},
+            'caption': 2,
+            'max_caption_length': 1024,
+          },
+        },
+      }, key: 'fixture');
+    await open(tester, room, files: [_CountingImage()]);
+    expect(find.text(CaptionFollowUp.notice), findsNothing);
+    await tester.enterText(find.byType(TextField), 'x' * 1100);
+    await tester.pump();
+    expect(
+      find.text(CaptionFollowUp.notice),
+      findsOneWidget,
+      reason: 'over the network limit',
+    );
+    await tester.enterText(find.byType(TextField), 'Short caption');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(room.sent.single.extra?['body'], 'Short caption');
+    expect(captions, isEmpty);
+  });
 }

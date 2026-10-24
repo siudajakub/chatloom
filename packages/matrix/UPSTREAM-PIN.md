@@ -193,3 +193,30 @@ library). Read-only: nothing is written, slugs and the usage filter are as
 upstream. The app lists `m.room.image_pack` in `importantStateEvents`
 (`lib/utils/client_manager.dart`). Regression: app
 `test/personal/stickers/image_pack_parsing_test.dart`.
+
+### 2026-10-23 — cancellable file sends, file name follows a resizer's format
+
+Three small changes for the send preview (wave 6, lane `media-send`):
+
+- `Client.fileSendCancelled` (`bool Function(String transactionId)?`,
+  default null = upstream behaviour). When it returns true for a
+  transaction, `Room.sendFileEvent` returns null before the encrypting echo
+  update (so a deleted bubble is not shown again), rethrows an upload error
+  instead of retrying it until the send timeout, and returns null instead of
+  sending the event after an upload that finished meanwhile. The app sets it
+  in `OutgoingMedia.send` and aborts the upload request itself
+  (`UploadProgress.abort`, `http.Abortable`). Nothing is sent that would not
+  have been sent upstream; transport and cryptography are unchanged.
+- `Room.sendFileEvent` uploads the **shrunk** image. Upstream took
+  `uploadFile` before the shrink and replaced it only when encrypting, so in
+  an unencrypted room the original bytes (full size, EXIF/GPS) were uploaded
+  under the shrunk `info` (found by the rename regression below).
+- `MatrixImageFile.generateThumbnail` (and therefore `shrink`) names the
+  resized file after the mimetype the resizer returned: a `.png` that the
+  resizer re-encoded as JPEG is sent as `.jpg`, so name, bytes and
+  `info.mimetype` agree. Same name when the format is unchanged.
+
+Regressions: app `test/personal/sdk_send_file_event_test.dart` ("a PNG
+re-encoded as JPEG is sent as .jpg" — also proves the shrunk file is the one
+uploaded in an unencrypted room —, "a cancelled send stops its upload and
+sends no event").

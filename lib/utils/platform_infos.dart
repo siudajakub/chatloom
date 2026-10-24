@@ -39,8 +39,15 @@ abstract class PlatformInfos {
   static bool get supportsVideoPlayer =>
       !PlatformInfos.isWindows && !PlatformInfos.isLinux;
 
+  /// ChatLoom's photo encoder (`lib/personal/media/photo_encoder.dart`):
+  /// one quality profile on Android and macOS (the SDK's pure-Dart fallback
+  /// upscaled, kept GPS and wrote JPEG q100).
   static bool get supportsCustomImageResizer =>
-      PlatformInfos.isWeb || PlatformInfos.isMobile;
+      PlatformInfos.isWeb || PlatformInfos.isMobile || PlatformInfos.isMacOS;
+
+  /// Native video compression, thumbnails and metadata (light_compressor:
+  /// MediaCodec on Android, AVFoundation on macOS).
+  static bool get supportsVideoTranscode => isMobile || isMacOS;
 
   /// Web could also record in theory but currently creates broken opus
   static bool get platformCanRecord => (isMobile || isMacOS);

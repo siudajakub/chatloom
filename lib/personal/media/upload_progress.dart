@@ -16,6 +16,10 @@ abstract final class UploadProgress {
   static final _zoneKey = Object();
   static final _values = <String, ValueNotifier<double?>>{};
 
+  /// Sends the user cancelled (MD-17): their uploads stop at once.
+  static final _aborted = <String>{};
+  static final _trackers = <String, UploadTracker>{};
+
   /// Rows re-read [of] whenever their status changes, so dropping the
   /// oldest entry never leaves a live upload without a listener for long.
   static const maxEntries = 64;
@@ -39,12 +43,32 @@ abstract final class UploadProgress {
   /// Runs [body]; media uploads it makes report to [transactionId].
   static Future<T> track<T>(String transactionId, Future<T> Function() body) {
     final tracker = UploadTracker._(_notifier(transactionId));
-    return runZoned(body, zoneValues: {_zoneKey: tracker});
+    if (_aborted.contains(transactionId)) tracker._abort();
+    _trackers[transactionId] = tracker;
+    return runZoned(body, zoneValues: {_zoneKey: tracker}).whenComplete(() {
+      if (identical(_trackers[transactionId], tracker)) {
+        _trackers.remove(transactionId);
+      }
+    });
   }
+
+  /// Stops the uploads of [transactionId]: a running request is aborted
+  /// (`http.Abortable`), a later one fails before its first byte.
+  static void abort(String transactionId) {
+    _aborted.add(transactionId);
+    while (_aborted.length > maxEntries) {
+      _aborted.remove(_aborted.first);
+    }
+    _trackers[transactionId]?._abort();
+  }
+
+  static bool isAborted(String transactionId) =>
+      _aborted.contains(transactionId);
 
   /// Clears the value once a send ended (sent, failed or cancelled).
   static void reset(String transactionId) {
     _values[transactionId]?.value = null;
+    _aborted.remove(transactionId);
   }
 
   /// The tracker of the current zone, for tests and the HTTP wrapper.
@@ -54,14 +78,27 @@ abstract final class UploadProgress {
   }
 
   @visibleForTesting
-  static void debugClear() => _values.clear();
+  static void debugClear() {
+    _values.clear();
+    _aborted.clear();
+    _trackers.clear();
+  }
 }
 
 /// Sums every upload of one send (file and thumbnail run concurrently).
 class UploadTracker {
   final ValueNotifier<double?> _notifier;
   final _parts = <Object, (int, int)>{};
+  final _aborted = Completer<void>();
   UploadTracker._(this._notifier);
+
+  /// Completes when the user cancelled this send.
+  Future<void> get abortTrigger => _aborted.future;
+  bool get aborted => _aborted.isCompleted;
+
+  void _abort() {
+    if (!_aborted.isCompleted) _aborted.complete();
+  }
 
   void update(Object part, int sent, int total) {
     if (total <= 0) return;
@@ -116,7 +153,7 @@ class UploadProgressClient extends http.BaseClient {
   void close() => inner.close();
 }
 
-class _CountingRequest extends http.BaseRequest {
+class _CountingRequest extends http.BaseRequest with http.Abortable {
   final http.BaseRequest _source;
   final UploadTracker _tracker;
 
@@ -130,6 +167,9 @@ class _CountingRequest extends http.BaseRequest {
   }
 
   @override
+  Future<void>? get abortTrigger => _tracker.abortTrigger;
+
+  @override
   http.ByteStream finalize() {
     super.finalize();
     final total = contentLength ?? 0;
@@ -138,6 +178,8 @@ class _CountingRequest extends http.BaseRequest {
     _tracker.update(part, 0, total);
     return http.ByteStream(
       _slices(_source.finalize()).map((chunk) {
+        // A client that ignores [abortTrigger] still stops here.
+        if (_tracker.aborted) throw http.RequestAbortedException(url);
         sent += chunk.length;
         _tracker.update(part, sent, total);
         return chunk;

@@ -925,7 +925,8 @@ void main() {
       );
       expect(config.encoder, AudioEncoder.opus);
       expect(config.sampleRate, 48000);
-      expect(config.bitRate, 64000);
+      // 32 kbit/s Opus: transparent for speech, half the old upload (MD-19).
+      expect(config.bitRate, 32000);
       expect(config.numChannels, 1);
       expect(config.noiseSuppress, isTrue);
       expect(config.autoGain, isTrue);

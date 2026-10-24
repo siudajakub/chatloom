@@ -2112,7 +2112,10 @@ class _MergedChatPageState extends State<_MergedChatView>
   /// the frozen source: the bridge's media limits are checked first and a
   /// reply stays with a message of the same source. [pick] runs after the
   /// draft is saved (a picker may take the app to the background).
-  Future<void> _attachMedia(Future<List<XFile>> Function() pick) async {
+  Future<void> _attachMedia(
+    Future<List<XFile>> Function() pick, {
+    bool asFiles = false,
+  }) async {
     if (sending || loading || _needsNetworkChoice) return;
     final frozen = target;
     final room = personal.client.getRoomById(frozen.conversation.roomId);
@@ -2151,9 +2154,9 @@ class _MergedChatPageState extends State<_MergedChatView>
           identical(replyEvent, sourceReply);
       final files = await pick();
       if (!mounted || files.isEmpty || !isCurrent()) return;
-      final result = await showNotionCustomDialog<AttachmentSendResult>(
-        context: context,
-        builder: (c) => SendFileDialog(
+      final result = await showSendFileDialog(
+        context,
+        SendFileDialog(
           files: files,
           room: room,
           outerContext: context,
@@ -2161,6 +2164,7 @@ class _MergedChatPageState extends State<_MergedChatView>
           threadLastEventId: null,
           replyTo: sourceReply,
           initialCaption: oldText,
+          initialCompress: !asFiles,
           composeContext: FrozenAttachmentContext(
             room: room,
             replyTo: sourceReply,
@@ -2247,7 +2251,11 @@ class _MergedChatPageState extends State<_MergedChatView>
         );
       case AddPopupMenuActions.file:
         unawaited(
-          _attachMedia(() => selectFiles(context, allowMultiple: true)),
+          // "File" sends photos and videos as the original file (MD-02).
+          _attachMedia(
+            () => selectFiles(context, allowMultiple: true),
+            asFiles: true,
+          ),
         );
       case AddPopupMenuActions.poll:
         showAdaptiveBottomSheet(

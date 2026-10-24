@@ -1281,10 +1281,16 @@ class Room {
       rethrow;
     }
 
+    // ChatLoom: upload the shrunk file. Upstream assigned `uploadFile`
+    // before the shrink, so an unencrypted room got the original bytes
+    // (full size, metadata and location included) under the shrunk info.
+    uploadFile = file;
     MatrixFile? uploadThumbnail =
         thumbnail; // ignore: omit_local_variable_types
     EncryptedFile? encryptedFile;
     EncryptedFile? encryptedThumbnail;
+    // ChatLoom: a cancelled send must not show its deleted echo again.
+    if (client.fileSendCancelled?.call(txid) ?? false) return null;
     if (encrypted && client.fileEncryptionEnabled) {
       syncUpdate
               .rooms!
@@ -1360,6 +1366,8 @@ class Room {
         await _handleFakeSync(syncUpdate);
         rethrow;
       } catch (_) {
+        // ChatLoom: an upload aborted by the user is not retried.
+        if (client.fileSendCancelled?.call(txid) ?? false) rethrow;
         if (DateTime.now().isAfter(timeoutDate)) {
           syncUpdate
                   .rooms!
@@ -1427,6 +1435,8 @@ class Room {
       },
       ...?extraContent,
     };
+    // ChatLoom: cancelled while the upload finished: no message.
+    if (client.fileSendCancelled?.call(txid) ?? false) return null;
     final eventId = await sendEvent(
       content,
       txid: txid,

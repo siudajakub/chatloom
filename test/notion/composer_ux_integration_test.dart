@@ -275,9 +275,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       var checks = 0;
-      final result = showDialog<AttachmentSendResult>(
-        context: page,
-        builder: (_) => SendFileDialog(
+      final result = showSendFileDialog(
+        page,
+        SendFileDialog(
           room: room,
           outerContext: page,
           threadLastEventId: null,
@@ -304,16 +304,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      // The same caption field and compression switch as any chat.
+      // The same caption field and quality choice as any chat.
       expect(find.text('Fictional caption'), findsOneWidget);
-      expect(find.byType(Switch), findsOneWidget);
-      await tester.tap(find.text(L10n.of(page).send));
+      expect(find.text('Compressed'), findsOneWidget);
+      await tester.tap(find.byTooltip(L10n.of(page).send));
       await tester.pumpAndSettle();
       expect(checks, 1);
       // The bridge's reason, inline; the selection and caption stay.
       expect(find.text('This network does not accept images.'), findsOneWidget);
       expect(find.text('Fictional caption'), findsOneWidget);
-      await tester.tap(find.text(L10n.of(page).cancel));
+      await tester.tap(find.byTooltip(L10n.of(page).cancel));
       await tester.pumpAndSettle();
       expect(await result, isNull);
       expect(personal.sends, isEmpty);

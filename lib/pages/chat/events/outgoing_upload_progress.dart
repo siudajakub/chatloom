@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
+import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
+import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/upload_progress.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/foundation.dart';
@@ -17,9 +21,60 @@ bool isOutgoingUpload(Event event) =>
       MessageTypes.File,
     }.contains(event.messageType);
 
-/// Upload progress of [event] (see [UploadProgress]).
+/// Upload progress of [event] (see [UploadProgress]). It carries the
+/// event, so the upload disc can offer to cancel it (MD-17).
 ValueListenable<double?> uploadProgressOf(Event event) =>
-    UploadProgress.of(event.transactionId ?? event.eventId);
+    OutgoingUploadProgress._(
+      event,
+      UploadProgress.of(event.transactionId ?? event.eventId),
+    );
+
+/// [uploadProgressOf]: the progress of one own upload and its event.
+class OutgoingUploadProgress implements ValueListenable<double?> {
+  final Event event;
+  final ValueListenable<double?> _progress;
+
+  OutgoingUploadProgress._(this.event, this._progress);
+
+  @override
+  double? get value => _progress.value;
+
+  @override
+  void addListener(VoidCallback listener) => _progress.addListener(listener);
+
+  @override
+  void removeListener(VoidCallback listener) =>
+      _progress.removeListener(listener);
+
+  /// Equal for the same upload, so a rebuilt bubble keeps its listener.
+  @override
+  bool operator ==(Object other) =>
+      other is OutgoingUploadProgress &&
+      identical(other._progress, _progress) &&
+      other.event.eventId == event.eventId;
+
+  @override
+  int get hashCode => Object.hash(identityHashCode(_progress), event.eventId);
+}
+
+/// Whether the upload behind [progress] can be cancelled from its disc:
+/// a photo, video or file ChatLoom's own send job is still sending.
+bool canCancelUpload(ValueListenable<double?> progress) =>
+    progress is OutgoingUploadProgress &&
+    OutgoingMedia.isActive(progress.event);
+
+/// Telegram's "×" on an upload: the compression or upload stops, the
+/// bubble goes and nothing is sent (an upload the server already
+/// accepted cannot be called back).
+Future<void> cancelUpload(OutgoingUploadProgress progress) async {
+  final event = progress.event;
+  if (!OutgoingMedia.isActive(event)) return;
+  try {
+    await MessageDeliveryActions.discard(event);
+  } catch (e) {
+    Logs().w('Upload could not be cancelled', e.runtimeType);
+  }
+}
 
 /// The ring of an own upload: it fills with the bytes sent and spins while
 /// the file is prepared (compression, encryption) or the final message is
@@ -57,7 +112,9 @@ class OutgoingUploadIndicator extends StatelessWidget {
 
 /// Telegram's upload disc over a photo, video or round while it uploads:
 /// a scrim disc with the ring. It appears only after the loader grace, so
-/// a fast send never flashes it, and it never takes taps.
+/// a fast send never flashes it. While ChatLoom's own job sends the file it
+/// shows an "×" and a tap cancels the send ([cancelUpload]); otherwise
+/// (rounds) it takes no taps.
 class OutgoingUploadOverlay extends StatelessWidget {
   final ValueListenable<double?> progress;
 
@@ -66,27 +123,55 @@ class OutgoingUploadOverlay extends StatelessWidget {
   static const double _ring = NotionSize.touchTarget - 2 * NotionSpace.xs;
 
   @override
-  Widget build(BuildContext context) => IgnorePointer(
-    child: NotionDelayedReveal(
-      child: SizedBox.square(
-        key: const ValueKey('outgoing-upload-overlay'),
-        dimension: NotionSize.touchTarget,
-        child: DecoratedBox(
-          decoration: const ShapeDecoration(
-            shape: CircleBorder(),
-            color: NotionMediaColors.scrim,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(NotionSpace.xs),
-            child: OutgoingUploadIndicator(
-              progress: progress,
-              size: _ring,
-              strokeWidth: 2.5,
-              color: NotionMediaColors.onScrim,
+  Widget build(BuildContext context) {
+    final progress = this.progress;
+    final cancellable = canCancelUpload(progress);
+    final disc = SizedBox.square(
+      key: const ValueKey('outgoing-upload-overlay'),
+      dimension: NotionSize.touchTarget,
+      child: DecoratedBox(
+        decoration: const ShapeDecoration(
+          shape: CircleBorder(),
+          color: NotionMediaColors.scrim,
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(NotionSpace.xs),
+              child: OutgoingUploadIndicator(
+                progress: progress,
+                size: _ring,
+                strokeWidth: 2.5,
+                color: NotionMediaColors.onScrim,
+              ),
             ),
+            if (cancellable)
+              const Icon(
+                Icons.close_rounded,
+                size: NotionSize.icon,
+                color: NotionMediaColors.onScrim,
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!cancellable || progress is! OutgoingUploadProgress) {
+      return IgnorePointer(child: NotionDelayedReveal(child: disc));
+    }
+    return NotionDelayedReveal(
+      child: Semantics(
+        button: true,
+        label: 'Cancel upload',
+        child: Tooltip(
+          message: 'Cancel upload',
+          child: NotionPressable(
+            scale: NotionMotion.pressIcon,
+            onTap: () => unawaited(cancelUpload(progress)),
+            child: disc,
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

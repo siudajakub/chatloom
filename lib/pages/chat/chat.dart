@@ -1759,7 +1759,12 @@ class ChatController extends State<ChatPageWithRoom>
 
   /// One picker/preview at a time. All routes keep their original source and
   /// reply, and a cancelled picker never consumes the editor's draft.
-  Future<void> _pickAttachments(Future<List<XFile>> Function() pick) async {
+  /// [asFiles]: photos and videos start as "Original" (sent as files,
+  /// unchanged); the attach menu's "File" entry (Telegram, MD-02).
+  Future<void> _pickAttachments(
+    Future<List<XFile>> Function() pick, {
+    bool asFiles = false,
+  }) async {
     if (!mounted || _attachmentPending || _personalSending) return;
     final frozen = _captureAttachmentContext();
     final originalValue = sendController.value;
@@ -1772,14 +1777,15 @@ class ChatController extends State<ChatPageWithRoom>
       final files = await pick();
       if (!mounted || files.isEmpty) return;
       frozen.validate();
-      final result = await showAdaptiveDialog<AttachmentSendResult>(
-        context: context,
-        builder: (_) => SendFileDialog(
+      final result = await showSendFileDialog(
+        context,
+        SendFileDialog(
           files: files,
           room: frozen.room,
           outerContext: context,
           replyTo: frozen.replyTo,
           initialCaption: originalValue.text,
+          initialCompress: !asFiles,
           composeContext: frozen,
           threadRootEventId: frozen.threadRootEventId,
           threadLastEventId: frozen.threadLastEventId,
@@ -1840,6 +1846,7 @@ class ChatController extends State<ChatPageWithRoom>
   Future<void> sendFileAction({FileType type = FileType.any}) =>
       _pickAttachments(
         () => selectFiles(context, allowMultiple: true, type: type),
+        asFiles: type == FileType.any,
       );
 
   Future<void> sendImageFromClipBoard(Uint8List? image) async {

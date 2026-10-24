@@ -199,13 +199,30 @@ class MatrixImageFile extends MatrixFile {
 
     final thumbnailFile = MatrixImageFile(
       bytes: resizedData.bytes,
-      name: name,
+      name: _nameForMime(name, resizedData.mimeType),
       mimeType: resizedData.mimeType,
       width: resizedData.width,
       height: resizedData.height,
       blurhash: resizedData.blurhash,
     );
     return thumbnailFile;
+  }
+
+  /// ChatLoom: [name] with the extension of [mimeType] when a resizer
+  /// changed the format (a `.png` re-encoded as JPEG is sent as `.jpg`), so
+  /// the name, the bytes and the mimetype agree.
+  static String _nameForMime(String name, String? mimeType) {
+    if (mimeType == null) return name;
+    final current = lookupMimeType(name);
+    if (current == null || current == mimeType) return name;
+    final extension = switch (mimeType) {
+      'image/jpeg' => 'jpg',
+      'image/png' => 'png',
+      _ => extensionFromMime(mimeType),
+    };
+    if (extension == null) return name;
+    final dot = name.lastIndexOf('.');
+    return '${dot > 0 ? name.substring(0, dot) : name}.$extension';
   }
 
   /// you would likely want to use [NativeImplementations] and

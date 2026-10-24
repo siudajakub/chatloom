@@ -109,7 +109,8 @@ Future<bool> mergedAttachmentPreflight(
         width: media.width,
         height: media.height,
         durationSeconds: media.durationSeconds,
-        caption: caption.isEmpty ? null : caption,
+        // A caption the bridge drops or limits never refuses the media:
+        // the send preview sends it as its own message (BR-04).
       ),
     );
     if (result.status == CapabilityStatus.unavailable) {

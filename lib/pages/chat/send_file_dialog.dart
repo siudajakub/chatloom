@@ -4,28 +4,30 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/image_edit_geometry.dart';
+import 'package:chatloom/pages/chat/recording_output_cleanup.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/personal/capabilities.dart'
     show PersonalCapabilityUnavailable;
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/media/caption_followup.dart';
+import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
+import 'package:chatloom/personal/media/photo_encoder.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/show_scaffold_dialog.dart';
 import 'package:chatloom/utils/size_string.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/dialog_text_field.dart';
 import 'package:crop_image/crop_image.dart';
 import 'package:cross_file/cross_file.dart';
-import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:light_compressor_v2/light_compressor_v2.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';
@@ -67,6 +69,87 @@ class AttachmentSendResult {
   const AttachmentSendResult(this.caption);
 }
 
+/// Opens [dialog] as the full-screen send preview (UI-18): it rises from
+/// the bottom (a translation only, so its glass bars blur from the first
+/// frame) and covers the chat; Esc or the close button leaves it.
+Future<AttachmentSendResult?> showSendFileDialog(
+  BuildContext context,
+  SendFileDialog dialog,
+) {
+  // Above every pane (like the dialog it replaced).
+  final navigator = Navigator.of(context, rootNavigator: true);
+  return navigator.push(
+    _SendPreviewRoute(
+      duration: NotionMotion.of(context, NotionMotion.long),
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+      builder: (_) => dialog,
+    ),
+  );
+}
+
+class _SendPreviewRoute extends PageRoute<AttachmentSendResult> {
+  _SendPreviewRoute({
+    required this.builder,
+    required this.duration,
+    this.themes,
+  }) : super(fullscreenDialog: true);
+
+  final WidgetBuilder builder;
+  final Duration duration;
+  final CapturedThemes? themes;
+
+  @override
+  bool get opaque => false;
+
+  @override
+  Color? get barrierColor => null;
+
+  @override
+  String? get barrierLabel => null;
+
+  @override
+  bool get maintainState => true;
+
+  @override
+  Duration get transitionDuration => duration;
+
+  @override
+  Duration get reverseTransitionDuration =>
+      duration == Duration.zero ? Duration.zero : NotionMotion.reverse;
+
+  @override
+  Widget buildPage(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) {
+    final page = builder(context);
+    return themes?.wrap(page) ?? page;
+  }
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) => SlideTransition(
+    position: Tween(begin: const Offset(0, 1), end: Offset.zero).animate(
+      CurvedAnimation(
+        parent: animation,
+        curve: NotionMotion.emphasized,
+        reverseCurve: NotionMotion.exitFast,
+      ),
+    ),
+    child: child,
+  );
+}
+
+/// The send preview of picked photos, videos and files, Telegram and
+/// Messenger style: a full-screen, swipeable preview of every item, a
+/// thumbnail strip to pick and remove items, the caption composer at the
+/// bottom, a quality choice (compressed, or the original as a file) and
+/// the send button. Open it with [showSendFileDialog].
 class SendFileDialog extends StatefulWidget {
   final Room room;
   final List<XFile> files;
@@ -75,6 +158,11 @@ class SendFileDialog extends StatefulWidget {
   final Event? replyTo;
   final String initialCaption;
   final FrozenAttachmentContext? composeContext;
+
+  /// The quality choice the preview opens with: true sends photos and
+  /// videos compressed ([MediaQuality]); false sends them as the original
+  /// file (the attach menu's "File" entry, MD-02).
+  final bool initialCompress;
 
   /// Checks the selection against the destination before anything is
   /// shown in the chat, e.g. a bridge's media limits for a merged chat's
@@ -101,6 +189,7 @@ class SendFileDialog extends StatefulWidget {
     this.replyTo,
     this.initialCaption = '',
     this.composeContext,
+    this.initialCompress = true,
     this.preflight,
     this.onAccepted,
     super.key,
@@ -110,59 +199,208 @@ class SendFileDialog extends StatefulWidget {
   SendFileDialogState createState() => SendFileDialogState();
 }
 
+enum _Kind { image, video, other }
+
+/// One picked item and its preview sources, created once (never in build).
+class _Item {
+  final XFile file;
+  final String? mimeType;
+  final _Kind kind;
+  final ImageProvider? image;
+  Future<Uint8List?>? videoFrame;
+
+  _Item(this.file, this.mimeType, this.kind, this.image);
+
+  factory _Item.of(XFile file) {
+    final mime =
+        file.mimeType ??
+        lookupMimeType(file.name) ??
+        (file.path.isEmpty ? null : lookupMimeType(file.path));
+    final kind = mime == null
+        ? _Kind.other
+        : mime.startsWith('image/')
+        ? _Kind.image
+        : mime.startsWith('video/')
+        ? _Kind.video
+        : _Kind.other;
+    return _Item(
+      file,
+      mime,
+      kind,
+      kind == _Kind.image ? XFileImage(file) : null,
+    );
+  }
+}
+
 class SendFileDialogState extends State<SendFileDialog> {
-  bool compress = true;
+  late bool compress = widget.initialCompress;
   bool _sending = false;
   int _accepted = 0;
   String? _problem;
-  late final _transactionIds = List.generate(
-    _files.length,
-    (_) => const Uuid().v4(),
-  );
+  int _page = 0;
+  final PageController _pages = PageController();
+  final FocusNode _captionFocus = FocusNode();
 
-  /// Images smaller than 20kb don't need compression.
+  /// One transaction per item; removing an item removes its own.
+  final List<String> _transactionIds = [];
+
+  /// Videos up to this size are sent as they are.
   static const int minSizeToCompress = 20 * 1000;
+
+  /// Long captions are allowed; a network that cannot carry one on media
+  /// gets it as its own message ([CaptionFollowUp]).
+  static const int maxCaptionLength = 4096;
 
   late final TextEditingController _labelTextController = TextEditingController(
     text: widget.initialCaption,
   );
 
-  /// Mutable working copy of [SendFileDialog.files]. Editing an image replaces
-  /// its entry with a new [XFile] whose bytes, mimetype and filename extension
-  /// all reflect the edit result (always PNG). Keeping bytes + mimetype in one
-  /// object avoids drift between the preview, the upload and the extension.
-  late final List<XFile> _files = List<XFile>.of(widget.files);
+  /// Mutable working copy of [SendFileDialog.files]. Editing an image
+  /// replaces its entry with a new [XFile] whose bytes, mimetype and
+  /// filename extension all reflect the edit result.
+  late final List<_Item> _items = [
+    for (final file in widget.files) _Item.of(file),
+  ];
+
+  /// Read once per selection change, never on a rebuild (MD-06).
+  late Future<int> _totalSize = _calcTotalSize();
+
+  List<XFile> get _files => [for (final item in _items) item.file];
+
+  bool get _locked => _sending || _accepted > 0;
+
+  bool get _hasMedia => _items.any((item) => item.kind != _Kind.other);
+
+  Future<int> _calcTotalSize() async {
+    final lengths = await Future.wait(_items.map((item) => item.file.length()));
+    return lengths.fold<int>(0, (sum, length) => sum + length);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _transactionIds.addAll(_items.map((_) => const Uuid().v4()));
+    _split = _captionNeedsSplit(_labelTextController.text.trim());
+    _labelTextController.addListener(_onCaptionChanged);
+  }
+
+  /// Whether the caption goes out as its own message (BR-04); the preview
+  /// rebuilds only when that changes, not per keystroke.
+  bool _split = false;
+
+  void _onCaptionChanged() {
+    final split = _captionNeedsSplit(_labelTextController.text.trim());
+    if (split != _split && mounted) setState(() => _split = split);
+  }
+
+  bool _captionNeedsSplit(String caption) {
+    if (caption.isEmpty || _items.isEmpty) return false;
+    final last = _items.last;
+    return CaptionFollowUp.needsSplit(
+      widget.room,
+      mimeType: _sendMimeType(last),
+      caption: caption,
+    );
+  }
+
+  /// The type the bridge sees for [item] with the current quality choice.
+  String _sendMimeType(_Item item) {
+    final mime = item.mimeType ?? 'application/octet-stream';
+    if (item.kind == _Kind.other || compress) return mime;
+    // The original as a file: the bridge checks it as a document.
+    return 'application/octet-stream';
+  }
 
   Future<void> _editImage(int index) async {
-    if (_sending || _accepted > 0) return;
+    if (_locked) return;
     Uint8List bytes;
     try {
-      bytes = await _files[index].readAsBytes();
+      bytes = await _items[index].file.readAsBytes();
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => _problem = 'This image could not be opened. Select it again.',
         );
+      }
       return;
     }
     if (!mounted) return;
-    final result = await showScaffoldDialog<Uint8List?>(
+    final result = await showScaffoldDialog<_EditedImage?>(
       context: context,
       builder: (_) => _ImageEditPage(bytes: bytes),
     );
     if (!mounted || result == null) return;
-    final original = _files[index];
+    final original = _items[index].file;
     final dot = original.name.lastIndexOf('.');
     final baseName = dot > 0 ? original.name.substring(0, dot) : original.name;
+    final name = '$baseName.${result.extension}';
     setState(() {
-      _files[index] = XFile.fromData(
-        result,
-        mimeType: 'image/png',
-        name: '$baseName.png',
-        path: '$baseName.png',
-        length: result.length,
+      _items[index] = _Item.of(
+        XFile.fromData(
+          result.bytes,
+          mimeType: result.mimeType,
+          name: name,
+          path: name,
+          length: result.bytes.length,
+        ),
       );
+      _totalSize = _calcTotalSize();
     });
+  }
+
+  void _remove(int index) {
+    if (_locked || index >= _items.length) return;
+    if (_items.length == 1) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _items.removeAt(index);
+      _transactionIds.removeAt(index);
+      _totalSize = _calcTotalSize();
+      _page = _page.clamp(0, _items.length - 1);
+    });
+    if (_pages.hasClients) _pages.jumpToPage(_page);
+    _onCaptionChanged();
+  }
+
+  void _goTo(int page) {
+    if (page < 0 || page >= _items.length || !_pages.hasClients) return;
+    final duration = NotionMotion.of(context, NotionMotion.medium);
+    if (duration == Duration.zero) {
+      _pages.jumpToPage(page);
+    } else {
+      _pages.animateToPage(
+        page,
+        duration: duration,
+        curve: NotionMotion.standard,
+      );
+    }
+  }
+
+  Future<Uint8List?> _videoFrame(_Item item) =>
+      item.videoFrame ??= _readVideoFrame(item.file);
+
+  static Future<Uint8List?> _readVideoFrame(XFile file) async {
+    if (!PlatformInfos.supportsVideoTranscode || file.path.isEmpty) {
+      return null;
+    }
+    String? framePath;
+    try {
+      framePath = await LightCompressor().getVideoThumbnail(
+        file.path,
+        quality: 70,
+      );
+      return await XFile(framePath).readAsBytes();
+    } catch (_) {
+      return null;
+    } finally {
+      if (framePath != null && framePath != file.path) {
+        try {
+          await cleanupRecordingOutput(ownedNativePath: framePath);
+        } catch (_) {}
+      }
+    }
   }
 
   /// Telegram/Messenger: the dialog closes as soon as every attachment has
@@ -196,51 +434,70 @@ class SendFileDialogState extends State<SendFileDialog> {
       if (!mounted) return;
       widget.composeContext?.validate();
       final maxUploadSize = clientConfig.mUploadSize ?? 100 * 1000 * 1000;
+      // Telegram: one caption under the album, on its newest item (an
+      // album only forms when the older items carry none). A network that
+      // drops or limits captions gets it as a text right after the media.
+      final split = _captionNeedsSplit(label);
+      Future<String>? lastAccepted;
 
-      for (var i = _accepted; i < _files.length; i++) {
+      for (var i = _accepted; i < _items.length; i++) {
         if (!mounted) return;
         widget.composeContext?.validate();
-        final xfile = _files[i];
-        final mimeType = xfile.mimeType ?? lookupMimeType(xfile.path);
-        final video =
-            PlatformInfos.isMobile &&
-            mimeType != null &&
-            mimeType.startsWith('video');
-        final bytes = await xfile.readAsBytes();
+        final item = _items[i];
+        final xfile = item.file;
+        final mimeType = item.mimeType;
+        final captioned = i == _items.length - 1 && label.isNotEmpty && !split;
+        // The size is known before anything is read (MD-05).
+        final size = await xfile.length();
         if (!mounted) return;
-        widget.composeContext?.validate();
+        final asDocument = !compress && item.kind != _Kind.other;
+        final transcode =
+            item.kind == _Kind.video &&
+            compress &&
+            PlatformInfos.supportsVideoTranscode &&
+            xfile.path.isNotEmpty;
+        if (!transcode && size > maxUploadSize) {
+          throw FileTooBigMatrixException(size, maxUploadSize);
+        }
         final MatrixFile file;
         OutgoingMediaPrepare? prepare;
-        if (video) {
-          file = MatrixVideoFile(
-            bytes: bytes,
+        Future<void> Function()? cancelPrepare;
+        if (transcode) {
+          // The bubble shows at once; the video is only read (or
+          // re-encoded) when its job runs, one video at a time.
+          file = PendingVideoFile(
             name: xfile.name,
             mimeType: mimeType,
+            declaredSize: size,
           );
-          final shrink = bytes.length > minSizeToCompress && compress;
-          // Thumbnail and compression run after the bubble is shown.
-          prepare = () async {
-            final thumbnail = await xfile.getVideoThumbnail();
-            final compressed = await xfile.getVideoInfo(compress: shrink);
-            if (compressed.bytes.length > maxUploadSize) {
-              throw FileTooBigMatrixException(
-                compressed.bytes.length,
-                maxUploadSize,
-              );
-            }
-            return (compressed, thumbnail);
-          };
+          final job = VideoPrepareJob();
+          final shrink = size > minSizeToCompress;
+          prepare = () => xfile.prepareVideo(
+            compress: shrink,
+            maxUploadSize: maxUploadSize,
+            job: job,
+          );
+          cancelPrepare = job.cancel;
         } else {
-          if (bytes.length > maxUploadSize) {
-            throw FileTooBigMatrixException(bytes.length, maxUploadSize);
-          }
-          file = await withImageSize(
-            MatrixFile(
+          final bytes = await xfile.readAsBytes();
+          if (!mounted) return;
+          if (asDocument) {
+            // Sent deliberately as a file: the original bytes, unchanged
+            // (its metadata included), as a document.
+            file = MatrixDocumentFile(
               bytes: bytes,
               name: xfile.name,
               mimeType: mimeType,
-            ).detectFileType,
-          );
+            );
+          } else {
+            file = await withImageSize(
+              MatrixFile(
+                bytes: bytes,
+                name: xfile.name,
+                mimeType: mimeType,
+              ).detectFileType,
+            );
+          }
         }
         if (!mounted) return;
         widget.composeContext?.validate();
@@ -249,12 +506,16 @@ class SendFileDialogState extends State<SendFileDialog> {
           file,
           txid: _transactionIds[i],
           inReplyTo: widget.replyTo,
-          shrinkImageMaxDimension: compress ? 1600 : null,
-          extraContent: label.isEmpty ? null : {'body': label},
+          shrinkImageMaxDimension: compress && file is MatrixImageFile
+              ? MediaQuality.photoMaxSide
+              : null,
+          extraContent: captioned ? {'body': label} : null,
           threadRootEventId: widget.threadRootEventId,
           threadLastEventId: widget.threadLastEventId,
           prepare: prepare,
+          cancelPrepare: cancelPrepare,
         );
+        lastAccepted = ticket.accepted;
         final onAccepted = widget.onAccepted;
         if (onAccepted != null) {
           unawaited(
@@ -265,6 +526,9 @@ class SendFileDialogState extends State<SendFileDialog> {
           );
         }
         if (mounted) setState(() => _accepted = i + 1);
+      }
+      if (split && label.isNotEmpty && lastAccepted != null) {
+        _sendCaptionAfter(lastAccepted, label);
       }
       if (mounted) {
         setState(() => _sending = false);
@@ -298,320 +562,778 @@ class SendFileDialogState extends State<SendFileDialog> {
     }
   }
 
-  Future<String> _calcCombinedFileSize() async {
-    final lengths = await Future.wait(_files.map((file) => file.length()));
-    return lengths.fold<double>(0, (p, length) => p + length).sizeString;
+  /// The caption as its own message once the media's send ended, so it
+  /// follows the media in the chat (Telegram, Instagram). It is not sent
+  /// when the user cancelled the media.
+  void _sendCaptionAfter(Future<String> media, String caption) {
+    final room = widget.room;
+    final thread = widget.threadRootEventId;
+    Future<void> send() => CaptionFollowUp.send(room, caption, threadId: thread)
+        .catchError((Object e) {
+          Logs().w('Caption could not be sent', e.runtimeType);
+        });
+    unawaited(
+      media.then<void>(
+        (_) => send(),
+        onError: (Object error) {
+          if (!OutgoingMedia.isDiscard(error)) return send();
+        },
+      ),
+    );
   }
 
   @override
   void dispose() {
     _labelTextController.dispose();
+    _pages.dispose();
+    _captionFocus.dispose();
     super.dispose();
+  }
+
+  void _close() {
+    if (_sending) return;
+    Navigator.of(context).pop();
+  }
+
+  /// Esc closes; ← / → page while the caption is not being edited.
+  KeyEventResult _pageKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.escape) {
+      _close();
+      return KeyEventResult.handled;
+    }
+    if (_captionFocus.hasFocus) return KeyEventResult.ignored;
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      _goTo(_page - 1);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _goTo(_page + 1);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _captionKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || !PlatformInfos.isDesktop) {
+      return KeyEventResult.ignored;
+    }
+    final enter =
+        event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (!enter || HardwareKeyboard.instance.isShiftPressed) {
+      return KeyEventResult.ignored;
+    }
+    unawaited(_send());
+    return KeyEventResult.handled;
+  }
+
+  String _title() {
+    if (_items.length > 1) return '${_page + 1} of ${_items.length}';
+    return switch (_items.single.kind) {
+      _Kind.image => 'Photo',
+      _Kind.video => 'Video',
+      _Kind.other => 'File',
+    };
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    var sendStr = L10n.of(context).sendFile;
-    final uniqueFileType = _files
-        .map((file) => file.mimeType ?? lookupMimeType(file.name))
-        .map((mimeType) => mimeType?.split('/').first)
-        .toSet()
-        .singleOrNull;
-
-    final fileName = _files.length == 1
-        ? _files.single.name
-        : L10n.of(context).countFiles(_files.length);
-    final fileTypes = _files
-        .map((file) => file.name.split('.').last)
-        .toSet()
-        .join(', ')
-        .toUpperCase();
-
-    if (uniqueFileType == 'image') {
-      if (_files.length == 1) {
-        sendStr = L10n.of(context).sendImage;
-      } else {
-        sendStr = L10n.of(context).sendImages(_files.length);
-      }
-    } else if (uniqueFileType == 'audio') {
-      sendStr = L10n.of(context).sendAudio;
-    } else if (uniqueFileType == 'video') {
-      sendStr = L10n.of(context).sendVideo;
-    }
-
-    final compressionSupported =
-        uniqueFileType != 'video' || PlatformInfos.isMobile;
-
-    return FutureBuilder<String>(
-      future: _calcCombinedFileSize(),
-      builder: (context, snapshot) {
-        final sizeString = snapshot.hasError
-            ? 'Size unavailable'
-            : snapshot.data ?? L10n.of(context).calculatingFileSize;
-
-        return PopScope(
-          canPop: !_sending,
-          child: AlertDialog.adaptive(
-            insetPadding: const EdgeInsets.all(NotionSpace.md),
-            title: Text(sendStr, style: NotionType.heading),
-            content: SizedBox(
-              width: 256,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: .min,
-                  children: [
-                    if (_accepted > 0)
-                      Text(
-                        '$_accepted of ${_files.length} attachments are already in the chat. Send again for the rest.',
-                      ),
-                    if (_problem != null)
-                      Semantics(
-                        liveRegion: true,
-                        child: Padding(
-                          padding: const EdgeInsets.only(
-                            bottom: NotionSpace.sm,
-                          ),
-                          child: Text(
-                            _problem!,
-                            style: TextStyle(color: theme.colorScheme.error),
+    final l10n = L10n.of(context);
+    final tokens = context.notion;
+    final current = _items[_page.clamp(0, _items.length - 1)];
+    return PopScope(
+      canPop: !_sending,
+      child: Focus(
+        autofocus: true,
+        onKeyEvent: _pageKey,
+        child: Scaffold(
+          backgroundColor: NotionMediaColors.viewer,
+          body: BackdropGroup(
+            child: Column(
+              children: [
+                _PreviewHeader(
+                  title: _title(),
+                  onClose: _sending ? null : _close,
+                  closeLabel: l10n.cancel,
+                  editLabel: l10n.editImage,
+                  onEdit: current.kind == _Kind.image && !_locked
+                      ? () => _editImage(_page)
+                      : null,
+                  removeLabel: l10n.remove,
+                  onRemove: _items.length > 1 && !_locked
+                      ? () => _remove(_page)
+                      : null,
+                ),
+                Expanded(
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: PageView.builder(
+                          controller: _pages,
+                          itemCount: _items.length,
+                          onPageChanged: (page) => setState(() => _page = page),
+                          itemBuilder: (context, i) => _PreviewPage(
+                            key: ObjectKey(_items[i]),
+                            item: _items[i],
+                            videoFrame: _items[i].kind == _Kind.video
+                                ? _videoFrame(_items[i])
+                                : null,
                           ),
                         ),
                       ),
-                    // Only a slow read (a long video) ever shows this; the
-                    // dialog closes once the bubbles are in the chat.
-                    if (_sending)
-                      const NotionDelayedReveal(
-                        child: LinearProgressIndicator(),
-                      ),
-                    const SizedBox(height: 12),
-                    if (uniqueFileType == 'image')
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 16.0),
-                        child: SizedBox(
-                          height: 256,
-                          child: Center(
-                            child: ListView.builder(
-                              shrinkWrap: true,
-                              itemCount: _files.length,
-                              scrollDirection: Axis.horizontal,
-                              itemBuilder: (context, i) => Padding(
-                                padding: const EdgeInsets.only(right: 8.0),
-                                child: Stack(
-                                  children: [
-                                    Material(
-                                      borderRadius: BorderRadius.circular(
-                                        AppConfig.borderRadius / 2,
-                                      ),
-                                      color: Colors.black,
-                                      clipBehavior: Clip.hardEdge,
-                                      child: FutureBuilder(
-                                        future: _files[i].readAsBytes(),
-                                        builder: (context, snapshot) {
-                                          final bytes = snapshot.data;
-                                          if (snapshot.error != null) {
-                                            Logs().w(
-                                              'Unable to preview image',
-                                              snapshot.error,
-                                              snapshot.stackTrace,
-                                            );
-                                            return const Center(
-                                              child: SizedBox(
-                                                width: 256,
-                                                height: 256,
-                                                child: Icon(
-                                                  Icons.broken_image_outlined,
-                                                  size: 64,
-                                                ),
-                                              ),
-                                            );
-                                          }
-                                          if (bytes == null) {
-                                            return const Center(
-                                              child:
-                                                  CircularProgressIndicator.adaptive(),
-                                            );
-                                          }
-                                          return Image.memory(
-                                            bytes,
-                                            height: 256,
-                                            width: _files.length == 1
-                                                ? 256 - 36
-                                                : null,
-                                            fit: BoxFit.contain,
-                                            errorBuilder: (context, e, s) {
-                                              Logs().w(
-                                                'Unable to preview image',
-                                                e,
-                                                s,
-                                              );
-                                              return const Center(
-                                                child: SizedBox(
-                                                  width: 256,
-                                                  height: 256,
-                                                  child: Icon(
-                                                    Icons.broken_image_outlined,
-                                                    size: 64,
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                          );
-                                        },
-                                      ),
-                                    ),
-                                    Positioned(
-                                      top: 4,
-                                      right: 4,
-                                      child: Material(
-                                        color: Colors.black54,
-                                        shape: const CircleBorder(),
-                                        child: IconButton(
-                                          tooltip: L10n.of(context).editImage,
-                                          icon: const Icon(
-                                            Icons.edit_outlined,
-                                            color: Colors.white,
-                                            size: 20,
-                                          ),
-                                          onPressed: _sending || _accepted > 0
-                                              ? null
-                                              : () => _editImage(i),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                      if (PlatformInfos.isDesktop && _items.length > 1) ...[
+                        if (_page > 0)
+                          Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: Padding(
+                              padding: const EdgeInsets.all(NotionSpace.md),
+                              child: NotionGlassPill(
+                                icon: Icons.chevron_left_rounded,
+                                tooltip: 'Previous',
+                                onPressed: () => _goTo(_page - 1),
                               ),
                             ),
                           ),
-                        ),
-                      ),
-                    if (uniqueFileType != 'image')
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 16.0),
-                        child: Row(
-                          children: [
-                            Icon(
-                              uniqueFileType == null
-                                  ? Icons.description_outlined
-                                  : uniqueFileType == 'video'
-                                  ? Icons.video_file_outlined
-                                  : uniqueFileType == 'audio'
-                                  ? Icons.audio_file_outlined
-                                  : Icons.description_outlined,
-                              size: 32,
+                        if (_page < _items.length - 1)
+                          Align(
+                            alignment: AlignmentDirectional.centerEnd,
+                            child: Padding(
+                              padding: const EdgeInsets.all(NotionSpace.md),
+                              child: NotionGlassPill(
+                                icon: Icons.chevron_right_rounded,
+                                tooltip: 'Next',
+                                onPressed: () => _goTo(_page + 1),
+                              ),
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                mainAxisSize: .min,
-                                crossAxisAlignment: .start,
-                                children: [
-                                  Text(
-                                    fileName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
+                NotionGlassBar(
+                  hairlineTop: true,
+                  child: SafeArea(
+                    top: false,
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: NotionSize.contentMaxWidth,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            NotionSpace.sm,
+                            NotionSpace.xs,
+                            NotionSpace.sm,
+                            NotionSpace.sm,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (_accepted > 0)
+                                _Notice(
+                                  '$_accepted of ${_items.length} attachments are already in the chat. Send again for the rest.',
+                                ),
+                              if (_problem != null)
+                                Semantics(
+                                  liveRegion: true,
+                                  child: _Notice(
+                                    _problem!,
+                                    color: tokens.colors.danger,
                                   ),
-                                  Text(
-                                    '$sizeString - $fileTypes',
-                                    style: theme.textTheme.labelSmall,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                ),
+                              if (_split) const _Notice(CaptionFollowUp.notice),
+                              if (_items.length > 1)
+                                _ThumbnailStrip(
+                                  items: _items,
+                                  selected: _page,
+                                  onSelect: _goTo,
+                                ),
+                              if (_hasMedia)
+                                FutureBuilder<int>(
+                                  future: _totalSize,
+                                  builder: (context, size) => _QualityChoice(
+                                    compress: compress,
+                                    originalSize: size.hasData
+                                        ? size.data!.toDouble().sizeString
+                                        : null,
+                                    onChanged: _locked
+                                        ? null
+                                        : (value) {
+                                            setState(() => compress = value);
+                                            _onCaptionChanged();
+                                          },
+                                  ),
+                                ),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Expanded(
+                                    child: Focus(
+                                      onKeyEvent: _captionKey,
+                                      child: _CaptionField(
+                                        controller: _labelTextController,
+                                        focusNode: _captionFocus,
+                                        readOnly: _locked,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: NotionSpace.xs),
+                                  _SendButton(
+                                    label: l10n.send,
+                                    busy: _sending,
+                                    onPressed: _sending ? null : _send,
                                   ),
                                 ],
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8.0),
-                      child: DialogTextField(
-                        controller: _labelTextController,
-                        readOnly: _sending || _accepted > 0,
-                        labelText: L10n.of(context).optionalMessage,
-                        minLines: 1,
-                        maxLines: 3,
-                        maxLength: 255,
-                        counterText: '',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Decodes an [XFile] for a preview without keeping its bytes: they are
+/// read when the image is first shown and released after the decode. Wrap
+/// it in a [ResizeImage] so only the displayed size is decoded (MD-06).
+class XFileImage extends ImageProvider<XFileImage> {
+  final XFile file;
+  const XFileImage(this.file);
+
+  @override
+  Future<XFileImage> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(XFileImage key, ImageDecoderCallback decode) =>
+      MultiFrameImageStreamCompleter(
+        codec: _load(decode),
+        scale: 1,
+        debugLabel: 'send-preview',
+      );
+
+  Future<ui.Codec> _load(ImageDecoderCallback decode) async {
+    final bytes = await file.readAsBytes();
+    return decode(await ui.ImmutableBuffer.fromUint8List(bytes));
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is XFileImage && identical(other.file, file);
+
+  @override
+  int get hashCode => identityHashCode(file);
+}
+
+class _PreviewHeader extends StatelessWidget {
+  final String title;
+  final VoidCallback? onClose, onEdit, onRemove;
+  final String closeLabel, editLabel, removeLabel;
+
+  const _PreviewHeader({
+    required this.title,
+    required this.onClose,
+    required this.closeLabel,
+    required this.onEdit,
+    required this.editLabel,
+    required this.onRemove,
+    required this.removeLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) => NotionGlassBar(
+    hairlineBottom: true,
+    child: SafeArea(
+      bottom: false,
+      child: SizedBox(
+        height: NotionSize.headerHeight,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xxs),
+          child: Row(
+            children: [
+              NotionIconButton(
+                icon: Icons.close_rounded,
+                label: closeLabel,
+                onPressed: onClose,
+              ),
+              Expanded(
+                child: NotionFadeThrough(
+                  child: Text(
+                    title,
+                    key: ValueKey(title),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.notion.typography.headline,
+                  ),
+                ),
+              ),
+              if (onEdit != null)
+                NotionIconButton(
+                  icon: Icons.edit_outlined,
+                  label: editLabel,
+                  onPressed: onEdit,
+                ),
+              if (onRemove != null)
+                NotionIconButton(
+                  icon: Icons.delete_outline_rounded,
+                  label: removeLabel,
+                  onPressed: onRemove,
+                ),
+              if (onEdit == null && onRemove == null)
+                const SizedBox(width: NotionSize.touchTarget),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _PreviewPage extends StatelessWidget {
+  final _Item item;
+  final Future<Uint8List?>? videoFrame;
+
+  const _PreviewPage({super.key, required this.item, this.videoFrame});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.all(NotionSpace.md),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final dpr = MediaQuery.devicePixelRatioOf(context);
+        final width = (constraints.maxWidth * dpr).ceil();
+        final height = (constraints.maxHeight * dpr).ceil();
+        final image = item.image;
+        if (image != null) {
+          return Center(
+            child: ClipRRect(
+              borderRadius: NotionRadius.mdAll,
+              child: Image(
+                image: ResizeImage(
+                  image,
+                  width: width,
+                  height: height,
+                  policy: ResizeImagePolicy.fit,
+                ),
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                errorBuilder: (context, error, _) =>
+                    _FileCard(item: item, broken: true),
+              ),
+            ),
+          );
+        }
+        final frame = videoFrame;
+        if (frame == null) return Center(child: _FileCard(item: item));
+        return FutureBuilder<Uint8List?>(
+          future: frame,
+          builder: (context, snapshot) {
+            final bytes = snapshot.data;
+            if (bytes == null) {
+              return Center(child: _FileCard(item: item));
+            }
+            return Center(
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  ClipRRect(
+                    borderRadius: NotionRadius.mdAll,
+                    child: Image(
+                      image: ResizeImage(
+                        MemoryImage(bytes),
+                        width: width,
+                        height: height,
+                        policy: ResizeImagePolicy.fit,
+                      ),
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  const DecoratedBox(
+                    decoration: ShapeDecoration(
+                      shape: CircleBorder(),
+                      color: NotionMediaColors.scrim,
+                    ),
+                    child: Padding(
+                      padding: EdgeInsets.all(NotionSpace.sm),
+                      child: Icon(
+                        Icons.play_arrow_rounded,
+                        color: NotionMediaColors.onScrim,
+                        size: NotionSize.iconLg,
                       ),
                     ),
-                    // Workaround for SwitchListTile.adaptive crashes in CupertinoDialog
-                    if ({'image', 'video'}.contains(uniqueFileType))
-                      Row(
-                        crossAxisAlignment: .center,
-                        children: [
-                          if ({
-                            TargetPlatform.iOS,
-                            TargetPlatform.macOS,
-                          }.contains(theme.platform))
-                            CupertinoSwitch(
-                              value: compressionSupported && compress,
-                              onChanged:
-                                  compressionSupported &&
-                                      !_sending &&
-                                      _accepted == 0
-                                  ? (v) => setState(() => compress = v)
-                                  : null,
-                            )
-                          else
-                            Switch.adaptive(
-                              value: compressionSupported && compress,
-                              onChanged:
-                                  compressionSupported &&
-                                      !_sending &&
-                                      _accepted == 0
-                                  ? (v) => setState(() => compress = v)
-                                  : null,
-                            ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              mainAxisSize: .min,
-                              crossAxisAlignment: .start,
-                              children: [
-                                Text(
-                                  L10n.of(context).compress,
-                                  style: theme.textTheme.titleMedium,
-                                  textAlign: TextAlign.left,
-                                ),
-                                if (!compress)
-                                  Text(
-                                    ' ($sizeString)',
-                                    style: theme.textTheme.labelSmall,
-                                  ),
-                                if (!compressionSupported)
-                                  Text(
-                                    L10n.of(context).notSupportedOnThisDevice,
-                                    style: theme.textTheme.labelSmall,
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    ),
+  );
+}
+
+/// A file (or an unreadable image) in the preview: icon, name, size, type.
+class _FileCard extends StatelessWidget {
+  final _Item item;
+  final bool broken;
+
+  const _FileCard({required this.item, this.broken = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.notion.colors;
+    final type = item.file.name.contains('.')
+        ? item.file.name.split('.').last.toUpperCase()
+        : (item.mimeType ?? '');
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: NotionSize.dialogMaxWidth),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: NotionRadius.lgAll,
+          border: Border.all(color: colors.border),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(NotionSpace.md),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                broken
+                    ? Icons.broken_image_outlined
+                    : switch (item.kind) {
+                        _Kind.video => Icons.video_file_outlined,
+                        _Kind.image => Icons.image_outlined,
+                        _Kind.other =>
+                          item.mimeType?.startsWith('audio/') ?? false
+                              ? Icons.audio_file_outlined
+                              : Icons.description_outlined,
+                      },
+                size: NotionSize.iconLg,
+                color: colors.textSecondary,
+              ),
+              const SizedBox(width: NotionSpace.sm),
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.file.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.notion.typography.body,
+                    ),
+                    FutureBuilder<int>(
+                      future: _lengthOf(item.file),
+                      builder: (context, size) => Text(
+                        [
+                          if (size.hasData) size.data!.toDouble().sizeString,
+                          if (type.isNotEmpty) type,
+                        ].join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.notion.typography.footnoteMuted,
                       ),
+                    ),
                   ],
                 ),
               ),
-            ),
-            actions: <Widget>[
-              AdaptiveDialogAction(
-                onPressed: _sending
-                    ? null
-                    : () => Navigator.of(context, rootNavigator: false).pop(),
-                child: Text(L10n.of(context).cancel),
-              ),
-              AdaptiveDialogAction(
-                onPressed: _sending ? null : _send,
-                child: Text(L10n.of(context).send),
-              ),
             ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
+
+  static final _lengths = Expando<Future<int>>();
+
+  /// Read once per file, not on every rebuild.
+  static Future<int> _lengthOf(XFile file) =>
+      _lengths[file] ??= file.length()..ignore();
+}
+
+class _ThumbnailStrip extends StatelessWidget {
+  final List<_Item> items;
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  const _ThumbnailStrip({
+    required this.items,
+    required this.selected,
+    required this.onSelect,
+  });
+
+  static const double _side = NotionSize.touchTarget + NotionSpace.xs;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.notion.colors;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final decode = (_side * dpr).ceil();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: NotionSpace.xs),
+      child: SizedBox(
+        height: _side,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: items.length,
+          separatorBuilder: (_, _) => const SizedBox(width: NotionSpace.xs),
+          itemBuilder: (context, i) {
+            final item = items[i];
+            final image = item.image;
+            final active = i == selected;
+            return Semantics(
+              button: true,
+              selected: active,
+              label: '${i + 1} of ${items.length}',
+              child: NotionPressable(
+                scale: NotionMotion.pressIcon,
+                onTap: () => onSelect(i),
+                child: AnimatedContainer(
+                  duration: NotionMotion.of(context, NotionMotion.quick),
+                  curve: NotionMotion.standard,
+                  width: _side,
+                  height: _side,
+                  decoration: BoxDecoration(
+                    borderRadius: NotionRadius.smAll,
+                    border: Border.all(
+                      color: active
+                          ? context.notion.palette.accentFill
+                          : colors.border,
+                      width: active ? 2 : 1,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: NotionRadius.smAll,
+                    child: image == null
+                        ? ColoredBox(
+                            color: colors.surface,
+                            child: Icon(
+                              item.kind == _Kind.video
+                                  ? Icons.videocam_outlined
+                                  : Icons.description_outlined,
+                              size: NotionSize.icon,
+                              color: colors.textSecondary,
+                            ),
+                          )
+                        : Image(
+                            image: ResizeImage(
+                              image,
+                              width: decode,
+                              height: decode,
+                              policy: ResizeImagePolicy.fit,
+                            ),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => ColoredBox(
+                              color: colors.surface,
+                              child: Icon(
+                                Icons.broken_image_outlined,
+                                size: NotionSize.icon,
+                                color: colors.textSecondary,
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// Compressed (the [MediaQuality] profile) or the original file, unchanged
+/// and sent as a document (Telegram's "Send as file").
+class _QualityChoice extends StatelessWidget {
+  final bool compress;
+  final String? originalSize;
+  final ValueChanged<bool>? onChanged;
+
+  const _QualityChoice({
+    required this.compress,
+    required this.originalSize,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final onChanged = this.onChanged;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: NotionSpace.xs),
+      child: Wrap(
+        spacing: NotionSpace.xs,
+        runSpacing: NotionSpace.xxs,
+        children: [
+          NotionGlassPill(
+            icon: Icons.photo_size_select_large_rounded,
+            label: 'Compressed',
+            tooltip: 'Smaller, without visible loss',
+            selected: compress,
+            onPressed: onChanged == null ? null : () => onChanged(true),
+          ),
+          NotionGlassPill(
+            icon: Icons.insert_drive_file_outlined,
+            label: originalSize == null
+                ? 'Original file'
+                : 'Original · $originalSize',
+            tooltip: 'Sent as a file, unchanged',
+            selected: !compress,
+            onPressed: onChanged == null ? null : () => onChanged(false),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CaptionField extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool readOnly;
+
+  const _CaptionField({
+    required this.controller,
+    required this.focusNode,
+    required this.readOnly,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.notion.colors;
+    const border = OutlineInputBorder(
+      borderRadius: NotionRadius.fieldAll,
+      borderSide: BorderSide.none,
+    );
+    return TextField(
+      controller: controller,
+      focusNode: focusNode,
+      readOnly: readOnly,
+      minLines: 1,
+      maxLines: 5,
+      maxLength: SendFileDialogState.maxCaptionLength,
+      maxLengthEnforcement: MaxLengthEnforcement.enforced,
+      keyboardType: TextInputType.multiline,
+      textCapitalization: TextCapitalization.sentences,
+      style: context.notion.typography.body,
+      decoration: InputDecoration(
+        hintText: 'Add a caption…',
+        counterText: '',
+        filled: true,
+        fillColor: colors.surface,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: NotionSpace.md,
+          vertical: NotionSpace.sm,
+        ),
+        border: border,
+        enabledBorder: border,
+        focusedBorder: border,
+      ),
+    );
+  }
+}
+
+class _SendButton extends StatelessWidget {
+  final String label;
+  final bool busy;
+  final VoidCallback? onPressed;
+
+  const _SendButton({
+    required this.label,
+    required this.busy,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.notion.palette;
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        label: label,
+        enabled: onPressed != null,
+        child: NotionPressable(
+          bounce: true,
+          enabled: onPressed != null,
+          child: Material(
+            color: palette.accentFill,
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onPressed,
+              child: SizedBox.square(
+                dimension: NotionSize.touchTarget,
+                child: Center(
+                  child: busy
+                      ? NotionDelayedReveal(
+                          placeholder: Icon(
+                            Icons.send_rounded,
+                            size: NotionSize.iconMd,
+                            color: palette.onAccentFill,
+                          ),
+                          child: SizedBox.square(
+                            dimension: NotionSize.iconMd,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: palette.onAccentFill,
+                            ),
+                          ),
+                        )
+                      : Icon(
+                          Icons.send_rounded,
+                          size: NotionSize.iconMd,
+                          color: palette.onAccentFill,
+                        ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Notice extends StatelessWidget {
+  final String text;
+  final Color? color;
+
+  const _Notice(this.text, {this.color});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: NotionSpace.xs),
+    child: Text(
+      text,
+      style: context.notion.typography.footnoteMuted.copyWith(color: color),
+    ),
+  );
+}
+
+/// The editor's result: an opaque edit as JPEG q92 (an edited 12 MP photo
+/// was a ~20 MB PNG, MD-20), a transparent one as PNG.
+class _EditedImage {
+  final Uint8List bytes;
+  final String mimeType;
+  const _EditedImage(this.bytes, this.mimeType);
+
+  String get extension => mimeType == 'image/jpeg' ? 'jpg' : 'png';
 }
 
 enum _EditMode { crop, draw }
@@ -620,8 +1342,9 @@ enum _EditMode { crop, draw }
 /// (quarter turns) and the drawn strokes are only composited into a single
 /// full-resolution bitmap when the user saves.
 ///
-/// Returns the edited image bytes (PNG) via [Navigator.pop], or null if the user
-/// cancelled or made no changes (in which case the original file is kept).
+/// Returns the edited image ([_EditedImage]: JPEG q92 when the source is
+/// opaque, PNG otherwise) via [Navigator.pop], or null if the user cancelled
+/// or made no changes (in which case the original file is kept).
 class _ImageEditPage extends StatefulWidget {
   final Uint8List bytes;
 
@@ -740,8 +1463,8 @@ class _ImageEditPageState extends State<_ImageEditPage> {
     return recorder.endRecording().toImage(image.width, image.height);
   }
 
-  /// Composites the current edits into a single full-resolution PNG.
-  Future<Uint8List?> _compose(ui.Image image) async {
+  /// Composites the current edits into a single full-resolution image.
+  Future<_EditedImage?> _compose(ui.Image image) async {
     // 1. Bake strokes onto the full-resolution image (only if there are any).
     var painted = image;
     if (_strokes.isNotEmpty) {
@@ -786,11 +1509,33 @@ class _ImageEditPageState extends State<_ImageEditPage> {
       staged.dispose();
     }
 
-    // 4. Encode to PNG.
-    final data = await output.toByteData(format: ui.ImageByteFormat.png);
-    output.dispose();
-    return data?.buffer.asUint8List();
+    // 4. Encode: an opaque photo as JPEG q92 (visually lossless, a tenth
+    //    of the PNG); transparency stays PNG.
+    try {
+      if (!photoHasAlpha(widget.bytes)) {
+        final rgba = await output.toByteData(
+          format: ui.ImageByteFormat.rawStraightRgba,
+        );
+        if (rgba != null) {
+          final (jpeg, _) = await encodeJpegRgba(
+            rgba.buffer.asUint8List(rgba.offsetInBytes, rgba.lengthInBytes),
+            output.width,
+            output.height,
+            quality: _editedJpegQuality,
+          );
+          return _EditedImage(jpeg, 'image/jpeg');
+        }
+      }
+      final data = await output.toByteData(format: ui.ImageByteFormat.png);
+      return data == null
+          ? null
+          : _EditedImage(data.buffer.asUint8List(), 'image/png');
+    } finally {
+      output.dispose();
+    }
   }
+
+  static const _editedJpegQuality = 92;
 
   Future<void> _save() async {
     if (_saving) return;

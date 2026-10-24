@@ -166,6 +166,20 @@ Future<MatrixFile> withImageSize(MatrixFile file) async {
   }
 }
 
+/// A photo or video sent deliberately as a file (the send preview's
+/// "Original"): an `m.file` document with the original bytes, whatever its
+/// mimetype, so receivers and bridges deliver it unchanged.
+class MatrixDocumentFile extends MatrixFile {
+  MatrixDocumentFile({
+    required super.bytes,
+    required super.name,
+    super.mimeType,
+  });
+
+  @override
+  String get msgType => MessageTypes.File;
+}
+
 /// The result of [OutgoingMedia.send]: the bubble is already visible.
 class OutgoingMediaTicket {
   final String transactionId;
@@ -185,6 +199,8 @@ class OutgoingMediaUnavailable implements Exception {
 }
 
 /// Work a file needs before its upload (video compression, a thumbnail).
+/// It may run again on Retry when its first run failed (the echo then has
+/// no bytes of its own, e.g. a video that is only read when prepared).
 typedef OutgoingMediaPrepare =
     Future<(MatrixFile, MatrixImageFile?)> Function();
 
@@ -224,6 +240,18 @@ abstract final class OutgoingMedia {
   static const maxHeldBytes = 256 * 1024 * 1024;
   static int _running = 0;
 
+  /// The preparation of each file until it was sent or deleted, so Retry
+  /// can prepare a file whose bytes were never stored (MD-05).
+  static final _prepares = <String, OutgoingMediaPrepare>{};
+
+  /// How to stop a running preparation (video compression), by job key.
+  static final _cancelPrepares = <String, Future<void> Function()>{};
+  static final _preparing = <String>{};
+
+  /// Transaction IDs the user cancelled while their job ran: the SDK stops
+  /// their upload and never sends the event (`Client.fileSendCancelled`).
+  static final _cancelled = <String>{};
+
   static String _roomKey(Room room) =>
       '${identityHashCode(room.client)}|${room.id}';
   static String _jobKey(Room room, String id) => '${_roomKey(room)}|$id';
@@ -253,8 +281,10 @@ abstract final class OutgoingMedia {
     int? shrinkImageMaxDimension,
     Map<String, dynamic>? extraContent,
     OutgoingMediaPrepare? prepare,
+    Future<void> Function()? cancelPrepare,
   }) async {
     final client = room.client;
+    client.fileSendCancelled = _cancelled.contains;
     final readUpToEventId = PersonalPrivacy.frozenReadCutoff(room);
     final id = txid ?? client.generateUniqueTransactionId();
     final key = _jobKey(room, id);
@@ -276,7 +306,12 @@ abstract final class OutgoingMedia {
     final at = DateTime.now();
     _failures.remove(id);
     _discarded.remove(key);
-    await OutgoingEcho.storeFile(room, _fileKey(id), file.bytes);
+    _cancelled.remove(id);
+    // A file only read when prepared (a video) has no bytes yet; the SDK
+    // stores the prepared copy itself when the upload starts.
+    if (file.bytes.isNotEmpty) {
+      await OutgoingEcho.storeFile(room, _fileKey(id), file.bytes);
+    }
     if (thumbnail != null) {
       await OutgoingEcho.storeFile(room, _thumbnailKey(id), thumbnail.bytes);
     }
@@ -307,19 +342,13 @@ abstract final class OutgoingMedia {
       rethrow;
     }
     _hold(room, key, file, thumbnail);
+    if (prepare != null) _prepares[key] = prepare;
+    if (cancelPrepare != null) _cancelPrepares[key] = cancelPrepare;
     final accepted = _enqueue(room, id, () async {
       var upload = file;
       var preview = thumbnail;
       if (prepare != null) {
-        try {
-          (upload, preview) = await prepare();
-        } on MatrixException {
-          // A deliberate refusal (e.g. the video is still too large) is
-          // told as such, not as "could not be prepared".
-          rethrow;
-        } catch (_) {
-          throw const _PrepareFailed();
-        }
+        (upload, preview) = await _runPrepare(key, prepare);
         preview ??= thumbnail;
         // Retry sends what was prepared (the SDK caches the same bytes).
         _hold(room, key, upload, preview);
@@ -378,6 +407,28 @@ abstract final class OutgoingMedia {
     }
   }
 
+  static Future<(MatrixFile, MatrixImageFile?)> _runPrepare(
+    String key,
+    OutgoingMediaPrepare prepare,
+  ) async {
+    _checkDiscarded(key);
+    _preparing.add(key);
+    try {
+      return await prepare();
+    } on MatrixException {
+      // A deliberate refusal (e.g. the video is still too large) is told
+      // as such, not as "could not be prepared".
+      rethrow;
+    } catch (_) {
+      if (_discarded.contains(key)) throw const _Discarded();
+      throw const _PrepareFailed();
+    } finally {
+      _preparing.remove(key);
+      // Deleted while it was prepared: nothing of it is uploaded.
+      _checkDiscarded(key);
+    }
+  }
+
   static Future<Future<String?> Function()> _retryTransport(
     Event event,
     String id,
@@ -396,11 +447,21 @@ abstract final class OutgoingMedia {
     final info = event.infoMap;
     final voice = event.content.containsKey('org.matrix.msc3245.voice');
     MatrixFile file;
-    final MatrixImageFile? thumbnail;
+    MatrixImageFile? thumbnail;
+    OutgoingMediaPrepare? rerun;
+    final cached = held == null
+        ? await OutgoingEcho.getFile(room, _fileKey(id))
+        : null;
     if (held != null) {
       (file, thumbnail) = held;
+    } else if ((cached == null || cached.isEmpty) && _prepares[key] != null) {
+      // Never prepared successfully (its bytes were never stored): the
+      // same preparation runs again.
+      rerun = _prepares[key];
+      file = _typedFile(event, Uint8List(0));
+      thumbnail = null;
     } else {
-      final bytes = await OutgoingEcho.getFile(room, _fileKey(id));
+      final bytes = cached;
       if (bytes == null || bytes.isEmpty) {
         throw const OutgoingMediaUnavailable();
       }
@@ -448,38 +509,62 @@ abstract final class OutgoingMedia {
     };
     final shrink = unsigned['shrink_image_max_dimension'];
     final thread = _thread(event.content);
-    return () => PersonalPrivacy.withFrozenRoundReadCutoff(
-      room,
-      unsigned['personal_read_cutoff'] as String?,
-      () => room.sendFileEvent(
-        file,
-        txid: id,
-        inReplyTo: reply,
-        thumbnail: thumbnail,
-        shrinkImageMaxDimension: shrink is int ? shrink : null,
-        extraContent: extra.isEmpty ? null : extra,
-        threadRootEventId: thread?.$1,
-        threadLastEventId: thread?.$2,
-      ),
-    );
+    return () async {
+      if (rerun != null) {
+        (file, thumbnail) = await _runPrepare(key, rerun);
+        _hold(room, key, file, thumbnail);
+      }
+      return PersonalPrivacy.withFrozenRoundReadCutoff(
+        room,
+        unsigned['personal_read_cutoff'] as String?,
+        () => room.sendFileEvent(
+          file,
+          txid: id,
+          inReplyTo: reply,
+          thumbnail: thumbnail,
+          shrinkImageMaxDimension: shrink is int ? shrink : null,
+          extraContent: extra.isEmpty ? null : extra,
+          threadRootEventId: thread?.$1,
+          threadLastEventId: thread?.$2,
+        ),
+      );
+    };
   }
 
-  /// The user deleted the unsent bubble of [event]: a job that has not
-  /// started its upload yet (queued, or waiting out a rate limit) never
-  /// sends it, and this device's copies of the file are dropped.
+  /// The user deleted the unsent bubble of [event], or cancelled its upload
+  /// with the "×" (Telegram): a queued job never starts, a running
+  /// preparation (video compression) is stopped, a running upload is
+  /// aborted and its message is never sent. This device's copies of the
+  /// file are dropped.
   static Future<void> discard(Event event) async {
     final room = event.room;
     final id = _idOf(event);
     final key = _jobKey(room, id);
     _failures.remove(id);
+    _prepares.remove(key);
     if (_jobs.containsKey(key)) {
       // The job drops the copies when it ends.
       _discarded.add(key);
+      _cancelled.add(id);
+      UploadProgress.abort(id);
+      final cancel = _cancelPrepares[key];
+      if (cancel != null && _preparing.contains(key)) {
+        try {
+          await cancel();
+        } catch (_) {
+          // The job still ends as discarded once the codec returns.
+        }
+      }
       return;
     }
+    _cancelPrepares.remove(key);
     _held.remove(key);
     await _forgetCopies(room, id);
   }
+
+  /// Whether [error] (of [OutgoingMediaTicket.accepted]) means the user
+  /// cancelled the send.
+  static bool isDiscard(Object error) => error is _Discarded;
 
   /// Whether the file of [content] is on the server already (the SDK wrote
   /// the final content into the echo before its last send failed).
@@ -517,7 +602,8 @@ abstract final class OutgoingMedia {
         mimeType: mimeType,
         duration: info.tryGet<int>('duration'),
       ),
-      _ => MatrixFile(bytes: bytes, name: name, mimeType: mimeType),
+      // A document stays a document on Retry, even with an image type.
+      _ => MatrixDocumentFile(bytes: bytes, name: name, mimeType: mimeType),
     };
   }
 
@@ -625,6 +711,8 @@ abstract final class OutgoingMedia {
           throw const _NotConfirmed();
         }
         _held.remove(key);
+        _prepares.remove(key);
+        _cancelPrepares.remove(key);
         // The SDK drops its copy after a full send; a resent event alone
         // leaves it.
         await _forgetCopies(room, id);
@@ -632,6 +720,8 @@ abstract final class OutgoingMedia {
       } on _Discarded {
         rethrow;
       } catch (error) {
+        // Cancelled by the user: the abort is not a failure.
+        if (_discarded.contains(key)) throw const _Discarded();
         // From here on the bubble offers Retry.
         if (identical(_jobs[key], job)) _jobs.remove(key);
         _failures[id] = describeFailure(error);
@@ -656,6 +746,9 @@ abstract final class OutgoingMedia {
         _stopped();
         if (_discarded.remove(key)) {
           _held.remove(key);
+          _prepares.remove(key);
+          _cancelPrepares.remove(key);
+          _cancelled.remove(id);
           await _forgetCopies(room, id);
         }
       }
