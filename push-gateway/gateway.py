@@ -501,6 +501,14 @@ class OAuthRequest:
             raise TransportError("OAuth transport failed") from None
 
 
+COUNTS_COLLAPSE_KEY = "counts"
+
+
+def is_count_only(data: dict[str, str]) -> bool:
+    """A read-state/badge update: no event to show and no reminder wake."""
+    return not data.get("event_id") and "personal_wake" not in data
+
+
 class FcmPublisher:
     def __init__(self, config: Config):
         from google.oauth2 import service_account
@@ -524,8 +532,14 @@ class FcmPublisher:
             headers = {"Content-Type": "application/json"}
             with self.auth_lock:
                 self.credentials.before_request(self.auth_request, "POST", url, headers)
-            body = {"message": {"token": token, "data": data,
-                "android": {"priority": priority, "ttl": "3600s", "restricted_package_name": APP_ID}}}
+            android = {"priority": priority, "ttl": "3600s", "restricted_package_name": APP_ID}
+            if is_count_only(data):
+                # FCM keeps only the newest message per collapse key while the
+                # phone is idle or offline, so a Doze window delivers one count
+                # update instead of every queued one. Message pushes and
+                # reminder wakes stay non-collapsible.
+                android["collapse_key"] = COUNTS_COLLAPSE_KEY
+            body = {"message": {"token": token, "data": data, "android": android}}
             status, response_headers, response_body = http_request(url, method="POST",
                 body=json.dumps(body, separators=(",", ":")).encode(), headers=headers, timeout=self.timeout)
             return provider_result(status, response_body, response_headers.get("Retry-After"))

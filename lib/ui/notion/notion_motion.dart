@@ -239,7 +239,8 @@ abstract final class NotionMotion {
           .platformDispatcher
           .accessibilityFeatures
           .reduceMotion ||
-      !NotionActivity.isActive(context);
+      !NotionActivity.isActive(context) ||
+      NotionActivity.isPowerSaving(context);
 
   /// Completes once the route that hosts [context], and every page route
   /// around it (a nested navigator's shell sliding in), has finished its

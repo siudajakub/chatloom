@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/utils/platform_infos.dart';
+import 'package:flutter/foundation.dart';
 
 /// Native players can acknowledge play before rendering a frame, and a seek
 /// can leave a positive position while paused. Played intent needs new progress
@@ -53,6 +55,16 @@ class RoundContinuationToken {
 /// A permit must be checked after asynchronous preparation and before play().
 class RoundPlaybackCoordinator {
   static final shared = RoundPlaybackCoordinator();
+
+  /// Whether a hidden window may keep voice playing on this platform: macOS
+  /// sends `hidden` for a covered, minimised or closed window, where desktop
+  /// messengers keep audio going (MAC-04). Phones pause it.
+  static bool get keepsVoiceWhenHidden =>
+      debugKeepsVoiceWhenHidden ?? PlatformInfos.isMacOS;
+
+  /// Overrides [keepsVoiceWhenHidden] (tests).
+  @visibleForTesting
+  static bool? debugKeepsVoiceWhenHidden;
   final Set<RoundPlaybackHandle> _players = {};
   Future<void> _queue = Future<void>.value();
   RoundPlaybackHandle? _audible;
@@ -98,13 +110,18 @@ class RoundPlaybackCoordinator {
 
   /// [retain] pauses a player and keeps its position when the app goes to
   /// the background without a lock ([stopAll] with `retain: true`); players
-  /// without it are stopped as on lock.
+  /// without it are stopped as on lock. [keepWhileHidden] marks audio-only
+  /// playback (voice notes) that keeps playing while a desktop window is
+  /// hidden without a lock ([stopAll] with `spareHidden: true`, MAC-04).
   RoundPlaybackHandle register({
     required Future<void> Function() pause,
     required Future<void> Function() stop,
     Future<void> Function()? retain,
+    bool keepWhileHidden = false,
   }) {
-    final handle = RoundPlaybackHandle._(this, pause, stop).._retain = retain;
+    final handle = RoundPlaybackHandle._(this, pause, stop)
+      .._retain = retain
+      .._keepWhileHidden = keepWhileHidden;
     _players.add(handle);
     return handle;
   }
@@ -154,16 +171,40 @@ class RoundPlaybackCoordinator {
   /// With [retain] (background without a lock) players registered with
   /// `retain` only pause and keep their position; every other one stops.
   /// Nothing resumes by itself either way.
-  Future<void> stopAll({bool suspend = true, bool retain = false}) {
+  ///
+  /// [spareHidden] (a desktop window hidden without a lock, MAC-04) leaves
+  /// players registered with `keepWhileHidden` untouched: an audible one
+  /// keeps its permit and its continuation (the next voice note), and the
+  /// coordinator is not suspended, so that queue can go on. Every other
+  /// player stops or pauses as above.
+  Future<void> stopAll({
+    bool suspend = true,
+    bool retain = false,
+    bool spareHidden = false,
+  }) {
+    final previous = _audible;
+    final keep =
+        spareHidden &&
+        previous != null &&
+        previous._keepWhileHidden &&
+        !previous._closed &&
+        previous.isCurrent;
     ++_generation;
-    _suspended = suspend;
-    _audible = null;
-    _cancelContinuation();
+    if (!spareHidden) _suspended = suspend;
+    if (keep) {
+      // Same player, new generation: pending downloads of the others are
+      // invalidated while the spared one stays current.
+      previous._permit = _generation;
+    } else {
+      _audible = null;
+      _cancelContinuation();
+    }
     return _serial(() async {
       Object? firstError;
       StackTrace? firstStack;
       for (final player in List<RoundPlaybackHandle>.from(_players)) {
         if (player._closed) continue;
+        if (spareHidden && player._keepWhileHidden) continue;
         try {
           final keep = retain ? player._retain : null;
           await (keep ?? player._stop)();
@@ -198,6 +239,7 @@ class RoundPlaybackHandle {
   final RoundPlaybackCoordinator _coordinator;
   Future<void> Function() _pause, _stop;
   Future<void> Function()? _retain;
+  bool _keepWhileHidden = false;
   int _permit = -1;
   bool _closed = false;
   RoundPlaybackHandle._(this._coordinator, this._pause, this._stop);

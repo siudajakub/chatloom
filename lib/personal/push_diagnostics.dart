@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// What a single push wake turned into. Names are stable: they are stored and
@@ -139,6 +140,51 @@ PushKind pushKindOf(Map<String, Object?> data, {bool test = false}) {
       : PushKind.countOnly;
 }
 
+/// How long the process the push started took to get ready (BP-10): from
+/// `main` to `BackgroundPush.ready` on the detached (background-fetch)
+/// start. The next push recorded within [claimWindow] is marked cold with
+/// this number; a push handled by an app that was already running is warm.
+abstract final class PushStartupTiming {
+  static final Stopwatch _sinceMain = Stopwatch();
+  static int? _coldMs;
+  static DateTime? _readyAt;
+
+  /// A cold start's push is recorded within this time after ready.
+  static const claimWindow = Duration(minutes: 1);
+
+  /// First thing in `main`.
+  static void mainStarted() => _sinceMain
+    ..reset()
+    ..start();
+
+  /// The detached start is ready to handle the push that woke it.
+  static void detachedReady({DateTime? now}) {
+    if (!_sinceMain.isRunning) return;
+    _coldMs = _sinceMain.elapsedMilliseconds;
+    _readyAt = now ?? DateTime.now();
+  }
+
+  /// The pending cold start, once; null for a warm push.
+  static int? takeCold({DateTime? now}) {
+    final ms = _coldMs;
+    final readyAt = _readyAt;
+    _coldMs = null;
+    _readyAt = null;
+    if (ms == null || readyAt == null) return null;
+    final age = (now ?? DateTime.now()).difference(readyAt);
+    return age.isNegative || age > claimWindow ? null : ms;
+  }
+
+  @visibleForTesting
+  static void debugReset() {
+    _sinceMain
+      ..stop()
+      ..reset();
+    _coldMs = null;
+    _readyAt = null;
+  }
+}
+
 class PushDiagnosticsEntry {
   final DateTime at;
   final PushKind kind;
@@ -146,13 +192,20 @@ class PushDiagnosticsEntry {
   final String? errorType;
   final int? elapsedMs;
 
+  /// Milliseconds from process start to ready when this push started the
+  /// app (cold); null when the app was already running (warm).
+  final int? startupMs;
+
   const PushDiagnosticsEntry({
     required this.at,
     required this.kind,
     required this.outcome,
     this.errorType,
     this.elapsedMs,
+    this.startupMs,
   });
+
+  bool get cold => startupMs != null;
 
   Map<String, Object?> toJson() => {
     'at': at.toUtc().millisecondsSinceEpoch,
@@ -160,6 +213,7 @@ class PushDiagnosticsEntry {
     'outcome': outcome.name,
     if (errorType != null) 'error': errorType,
     if (elapsedMs != null) 'ms': elapsedMs,
+    if (startupMs != null) 'coldMs': startupMs,
   };
 
   static PushDiagnosticsEntry? fromJson(Object? json) {
@@ -170,12 +224,14 @@ class PushDiagnosticsEntry {
     if (at is! int || kind.isEmpty || outcome.isEmpty) return null;
     final error = json['error'];
     final ms = json['ms'];
+    final coldMs = json['coldMs'];
     return PushDiagnosticsEntry(
       at: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
       kind: kind.first,
       outcome: outcome.first,
       errorType: error is String ? error : null,
       elapsedMs: ms is int ? ms : null,
+      startupMs: coldMs is int && coldMs >= 0 ? coldMs : null,
     );
   }
 }
@@ -205,6 +261,20 @@ class PushDiagnosticsSnapshot {
   /// The newest push handled with [outcome] among [recent], if any.
   PushDiagnosticsEntry? lastWith(Set<PushOutcome> outcomes) =>
       recent.where((entry) => outcomes.contains(entry.outcome)).firstOrNull;
+
+  /// Recent pushes that started the app.
+  Iterable<PushDiagnosticsEntry> get coldStarts =>
+      recent.where((entry) => entry.cold);
+
+  /// Median start-up time of the recent cold starts, or null.
+  int? get medianColdStartupMs {
+    final values = [for (final entry in coldStarts) entry.startupMs!]..sort();
+    if (values.isEmpty) return null;
+    final middle = values.length ~/ 2;
+    return values.length.isOdd
+        ? values[middle]
+        : ((values[middle - 1] + values[middle]) / 2).round();
+  }
 }
 
 /// Failure-tolerant, content-free record of push handling on this device.
@@ -250,22 +320,27 @@ abstract final class PushDiagnostics {
     Duration? elapsed,
     Future<SharedPreferences> Function()? store,
     DateTime? now,
-  }) => _update(store, (state) {
-    final entry = PushDiagnosticsEntry(
-      at: (now ?? DateTime.now()).toUtc(),
-      kind: kind,
-      outcome: outcome,
-      errorType: error == null ? null : errorType(error),
-      elapsedMs: elapsed?.inMilliseconds,
-    );
-    _bump(state, outcome.name);
-    state['last'] = entry.toJson();
-    final recent = [
-      entry.toJson(),
-      ...(state['recent'] is List ? state['recent'] as List : const []),
-    ];
-    state['recent'] = recent.take(maxRecent).toList();
-  });
+  }) {
+    final cold = PushStartupTiming.takeCold(now: now);
+    return _update(store, (state) {
+      final entry = PushDiagnosticsEntry(
+        at: (now ?? DateTime.now()).toUtc(),
+        kind: kind,
+        outcome: outcome,
+        errorType: error == null ? null : errorType(error),
+        elapsedMs: elapsed?.inMilliseconds,
+        startupMs: cold,
+      );
+      _bump(state, outcome.name);
+      if (cold != null) _bump(state, 'start.cold');
+      state['last'] = entry.toJson();
+      final recent = [
+        entry.toJson(),
+        ...(state['recent'] is List ? state['recent'] as List : const []),
+      ];
+      state['recent'] = recent.take(maxRecent).toList();
+    });
+  }
 
   /// Remembers the outcome of the latest attempt of a setup [step]. Survives
   /// restarts so the page can tell which step failed in an earlier process.
@@ -457,9 +532,16 @@ abstract final class PushDiagnostics {
           '  ${entry.at.toIso8601String()} ${entry.kind.name} '
           '${entry.outcome.name}'
           '${entry.errorType == null ? '' : ' ${entry.errorType}'}'
-          '${entry.elapsedMs == null ? '' : ' ${entry.elapsedMs}ms'}',
+          '${entry.elapsedMs == null ? '' : ' ${entry.elapsedMs}ms'}'
+          '${entry.startupMs == null ? '' : ' cold ${entry.startupMs}ms'}',
         );
       }
+      final median = snapshot.medianColdStartupMs;
+      buffer.writeln(
+        'Cold starts: ${snapshot.coldStarts.length} of '
+        '${snapshot.recent.length}'
+        '${median == null ? '' : ', median $median ms'}',
+      );
     }
     return buffer.toString();
   }

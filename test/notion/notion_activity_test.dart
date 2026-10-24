@@ -121,4 +121,46 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: _Probe(seen)));
     expect(seen.last, (true, false));
   });
+
+  testWidgets('power saving: lite mode reduces motion and turns glass off '
+      'without stopping tickers or remounting the app', (tester) async {
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    final saving = ValueNotifier(false);
+    addTearDown(saving.dispose);
+    final seen = <(bool, bool)>[];
+    final glass = <bool>[];
+    final key = GlobalKey();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: NotionTheme.build(Brightness.dark),
+        builder: (context, app) =>
+            NotionActivity(powerSaving: saving, child: app!),
+        home: Scaffold(
+          body: Builder(
+            key: key,
+            builder: (context) {
+              glass.add(
+                NotionGlassScope.modeOf(context) == NotionGlassMode.off,
+              );
+              return _Probe(seen);
+            },
+          ),
+        ),
+      ),
+    );
+    final element = key.currentContext;
+    expect(seen.last, (true, false));
+    expect(glass.last, isFalse);
+
+    saving.value = true;
+    await tester.pump();
+    expect(seen.last, (true, true), reason: 'tickers stay on, motion reduced');
+    expect(glass.last, isTrue, reason: 'opaque glass tint');
+    expect(identical(key.currentContext, element), isTrue);
+
+    saving.value = false;
+    await tester.pump();
+    expect(seen.last, (true, false));
+    expect(glass.last, isFalse);
+  });
 }

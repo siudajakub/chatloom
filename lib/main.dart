@@ -13,6 +13,7 @@ import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/stale_recordings.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/push_diagnostics.dart';
 import 'package:chatloom/utils/background_startup_recovery.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/error_reporter.dart';
@@ -43,6 +44,7 @@ bool _vodozemacInitialized = false;
 bool isIntegrationTest = false;
 
 void main(List<String> args) => runZonedGuarded(() async {
+  PushStartupTiming.mainStarted();
   PersonalPerformanceProbe.startupPhase('main');
   // Forward Flutter errors to global error reporter
   FlutterError.onError = (details) =>
@@ -148,6 +150,8 @@ void main(List<String> args) => runZonedGuarded(() async {
       final backgroundPush = BackgroundPush.clientOnly(clients);
       try {
         await backgroundPush.ready.timeout(const Duration(seconds: 30));
+        // The push that woke the process is recorded as a cold start (BP-10).
+        PushStartupTiming.detachedReady();
       } catch (error, stack) {
         backgroundPush.forgetClients(clients);
         ErrorReporter.onFlutterError(error, stack);

@@ -4,6 +4,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import 'notion_glass.dart';
+
 /// Stops decorative animation app-wide while the user is not looking at the
 /// app (PF-08): another app has focus (macOS window unfocused, Android
 /// notification shade or system dialog, the other half of split screen), or
@@ -22,15 +24,31 @@ import 'package:flutter/widgets.dart';
 /// or trackpad, which macOS delivers without focus) re-enables tickers for
 /// [pointerGrace], so flings and overscroll settle normally.
 ///
+/// With [powerSaving] on (Android Battery Saver, macOS Low Power Mode; see
+/// `PowerSaving`) the app runs in a lite mode, like Telegram's power saver
+/// (BP-08): [NotionMotion.reduced] is true, so content loops (Lottie
+/// stickers, inline GIF videos) rest on a static frame and one-shot motion
+/// shows its end state, and glass below falls back to its opaque tint
+/// (`NotionGlassMode.off`). Tickers keep running, so scrolling, flings and
+/// progress stay live.
+///
 /// Mount once above the navigator (`MaterialApp.builder`).
 class NotionActivity extends StatefulWidget {
-  const NotionActivity({super.key, required this.child, this.windowVisible});
+  const NotionActivity({
+    super.key,
+    required this.child,
+    this.windowVisible,
+    this.powerSaving,
+  });
 
   final Widget child;
 
   /// Whether the native window is on screen (macOS occlusion/minimise);
   /// null where the lifecycle alone decides.
   final ValueListenable<bool>? windowVisible;
+
+  /// Whether the system saves power; null where it is not reported.
+  final ValueListenable<bool>? powerSaving;
 
   /// How long pointer activity in an inactive window keeps animation on.
   static const pointerGrace = Duration(seconds: 3);
@@ -42,6 +60,14 @@ class NotionActivity extends StatefulWidget {
           .dependOnInheritedWidgetOfExactType<_NotionActivityScope>()
           ?.active ??
       true;
+
+  /// Whether the system power saving mode asks for the lite mode. False
+  /// without a [NotionActivity] above [context].
+  static bool isPowerSaving(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<_NotionActivityScope>()
+          ?.lite ??
+      false;
 
   @override
   State<NotionActivity> createState() => _NotionActivityState();
@@ -59,6 +85,7 @@ class _NotionActivityState extends State<NotionActivity> {
     _state = WidgetsBinding.instance.lifecycleState;
     _lifecycle = AppLifecycleListener(onStateChange: _onState);
     widget.windowVisible?.addListener(_changed);
+    widget.powerSaving?.addListener(_changed);
   }
 
   @override
@@ -68,12 +95,17 @@ class _NotionActivityState extends State<NotionActivity> {
       oldWidget.windowVisible?.removeListener(_changed);
       widget.windowVisible?.addListener(_changed);
     }
+    if (oldWidget.powerSaving != widget.powerSaving) {
+      oldWidget.powerSaving?.removeListener(_changed);
+      widget.powerSaving?.addListener(_changed);
+    }
   }
 
   @override
   void dispose() {
     _pointerTimer?.cancel();
     widget.windowVisible?.removeListener(_changed);
+    widget.powerSaving?.removeListener(_changed);
     _lifecycle.dispose();
     super.dispose();
   }
@@ -101,6 +133,8 @@ class _NotionActivityState extends State<NotionActivity> {
   @override
   Widget build(BuildContext context) {
     final active = _foreground || _pointer;
+    final lite = widget.powerSaving?.value ?? false;
+    final glass = NotionGlassScope.modeOf(context);
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: _onPointer,
@@ -109,18 +143,32 @@ class _NotionActivityState extends State<NotionActivity> {
       onPointerPanZoomUpdate: _onPointer,
       child: TickerMode(
         enabled: active,
-        child: _NotionActivityScope(active: active, child: widget.child),
+        child: _NotionActivityScope(
+          active: active,
+          lite: lite,
+          // Always mounted (a toggle never remounts the app); off only in
+          // the lite mode, otherwise whatever an ancestor chose.
+          child: NotionGlassScope(
+            mode: lite ? NotionGlassMode.off : glass,
+            child: widget.child,
+          ),
+        ),
       ),
     );
   }
 }
 
 class _NotionActivityScope extends InheritedWidget {
-  const _NotionActivityScope({required this.active, required super.child});
+  const _NotionActivityScope({
+    required this.active,
+    required this.lite,
+    required super.child,
+  });
 
   final bool active;
+  final bool lite;
 
   @override
   bool updateShouldNotify(_NotionActivityScope oldWidget) =>
-      active != oldWidget.active;
+      active != oldWidget.active || lite != oldWidget.lite;
 }

@@ -110,4 +110,79 @@ void main() {
     expect(catchUp.run(client), isNull);
     expect(syncs, 0);
   });
+
+  group('count-only pushes (BP-06a)', () {
+    test('two count pushes 2 s apart with a matching count sync once', () {
+      fakeAsync((async) {
+        final client = _Client();
+        var syncs = 0;
+        var local = 3;
+        final counts = PushCountSync(
+          clock: () => DateTime.utc(2026).add(async.elapsed),
+          sync: (_) async {
+            syncs++;
+            local = 2; // the sync brought the read state from the Mac
+          },
+          localUnread: (_) => local,
+        );
+        bool? first, second;
+        counts.run(client, unread: 2).then((value) => first = value);
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 2));
+        counts.run(client, unread: 2).then((value) => second = value);
+        async.flushMicrotasks();
+        expect(syncs, 1);
+        expect(first, isTrue);
+        expect(second, isFalse, reason: 'local state already matches');
+      });
+    });
+
+    test('a different count within the window still syncs', () {
+      fakeAsync((async) {
+        final client = _Client();
+        var syncs = 0;
+        final counts = PushCountSync(
+          clock: () => DateTime.utc(2026).add(async.elapsed),
+          sync: (_) async => syncs++,
+          localUnread: (_) => 5,
+        );
+        counts.run(client, unread: 4);
+        async.elapse(const Duration(seconds: 3));
+        counts.run(client, unread: 3);
+        async.flushMicrotasks();
+        expect(syncs, 2, reason: 'another chat was read meanwhile');
+        // Without a count, the window alone decides.
+        async.elapse(const Duration(seconds: 3));
+        counts.run(client, unread: null);
+        async.flushMicrotasks();
+        expect(syncs, 2);
+        async.elapse(const Duration(seconds: 10));
+        counts.run(client, unread: null);
+        async.flushMicrotasks();
+        expect(syncs, 3);
+      });
+    });
+
+    test('a running sync is joined; a failure never throws', () {
+      fakeAsync((async) {
+        final client = _Client();
+        var syncs = 0;
+        final counts = PushCountSync(
+          clock: () => DateTime.utc(2026).add(async.elapsed),
+          sync: (_) async {
+            syncs++;
+            await Future<void>.delayed(const Duration(seconds: 1));
+            throw StateError('synthetic offline');
+          },
+          localUnread: (_) => 0,
+        );
+        var done = 0;
+        counts.run(client, unread: 1).then((_) => done++);
+        counts.run(client, unread: 1).then((_) => done++);
+        async.elapse(const Duration(seconds: 2));
+        expect(syncs, 1);
+        expect(done, 2);
+      });
+    });
+  });
 }

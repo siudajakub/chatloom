@@ -131,9 +131,15 @@ class AppLockController extends ChangeNotifier with WidgetsBindingObserver {
       case AppLifecycleState.detached:
         // Background: voice pauses and keeps its position, everything else
         // stops; a lock (below) stops voice too. Nothing resumes by itself.
+        // A Mac window that is hidden (closed, minimised, covered, another
+        // Space) without a lock keeps a voice note playing, like desktop
+        // messengers (MAC-04); videos and rounds still stop.
         unawaited(
           RoundPlaybackCoordinator.shared
-              .stopAll(retain: state != AppLifecycleState.detached)
+              .stopAll(
+                retain: state != AppLifecycleState.detached,
+                spareHidden: sparesVoiceWhenHidden(state),
+              )
               .catchError((Object _) {}),
         );
         unawaited(
@@ -150,6 +156,15 @@ class AppLockController extends ChangeNotifier with WidgetsBindingObserver {
       unawaited(unlockWithBiometrics());
     }
   }
+
+  /// Whether [state] keeps voice playing: a hidden desktop window while no
+  /// lock is configured (a configured lock locks on hidden and stops it).
+  @visibleForTesting
+  bool sparesVoiceWhenHidden(AppLifecycleState state) =>
+      state == AppLifecycleState.hidden &&
+      RoundPlaybackCoordinator.keepsVoiceWhenHidden &&
+      !isActive &&
+      !_isLocked;
 
   Future<void> changeUseBiometrics(bool useBiometrics) async {
     await personalSecureStorage.write(

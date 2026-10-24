@@ -61,7 +61,11 @@ class _PushClient extends Client {
   bool logged;
   Future<Event?> Function()? fetch;
   int fetches = 0;
+  int syncs = 0;
   bool? returnNullIfSeen;
+
+  @override
+  Future<void> oneShotSync({Duration? timeout}) async => syncs++;
 
   @override
   bool isLogged() => logged;
@@ -122,8 +126,10 @@ class _Notifications implements FlutterLocalNotificationsPlugin {
     cancelled.add(id);
   }
 
+  final active = <ActiveNotification>[];
+
   @override
-  Future<List<ActiveNotification>> getActiveNotifications() async => [];
+  Future<List<ActiveNotification>> getActiveNotifications() async => active;
 
   @override
   T? resolvePlatformSpecificImplementation<
@@ -530,6 +536,39 @@ void main() {
       expect(shown.body, 'Synthetic-peer: Synthetic preview text');
     },
   );
+
+  test('count-only pushes in a burst sync once and still clear read chats '
+      '(BP-06a)', () async {
+    final f = fixture();
+    final other = Room(
+      id: _secondRoomId,
+      client: f.client,
+      notificationCount: 1,
+    );
+    f.client.rooms.add(other);
+    final read = messageNotificationId('synthetic-account', _roomId);
+    Future<void> countPush() async {
+      f.plugin.active
+        ..clear()
+        ..add(ActiveNotification(id: read, groupKey: 'synthetic-account'));
+      expect(
+        await pushHelper(
+          PushNotification(
+            counts: const PushNotificationCounts(unread: 1),
+            devices: const [],
+          ),
+          clients: [f.client],
+          flutterLocalNotificationsPlugin: f.plugin,
+        ),
+        PushOutcome.cleared,
+      );
+    }
+
+    await countPush();
+    await countPush();
+    expect(f.client.syncs, 1, reason: 'the second count matches local state');
+    expect(f.plugin.cancelled, [read, read]);
+  });
 
   group('one notification per merged person', () {
     test('messages from both networks of a person replace one notification '

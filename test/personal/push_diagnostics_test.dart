@@ -15,6 +15,41 @@ void main() {
     await PushDiagnostics.reset();
   });
 
+  test('a push that started the app is recorded cold with its start-up '
+      'time, once; later pushes are warm (BP-10)', () async {
+    PushStartupTiming.debugReset();
+    addTearDown(PushStartupTiming.debugReset);
+    final at = DateTime.utc(2026, 10, 23, 7);
+    PushStartupTiming.mainStarted();
+    PushStartupTiming.detachedReady(now: at);
+    await PushDiagnostics.record(
+      PushKind.countOnly,
+      PushOutcome.cleared,
+      now: at.add(const Duration(seconds: 2)),
+    );
+    await PushDiagnostics.record(
+      PushKind.message,
+      PushOutcome.shown,
+      now: at.add(const Duration(seconds: 3)),
+    );
+    // A ready that nobody claims in time is not attributed to a later push.
+    PushStartupTiming.detachedReady(now: at);
+    await PushDiagnostics.record(
+      PushKind.message,
+      PushOutcome.shown,
+      now: at.add(const Duration(minutes: 5)),
+    );
+    final snapshot = await PushDiagnostics.read();
+    expect(snapshot.recent.map((e) => e.cold), [false, false, true]);
+    expect(snapshot.recent.last.startupMs, isNonNegative);
+    expect(snapshot.coldStarts.length, 1);
+    expect(snapshot.medianColdStartupMs, snapshot.recent.last.startupMs);
+    expect(snapshot.counters['start.cold'], 1);
+    expect(PushDiagnostics.describe(snapshot), contains('Cold starts: 1 of 3'));
+    final parsed = PushDiagnosticsEntry.fromJson(snapshot.recent.last.toJson());
+    expect(parsed?.startupMs, snapshot.recent.last.startupMs);
+  });
+
   test('push kinds come only from fixed markers', () {
     expect(pushKindOf({'personal_wake': 'reminder'}), PushKind.reminder);
     // Remote data can never mark a push as a test; only the in-process flag.

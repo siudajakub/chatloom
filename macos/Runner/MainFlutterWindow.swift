@@ -6,6 +6,9 @@ class MainFlutterWindow: NSWindow {
   private var wakeObserver: NSObjectProtocol?
   private var occlusionObserver: NSObjectProtocol?
   private var roundCapture: RoundCapture?
+  // battery-lifecycle (BP-08): Low Power Mode -> lite mode.
+  private var powerChannel: FlutterMethodChannel?
+  private var powerObserver: NSObjectProtocol?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -45,6 +48,7 @@ class MainFlutterWindow: NSWindow {
         "visibility", arguments: self.occlusionState.contains(.visible) && !self.isMiniaturized)
     }
     configureMenu(NSApp.mainMenu)
+    configurePowerSaving(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }
@@ -64,6 +68,27 @@ class MainFlutterWindow: NSWindow {
     }
   }
 
+  // battery-lifecycle (BP-08): reports Low Power Mode to Dart
+  // (lib/utils/power_saving.dart): `isPowerSaving` answers the current state,
+  // `powerSaving` is sent on every change.
+  private func configurePowerSaving(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: "pl.personal.chat/power", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      if call.method == "isPowerSaving" {
+        result(ProcessInfo.processInfo.isLowPowerModeEnabled)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    powerChannel = channel
+    powerObserver = NotificationCenter.default.addObserver(
+      forName: ProcessInfo.powerStateDidChangeNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      self?.powerChannel?.invokeMethod(
+        "powerSaving", arguments: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    }
+  }
+
   @objc private func openSettings(_ sender: Any?) {
     makeKeyAndOrderFront(nil)
     desktopChannel?.invokeMethod("settings", arguments: nil)
@@ -79,6 +104,9 @@ class MainFlutterWindow: NSWindow {
       NSWorkspace.shared.notificationCenter.removeObserver(observer)
     }
     if let observer = occlusionObserver {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    if let observer = powerObserver {
       NotificationCenter.default.removeObserver(observer)
     }
   }

@@ -202,8 +202,55 @@ class ConversationActivity extends ChangeNotifier {
   String? counterpartId(Room room) =>
       identical(room.client, client) ? _counterparts[room.id] : null;
 
+  /// One classifier per client, shared by every row (BP-09): building one
+  /// walks every room's bridge state, and each inbox row used to build its
+  /// own on creation and on every relevant state event of any room. It is
+  /// rebuilt when a bridge info or functional-members event arrives (once per
+  /// event, not once per row) or when it does not cover a row's room.
+  static final _sharedClassifier = Expando<ConversationClassifier>(
+    'activity classifier',
+  );
+  static final _sharedStamp = Expando<Object>('activity classifier stamp');
+
+  /// Classifiers built for counterparts (tests only).
+  @visibleForTesting
+  static int debugClassifierBuilds = 0;
+
+  void _invalidateClassifier(Object stamp) {
+    if (identical(_sharedStamp[client], stamp)) return;
+    _sharedStamp[client] = stamp;
+    _sharedClassifier[client] = null;
+  }
+
+  ConversationClassifier _classifier() {
+    final shared = _sharedClassifier[client];
+    if (shared != null && _rooms.every(shared.covers)) return shared;
+    debugClassifierBuilds++;
+    return _sharedClassifier[client] = ConversationClassifier(client.rooms);
+  }
+
+  bool _refreshScheduled = false;
+  bool _refreshOwnRoom = false;
+
+  /// Coalesces a burst of state events (a catch-up delivers full state for
+  /// many rooms, a group a member burst) into one recompute.
+  void _scheduleRefresh({required bool ownRoom}) {
+    _refreshOwnRoom |= ownRoom;
+    if (_refreshScheduled) return;
+    _refreshScheduled = true;
+    scheduleMicrotask(() {
+      _refreshScheduled = false;
+      final own = _refreshOwnRoom;
+      _refreshOwnRoom = false;
+      if (!hasListeners) return;
+      final previous = Map<String, String>.of(_counterparts);
+      _refreshCounterparts();
+      if (own || !mapEquals(previous, _counterparts)) _changed();
+    });
+  }
+
   void _refreshCounterparts() {
-    final classifier = ConversationClassifier(client.rooms);
+    final classifier = _classifier();
     _counterparts.clear();
     for (final room in _rooms) {
       final id = _resolveCounterpart(room, classifier);
@@ -391,9 +438,11 @@ class ConversationActivity extends ChangeNotifier {
               'io.element.functional_members',
             }.contains(type))
           return;
-        final previous = Map<String, String>.of(_counterparts);
-        _refreshCounterparts();
-        if (ownRoom || !mapEquals(previous, _counterparts)) _changed();
+        if (bridgeInfoStateTypes.contains(type) ||
+            type == 'io.element.functional_members') {
+          _invalidateClassifier(update.state);
+        }
+        _scheduleRefresh(ownRoom: ownRoom);
       }),
     );
     _subscriptions.add(

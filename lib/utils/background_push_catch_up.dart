@@ -86,3 +86,79 @@ class PushCatchUp {
     return started;
   }
 }
+
+/// The `/sync` a count-only push (read on another device, badge update) runs
+/// before it removes notifications of chats that are no longer unread
+/// (BP-06a). J reading chats one by one on the Mac used to cost the phone one
+/// wake-up sync per chat.
+///
+/// Same bounds as [PushCatchUp]: a running sync is joined, and within
+/// [minInterval] of the last one no new sync starts when the push's unread
+/// count already matches the local state (a burst delivered together after
+/// Doze, or a repeat). A count that differs still syncs, so a chat read a
+/// few seconds after the previous one still loses its notification. The
+/// caller waits at most [wait]; failures are swallowed (the next push or the
+/// resume catch-up retries).
+class PushCountSync {
+  PushCountSync({
+    this.minInterval = const Duration(seconds: 10),
+    this.wait = const Duration(seconds: 8),
+    DateTime Function()? clock,
+    @visibleForTesting Future<void> Function(Client client)? sync,
+    @visibleForTesting int Function(Client client)? localUnread,
+  }) : _clock = clock ?? DateTime.now,
+       _sync = sync ?? _zeroTimeoutSync,
+       _localUnread = localUnread ?? unreadOf;
+
+  /// One per isolate: the push isolate and the app share nothing anyway.
+  static final shared = PushCountSync();
+
+  final Duration minInterval;
+  final Duration wait;
+  final DateTime Function() _clock;
+  final Future<void> Function(Client client) _sync;
+  final int Function(Client client) _localUnread;
+  final _last = Expando<DateTime>('push count sync');
+  final _running = Expando<Future<void>>('push count sync run');
+
+  static Future<void> _zeroTimeoutSync(Client client) =>
+      client.oneShotSync(timeout: Duration.zero);
+
+  /// The unread total the gateway counts (`counts.unread`): the sum of the
+  /// rooms' notification counts.
+  static int unreadOf(Client client) =>
+      client.rooms.fold<int>(0, (sum, room) => sum + room.notificationCount);
+
+  /// Syncs [client] unless that is not needed (see the class); never throws.
+  /// Returns whether a sync ran or was joined.
+  Future<bool> run(Client client, {required int? unread}) async {
+    final running = _running[client];
+    if (running != null) {
+      await running;
+      return true;
+    }
+    final now = _clock();
+    final last = _last[client];
+    final recent =
+        last != null &&
+        !now.isBefore(last) &&
+        now.difference(last) < minInterval;
+    if (recent && (unread == null || unread == _localUnread(client))) {
+      return false;
+    }
+    _last[client] = now;
+    late final Future<void> started;
+    started = () async {
+      try {
+        await Future<void>.sync(() => _sync(client)).timeout(wait);
+      } catch (error) {
+        Logs().w('[Push] count_sync_failed', error.runtimeType.toString());
+      } finally {
+        if (identical(_running[client], started)) _running[client] = null;
+      }
+    }();
+    _running[client] = started;
+    await started;
+    return true;
+  }
+}

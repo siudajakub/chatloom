@@ -13,6 +13,7 @@ import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/performance_probe_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
+import 'package:chatloom/utils/crypto_worker.dart';
 import 'package:chatloom/utils/custom_http_client.dart';
 import 'package:chatloom/utils/custom_image_resizer.dart';
 import 'package:chatloom/utils/init_with_restore.dart';
@@ -32,6 +33,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_html/html.dart' as html;
 
 import 'matrix_sdk_extensions/flutter_matrix_dart_sdk_database/builder.dart';
+
+/// Loads vodozemac once per isolate: the long-lived crypto worker runs many
+/// jobs, and flutter_rust_bridge refuses a second initialisation. Statics are
+/// per isolate, so every `compute` isolate still initialises its own copy.
+Future<void>? _vodozemacReady;
+Future<void> _initVodozemacOnce() => _vodozemacReady ??= vod
+    .init(wasmPath: './assets/assets/vodozemac/${AppConfig.vodozemacVersion}/')
+    .catchError((Object error, StackTrace stack) {
+      // A failed load may be retried by the next job.
+      _vodozemacReady = null;
+      Error.throwWithStackTrace(error, stack);
+    });
 
 abstract class ClientManager {
   static const String clientNamespace = 'im.fluffychat.store.clients';
@@ -86,11 +99,10 @@ abstract class ClientManager {
           timeout: const Duration(minutes: 1),
         )
       : NativeImplementationsIsolate(
-          compute,
-          vodozemacInit: () => vod.init(
-            wasmPath:
-                './assets/assets/vodozemac/${AppConfig.vodozemacVersion}/',
-          ),
+          // Attachment decryption reuses one worker isolate (BP-04); every
+          // other job still runs in a fresh `compute` isolate.
+          personalCryptoCompute,
+          vodozemacInit: _initVodozemacOnce,
         );
 
   static Future<Client> createClient(
@@ -170,6 +182,17 @@ abstract class ClientManager {
     client.syncErrorMaxTimeoutSec = foregroundSyncRetryCapSec;
     client.requestHistoryOnLimitedTimeline = false;
     client.backgroundSync = foreground;
+  }
+
+  /// macOS sync settings while the window is shown or has been hidden for
+  /// [DesktopSyncPause.delay] (BP-02/MAC-12; J declined Mac notifications, so
+  /// nothing a hidden window syncs is seen). Stopping only ends the loop: a
+  /// waiting long-poll answers within its 30 s and is processed, then no new
+  /// one starts. Turning it back on starts a sync at once (the catch-up).
+  /// Sends keep working over HTTP; their echoes arrive with the catch-up.
+  static void applyDesktopLifecycle(Client client, {required bool visible}) {
+    if (!client.isLogged()) return;
+    client.backgroundSync = visible;
   }
 
   static WindowsInitializationSettings get windowsNotificationSettings =>

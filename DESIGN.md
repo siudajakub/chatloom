@@ -347,7 +347,8 @@ Rules:
   panels and pills and by overlays while their route animates, so glass and
   fallback never differ in colour.
   `NotionGlassScope(mode: NotionGlassMode.off)` forces the fallback for a
-  subtree (low-end flag); `.on` forces glass (goldens).
+  subtree (low-end flag); `.on` forces glass (goldens). The lite mode
+  (Battery Saver / Low Power Mode, see Motion rule 6) sets `off` app-wide.
 - Text on glass uses the normal text roles; never lower its contrast to
   "show off" the blur.
 
@@ -520,6 +521,14 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
    loops, GIF frames and spinners stop and one-shot motion that starts then
    shows its end state. Sync, sending and platform video keep running;
    scrolling an unfocused macOS window re-enables animation briefly.
+   `reduced` is also true in the lite mode: while Android Battery Saver or
+   macOS Low Power Mode is on (`PowerSaving`, `NotionActivity(powerSaving:)`,
+   Telegram's power saver), content loops (Lottie stickers, inline GIF
+   videos) rest on a static frame, one-shot motion and page pushes jump to
+   their end, and glass falls back to its opaque tint. Tickers stay on, so
+   scrolling and progress remain live; sync, sending, notifications and
+   media the user starts are unchanged. Test it with
+   `NotionActivity.isPowerSaving(context)`, never a platform call in a screen.
 7. No rebuilds per tick: use `*Transition`/`AnimatedBuilder` with a `child`,
    `CustomPaint(repaint:)` for loops; never `setState` on every frame.
 8. Never wrap subtrees that hold GlobalKeys or whole pages in a switcher

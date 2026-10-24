@@ -379,4 +379,61 @@ void main() {
     }
     activity.removeListener(listener);
   });
+
+  testWidgets('a member burst in a group costs no classifier per event and '
+      'rows share one classifier; a DM partner change still updates (BP-09)', (
+    tester,
+  ) async {
+    final group = Room(
+      id: '!group:example.invalid',
+      client: client,
+      summary: RoomSummary.fromJson({
+        'm.joined_member_count': 2,
+        'm.invited_member_count': 0,
+      }),
+    );
+    client.rooms.add(group);
+    final rows = [
+      for (var i = 0; i < 10; i++)
+        ConversationActivity(client: client, rooms: [group], now: () => now),
+    ];
+    for (final row in rows) {
+      row.addListener(listener);
+    }
+    activity.addListener(listener);
+    await tester.pump();
+    final builds = ConversationActivity.debugClassifierBuilds;
+    for (var i = 0; i < 100; i++) {
+      _state(group, EventTypes.RoomMember, {
+        'membership': 'join',
+      }, key: '@member$i:example.invalid');
+    }
+    await tester.pump();
+    expect(
+      ConversationActivity.debugClassifierBuilds - builds,
+      lessThanOrEqualTo(1),
+      reason: 'rooms × rows × events used to build a classifier each time',
+    );
+
+    // A bridge info event anywhere rebuilds the shared classifier once.
+    final before = ConversationActivity.debugClassifierBuilds;
+    _state(group, 'm.bridge', {
+      'bridgebot': '@bot:example.invalid',
+      'protocol': {'id': 'telegram'},
+    }, key: 'bridge');
+    await tester.pump();
+    expect(ConversationActivity.debugClassifierBuilds - before, 1);
+
+    // The DM's partner still resolves after a membership change.
+    expect(activity.counterpartId(room), _peer);
+    _state(room, EventTypes.RoomMember, {'membership': 'leave'}, key: _peer);
+    await tester.pump();
+    expect(activity.counterpartId(room), isNull);
+
+    for (final row in rows) {
+      row.removeListener(listener);
+      row.dispose();
+    }
+    activity.removeListener(listener);
+  });
 }

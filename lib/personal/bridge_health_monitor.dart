@@ -6,6 +6,8 @@ import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/utils/macos_desktop.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart'
     show AppLifecycleState, WidgetsBinding, WidgetsBindingObserver;
@@ -63,10 +65,16 @@ class BridgeHealthMonitor extends ChangeNotifier with WidgetsBindingObserver {
     BridgeWhoamiLoader? whoami,
     List<BridgeEndpoint> Function()? bridges,
     bool watchLifecycle = true,
+    ValueListenable<bool>? windowVisible,
   }) : _clock = clock ?? DateTime.now,
        _whoami = whoami ?? _directoryWhoami(client),
        _bridges = bridges ?? (() => discoverBridges(client.rooms)),
-       _watchLifecycle = watchLifecycle;
+       _watchLifecycle = watchLifecycle,
+       _windowVisible =
+           windowVisible ??
+           (watchLifecycle && PlatformInfos.isMacOS
+               ? MacDesktopWindow.visible
+               : null);
 
   static final _byClient = Expando<BridgeHealthMonitor>('bridge health');
 
@@ -82,6 +90,11 @@ class BridgeHealthMonitor extends ChangeNotifier with WidgetsBindingObserver {
   final BridgeWhoamiLoader _whoami;
   final List<BridgeEndpoint> Function() _bridges;
   final bool _watchLifecycle;
+
+  /// The macOS window's visibility: a covered or minimised window asks no
+  /// bridge (BP-03).
+  final ValueListenable<bool>? _windowVisible;
+  AppLifecycleState? _lifecycle;
 
   /// Bridge bot user id → network.
   final _bots = <String, String>{};
@@ -203,12 +216,13 @@ class BridgeHealthMonitor extends ChangeNotifier with WidgetsBindingObserver {
         final binding = WidgetsBinding.instance;
         binding.addObserver(this);
         _observing = true;
-        final state = binding.lifecycleState;
-        _foreground = state == null || _isForeground(state);
+        _lifecycle = binding.lifecycleState;
       } catch (_) {
         // No Flutter binding (plain unit tests): always in the foreground.
       }
     }
+    _windowVisible?.addListener(_onForegroundChanged);
+    _foreground = _isForeground;
     unawaited(_scan(generation));
   }
 
@@ -225,14 +239,28 @@ class BridgeHealthMonitor extends ChangeNotifier with WidgetsBindingObserver {
       WidgetsBinding.instance.removeObserver(this);
       _observing = false;
     }
+    _windowVisible?.removeListener(_onForegroundChanged);
   }
 
-  static bool _isForeground(AppLifecycleState state) =>
-      state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
+  /// Only an app the user is looking at polls (BP-03): `inactive` (another
+  /// app focused on the Mac, the shade or split screen on Android) waits,
+  /// and so does a hidden Mac window. Coming back asks due bridges at once.
+  bool get _isForeground =>
+      (_lifecycle == null || _lifecycle == AppLifecycleState.resumed) &&
+      (_windowVisible?.value ?? true);
+
+  /// Whether a `whoami` round is scheduled (tests).
+  @visibleForTesting
+  bool get debugPollScheduled => _poll != null;
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final foreground = _isForeground(state);
+    _lifecycle = state;
+    _onForegroundChanged();
+  }
+
+  void _onForegroundChanged() {
+    final foreground = _isForeground;
     if (foreground == _foreground) return;
     _foreground = foreground;
     if (foreground) {

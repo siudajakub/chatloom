@@ -28,6 +28,10 @@ class MainActivity : FlutterFragmentActivity() {
             if (!eng.plugins.has(TelegramRoundPlugin::class.java)) {
                 eng.plugins.add(TelegramRoundPlugin())
             }
+            // battery-lifecycle (BP-08): Battery Saver -> lite mode.
+            if (!eng.plugins.has(PowerSavingPlugin::class.java)) {
+                eng.plugins.add(PowerSavingPlugin())
+            }
             engine = eng
             return eng
         }

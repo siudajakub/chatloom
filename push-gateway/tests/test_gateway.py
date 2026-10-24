@@ -233,6 +233,28 @@ class GatewayTests(unittest.TestCase):
         self.assertNotIn('notification',body['message'])
         self.assertNotIn('SECRET_AUTH_CANARY',json.dumps(body))
 
+    def test_count_only_pushes_collapse_and_messages_and_reminders_do_not(self):
+        publisher=gateway.FcmPublisher.__new__(gateway.FcmPublisher)
+        class Credentials:
+            def before_request(self,auth,method,url,headers):
+                headers['Authorization']='Bearer SECRET_AUTH_CANARY'
+        publisher.credentials=Credentials()
+        publisher.project_id='fixture-project'
+        publisher.timeout=8
+        publisher.auth_request=None
+        publisher.auth_lock=threading.Lock()
+        def android_block(data,priority):
+            with patch.object(gateway,'http_request',return_value=(200,{},b'{}')) as request:
+                self.assertEqual(publisher.publish(TOKEN,data,priority).status,'accepted')
+            return json.loads(request.call_args.kwargs['body'])['message']['android']
+        counts=android_block(gateway.routing_data(packet(event=None)['notification']),'normal')
+        self.assertEqual(counts['collapse_key'],'counts')
+        self.assertEqual(counts['priority'],'normal')
+        message=android_block(gateway.routing_data(packet()['notification']),'high')
+        self.assertNotIn('collapse_key',message)
+        reminder=android_block({"personal_wake":"reminder"},'high')
+        self.assertNotIn('collapse_key',reminder)
+
     @unittest.skipUnless(HAS_GOOGLE_AUTH, 'Run optional auth test in requirements.txt venv')
     def test_real_google_auth_signer_only_calls_mocked_google_endpoints(self):
         from cryptography.hazmat.primitives import serialization

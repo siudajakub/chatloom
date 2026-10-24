@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/widgets/app_lock.dart';
@@ -301,4 +302,32 @@ void main() {
       startup.dispose();
     },
   );
+
+  testWidgets('a hidden Mac window keeps voice only without a lock (MAC-04)', (
+    tester,
+  ) async {
+    RoundPlaybackCoordinator.debugKeepsVoiceWhenHidden = true;
+    addTearDown(
+      () => RoundPlaybackCoordinator.debugKeepsVoiceWhenHidden = null,
+    );
+    final open = AppLockController();
+    addTearDown(open.dispose);
+    expect(open.sparesVoiceWhenHidden(AppLifecycleState.hidden), isTrue);
+    expect(open.sparesVoiceWhenHidden(AppLifecycleState.paused), isFalse);
+
+    final locked = _lock(_Biometrics(() async => false));
+    addTearDown(locked.dispose);
+    expect(
+      locked.sparesVoiceWhenHidden(AppLifecycleState.hidden),
+      isFalse,
+      reason: 'a configured lock locks on hidden and stops voice',
+    );
+
+    RoundPlaybackCoordinator.debugKeepsVoiceWhenHidden = false;
+    expect(
+      open.sparesVoiceWhenHidden(AppLifecycleState.hidden),
+      isFalse,
+      reason: 'phones pause voice in the background',
+    );
+  });
 }

@@ -519,6 +519,8 @@ class RoundMiniPlayerController extends ChangeNotifier
     session.handle = _coordinator.register(
       pause: () => _stopSession(session),
       stop: () => _stopSession(session),
+      // A voice queue keeps playing while a Mac window is hidden (MAC-04).
+      keepWhileHidden: !round,
     );
     final previous = _current;
     _current = session;
@@ -660,6 +662,15 @@ class RoundMiniPlayerController extends ChangeNotifier
     if (state == AppLifecycleState.inactive &&
         session != null &&
         !_isRound(session.event)) {
+      return;
+    }
+    // A hidden Mac window keeps a detached voice note playing too (MAC-04).
+    // The app lock decides through the coordinator: a configured lock stops
+    // it, as on every other lock.
+    if (state == AppLifecycleState.hidden &&
+        session != null &&
+        !_isRound(session.event) &&
+        RoundPlaybackCoordinator.keepsVoiceWhenHidden) {
       return;
     }
     unawaited(stop());

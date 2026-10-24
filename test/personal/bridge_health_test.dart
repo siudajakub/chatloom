@@ -4,6 +4,7 @@
 import 'package:chatloom/personal/bridge_contact_search_provisioning.dart';
 import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState, ValueNotifier;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 
@@ -698,6 +699,42 @@ void main() {
       expect(health?.state, BridgeHealthState.loggedOut);
       expect(health?.userInitiated, isTrue);
       expect(health?.signedIn, isFalse);
+    });
+
+    test('only an app in front polls: inactive and a hidden Mac window '
+        'wait; coming back asks due bridges (BP-03)', () async {
+      var calls = 0;
+      final visible = ValueNotifier(true);
+      addTearDown(visible.dispose);
+      final monitor = BridgeHealthMonitor(
+        client,
+        clock: () => now,
+        whoami: (_) async {
+          calls++;
+          return whoami(_bot, []);
+        },
+        watchLifecycle: false,
+        windowVisible: visible,
+      );
+      void listener() {}
+      monitor.addListener(listener);
+      addTearDown(() => monitor.removeListener(listener));
+      await pumpEventQueue();
+      expect(calls, 1);
+      expect(monitor.debugPollScheduled, isTrue);
+
+      monitor.didChangeAppLifecycleState(AppLifecycleState.inactive);
+      expect(monitor.debugPollScheduled, isFalse);
+      now = now.add(const Duration(minutes: 10));
+      monitor.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await pumpEventQueue();
+      expect(calls, 2, reason: 'the overdue bridge is asked at once');
+      expect(monitor.debugPollScheduled, isTrue);
+
+      visible.value = false;
+      expect(monitor.debugPollScheduled, isFalse);
+      visible.value = true;
+      expect(monitor.debugPollScheduled, isTrue);
     });
   });
 }

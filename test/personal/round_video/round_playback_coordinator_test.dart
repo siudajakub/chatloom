@@ -179,4 +179,50 @@ void main() {
     coordinator.resume();
     expect(await voice.acquireAudible(), isTrue);
   });
+
+  test('a hidden desktop window spares voice: it stays current and its '
+      'queue may continue, while videos stop (MAC-04)', () async {
+    final coordinator = RoundPlaybackCoordinator();
+    final calls = <String>[];
+    final voice = coordinator.register(
+      pause: () async => calls.add('voice pause'),
+      stop: () async => calls.add('voice stop'),
+      retain: () async => calls.add('voice retain'),
+      keepWhileHidden: true,
+    );
+    coordinator.register(
+      pause: () async => calls.add('video pause'),
+      stop: () async => calls.add('video stop'),
+    );
+    expect(await voice.acquireAudible(), isTrue);
+    await coordinator.stopAll(retain: true, spareHidden: true);
+    expect(calls, ['video stop']);
+    expect(voice.isCurrent, isTrue);
+    expect(coordinator.suspended, isFalse);
+    final next = coordinator.beginContinuation();
+    expect(next.active, isTrue, reason: 'the next voice note may play');
+    next.end();
+
+    // A lock (or phones' background) still stops or pauses voice.
+    calls.clear();
+    await coordinator.stopAll(retain: true);
+    expect(calls, ['voice retain', 'video stop']);
+    expect(voice.isCurrent, isFalse);
+    expect(coordinator.suspended, isTrue);
+  });
+
+  test('sparing keeps nothing audible when the voice is not playing', () async {
+    final coordinator = RoundPlaybackCoordinator();
+    final voice = coordinator.register(
+      pause: () async {},
+      stop: () async {},
+      keepWhileHidden: true,
+    );
+    final video = coordinator.register(pause: () async {}, stop: () async {});
+    expect(await video.acquireAudible(), isTrue);
+    await coordinator.stopAll(retain: true, spareHidden: true);
+    expect(video.isCurrent, isFalse);
+    expect(voice.isCurrent, isFalse);
+    expect(coordinator.continuing, isFalse);
+  });
 }

@@ -19,7 +19,9 @@ import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/voice_playback.dart';
 import 'package:chatloom/personal/voice_played_storage.dart';
 import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/desktop_sync_pause.dart';
 import 'package:chatloom/utils/init_with_restore.dart';
+import 'package:chatloom/utils/macos_desktop.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/sync_network_recovery.dart';
@@ -217,8 +219,10 @@ class MatrixState extends State<Matrix> {
         pause: _pauseAudio,
         stop: closeAudioPlayer,
         // Backgrounding without a lock pauses the note and keeps its
-        // position; a lock or an account switch still closes it.
+        // position; a lock or an account switch still closes it. A hidden
+        // Mac window without a lock keeps it playing (MAC-04).
         retain: _pauseAudio,
+        keepWhileHidden: true,
       );
   Future<void> _pauseAudio() async {
     final current = audioPlayer;
@@ -533,10 +537,25 @@ class MatrixState extends State<Matrix> {
       // A Wi-Fi <-> mobile switch leaves the long-poll on a dead socket for up
       // to 40 s plus the retry backoff; restart it at once while the app is
       // open. The platform callback is event-driven: no polling.
+      // macOS stops the loop after a while hidden (see [DesktopSyncPause]);
+      // a network change must not restart it then.
+      final pause = _desktopSyncPause = PlatformInfos.isMacOS
+          ? DesktopSyncPause(
+              clients: () => widget.clients.where((c) => c.isLogged()),
+            )
+          : null;
+      if (pause != null) {
+        DesktopSyncPause.current = pause;
+        final state = WidgetsBinding.instance.lifecycleState;
+        if (state != null) pause.onLifecycle(state);
+        pause.onWindowVisible(MacDesktopWindow.visible.value);
+        MacDesktopWindow.visible.addListener(_onMacWindowVisible);
+      }
       final recovery = SyncNetworkRecovery(
-        foreground: () =>
-            !PlatformInfos.isMobile ||
-            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+        foreground: () => PlatformInfos.isMobile
+            ? WidgetsBinding.instance.lifecycleState ==
+                  AppLifecycleState.resumed
+            : !(_desktopSyncPause?.paused ?? false),
       );
       _networkChanges = Connectivity().onConnectivityChanged.listen(
         (networks) => unawaited(
@@ -587,7 +606,13 @@ class MatrixState extends State<Matrix> {
     }
   }
 
+  DesktopSyncPause? _desktopSyncPause;
+
+  void _onMacWindowVisible() =>
+      _desktopSyncPause?.onWindowVisible(MacDesktopWindow.visible.value);
+
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _desktopSyncPause?.onLifecycle(state);
     final foreground = state == AppLifecycleState.resumed;
     backgroundPush?.setRegistrationForeground(foreground);
     for (final client in widget.clients) {
@@ -622,6 +647,13 @@ class MatrixState extends State<Matrix> {
     closeAudioPlayer();
     _listener?.dispose();
     unawaited(_networkChanges?.cancel());
+    if (_desktopSyncPause case final pause?) {
+      MacDesktopWindow.visible.removeListener(_onMacWindowVisible);
+      pause.dispose();
+      if (identical(DesktopSyncPause.current, pause)) {
+        DesktopSyncPause.current = null;
+      }
+    }
 
     for (final sub in onPersonalReminder.values) {
       sub.cancel();

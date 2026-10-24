@@ -27,6 +27,7 @@ import 'package:chatloom/personal/push_rule_check.dart';
 import 'package:chatloom/personal/reminder_notification.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
+import 'package:chatloom/utils/background_push_catch_up.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/notification_avatar_extension.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
@@ -980,14 +981,11 @@ Future<void> _clearReadNotifications(
     NotificationThreads.forget(active.map((n) => n.id!));
     return;
   }
-  // Make sure client is fully loaded and synced before dismiss notifications:
+  // Make sure client is fully loaded and synced before dismiss notifications.
+  // A sync is skipped when one ran moments ago and the push's count already
+  // matches (BP-06a, [PushCountSync]).
   await work.wait(() async => await client.roomsLoading);
-  await work.wait(
-    () => client
-        .oneShotSync(timeout: Duration.zero)
-        .timeout(const Duration(seconds: 8))
-        .catchError((_) => null),
-  );
+  await work.wait(() => PushCountSync.shared.run(client, unread: unread));
   // Which rooms each notification can show: single chats and the person
   // merges of the private store (when it opens in time).
   final shows = <int, List<Room>>{

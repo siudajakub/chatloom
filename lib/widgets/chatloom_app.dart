@@ -11,8 +11,10 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/ui/keyboard_shortcuts_sheet.dart';
 import 'package:chatloom/ui/notion/notion_activity.dart';
 import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/desktop_sync_pause.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/power_saving.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/client_startup.dart';
 import 'package:chatloom/widgets/theme_builder.dart';
@@ -103,6 +105,8 @@ class ChatLoomApp extends StatelessWidget {
           windowVisible: PlatformInfos.isMacOS
               ? MacDesktopWindow.visible
               : null,
+          // Battery Saver / Low Power Mode: lite mode (BP-08).
+          powerSaving: PowerSaving.watch(),
           child: AppLockWidget(
             controller: appLock,
             pincode: appLockSettings.pincode,
@@ -122,6 +126,9 @@ class ChatLoomApp extends StatelessWidget {
                 if (navigator != null) showKeyboardShortcutsSheet(navigator);
               },
               onWake: () {
+                // A window hidden long enough has stopped syncing; showing
+                // it resumes (battery-lifecycle, BP-02).
+                if (DesktopSyncPause.current?.paused ?? false) return;
                 for (final client in clients.where(
                   (client) => client.isLogged(),
                 )) {

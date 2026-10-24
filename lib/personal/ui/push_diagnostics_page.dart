@@ -766,6 +766,17 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
             title: 'Failed',
             trailing: _count(context, failures, problem: failures > 0),
           ),
+          if (snapshot.recent.isNotEmpty)
+            NotionListRow(
+              title: 'Started the app',
+              subtitle: snapshot.medianColdStartupMs == null
+                  ? 'Recent pushes found the app running'
+                  : 'Median start-up ${snapshot.medianColdStartupMs} ms',
+              trailing: _value(
+                context,
+                '${snapshot.coldStarts.length} of ${snapshot.recent.length}',
+              ),
+            ),
           for (final entry in snapshot.recent.take(10))
             NotionListRow(
               title: pushOutcomeLabel(entry.outcome),
@@ -773,6 +784,8 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
                 pushKindLabel(entry.kind),
                 ?entry.errorType,
                 if (entry.elapsedMs != null) '${entry.elapsedMs} ms',
+                if (entry.startupMs != null)
+                  'started app in ${entry.startupMs} ms',
               ].join(' · '),
               trailing: _value(context, _time(entry.at)),
             ),
