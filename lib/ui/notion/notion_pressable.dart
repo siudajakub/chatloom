@@ -157,14 +157,17 @@ class _NotionPressableState extends State<NotionPressable>
   Widget build(BuildContext context) {
     var child = widget.child;
     if (widget.onTap != null || widget.onLongPress != null) {
-      child = NotionTapTarget(
+      // Not NotionTapTarget: a MouseRegion between the Listener and the
+      // detector stopped the press scale; the cursor is set outside instead.
+      child = GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap == null ? null : _tap,
         onLongPress: widget.onLongPress == null ? null : _longPress,
+        onSecondaryTap: widget.onLongPress == null ? null : _longPress,
         child: child,
       );
     }
-    return Listener(
+    final pressable = Listener(
       onPointerDown: _press,
       onPointerMove: _move,
       onPointerUp: _release,
@@ -174,6 +177,13 @@ class _NotionPressableState extends State<NotionPressable>
         alignment: widget.alignment,
         child: child,
       ),
+    );
+    return MouseRegion(
+      opaque: false,
+      cursor: widget.onTap == null
+          ? MouseCursor.defer
+          : SystemMouseCursors.click,
+      child: pressable,
     );
   }
 }
