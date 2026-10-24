@@ -44,6 +44,7 @@ import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/media/media_export_actions.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
 import 'package:chatloom/personal/network_rejections.dart';
 import 'package:chatloom/personal/performance_probe.dart';
@@ -77,7 +78,6 @@ import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
-import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/app_lock.dart';
@@ -1596,12 +1596,12 @@ class _MergedChatPageState extends State<_MergedChatView>
         ),
       // Stickers: favourite, view pack; GIFs: save (Telegram).
       ...stickerMessageActions(context, display),
-      if (_canSave(display))
-        ConversationMessageAction(
-          icon: Icons.download_outlined,
-          label: l10n.downloadFile,
-          onSelected: () => display.saveFile(this.context),
-        ),
+      // Save (gallery/Downloads on Android), Save as…, Copy image (macOS).
+      ...mediaExportMenuActions(
+        this.context,
+        display,
+        canSave: _canSave(display),
+      ),
       // Raw message source: developer options only (CS-23).
       if (DeveloperOptions.enabled)
         ConversationMessageAction(

@@ -139,8 +139,31 @@ Future<_PhotoEvent> _openFromTimeline(WidgetTester tester) async {
   return event;
 }
 
+/// The full image layer: a capped decode of the original's bytes.
+ResizeImage? _fullProvider(WidgetTester tester) {
+  final images = tester.widgetList<Image>(find.byType(Image)).where((image) {
+    final provider = image.image;
+    return provider is ResizeImage &&
+        provider.imageProvider is MemoryImage &&
+        identical((provider.imageProvider as MemoryImage).bytes, _full);
+  });
+  return images.isEmpty ? null : images.single.image as ResizeImage;
+}
+
 void main() {
   tearDown(() => MxcImage.clearCache(_cacheName));
+
+  test('decode side: twice the fitted size, capped at 4096', () {
+    expect(ProgressivePhoto.decodeSideFor(const Size(400, 300), 3), 2400);
+    expect(
+      ProgressivePhoto.decodeSideFor(const Size(1200, 900), 3),
+      ProgressivePhoto.maxDecodeSide,
+    );
+    expect(
+      ProgressivePhoto.decodeSideFor(const Size(400, 300), 3, sharp: true),
+      ProgressivePhoto.maxDecodeSide,
+    );
+  });
 
   testWidgets('opens on the cached timeline thumbnail, then sharpens', (
     tester,
@@ -201,6 +224,64 @@ void main() {
     expect(_cachedThumbnail(), findsOneWidget);
     await tester.pump(NotionMotion.medium);
     expect(find.text('Try again'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('decodes the original capped and sharpens past 1.8x zoom', (
+    tester,
+  ) async {
+    final room = Room(
+      id: '!fixture:example.invalid',
+      client: Client('progressive photo zoom', database: _Database()),
+    );
+    final event = _PhotoEvent(room);
+    final zoom = TransformationController();
+    addTearDown(zoom.dispose);
+    await tester.pumpWidget(
+      _app(
+        ProgressivePhoto(
+          event: event,
+          size: const Size(400, 300),
+          zoom: zoom,
+          frame: (context, photo) => Center(child: photo),
+        ),
+      ),
+    );
+    // The deferred localizations load on fake time (never inside runAsync).
+    for (var i = 0; i < 20 && event.fullRequests.isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    event.fullRequests.single.complete(
+      MatrixImageFile(bytes: _full, name: 'photo.png'),
+    );
+    for (var i = 0; i < 50 && _fullProvider(tester) == null; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+    }
+    final dpr = tester.view.devicePixelRatio;
+    final side = ProgressivePhoto.decodeSideFor(const Size(400, 300), dpr);
+    expect(_fullProvider(tester)?.width, side);
+    expect(_fullProvider(tester)?.height, side);
+    expect(_fullProvider(tester)?.policy, ResizeImagePolicy.fit);
+
+    zoom.value = Matrix4.diagonal3Values(1.5, 1.5, 1);
+    await tester.pump();
+    expect(_fullProvider(tester)?.width, side);
+
+    zoom.value = Matrix4.diagonal3Values(2.5, 2.5, 1);
+    await tester.pump();
+    expect(_fullProvider(tester)?.width, ProgressivePhoto.maxDecodeSide);
+
+    // Above fit it stays sharp (no decode ping-pong around the threshold).
+    zoom.value = Matrix4.diagonal3Values(1.5, 1.5, 1);
+    await tester.pump();
+    expect(_fullProvider(tester)?.width, ProgressivePhoto.maxDecodeSide);
+
+    zoom.value = Matrix4.identity();
+    await tester.pump();
+    expect(_fullProvider(tester)?.width, side);
     expect(tester.takeException(), isNull);
   });
 }

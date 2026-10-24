@@ -5,8 +5,10 @@
 
 import 'package:async/async.dart' as async;
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/size_string.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
+import 'package:chatloom/widgets/lottie_sticker_data.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -27,7 +29,9 @@ extension LocalizedBody on Event {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('This file is not sent yet. Save or share it once it is sent.'),
+            content: Text(
+              'This file is not sent yet. Save or share it once it is sent.',
+            ),
           ),
         );
       }
@@ -48,9 +52,7 @@ extension LocalizedBody on Event {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'This protected message cannot be saved or shared.',
-          ),
+          content: Text('This protected message cannot be saved or shared.'),
         ),
       );
     }
@@ -72,26 +74,54 @@ extension LocalizedBody on Event {
         },
       );
 
-  Future<void> saveFile(BuildContext context) async {
-    if (!await _guardMediaExport(context)) return;
-    if (!context.mounted) return;
+  /// Downloads the attachment behind the export gate (checked again after
+  /// the download, which may outlive a disappearing message).
+  Future<MatrixFile?> _exportableFile(BuildContext context) async {
+    if (!await _guardMediaExport(context)) return null;
+    if (!context.mounted) return null;
     final matrixFile = await _getFile(context);
-    if (!context.mounted) return;
-    if (!await _guardMediaExport(context)) return;
-    if (!context.mounted) return;
+    if (!context.mounted) return null;
+    if (!await _guardMediaExport(context)) return null;
+    if (!context.mounted) return null;
+    return matrixFile.result;
+  }
 
-    matrixFile.result?.save(context);
+  /// One-tap save: the gallery or Downloads on Android, the save panel
+  /// elsewhere (see [MatrixFileExtension.save]).
+  Future<void> saveFile(BuildContext context) async {
+    final file = await _exportableFile(context);
+    if (file == null || !context.mounted) return;
+    await file.save(context);
+  }
+
+  /// The system "Save as" dialog (Android: choose folder and name).
+  Future<void> saveFileAs(BuildContext context) async {
+    final file = await _exportableFile(context);
+    if (file == null || !context.mounted) return;
+    await file.saveAs(context);
   }
 
   Future<void> shareFile(BuildContext context) async {
-    if (!await _guardMediaExport(context)) return;
-    if (!context.mounted) return;
-    final matrixFile = await _getFile(context);
-    if (!context.mounted) return;
-    if (!await _guardMediaExport(context)) return;
-    if (!context.mounted) return;
+    final file = await _exportableFile(context);
+    if (file == null || !context.mounted) return;
+    await file.share(context);
+  }
 
-    matrixFile.result?.share(context);
+  /// Whether "Copy image" applies: a still or animated picture (not a
+  /// Lottie sticker) that may be exported, on macOS, where the clipboard
+  /// holds it in memory. Android's clipboard plugin would write a
+  /// plaintext copy into the app cache, so it is not offered there.
+  bool get canCopyImage =>
+      PlatformInfos.isMacOS &&
+      personalMediaExportAllowed &&
+      status.isSent &&
+      {MessageTypes.Image, MessageTypes.Sticker}.contains(messageType) &&
+      !LottieStickerData.isLottieMime(attachmentMimetype);
+
+  Future<void> copyImage(BuildContext context) async {
+    final file = await _exportableFile(context);
+    if (file == null || !context.mounted) return;
+    await file.copyImage(context);
   }
 
   bool get isAttachmentSmallEnough =>

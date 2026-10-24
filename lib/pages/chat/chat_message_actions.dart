@@ -8,12 +8,12 @@ import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
 import 'package:chatloom/pages/chat/message_link_actions.dart';
 import 'package:chatloom/personal/developer_options.dart';
+import 'package:chatloom/personal/media/media_export_actions.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/report_policy.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/utils/file_description.dart';
-import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show RoundMediaPolicy;
@@ -141,12 +141,12 @@ List<ConversationMessageAction> chatMessageActions(
       }(),
     // Stickers: favourite, view pack; GIFs: save (Telegram).
     ...stickerMessageActions(context, display),
-    if (controller.canSaveEvent(display))
-      ConversationMessageAction(
-        icon: Icons.download_outlined,
-        label: l10n.downloadFile,
-        onSelected: () => display.saveFile(controller.context),
-      ),
+    // Save (gallery/Downloads on Android), Save as…, Copy image (macOS).
+    ...mediaExportMenuActions(
+      controller.context,
+      display,
+      canSave: controller.canSaveEvent(display),
+    ),
     // Raw message source: developer options only (CS-23).
     if (DeveloperOptions.enabled)
       ConversationMessageAction(

@@ -61,6 +61,14 @@ class MxcImage extends StatefulWidget {
   /// Paint opacity applied while drawing the image (no compositing layer).
   final double opacity;
 
+  /// Caps the decode of a full-size image ([isThumbnail] false) to this many
+  /// physical pixels on its long side (never upscaled), so a 50 MP original
+  /// does not take 200 MB of RAM. A change keeps the previous frame until
+  /// the new decode is ready (the viewer sharpens on zoom). The decodes are
+  /// evicted from the shared [ImageCache] when they are replaced or the
+  /// widget goes away, so they never push avatars and thumbnails out.
+  final int? maxDecodeSide;
+
   /// Encryption of an [uri] attachment (an `EncryptedFile` JSON without
   /// `url`, as in `com.beeper.linkpreviews` `beeper:image:encryption`): the
   /// original is downloaded and decrypted locally; no thumbnail is asked for.
@@ -146,6 +154,7 @@ class MxcImage extends StatefulWidget {
     this.cacheName,
     this.decodeToCover = false,
     this.opacity = 1,
+    this.maxDecodeSide,
     this.encryption,
     this.onLoadStateChanged,
     super.key,
@@ -190,6 +199,16 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   /// directly, without the placeholder cross-fade.
   bool _fromCache = false;
   MxcImageLoad _reported = MxcImageLoad.loading;
+
+  /// A frame of the current bytes is on screen.
+  bool _shown = false;
+
+  /// The decode size changed after a frame was shown ([MxcImage.maxDecodeSide]):
+  /// the new decode swaps in place, without the placeholder fade.
+  bool _swapped = false;
+
+  /// The capped decode in use (see [MxcImage.maxDecodeSide]).
+  ImageProvider? _capped;
   Client? _dependencyClient;
   double? _dependencyDpr;
 
@@ -476,6 +495,8 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     _imageData = null;
     _lottie = null;
     _fromCache = false;
+    _shown = false;
+    _swapped = false;
     _reported = MxcImageLoad.loading;
     if (widget.uri != null || widget.event != null) {
       final client = _client();
@@ -551,8 +572,22 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     }
   }
 
+  /// Remembers the capped provider in use; a replaced one leaves the cache.
+  ImageProvider _track(ImageProvider provider) {
+    final previous = _capped;
+    if (previous != null && previous != provider) {
+      if (_shown) _swapped = true;
+      unawaited(previous.evict().catchError((Object _) => false));
+    }
+    return _capped = provider;
+  }
+
   @override
   void dispose() {
+    final capped = _capped;
+    if (capped != null) {
+      unawaited(capped.evict().catchError((Object _) => false));
+    }
     _generation++;
     _retryTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
@@ -590,6 +625,17 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
             height: max(1, (height * dpr).ceil()),
           );
         }
+      }
+      final side = widget.maxDecodeSide;
+      if (side != null && side > 0 && !widget.isThumbnail) {
+        return _track(
+          ResizeImage(
+            original,
+            width: side,
+            height: side,
+            policy: ResizeImagePolicy.fit,
+          ),
+        );
       }
       final width = decodeSize(widget.width);
       final height = decodeSize(widget.height);
@@ -653,8 +699,11 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       int? frame,
       bool wasSynchronouslyLoaded,
     ) {
-      if (frame != null) _report(MxcImageLoad.ready);
-      if (wasSynchronouslyLoaded || _fromCache) return child;
+      if (frame != null) {
+        _report(MxcImageLoad.ready);
+        _shown = true;
+      }
+      if (wasSynchronouslyLoaded || _fromCache || _swapped) return child;
       final duration = NotionMotion.reduced(context)
           ? Duration.zero
           : widget.animationDuration;
@@ -719,6 +768,8 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
                   filterQuality: widget.isThumbnail
                       ? FilterQuality.low
                       : FilterQuality.medium,
+                  // A new decode size keeps the old frame until it is ready.
+                  gaplessPlayback: widget.maxDecodeSide != null,
                   frameBuilder: loops ? firstFrame : fadeInFrame,
                   errorBuilder: errorFallback,
                 ));

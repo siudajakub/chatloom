@@ -8,11 +8,13 @@ import 'dart:io';
 
 import 'package:chatloom/pages/chat/events/inline_loop_video.dart';
 import 'package:chatloom/pages/chat/events/round_video_view.dart';
+import 'package:chatloom/personal/media/cancellable_download.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/size_string.dart';
 import 'package:chatloom/widgets/blur_hash.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
@@ -33,11 +35,16 @@ class EventVideoPlayer extends StatefulWidget {
   /// playing) only while it is this page; null: always (a single video).
   final ValueListenable<String?>? currentPage;
 
+  /// Notifies when the viewer asks to play or pause (Space on a keyboard);
+  /// only the player of the current page reacts.
+  final Listenable? playPauseRequests;
+
   const EventVideoPlayer(
     this.event, {
     this.heroTag,
     this.sourceRadius = NotionRadius.mdAll,
     this.currentPage,
+    this.playPauseRequests,
     super.key,
   });
 
@@ -79,12 +86,30 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
         unawaited(_downloadAction());
       }
     } else {
+      // Swiped past while downloading: stop the transfer (Telegram); the
+      // page shows a play button when it comes back.
+      _download?.cancel();
       final video = _videoPlayerController;
       if (video != null && video.value.isPlaying) {
         unawaited(video.pause().catchError((Object _) {}));
       }
       _playback.releaseAudible();
     }
+  }
+
+  void _onPlayPauseRequest() {
+    if (!mounted || !_isCurrentPage) return;
+    if (_videoPlayerController?.value.isInitialized == true) {
+      unawaited(_toggle());
+    } else if (_stopped && !_downloading) {
+      unawaited(_retry());
+    }
+  }
+
+  /// Stops the running download (the "×" on the ring).
+  void _cancelDownload() {
+    _download?.cancel();
+    if (mounted) setState(() => _stopped = true);
   }
 
   bool _coordinating = false;
@@ -117,8 +142,12 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   VideoPlayerController? _videoPlayerController;
 
   double? _downloadProgress;
+  int _downloadedBytes = 0;
   ManagedMediaFile? _lease;
   bool _downloading = false;
+
+  /// The transfer in flight; cancelled on close, swipe-away and "×".
+  MediaDownloadToken? _download;
   bool _loadFailed = false;
 
   // The video_player package only doesn't support Windows and Linux.
@@ -146,22 +175,44 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
         if (mounted) setState(() => _stopped = true);
         return;
       }
-      final fileSize = widget.event.content
-          .tryGetMap<String, Object?>('info')
-          ?.tryGet<int>('size');
-      final videoFile = await widget.event.downloadAndDecryptAttachment(
-        onDownloadProgress: fileSize == null
-            ? null
-            : (progress) {
-                if (!mounted) return;
-                final progressPercentage = progress / fileSize;
-                setState(() {
-                  _downloadProgress = progressPercentage < 1
-                      ? progressPercentage
-                      : null;
-                });
-              },
-      );
+      final fileSize = _fileSize;
+      final token = _download = MediaDownloadToken();
+      final MatrixFile videoFile;
+      try {
+        videoFile = await downloadAttachmentCancellable(
+          widget.event,
+          token: token,
+          onDownloadProgress: fileSize == null
+              ? null
+              : (bytes) {
+                  if (!mounted) return;
+                  final fraction = bytes / fileSize;
+                  final shown = fraction < 1 ? fraction : null;
+                  // One rebuild per percent, not per network chunk.
+                  final previous = _downloadProgress;
+                  if (shown != null &&
+                      previous != null &&
+                      (shown - previous).abs() < .01) {
+                    return;
+                  }
+                  setState(() {
+                    _downloadProgress = shown;
+                    _downloadedBytes = bytes;
+                  });
+                },
+        );
+      } on MediaDownloadCancelled {
+        if (mounted) {
+          setState(() {
+            _stopped = true;
+            _downloadProgress = null;
+            _downloadedBytes = 0;
+          });
+        }
+        return;
+      } finally {
+        if (identical(_download, token)) _download = null;
+      }
 
       // Dispose the controllers if we already have them.
       await _disposeControllers();
@@ -227,9 +278,16 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     }
   }
 
+  int? get _fileSize => widget.event.content
+      .tryGetMap<String, Object?>('info')
+      ?.tryGet<int>('size');
+
   @override
   void dispose() {
+    // Closing the viewer stops the transfer; nothing keeps downloading.
+    _download?.cancel();
     widget.currentPage?.removeListener(_onPageChanged);
+    widget.playPauseRequests?.removeListener(_onPlayPauseRequest);
     _playback.dispose();
     unawaited(_disposeControllers().catchError((Object _) {}));
     super.dispose();
@@ -239,6 +297,7 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   void initState() {
     super.initState();
     widget.currentPage?.addListener(_onPageChanged);
+    widget.playPauseRequests?.addListener(_onPlayPauseRequest);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (_isCurrentPage) {
@@ -255,6 +314,10 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     if (oldWidget.currentPage != widget.currentPage) {
       oldWidget.currentPage?.removeListener(_onPageChanged);
       widget.currentPage?.addListener(_onPageChanged);
+    }
+    if (oldWidget.playPauseRequests != widget.playPauseRequests) {
+      oldWidget.playPauseRequests?.removeListener(_onPlayPauseRequest);
+      widget.playPauseRequests?.addListener(_onPlayPauseRequest);
     }
   }
 
@@ -456,8 +519,11 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
                     else
                       Center(
                         child: NotionDelayedReveal(
-                          child: CircularProgressIndicator.adaptive(
-                            value: _downloadProgress,
+                          child: _DownloadRing(
+                            progress: _downloadProgress,
+                            received: _downloadedBytes,
+                            total: _fileSize,
+                            onCancel: _downloading ? _cancelDownload : null,
                           ),
                         ),
                       ),
@@ -513,4 +579,80 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
       );
     },
   );
+}
+
+/// Download progress of the viewer's video (Telegram): a ring with an "×"
+/// that stops the transfer, and "12.4 MB / 48 MB" under it once the size is
+/// known.
+class _DownloadRing extends StatelessWidget {
+  const _DownloadRing({
+    required this.progress,
+    required this.received,
+    required this.total,
+    required this.onCancel,
+  });
+
+  final double? progress;
+  final int received;
+  final int? total;
+  final VoidCallback? onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = this.total;
+    final cancel = onCancel;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          button: cancel != null,
+          label: cancel != null ? 'Cancel download' : null,
+          child: GestureDetector(
+            key: const ValueKey('viewer-video-cancel'),
+            behavior: HitTestBehavior.opaque,
+            onTap: cancel,
+            child: DecoratedBox(
+              decoration: const ShapeDecoration(
+                color: NotionMediaColors.scrim,
+                shape: CircleBorder(),
+              ),
+              child: SizedBox.square(
+                dimension: NotionSize.touchTarget + NotionSpace.md,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(NotionSpace.xxs),
+                      child: SizedBox.expand(
+                        child: CircularProgressIndicator(
+                          value: progress,
+                          strokeWidth: 2.5,
+                          color: NotionMediaColors.onScrim,
+                        ),
+                      ),
+                    ),
+                    if (cancel != null)
+                      const Icon(
+                        Icons.close,
+                        color: NotionMediaColors.onScrim,
+                        size: NotionSize.iconSm,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (total != null && total > 0 && received > 0) ...[
+          const SizedBox(height: NotionSpace.xs),
+          Text(
+            '${received.sizeString} / ${total.sizeString}',
+            style: NotionType.caption.copyWith(
+              color: NotionMediaColors.onScrim,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
 }

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/blur_hash.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -19,13 +19,42 @@ import 'package:matrix/matrix.dart';
 /// A small loader sits at the bottom while the download takes longer than
 /// [NotionMotion.loaderGrace]; a failed download keeps the thumbnail and
 /// offers a retry there.
+///
+/// Memory: the original is decoded at twice its on-screen size (sharp at a
+/// double-tap zoom), at most [maxDecodeSide] px; zooming past
+/// [sharpenScale] swaps in the [maxDecodeSide] decode without a flash, and
+/// back at fit the small one returns. Neither decode stays in the shared
+/// image cache once replaced or the page is gone (BP-11).
 class ProgressivePhoto extends StatefulWidget {
   const ProgressivePhoto({
     super.key,
     required this.event,
     required this.size,
     required this.frame,
+    this.zoom,
   });
+
+  /// Long-side cap of any decode in the viewer: 4096 px keeps a 50 MP photo
+  /// at about 50 MB instead of 200 MB and is still sharp at 2–3× on a phone.
+  static const int maxDecodeSide = 4096;
+
+  /// Zoom factor from which the photo is decoded at [maxDecodeSide].
+  static const double sharpenScale = 1.8;
+
+  /// The decode side for a photo shown at [size] logical px.
+  static int decodeSideFor(
+    Size size,
+    double devicePixelRatio, {
+    bool sharp = false,
+  }) {
+    if (sharp) return maxDecodeSide;
+    final longest = max(size.width, size.height) * devicePixelRatio * 2;
+    if (!longest.isFinite || longest <= 0) return maxDecodeSide;
+    return min(maxDecodeSide, max(1, longest.ceil()));
+  }
+
+  /// Zoom of the page ([InteractiveViewer] transformation).
+  final ValueListenable<Matrix4>? zoom;
 
   final Event event;
 
@@ -49,10 +78,14 @@ class _ProgressivePhotoState extends State<ProgressivePhoto> {
   /// Bytes of the bubble or grid tile the viewer was opened from.
   Uint8List? _preview;
 
+  /// Zoomed past [ProgressivePhoto.sharpenScale]: decode at the cap.
+  bool _sharp = false;
+
   @override
   void initState() {
     super.initState();
     _preview = MxcImage.cachedPreviewOf(widget.event);
+    widget.zoom?.addListener(_onZoom);
   }
 
   @override
@@ -62,6 +95,24 @@ class _ProgressivePhotoState extends State<ProgressivePhoto> {
       _load = MxcImageLoad.loading;
       _preview = MxcImage.cachedPreviewOf(widget.event);
     }
+    if (oldWidget.zoom != widget.zoom) {
+      oldWidget.zoom?.removeListener(_onZoom);
+      widget.zoom?.addListener(_onZoom);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.zoom?.removeListener(_onZoom);
+    super.dispose();
+  }
+
+  /// Sharpens past [ProgressivePhoto.sharpenScale]; drops the big decode only
+  /// back at fit, so a pinch around the threshold never decodes twice.
+  void _onZoom() {
+    final scale = widget.zoom?.value.getMaxScaleOnAxis() ?? 1;
+    final sharp = _sharp ? scale > 1.01 : scale > ProgressivePhoto.sharpenScale;
+    if (sharp != _sharp && mounted) setState(() => _sharp = sharp);
   }
 
   void _onLoad(MxcImageLoad load) {
@@ -142,6 +193,11 @@ class _ProgressivePhotoState extends State<ProgressivePhoto> {
             animated: true,
             width: size.width,
             height: size.height,
+            maxDecodeSide: ProgressivePhoto.decodeSideFor(
+              size,
+              MediaQuery.devicePixelRatioOf(context),
+              sharp: _sharp,
+            ),
             // The thumbnail below is the placeholder; no spinner, no broken
             // image icon over it.
             placeholder: (_) => const SizedBox.shrink(),

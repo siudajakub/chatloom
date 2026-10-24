@@ -22,12 +22,19 @@ import '../../utils/matrix_sdk_extensions/event_extension.dart';
 /// bubbles use) while the backdrop fades in, and flies back on close or
 /// after a downward swipe (see [ImageViewerController]). [sourceRadius] is
 /// the corner radius of that thumbnail.
+///
+/// [mediaEvents] is the album to swipe through, in display order (oldest
+/// first); without it the viewer collects the images and videos of
+/// [timeline]. [heroTagFor] gives the hero tag of every page, so closing
+/// after a swipe flies back into that item's own thumbnail (the shared-media
+/// grid); it wins over [heroTag].
 Future<void> showImageViewer(
   BuildContext context,
   Event event, {
   Timeline? timeline,
   List<Event>? mediaEvents,
   Object? heroTag,
+  Object Function(Event event)? heroTagFor,
   BorderRadius sourceRadius = NotionRadius.mdAll,
 }) {
   final navigator = Navigator.of(context, rootNavigator: true);
@@ -40,6 +47,7 @@ Future<void> showImageViewer(
         mediaEvents: mediaEvents,
         outerContext: context,
         heroTag: heroTag,
+        heroTagFor: heroTagFor,
         sourceRadius: sourceRadius,
       ),
     ),
@@ -57,6 +65,10 @@ class ImageViewer extends StatefulWidget {
   /// Hero tag of the thumbnail [event] was opened from (other pages use
   /// their event id).
   final Object? heroTag;
+
+  /// Hero tag of each page's thumbnail (a grid with its own tags); wins
+  /// over [heroTag].
+  final Object Function(Event event)? heroTagFor;
   final BorderRadius sourceRadius;
 
   const ImageViewer(
@@ -65,9 +77,40 @@ class ImageViewer extends StatefulWidget {
     this.timeline,
     this.mediaEvents,
     this.heroTag,
+    this.heroTagFor,
     this.sourceRadius = NotionRadius.mdAll,
     super.key,
   });
+
+  /// Opens [events] (display order, oldest first) at [initialIndex]: the
+  /// entry point of galleries such as the chat details' shared media.
+  ///
+  /// ```dart
+  /// ImageViewer.open(
+  ///   context,
+  ///   events: media,
+  ///   initialIndex: i,
+  ///   heroTagFor: (event) => ('details-media', event.eventId),
+  ///   sourceRadius: NotionRadius.smAll,
+  /// );
+  /// ```
+  static Future<void> open(
+    BuildContext context, {
+    required List<Event> events,
+    required int initialIndex,
+    Object Function(Event event)? heroTagFor,
+    BorderRadius sourceRadius = NotionRadius.mdAll,
+  }) {
+    assert(events.isNotEmpty);
+    final index = initialIndex.clamp(0, events.length - 1);
+    return showImageViewer(
+      context,
+      events[index],
+      mediaEvents: List.unmodifiable(events),
+      heroTagFor: heroTagFor,
+      sourceRadius: sourceRadius,
+    );
+  }
 
   @override
   ImageViewerController createState() => ImageViewerController();
@@ -98,16 +141,35 @@ class ImageViewerController extends State<ImageViewer>
   ValueNotifier<double> get dismissOffset => dismiss.offset;
 
   /// Hero tag of [event]'s media.
-  Object heroTagFor(Event event) =>
-      event.eventId == widget.event.eventId && widget.heroTag != null
-      ? widget.heroTag!
-      : event.eventId;
+  Object heroTagFor(Event event) {
+    final builder = widget.heroTagFor;
+    if (builder != null) return builder(event);
+    return event.eventId == widget.event.eventId && widget.heroTag != null
+        ? widget.heroTag!
+        : event.eventId;
+  }
 
   /// Zoom state of one page; a zoomed image pans instead of dismissing.
   TransformationController transformFor(Event event) =>
       _transforms.putIfAbsent(event.eventId, TransformationController.new);
 
   void toggleChrome() => chromeVisible.value = !chromeVisible.value;
+
+  /// Index of the page on screen: header ("3 of 12"), caption, actions and
+  /// arrows follow it (once per page, not per scroll frame).
+  late final ValueNotifier<int> currentIndex = ValueNotifier(_initialIndex);
+  late int _initialIndex;
+
+  /// Height of the caption at the bottom; pages keep their status pills
+  /// and video transport above it.
+  final ValueNotifier<double> captionInset = ValueNotifier(0);
+
+  /// Space bar: play or pause the video on screen.
+  final ValueNotifier<int> playPauseRequests = ValueNotifier(0);
+
+  void requestPlayPause() => playPauseRequests.value++;
+
+  void close() => Navigator.of(context, rootNavigator: false).maybePop();
 
   void onDoubleTapDown(TapDownDetails details) =>
       _doubleTapAt = details.localPosition;
@@ -170,10 +232,10 @@ class ImageViewerController extends State<ImageViewer>
         .stopAll(suspend: false)
         .catchError((Object _) {});
     currentPage.value = current;
+    currentIndex.value = index;
   }
 
-  Event get currentEventOrInitial =>
-      pageController.hasClients ? currentEvent : widget.event;
+  Event get currentEventOrInitial => currentEvent;
 
   @override
   void initState() {
@@ -196,6 +258,7 @@ class ImageViewerController extends State<ImageViewer>
       (event) => event.eventId == widget.event.eventId,
     );
     if (index < 0) index = 0;
+    _initialIndex = index;
     pageController = PageController(initialPage: index);
   }
 
@@ -203,36 +266,56 @@ class ImageViewerController extends State<ImageViewer>
 
   late final List<Event> allEvents;
 
-  void onKeyEvent(KeyEvent event) {
-    switch (event.logicalKey) {
-      case LogicalKeyboardKey.arrowLeft:
-        if (canGoBack) prevImage();
-        break;
-      case LogicalKeyboardKey.arrowRight:
-        if (canGoNext) nextImage();
-        break;
+  /// Keyboard (macOS, a keyboard on Android): Esc closes, the arrows page,
+  /// Space plays or pauses a video, Cmd/Ctrl+S saves, Cmd/Ctrl+C copies an
+  /// image (where the clipboard can hold it).
+  Map<ShortcutActivator, VoidCallback> get shortcuts => {
+    const SingleActivator(LogicalKeyboardKey.escape): close,
+    const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
+      if (canGoBack) prevImage();
+    },
+    const SingleActivator(LogicalKeyboardKey.arrowRight): () {
+      if (canGoNext) nextImage();
+    },
+    const SingleActivator(LogicalKeyboardKey.space): requestPlayPause,
+    const SingleActivator(LogicalKeyboardKey.keyS, meta: true): _saveShortcut,
+    const SingleActivator(LogicalKeyboardKey.keyS, control: true):
+        _saveShortcut,
+    const SingleActivator(LogicalKeyboardKey.keyC, meta: true): _copyShortcut,
+    const SingleActivator(LogicalKeyboardKey.keyC, control: true):
+        _copyShortcut,
+  };
+
+  void _saveShortcut() {
+    if (canExport(currentEvent)) saveFileAction(context);
+  }
+
+  void _copyShortcut() {
+    if (currentEvent.canCopyImage) copyImageAction(context);
+  }
+
+  /// Whether [event] may be saved or shared (not redacted or protected).
+  bool canExport(Event event) =>
+      !event.redacted && RoundMediaPolicy.fromContent(event.content).canExport;
+
+  Future<void> prevImage() => _goTo(_index - 1);
+
+  Future<void> nextImage() => _goTo(_index + 1);
+
+  Future<void> _goTo(int index) async {
+    if (index < 0 || index >= allEvents.length) return;
+    if (NotionMotion.reduced(context)) {
+      pageController.jumpToPage(index);
+      return;
     }
-  }
-
-  Future<void> prevImage() async {
-    await pageController.previousPage(
+    await pageController.animateToPage(
+      index,
       duration: NotionMotion.long,
       curve: NotionMotion.emphasized,
     );
-    if (!mounted) return;
-    setState(() {});
   }
 
-  Future<void> nextImage() async {
-    await pageController.nextPage(
-      duration: NotionMotion.long,
-      curve: NotionMotion.emphasized,
-    );
-    if (!mounted) return;
-    setState(() {});
-  }
-
-  int get _index => pageController.page?.toInt() ?? 0;
+  int get _index => currentIndex.value;
 
   Event get currentEvent => allEvents[_index];
 
@@ -254,11 +337,20 @@ class ImageViewerController extends State<ImageViewer>
     showForwardSheet(context, items: [ContentShareItem(event.content.copy())]);
   }
 
-  /// Save this file with a system call.
+  /// One-tap save: the gallery or Downloads on Android, the save panel
+  /// (in ~/Downloads) on macOS.
   void saveFileAction(BuildContext context) => currentEvent.saveFile(context);
 
-  /// Save this file with a system call.
+  /// The system "Save as" dialog (Android).
+  void saveFileAsAction(BuildContext context) =>
+      currentEvent.saveFileAs(context);
+
+  /// The system share sheet (Android) or sharing picker (macOS: AirDrop,
+  /// Messages).
   void shareFileAction(BuildContext context) => currentEvent.shareFile(context);
+
+  /// Copies the image on screen to the clipboard (macOS).
+  void copyImageAction(BuildContext context) => currentEvent.copyImage(context);
 
   static const maxScaleFactor = 1.5;
 
@@ -282,6 +374,9 @@ class ImageViewerController extends State<ImageViewer>
     zoom.dispose();
     chromeVisible.dispose();
     currentPage.dispose();
+    currentIndex.dispose();
+    captionInset.dispose();
+    playPauseRequests.dispose();
     for (final transform in _transforms.values) {
       transform.dispose();
     }

@@ -6,11 +6,14 @@
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/events/round_video_bridge_message.dart';
 import 'package:chatloom/pages/chat/events/round_video_message.dart';
+import 'package:chatloom/pages/image_viewer/image_viewer_chrome.dart';
 import 'package:chatloom/pages/image_viewer/pointers_listener.dart';
 import 'package:chatloom/pages/image_viewer/progressive_photo.dart';
 import 'package:chatloom/pages/image_viewer/video_player.dart';
+import 'package:chatloom/personal/media/media_export_actions.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/hover_builder.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
@@ -40,160 +43,228 @@ class ImageViewerView extends StatelessWidget {
       builder: (context, visible, child) =>
           NotionMediaChrome(drag: drag, visible: visible, child: child!),
     );
-    return GestureDetector(
-      onTap: () => Navigator.of(context).pop(),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        extendBodyBehindAppBar: true,
-        appBar: PreferredSize(
-          preferredSize: const Size.fromHeight(kToolbarHeight),
-          child: chrome(
-            AppBar(
-              elevation: 0,
-              leading: IconButton(
-                style: iconButtonStyle,
-                icon: const Icon(Icons.close),
-                onPressed: Navigator.of(context).pop,
-                color: NotionMediaColors.onScrim,
-                tooltip: L10n.of(context).close,
-              ),
-              backgroundColor: Colors.transparent,
-              actions: [
-                AnimatedBuilder(
-                  animation: controller.pageController,
-                  builder: (context, _) {
-                    final event = controller.pageController.hasClients
-                        ? controller.currentEvent
-                        : controller.widget.event;
-                    final policy = RoundMediaPolicy.fromContent(event.content);
-                    final round =
-                        RoundVideoDescriptor.fromContent(
-                          event.content,
-                          redacted: event.redacted,
-                        ) !=
-                        null;
-                    final canForward =
-                        event.content['chatloom.local_media'] != true &&
-                        !event.redacted &&
-                        policy.canForward &&
-                        (!round ||
-                            TelegramRoundService.of(
-                              event.room.client,
-                            ).canNativeForward(event));
-                    final canExport = !event.redacted && policy.canExport;
-                    // Local link assets have no server event that can be forwarded.
-
-                    return NotionMediaActionsButton(
-                      actions: [
-                        NotionMediaAction(
-                          label: round ? 'Forward in Telegram' : 'Forward',
-                          icon: Icons.reply_outlined,
-                          onPressed: canForward
-                              ? controller.forwardAction
-                              : null,
-                        ),
-                        NotionMediaAction(
-                          label: L10n.of(context).downloadFile,
-                          icon: Icons.download_outlined,
-                          onPressed: canExport
-                              ? () => controller.saveFileAction(context)
-                              : null,
-                        ),
-                        if (PlatformInfos.isMobile)
-                          NotionMediaAction(
-                            label: L10n.of(context).share,
-                            icon: Icons.adaptive.share_outlined,
-                            onPressed: canExport
-                                ? () => controller.shareFileAction(context)
-                                : null,
-                          ),
-                      ],
-                    );
-                  },
+    // Header, caption, actions and arrows follow the page on screen (once
+    // per page change, not per scroll frame).
+    Widget perPage(Widget Function(BuildContext context, Event event) build) =>
+        ValueListenableBuilder<int>(
+          valueListenable: controller.currentIndex,
+          builder: (context, _, _) => build(context, controller.currentEvent),
+        );
+    return CallbackShortcuts(
+      bindings: controller.shortcuts,
+      child: Focus(
+        focusNode: controller.focusNode,
+        autofocus: true,
+        child: GestureDetector(
+          onTap: () => Navigator.of(context).pop(),
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            extendBodyBehindAppBar: true,
+            appBar: PreferredSize(
+              preferredSize: const Size.fromHeight(kToolbarHeight),
+              child: chrome(
+                AppBar(
+                  elevation: 0,
+                  scrolledUnderElevation: 0,
+                  flexibleSpace: const ImageViewerTopScrim(),
+                  leading: IconButton(
+                    style: iconButtonStyle,
+                    icon: const Icon(Icons.close),
+                    onPressed: Navigator.of(context).pop,
+                    color: NotionMediaColors.onScrim,
+                    tooltip: L10n.of(context).close,
+                  ),
+                  backgroundColor: Colors.transparent,
+                  titleSpacing: 0,
+                  title: perPage(
+                    (context, event) => ImageViewerTitle(
+                      event: event,
+                      index: controller.currentIndex.value,
+                      count: controller.allEvents.length,
+                    ),
+                  ),
+                  actions: [perPage(_actions)],
                 ),
-              ],
+              ),
             ),
-          ),
-        ),
-        body: HoverBuilder(
-          builder: (context, hovered) => Stack(
-            children: [
-              // Fades in with the route and out while the media is swiped
-              // away.
-              Positioned.fill(
-                child: AnimatedBuilder(
-                  animation: controller.pageController,
-                  builder: (context, _) {
-                    final event = controller.pageController.hasClients
-                        ? controller.currentEvent
-                        : controller.widget.event;
-                    return NotionMediaBackdrop(
-                      drag: drag,
-                      color: event.messageType == MessageTypes.Video
-                          ? NotionMediaColors.stageScrim
-                          : NotionMediaColors.viewer,
-                    );
-                  },
-                ),
-              ),
-              NotionDismissTransform(
-                drag: drag,
-                child: KeyboardListener(
-                  focusNode: controller.focusNode,
-                  onKeyEvent: controller.onKeyEvent,
-                  child: PointersListener(
-                    builder: (context, moreThanOnePointer) => PageView.builder(
-                      physics: !moreThanOnePointer
-                          ? BouncingScrollPhysics()
-                          : NeverScrollableScrollPhysics(),
-                      scrollDirection: Axis.horizontal,
-                      controller: controller.pageController,
-                      onPageChanged: controller.onPageChanged,
-                      itemCount: controller.allEvents.length,
-                      itemBuilder: (context, i) =>
-                          _page(context, controller.allEvents[i]),
+            body: HoverBuilder(
+              builder: (context, hovered) => Stack(
+                children: [
+                  // Fades in with the route and out while the media is swiped
+                  // away.
+                  Positioned.fill(
+                    child: perPage(
+                      (context, event) => NotionMediaBackdrop(
+                        drag: drag,
+                        color: event.messageType == MessageTypes.Video
+                            ? NotionMediaColors.stageScrim
+                            : NotionMediaColors.viewer,
+                      ),
                     ),
                   ),
-                ),
-              ),
-              if (hovered) ...[
-                if (controller.canGoBack)
-                  Align(
-                    alignment: .centerLeft,
+                  NotionDismissTransform(
+                    drag: drag,
+                    child: PointersListener(
+                      builder: (context, moreThanOnePointer) =>
+                          PageView.builder(
+                            physics: !moreThanOnePointer
+                                ? BouncingScrollPhysics()
+                                : NeverScrollableScrollPhysics(),
+                            scrollDirection: Axis.horizontal,
+                            controller: controller.pageController,
+                            onPageChanged: controller.onPageChanged,
+                            itemCount: controller.allEvents.length,
+                            itemBuilder: (context, i) => _withCaptionInset(
+                              _page(context, controller.allEvents[i]),
+                            ),
+                          ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
                     child: chrome(
-                      Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: IconButton(
-                          style: iconButtonStyle,
-                          tooltip: L10n.of(context).previous,
-                          icon: const Icon(Icons.keyboard_arrow_left_outlined),
-                          onPressed: controller.prevImage,
+                      perPage(
+                        (context, event) => ImageViewerCaption(
+                          event: event,
+                          onHeight: (height) =>
+                              controller.captionInset.value = height,
                         ),
                       ),
                     ),
                   ),
-                if (controller.canGoNext)
-                  Align(
-                    alignment: .centerRight,
-                    child: chrome(
-                      Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: IconButton(
-                          style: iconButtonStyle,
-                          tooltip: L10n.of(context).next,
-                          icon: const Icon(Icons.keyboard_arrow_right_outlined),
-                          onPressed: controller.nextImage,
+                  if (hovered)
+                    Positioned.fill(
+                      child: perPage(
+                        (context, _) => Stack(
+                          children: [
+                            if (controller.canGoBack)
+                              Align(
+                                alignment: .centerLeft,
+                                child: chrome(
+                                  Padding(
+                                    padding: const EdgeInsets.all(
+                                      NotionSpace.sm,
+                                    ),
+                                    child: IconButton(
+                                      style: iconButtonStyle,
+                                      tooltip: L10n.of(context).previous,
+                                      icon: const Icon(
+                                        Icons.keyboard_arrow_left_outlined,
+                                      ),
+                                      onPressed: controller.prevImage,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            if (controller.canGoNext)
+                              Align(
+                                alignment: .centerRight,
+                                child: chrome(
+                                  Padding(
+                                    padding: const EdgeInsets.all(
+                                      NotionSpace.sm,
+                                    ),
+                                    child: IconButton(
+                                      style: iconButtonStyle,
+                                      tooltip: L10n.of(context).next,
+                                      icon: const Icon(
+                                        Icons.keyboard_arrow_right_outlined,
+                                      ),
+                                      onPressed: controller.nextImage,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ),
-                  ),
-              ],
-            ],
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
+
+  /// Forward, save (gallery on Android), save as, share, copy image: the
+  /// export entries follow the same protected-media gate as the message
+  /// menu.
+  Widget _actions(BuildContext context, Event event) {
+    final policy = RoundMediaPolicy.fromContent(event.content);
+    final round =
+        RoundVideoDescriptor.fromContent(
+          event.content,
+          redacted: event.redacted,
+        ) !=
+        null;
+    // Local link assets have no server event that can be forwarded.
+    final canForward =
+        event.content['chatloom.local_media'] != true &&
+        !event.redacted &&
+        policy.canForward &&
+        (!round ||
+            TelegramRoundService.of(event.room.client).canNativeForward(event));
+    final canExport = controller.canExport(event);
+    return NotionMediaActionsButton(
+      actions: [
+        NotionMediaAction(
+          label: round ? 'Forward in Telegram' : 'Forward',
+          icon: Icons.reply_outlined,
+          onPressed: canForward ? controller.forwardAction : null,
+        ),
+        NotionMediaAction(
+          label: mediaSaveLabel(event),
+          icon: Icons.download_outlined,
+          onPressed: canExport
+              ? () => controller.saveFileAction(context)
+              : null,
+        ),
+        if (mediaOffersSaveAs())
+          NotionMediaAction(
+            label: 'Save as…',
+            icon: Icons.save_as_outlined,
+            onPressed: canExport
+                ? () => controller.saveFileAsAction(context)
+                : null,
+          ),
+        if (PlatformInfos.isMobile || PlatformInfos.isMacOS)
+          NotionMediaAction(
+            label: L10n.of(context).share,
+            icon: Icons.adaptive.share_outlined,
+            onPressed: canExport
+                ? () => controller.shareFileAction(context)
+                : null,
+          ),
+        if (event.canCopyImage)
+          NotionMediaAction(
+            label: 'Copy image',
+            icon: Icons.copy_all_outlined,
+            onPressed: () => controller.copyImageAction(context),
+          ),
+      ],
+    );
+  }
+
+  /// Keeps a page's own bottom elements (loader, retry, video transport)
+  /// above the caption.
+  Widget _withCaptionInset(Widget page) => ValueListenableBuilder<double>(
+    valueListenable: controller.captionInset,
+    child: page,
+    builder: (context, inset, page) {
+      if (inset <= 0) return page!;
+      final media = MediaQuery.of(context);
+      return MediaQuery(
+        data: media.copyWith(
+          padding: media.padding.copyWith(bottom: media.padding.bottom + inset),
+        ),
+        child: page!,
+      );
+    },
+  );
 
   Widget _page(BuildContext context, Event event) {
     final policy = RoundMediaPolicy.fromContent(event.content);
@@ -252,6 +323,7 @@ class ImageViewerView extends StatelessWidget {
                   heroTag: controller.heroTagFor(event),
                   sourceRadius: controller.widget.sourceRadius,
                   currentPage: controller.currentPage,
+                  playPauseRequests: controller.playPauseRequests,
                 ),
               ),
             ),
@@ -300,6 +372,7 @@ class ImageViewerView extends StatelessWidget {
                 key: ValueKey(event.eventId),
                 event: event,
                 size: size,
+                zoom: controller.transformFor(event),
                 frame: (context, photo) => zoomable(photo),
               );
             }
@@ -312,6 +385,7 @@ class ImageViewerView extends StatelessWidget {
                 fit: BoxFit.contain,
                 isThumbnail: false,
                 animated: true,
+                maxDecodeSide: ProgressivePhoto.maxDecodeSide,
               ),
             );
           },
