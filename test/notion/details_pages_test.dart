@@ -9,7 +9,6 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/ui/notion/notion_choice.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -12,7 +12,6 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/ui/notion/notion_glass_header.dart';
 import 'package:chatloom/widgets/cover_resize_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';

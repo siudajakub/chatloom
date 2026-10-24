@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/ui/notion/notion_glass_header.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// The same presentation is used by ordinary and merged conversation adapters.

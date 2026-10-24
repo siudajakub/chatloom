@@ -14,7 +14,6 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/conversation_content_controller.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/ui/notion/notion_glass_header.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/size_string.dart';
