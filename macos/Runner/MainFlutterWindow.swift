@@ -90,7 +90,7 @@ class MainFlutterWindow: NSWindow {
     }
     powerChannel = channel
     powerObserver = NotificationCenter.default.addObserver(
-      forName: ProcessInfo.powerStateDidChangeNotification, object: nil, queue: .main
+      forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
     ) { [weak self] _ in
       self?.powerChannel?.invokeMethod(
         "powerSaving", arguments: ProcessInfo.processInfo.isLowPowerModeEnabled)
