@@ -1095,7 +1095,7 @@ void main() {
     expect(await state.requestDiscard(), isTrue);
     expect(state.isRecording, isFalse);
     await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(Dialog), findsNothing);
   });
 
   testWithDeadline('recording row exposes labelled 48 dp controls', (

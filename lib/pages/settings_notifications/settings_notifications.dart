@@ -5,11 +5,10 @@
 
 import 'dart:convert';
 
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/settings_notifications/push_rule_extensions.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
@@ -125,41 +124,32 @@ class SettingsNotificationsController extends State<SettingsNotifications> {
     final theme = Theme.of(context);
     final action = await showNotionAdaptiveDialog<PushRuleDialogAction>(
       context: context,
-      builder: (context) => ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 256),
-        child: AlertDialog.adaptive(
-          title: Text(rule.getPushRuleName(L10n.of(context))),
-          content: Padding(
-            padding: const EdgeInsets.only(top: 16.0),
-            child: Material(
-              borderRadius: BorderRadius.circular(AppConfig.borderRadius),
-              color: theme.colorScheme.surfaceContainer,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                scrollDirection: Axis.horizontal,
-                child: SelectableText(
-                  prettyJson(rule.toJson()),
-                  style: TextStyle(color: theme.colorScheme.onSurface),
-                ),
-              ),
+      builder: (context) => NotionAlertDialog(
+        title: Text(rule.getPushRuleName(L10n.of(context))),
+        content: Material(
+          borderRadius: NotionRadius.mdAll,
+          color: theme.colorScheme.surfaceContainer,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(NotionSpace.md),
+            scrollDirection: Axis.horizontal,
+            child: SelectableText(
+              prettyJson(rule.toJson()),
+              style: context.notion.typography.footnote,
             ),
           ),
-          actions: [
-            AdaptiveDialogAction(
-              onPressed: Navigator.of(context).pop,
-              child: Text(L10n.of(context).close),
-            ),
-            if (!rule.ruleId.startsWith('.m.'))
-              AdaptiveDialogAction(
-                onPressed: () =>
-                    Navigator.of(context).pop(PushRuleDialogAction.delete),
-                child: Text(
-                  L10n.of(context).delete,
-                  style: TextStyle(color: theme.colorScheme.error),
-                ),
-              ),
-          ],
         ),
+        actions: [
+          if (!rule.ruleId.startsWith('.m.'))
+            NotionButton.destructive(
+              label: L10n.of(context).delete,
+              onPressed: () =>
+                  Navigator.of(context).pop(PushRuleDialogAction.delete),
+            ),
+          NotionButton.ghost(
+            label: L10n.of(context).close,
+            onPressed: Navigator.of(context).pop,
+          ),
+        ],
       ),
     );
     if (action == null || !_current(account, revision)) return;

@@ -42,57 +42,64 @@ class AdaptiveDialogAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    switch (targetPlatform ?? theme.platform) {
-      case TargetPlatform.android:
-      case TargetPlatform.fuchsia:
-      case TargetPlatform.linux:
-      case TargetPlatform.windows:
-        if (bigButtons) {
-          return NotionPressable(
-            enabled: onPressed != null,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2.0),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius:
-                          borderRadius ??
-                          BorderRadius.circular(AppConfig.borderRadius),
-                    ),
-                    backgroundColor: autofocus
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.surfaceBright,
-                    foregroundColor: autofocus
-                        ? theme.colorScheme.onPrimary
-                        : theme.colorScheme.primary,
-                  ),
-                  onPressed: onPressed,
-                  autofocus: autofocus,
-                  child: child,
-                ),
-              ),
-            ),
-          );
-        }
-        return NotionPressable(
-          enabled: onPressed != null,
-          child: TextButton(
+    // A dialog that still builds a Cupertino alert (owned by another
+    // screen, not yet on `NotionAlertDialog`) keeps matching actions.
+    if (context.findAncestorWidgetOfExactType<CupertinoAlertDialog>() != null) {
+      return CupertinoDialogAction(
+        onPressed: onPressed,
+        isDefaultAction: autofocus,
+        child: child,
+      );
+    }
+    // Everywhere else the Notion buttons (pills from the theme) on every
+    // platform: the default action filled, the others text-only; big
+    // buttons stretch to the dialog width.
+    const padding = EdgeInsets.symmetric(horizontal: NotionSpace.md);
+    final minimumSize = Size(bigButtons ? double.infinity : 64, 40);
+    final shape = borderRadius == null
+        ? null
+        : RoundedRectangleBorder(borderRadius: borderRadius!);
+    final Widget button = autofocus
+        ? FilledButton(
             onPressed: onPressed,
             autofocus: autofocus,
+            style: FilledButton.styleFrom(
+              padding: padding,
+              minimumSize: minimumSize,
+              shape: shape,
+            ),
             child: child,
-          ),
-        );
-      case TargetPlatform.iOS:
-      case TargetPlatform.macOS:
-        return CupertinoDialogAction(
-          onPressed: onPressed,
-          isDefaultAction: autofocus,
-          child: child,
-        );
-    }
+          )
+        : bigButtons
+        ? OutlinedButton(
+            onPressed: onPressed,
+            style: OutlinedButton.styleFrom(
+              padding: padding,
+              minimumSize: minimumSize,
+              shape: shape,
+            ),
+            child: child,
+          )
+        : TextButton(
+            onPressed: onPressed,
+            style: TextButton.styleFrom(
+              padding: padding,
+              minimumSize: minimumSize,
+              shape: shape,
+            ),
+            child: child,
+          );
+    return NotionPressable(
+      enabled: onPressed != null,
+      child: bigButtons
+          ? Padding(
+              padding: const EdgeInsets.symmetric(
+                vertical: NotionSpace.xxs / 2,
+              ),
+              child: SizedBox(width: double.infinity, child: button),
+            )
+          : button,
+    );
   }
 }
 
@@ -105,30 +112,19 @@ class AdaptiveDialogInkWell extends StatelessWidget {
     super.key,
     required this.onTap,
     required this.child,
-    this.padding = const EdgeInsets.all(16),
+    this.padding = const EdgeInsets.all(NotionSpace.md),
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    if ({TargetPlatform.iOS, TargetPlatform.macOS}.contains(theme.platform)) {
-      return CupertinoButton(
-        onPressed: onTap,
-        borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-        color: theme.colorScheme.surfaceBright,
-        padding: padding,
-        child: child,
-      );
-    }
+    final colors = context.notion.colors;
     return NotionPressable(
       enabled: onTap != null,
       child: Material(
-        color: onTap == null
-            ? theme.colorScheme.surfaceContainer
-            : theme.colorScheme.surfaceBright,
-        borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+        color: onTap == null ? colors.background : colors.selected,
+        borderRadius: NotionRadius.mdAll,
         child: InkWell(
-          borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+          borderRadius: NotionRadius.mdAll,
           onTap: onTap,
           child: Padding(
             padding: padding,
@@ -153,10 +149,10 @@ class AdaptiveIconTextButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.secondary;
+    final color = context.notion.colors.text;
     return Expanded(
       child: AdaptiveDialogInkWell(
-        padding: EdgeInsets.all(8.0),
+        padding: const EdgeInsets.all(NotionSpace.xs),
         onTap: onTap,
         child: Column(
           mainAxisSize: .min,
@@ -164,7 +160,7 @@ class AdaptiveIconTextButton extends StatelessWidget {
             Icon(icon, color: color),
             Text(
               label,
-              style: TextStyle(fontSize: 12, color: color),
+              style: NotionType.caption.copyWith(color: color),
               maxLines: 1,
               overflow: .ellipsis,
             ),

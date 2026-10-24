@@ -103,7 +103,7 @@ void main() {
     await tester.pump();
     await tester.tap(button);
     expect(room.receipts, [(r'$one', r'$one', true)]);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(Dialog), findsNothing);
     expect(AppSettings.personalIncognito.value, isTrue);
     expect(AppSettings.sendPublicReadReceipts.value, isFalse);
     room.gate!.complete();

@@ -2,6 +2,7 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'notion_dialog_frame.dart';
 import 'notion_entrance.dart';
 import 'notion_glass.dart';
 import 'notion_modal_routes.dart';
@@ -315,46 +316,33 @@ class NotionDialog extends StatelessWidget {
     final typography = context.notion.typography;
     // A glass panel (dock tint + hairline, blur once the route settles) in
     // place of the opaque Material dialog surface.
-    return Dialog(
-      insetPadding: const EdgeInsets.all(NotionSpace.xl),
-      backgroundColor: Colors.transparent,
-      shape: const RoundedRectangleBorder(
-        borderRadius: NotionGlass.dialogRadius,
-      ),
-      clipBehavior: Clip.none,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: NotionSize.dialogMaxWidth),
-        child: NotionGlassPanel(
-          borderRadius: NotionGlass.dialogRadius,
-          padding: NotionSpace.dialog,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Semantics(
-                header: true,
-                child: Text(title, style: typography.headline),
-              ),
-              if (message != null) ...[
-                const SizedBox(height: NotionSpace.xs),
-                Text(message!, style: typography.calloutMuted),
-              ],
-              if (content != null) ...[
-                const SizedBox(height: NotionSpace.md),
-                Flexible(child: content!),
-              ],
-              if (actions.isNotEmpty) ...[
-                const SizedBox(height: NotionSpace.xl),
-                Wrap(
-                  alignment: WrapAlignment.end,
-                  spacing: NotionSpace.xs,
-                  runSpacing: NotionSpace.xs,
-                  children: actions,
-                ),
-              ],
-            ],
+    return NotionDialogFrame(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Semantics(
+            header: true,
+            child: Text(title, style: typography.headline),
           ),
-        ),
+          if (message != null) ...[
+            const SizedBox(height: NotionSpace.xs),
+            Text(message!, style: typography.calloutMuted),
+          ],
+          if (content != null) ...[
+            const SizedBox(height: NotionSpace.md),
+            Flexible(child: content!),
+          ],
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: NotionSpace.xl),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: NotionSpace.xs,
+              runSpacing: NotionSpace.xs,
+              children: actions,
+            ),
+          ],
+        ],
       ),
     );
   }

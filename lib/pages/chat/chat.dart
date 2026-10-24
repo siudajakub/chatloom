@@ -584,15 +584,11 @@ class ChatController extends State<ChatPageWithRoom>
     if (shareItems == null || shareItems.isEmpty) return;
     final frozen = _captureAttachmentContext();
     if (!room.otherPartyCanReceiveMessages) {
-      final theme = Theme.of(context);
+      // The themed snackbar (dock tone, hairline), not a translucent red
+      // block over the chat.
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: theme.colorScheme.errorContainer,
-          closeIconColor: theme.colorScheme.onErrorContainer,
-          content: Text(
-            L10n.of(context).otherPartyNotLoggedIn,
-            style: TextStyle(color: theme.colorScheme.onErrorContainer),
-          ),
+          content: Text(L10n.of(context).otherPartyNotLoggedIn),
           showCloseIcon: true,
         ),
       );
@@ -2017,7 +2013,7 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   Future<void> sendLocationAction() async {
-    await showAdaptiveDialog(
+    await showNotionCustomDialog<void>(
       context: context,
       builder: (c) => SendLocationDialog(room: room),
     );

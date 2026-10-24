@@ -9,6 +9,7 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/stickers/sticker_pack_import.dart';
 import 'package:chatloom/personal/stickers/sticker_pack_sheet.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
@@ -216,7 +217,7 @@ class UrlLauncher {
         return;
       } else {
         if (!context.mounted) return;
-        await showAdaptiveDialog(
+        await showNotionAdaptiveDialog<void>(
           context: context,
           barrierDismissible: true,
           builder: (c) =>

@@ -9,7 +9,6 @@ import 'package:async/async.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix_api_lite/utils/logs.dart';
@@ -155,16 +154,16 @@ class LoadingDialogState<T> extends State<LoadingDialog<T>>
   }
 
   Widget _progress(BuildContext context) {
-    final theme = Theme.of(context);
     if (_check.isAnimating || _check.isCompleted) {
       return SizedBox.square(
         key: const ValueKey('done'),
-        dimension: NotionSize.icon,
+        dimension: NotionSize.iconLg,
         child: ScaleTransition(
           scale: _checkScale,
           child: Icon(
             Icons.check_circle_outline,
-            color: theme.colorScheme.primary,
+            size: NotionSize.iconLg,
+            color: context.notion.colors.success,
           ),
         ),
       );
@@ -175,15 +174,28 @@ class LoadingDialogState<T> extends State<LoadingDialog<T>>
       builder: (context, snapshot) {
         final value = snapshot.data;
         if (value == null) {
-          return const CircularProgressIndicator.adaptive();
+          // The dialog itself appeared after the grace period, so the ring
+          // shows at once; it still rests after `loopCap` (an endless wait
+          // draws no frames).
+          return const NotionDelayedSpinner(
+            size: NotionSize.iconLg,
+            strokeWidth: 2.5,
+            delay: Duration.zero,
+          );
         }
         // Determinate progress glides between reported values.
         return TweenAnimationBuilder<double>(
           tween: Tween(end: value.clamp(0, 1).toDouble()),
           duration: NotionMotion.of(context, NotionMotion.medium),
           curve: NotionMotion.standard,
-          builder: (context, value, _) =>
-              CircularProgressIndicator.adaptive(value: value),
+          builder: (context, value, _) => SizedBox.square(
+            dimension: NotionSize.iconLg,
+            child: CircularProgressIndicator(
+              value: value,
+              strokeWidth: 2.5,
+              color: context.notion.colors.textSecondary,
+            ),
+          ),
         );
       },
     );
@@ -192,83 +204,94 @@ class LoadingDialogState<T> extends State<LoadingDialog<T>>
   @override
   Widget build(BuildContext context) {
     final exception = this.exception;
-    final theme = Theme.of(context);
-    final apple = switch (theme.platform) {
-      TargetPlatform.iOS || TargetPlatform.macOS => true,
-      _ => false,
-    };
+    final tokens = context.notion;
     final titleLabel = exception != null
         ? exception.toLocalizedString(context, widget.exceptionContext)
         : widget.title ?? L10n.of(context).loadingPleaseWait;
-    final close = AdaptiveDialogAction(
-      onPressed: () => Navigator.of(
-        context,
-      ).pop<Result<T>>(Result.error(exception!, stackTrace)),
-      child: Text(widget.backLabel ?? L10n.of(context).close),
-    );
 
     final Widget body = exception == null
         ? Row(
             key: const ValueKey('loading'),
-            crossAxisAlignment: .center,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               NotionMorphSwitcher(rotate: false, child: _progress(context)),
-              const SizedBox(width: 20),
+              const SizedBox(width: NotionSpace.md),
               Expanded(
-                child: Text(
-                  titleLabel,
-                  maxLines: 4,
-                  textAlign: TextAlign.left,
-                  overflow: TextOverflow.ellipsis,
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    titleLabel,
+                    maxLines: 4,
+                    textAlign: TextAlign.start,
+                    overflow: TextOverflow.ellipsis,
+                    style: tokens.typography.callout,
+                  ),
                 ),
               ),
             ],
           )
         : Column(
             key: const ValueKey('error'),
-            mainAxisSize: .min,
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               NotionPop(
                 bounce: false,
                 from: NotionMotion.dialogFrom,
                 child: Icon(
                   Icons.error_outline_outlined,
-                  color: theme.colorScheme.error,
-                  size: 48,
+                  color: tokens.colors.danger,
+                  size: NotionSize.avatar,
                 ),
               ),
-              const SizedBox(height: NotionSpace.md),
-              Text(titleLabel, maxLines: 4, overflow: TextOverflow.ellipsis),
-              // Material keeps the action with the content so the dialog
-              // grows in one smooth step; Cupertino needs its action row.
-              if (!apple)
-                Align(
+              const SizedBox(height: NotionSpace.sm),
+              Semantics(
+                liveRegion: true,
+                child: Text(
+                  titleLabel,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: tokens.typography.callout,
+                ),
+              ),
+              // The action stays with the content so the dialog grows in
+              // one smooth step.
+              Padding(
+                padding: const EdgeInsets.only(top: NotionSpace.lg),
+                child: Align(
                   alignment: AlignmentDirectional.centerEnd,
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: NotionSpace.md),
-                    child: close,
+                  child: NotionButton(
+                    key: const Key('loading_dialog_close_button'),
+                    label: widget.backLabel ?? L10n.of(context).close,
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pop<Result<T>>(Result.error(exception, stackTrace)),
                   ),
                 ),
+              ),
             ],
           );
 
-    return AlertDialog.adaptive(
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 256),
+    // A compact glass panel (the dialog radius and tint) on every platform:
+    // no Cupertino alert or activity indicator on macOS.
+    return NotionDialogFrame(
+      maxWidth: _maxWidth,
+      padding: const EdgeInsets.all(NotionSpace.lg),
+      child: NotionShake(
         // The error arrives with a single shake.
-        child: NotionShake(
-          trigger: exception,
-          child: AnimatedSize(
-            duration: NotionMotion.of(context, NotionMotion.medium),
-            curve: NotionMotion.emphasized,
-            alignment: Alignment.topCenter,
-            child: NotionFadeThrough(alignment: Alignment.center, child: body),
-          ),
+        trigger: exception,
+        child: NotionAnimatedSize(
+          curve: NotionMotion.emphasized,
+          alignment: Alignment.topCenter,
+          child: NotionFadeThrough(alignment: Alignment.center, child: body),
         ),
       ),
-      actions: exception == null || !apple ? null : [close],
     );
   }
+
+  /// A progress line, not a full dialog: narrower than a question.
+  static const double _maxWidth = 320;
 }
 
 extension DeprecatedApiAccessExtension<T> on Result<T> {

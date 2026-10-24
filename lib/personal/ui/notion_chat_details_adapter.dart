@@ -8,6 +8,7 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/round_video/round_availability.dart';
+import 'package:chatloom/personal/ui/capabilities_dialog.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_notifications.dart';
@@ -572,32 +573,10 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
         NotionListRow(
           leading: const Icon(Icons.info_outline),
           title: 'Conversation capabilities',
-          onTap: () => showNotionCustomDialog<void>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Conversation capabilities'),
-              content: SizedBox(
-                width: 460,
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    for (final feature in BridgeFeature.values)
-                      ListTile(
-                        title: Text(feature.name),
-                        subtitle: Text(
-                          RoomCapabilities.forFeature(feature, room).reason,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
-              ],
-            ),
+          onTap: () => showConversationCapabilitiesDialog(
+            context,
+            reasonOf: (BridgeFeature feature) =>
+                RoomCapabilities.forFeature(feature, room).reason,
           ),
         ),
         if (PlatformInfos.isAndroid &&

@@ -4,9 +4,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:material_ui/material_ui.dart';
 
+/// A list of choices in the dock's glass language: a bottom sheet of
+/// [NotionGlassMenuRow]s on phones (Telegram's action sheet), a centred
+/// glass dialog on desktop (macOS, Linux, Windows), where a sheet rising
+/// from the bottom of a wide window is far from the pointer. Never a
+/// Cupertino action sheet.
 Future<T?> showModalActionPopup<T>({
   required BuildContext context,
   required List<AdaptiveModalAction<T>> actions,
@@ -15,104 +19,153 @@ Future<T?> showModalActionPopup<T>({
   String? cancelLabel,
   bool useRootNavigator = true,
 }) {
-  final theme = Theme.of(context);
-
-  switch (theme.platform) {
-    case TargetPlatform.android:
-    case TargetPlatform.fuchsia:
-    case TargetPlatform.windows:
-    case TargetPlatform.linux:
-      return showModalBottomSheet(
-        sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
-        isScrollControlled: true,
-        useRootNavigator: useRootNavigator,
-        context: context,
-        // A glass sheet like the dock; rows keep rounded highlights inset
-        // from its edges.
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        shape: NotionShapes.sheet,
-        constraints: BoxConstraints(
-          maxWidth: 512,
-          maxHeight: MediaQuery.sizeOf(context).height - 32,
+  final desktop = switch (Theme.of(context).platform) {
+    TargetPlatform.macOS ||
+    TargetPlatform.linux ||
+    TargetPlatform.windows => true,
+    _ => false,
+  };
+  if (desktop) {
+    return showNotionCustomDialog<T>(
+      context: context,
+      useRootNavigator: useRootNavigator,
+      builder: (context) => NotionDialogFrame(
+        padding: const EdgeInsets.symmetric(vertical: NotionSpace.xs),
+        child: _ActionList<T>(
+          title: title,
+          message: message,
+          cancelLabel: cancelLabel,
+          actions: actions,
+          entrance: false,
         ),
-        // Rows rise in one after another while the sheet slides up.
-        builder: (context) => NotionGlassPanel(
-          borderRadius: NotionGlass.sheetRadius,
-          child: SafeArea(
-            top: false,
-            child: ListView(
-              shrinkWrap: true,
-              padding: const EdgeInsets.all(NotionSpace.xs),
-              children: NotionEntrance.stagger(afterRoute: false, [
-                if (title != null || message != null) ...[
-                  ListTile(
-                    title: title == null
-                        ? null
-                        : Text(title, style: theme.textTheme.labelSmall),
-                    subtitle: message == null ? null : Text(message),
-                  ),
-                  const NotionGlassDivider(vertical: false),
-                ],
-                ...actions.map(
-                  (action) => ListTile(
-                    leading: action.icon,
-                    title: Text(
-                      action.label,
-                      maxLines: 1,
-                      style: action.isDestructive
-                          ? TextStyle(
-                              color: theme.colorScheme.error,
-                              fontWeight: action.isDefaultAction
-                                  ? FontWeight.bold
-                                  : null,
-                            )
-                          : null,
-                    ),
-                    onTap: () => Navigator.of(context).pop<T>(action.value),
+      ),
+    );
+  }
+  return showModalBottomSheet<T>(
+    sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
+    isScrollControlled: true,
+    useRootNavigator: useRootNavigator,
+    context: context,
+    // A glass sheet like the dock; rows keep rounded highlights inset
+    // from its edges.
+    backgroundColor: Colors.transparent,
+    elevation: 0,
+    shape: NotionShapes.sheet,
+    constraints: BoxConstraints(
+      maxWidth: 512,
+      maxHeight: MediaQuery.sizeOf(context).height - NotionSpace.xxl,
+    ),
+    builder: (context) => NotionGlassPanel(
+      borderRadius: NotionGlass.sheetRadius,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: NotionSpace.xs),
+          child: _ActionList<T>(
+            title: title,
+            message: message,
+            cancelLabel: cancelLabel,
+            actions: actions,
+            entrance: true,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _ActionList<T> extends StatelessWidget {
+  final String? title;
+  final String? message;
+  final String? cancelLabel;
+  final List<AdaptiveModalAction<T>> actions;
+
+  /// Rows rise in one after another while a sheet slides up; a dialog
+  /// already scales in as a whole.
+  final bool entrance;
+
+  const _ActionList({
+    required this.title,
+    required this.message,
+    required this.cancelLabel,
+    required this.actions,
+    required this.entrance,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.notion;
+    final title = this.title;
+    final message = this.message;
+    final cancelLabel = this.cancelLabel;
+    final children = <Widget>[
+      if (title != null || message != null) ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            NotionSpace.md,
+            NotionSpace.xs,
+            NotionSpace.md,
+            NotionSpace.xs,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (title != null)
+                Semantics(
+                  header: true,
+                  child: Text(
+                    title,
+                    style: tokens.typography.sectionLabel,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (cancelLabel != null) ...[
-                  const NotionGlassDivider(vertical: false),
-                  ListTile(
-                    title: Text(cancelLabel),
-                    onTap: () => Navigator.of(context).pop(null),
-                  ),
-                ],
-              ]),
-            ),
+              if (message != null) ...[
+                if (title != null) const SizedBox(height: NotionSpace.xxs),
+                Text(message, style: tokens.typography.footnoteMuted),
+              ],
+            ],
           ),
         ),
-      );
-    case TargetPlatform.iOS:
-    case TargetPlatform.macOS:
-      return showCupertinoModalPopup<T>(
-        context: context,
-        useRootNavigator: useRootNavigator,
-        builder: (context) => ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 512),
-          child: CupertinoActionSheet(
-            title: title == null ? null : Text(title),
-            message: message == null ? null : Text(message),
-            cancelButton: cancelLabel == null
-                ? null
-                : CupertinoActionSheetAction(
-                    onPressed: () => Navigator.of(context).pop(null),
-                    child: Text(cancelLabel),
+        const NotionGlassDivider(vertical: false),
+      ],
+      for (final action in actions)
+        NotionGlassMenuRow(
+          leading: action.icon == null
+              ? null
+              : IconTheme.merge(
+                  data: IconThemeData(
+                    color: action.isDestructive
+                        ? tokens.colors.danger
+                        : tokens.colors.text,
                   ),
-            actions: actions
-                .map(
-                  (action) => CupertinoActionSheetAction(
-                    isDestructiveAction: action.isDestructive,
-                    isDefaultAction: action.isDefaultAction,
-                    onPressed: () => Navigator.of(context).pop<T>(action.value),
-                    child: Text(action.label, maxLines: 1),
-                  ),
-                )
-                .toList(),
+                  child: action.icon!,
+                ),
+          title: action.label,
+          style: NotionType.callout.copyWith(
+            color: action.isDestructive ? tokens.colors.danger : null,
+            fontWeight: action.isDefaultAction ? FontWeight.w600 : null,
           ),
+          onTap: () => Navigator.of(context).pop<T>(action.value),
         ),
-      );
+      if (cancelLabel != null) ...[
+        const NotionGlassDivider(vertical: false),
+        NotionGlassMenuRow(
+          title: cancelLabel,
+          style: NotionType.callout.copyWith(
+            color: tokens.colors.textSecondary,
+          ),
+          onTap: () => Navigator.of(context).pop(null),
+        ),
+      ],
+    ];
+    return ListView(
+      shrinkWrap: true,
+      padding: EdgeInsets.zero,
+      children: entrance
+          ? NotionEntrance.stagger(afterRoute: false, children)
+          : children,
+    );
   }
 }
 

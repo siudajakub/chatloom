@@ -94,9 +94,9 @@ class PublicRoomDialog extends StatelessWidget {
     final roomAlias = this.roomAlias ?? chunk?.canonicalAlias;
     final roomLink = roomAlias ?? chunk?.roomId;
     var copied = false;
-    return AlertDialog.adaptive(
+    return NotionAlertDialog(
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 256),
+        constraints: const BoxConstraints(maxWidth: NotionSize.dialogMaxWidth),
         child: FutureBuilder<PublishedRoomsChunk>(
           future: _search(context),
           builder: (context, snapshot) {
@@ -181,7 +181,10 @@ class PublicRoomDialog extends StatelessWidget {
                                                           : Icons.copy,
                                                       size: 12,
                                                       color: copied
-                                                          ? Colors.green
+                                                          ? context
+                                                                .notion
+                                                                .colors
+                                                                .success
                                                           : null,
                                                     ),
                                                   ),
@@ -297,7 +300,7 @@ class PublicRoomDialog extends StatelessWidget {
                                     null
                             ? L10n.of(context).knock
                             : L10n.of(context).joinRoom,
-                        style: TextStyle(color: theme.colorScheme.secondary),
+                        style: TextStyle(color: theme.colorScheme.onSurface),
                       ),
                     ),
                 ],

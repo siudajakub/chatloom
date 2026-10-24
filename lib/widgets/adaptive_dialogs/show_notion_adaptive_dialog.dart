@@ -4,10 +4,11 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// Drop-in for `showAdaptiveDialog` that presents the (still adaptive)
-/// dialog body in the animated [NotionDialogRoute]: the barrier fades, the
-/// dialog scales up from 94 % on a critically damped spring and leaves with
-/// a quick fade. Reduced motion keeps a plain fade.
+/// Drop-in for `showAdaptiveDialog` that presents the dialog body (a
+/// `NotionDialog` / `NotionAlertDialog`, glass on every platform) in the
+/// animated [NotionDialogRoute]: the barrier fades, the dialog scales up
+/// from 94 % on a critically damped spring and leaves with a quick fade.
+/// Reduced motion keeps a plain fade.
 ///
 /// [barrierDismissible] defaults like `showAdaptiveDialog`: dismissible on
 /// Material platforms, not on iOS/macOS.
@@ -61,9 +62,8 @@ class DialogValidationFeedback extends StatelessWidget {
         valueListenable: validation,
         builder: (context, state, _) => NotionShake(
           trigger: state.attempt,
-          child: AnimatedSize(
-            duration: NotionMotion.of(context, NotionMotion.short),
-            curve: NotionMotion.standard,
+          child: NotionAnimatedSize(
+            duration: NotionMotion.short,
             alignment: AlignmentDirectional.topStart,
             child: builder(context, state.error),
           ),

@@ -227,6 +227,7 @@ in new code; read `context.notion` instead.
 | `NotionIconButton(icon:, label:, onPressed:)` | header and inline icon actions (label is the tooltip) |
 | `NotionButton(label:, onPressed:, variant:)` / `.primary` / `.ghost` / `.destructive` | every text button; `icon:`, `expand:`, `busy:` |
 | `NotionDialog` + `showNotionDialog(...)` / `showNotionConfirmDialog(...)` | modal questions and confirmations (glass panel, `xl` corners) |
+| `NotionDialogFrame`, `NotionAlertDialog(icon:, title:, content:, actions:)`, `NotionDialogSubmit` | the glass dialog shell, `NotionDialog` with widget slots (the replacement for `AlertDialog.adaptive`, never Cupertino on macOS), Return-to-confirm while nothing inside has focus (`notion_dialog_frame.dart`); the legacy helpers (`showOkCancelAlertDialog`, `showTextInputDialog`, `showFutureLoadingDialog`, `showModalActionPopup`) are built on them |
 | `NotionSheet` + `showNotionSheet(...)` | bottom sheets and pickers (glass panel, `sheetTop` corners) |
 | `NotionEmptyState(icon:, title:, message:, action:)` | empty lists, soft errors |
 | `NotionCallout(icon:, title:, message:, actionLabel:, onAction:, onDismiss:, tone:)` | inline fixable status (inbox encryption/sync notice, connection retry); `tone` colours only the icon |
@@ -423,6 +424,7 @@ decide; nothing buzzes by default.
 | `NotionMorphSwitcher(child:, bounce:, rotate:)` | glyph/button swaps (mic → send, idle → busy) | `NotionMorphSwitcher(bounce: true, child: Icon(icon, key: ValueKey(icon)))` |
 | `NotionLazySwitcher(child:, style:, bounce:)` | the same fade / morph swap inside list rows: no controller until the child's key first changes, so rows built by scrolling cost no ticker (inbox rows) | `NotionLazySwitcher(child: Text(time, key: ValueKey(time)))` |
 | `NotionAnimatedCount(count:, style:, format:)` | numbers that change: rolls up/down | `NotionAnimatedCount(count: unread, style: NotionType.micro)` |
+| `NotionAnimatedSize(child:, duration:)` | a block whose size changes in place (dialog content, a validation error): `AnimatedSize` that snaps in one frame under reduced motion, because a zero duration trips a layout assertion on the next relayout | `NotionAnimatedSize(child: NotionFadeThrough(child: body))` |
 | `NotionSizeReveal(visible:, child:, axis:)` | single element appearing/disappearing with size + fade (callout, reply preview, typing row) | `NotionSizeReveal(visible: error != null, child: NotionCallout(...))` |
 | `NotionPop(child:, trigger:, visible:, bounce:)` | badges, reaction chips, dots: spring in, pulse on `trigger`, pop out | `NotionPop(trigger: count, child: badge)` |
 | `NotionReactionBar(entrance:)`, `NotionReactionBurst(animation:)` | reward motion of reactions, driven by a route or controller animation: the bar springs out of the bubble corner (`barFrom` → 1, bouncy) and its emoji pop in staggered; the burst pops at the finger and floats away | `NotionReactionBar(reactions: r, entrance: route.animation, onSelected: react)` |

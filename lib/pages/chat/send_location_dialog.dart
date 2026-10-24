@@ -7,8 +7,7 @@ import 'dart:async';
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/events/map_bubble.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
-import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -119,27 +118,27 @@ class SendLocationDialogState extends State<SendLocationDialog> {
       contentWidget = const Text('Couldn’t get your location. Try again.');
     } else {
       contentWidget = Row(
-        mainAxisSize: .min,
-        mainAxisAlignment: .center,
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const CupertinoActivityIndicator(),
-          const SizedBox(width: 12),
-          Text(L10n.of(context).obtainingLocation),
+          const NotionDelayedSpinner(),
+          const SizedBox(width: NotionSpace.sm),
+          Flexible(child: Text(L10n.of(context).obtainingLocation)),
         ],
       );
     }
-    return AlertDialog.adaptive(
+    return NotionAlertDialog(
       title: Text(L10n.of(context).shareLocation),
       content: contentWidget,
       actions: [
-        AdaptiveDialogAction(
+        NotionButton.ghost(
+          label: L10n.of(context).cancel,
           onPressed: Navigator.of(context, rootNavigator: false).pop,
-          child: Text(L10n.of(context).cancel),
         ),
         if (position != null)
-          AdaptiveDialogAction(
+          NotionButton.primary(
+            label: L10n.of(context).send,
             onPressed: isSending ? null : sendAction,
-            child: Text(L10n.of(context).send),
           ),
       ],
     );

@@ -768,24 +768,13 @@ class TelegramRoundService extends ChangeNotifier
     final candidate = TelegramRoomBinding.unverifiedCandidate(room);
     if (candidate == null) return false;
     final identity = candidate.identity;
-    final accepted = await showNotionCustomDialog<bool>(
+    final accepted = await showNotionConfirmDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Trust your Telegram bridge'),
-        content: Text(
+      title: 'Trust your Telegram bridge',
+      message:
           'Confirm this is your configured bridge and Telegram login.\n\nBot: ${identity.senderId}\nLogin: ${identity.accountId}\nNamespace: ${identity.stateKey.isEmpty ? '(empty)' : identity.stateKey}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Trust this bridge'),
-          ),
-        ],
-      ),
+      cancelLabel: 'Cancel',
+      confirmLabel: 'Trust this bridge',
     );
     if (accepted != true || !context.mounted) return false;
     final current = TelegramRoomBinding.unverifiedCandidate(room);

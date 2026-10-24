@@ -63,7 +63,7 @@ void main() {
     );
     expect(proceed, isTrue);
     expect(room.known, 1);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(Dialog), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

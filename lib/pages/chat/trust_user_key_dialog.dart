@@ -6,10 +6,11 @@
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/beautify_string_extension.dart';
 import 'package:chatloom/utils/error_reporter.dart';
-import 'package:chatloom/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/dialog_text_field.dart';
+import 'package:chatloom/widgets/adaptive_dialogs/show_notion_adaptive_dialog.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -46,56 +47,47 @@ Future<bool> showTrustUserInRoomDialog(BuildContext context, Room room) async {
   if (users.isEmpty) return true;
 
   final l10n = L10n.of(context);
-  final theme = Theme.of(context);
 
-  final action = await showAdaptiveDialog<_Action>(
+  // The question is a choice, not a destructive confirmation: a glass
+  // dialog with the three answers stacked full width.
+  final action = await showNotionAdaptiveDialog<_Action>(
     context: context,
-    builder: (context) => AlertDialog.adaptive(
-      title: Center(
-        child: Icon(
-          Icons.lock_outlined,
-          size: 32,
-          color: theme.colorScheme.primary,
+    builder: (context) {
+      final tokens = context.notion;
+      return NotionAlertDialog(
+        icon: Icon(Icons.lock_outlined, color: tokens.colors.accent),
+        title: Text(
+          users.length == 1
+              ? l10n.messageCanOnlyBeReadByUser
+              : l10n.messageCanOnlyBeReadByUsers,
+          textAlign: TextAlign.center,
         ),
-      ),
-      content: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 128),
-        child: SelectionArea(
+        content: SelectionArea(
           child: SingleChildScrollView(
             child: Column(
-              crossAxisAlignment: .stretch,
-              mainAxisSize: .min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const SizedBox(height: 8),
-                Center(
-                  child: Text(
-                    users.length == 1
-                        ? l10n.messageCanOnlyBeReadByUser
-                        : l10n.messageCanOnlyBeReadByUsers,
-                    style: TextStyle(fontSize: 16),
-                    textAlign: .center,
-                  ),
-                ),
-                const SizedBox(height: 16),
                 for (final user in users) ...[
                   Row(
                     children: [
                       Avatar(
                         name: user.calcDisplayname(),
                         mxContent: user.avatarUrl,
-                        size: 14,
+                        size: NotionSize.iconSm,
                       ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: NotionSpace.xs),
                       Expanded(
                         child: Text(
                           user.calcDisplayname(),
-                          style: theme.textTheme.labelSmall,
+                          style: tokens.typography.footnoteMuted,
                           maxLines: 1,
-                          textAlign: TextAlign.start,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: NotionSpace.xxs),
                   Builder(
                     builder: (context) {
                       final controller = TextEditingController(
@@ -111,43 +103,55 @@ Future<bool> showTrustUserInRoomDialog(BuildContext context, Room room) async {
                       );
                       return DialogTextField(
                         controller: controller,
-                        textStyle: theme.textTheme.labelSmall,
+                        textStyle: tokens.typography.caption,
                         readOnly: true,
                         maxLines: 3,
                       );
                     },
                   ),
+                  const SizedBox(height: NotionSpace.sm),
                 ],
               ],
             ),
           ),
         ),
-      ),
-      actions: [
-        AdaptiveDialogAction(
-          autofocus: true,
-          bigButtons: true,
-          onPressed: () {
-            for (final user in users) {
-              room.client.userDeviceKeys[user.id]?.masterKey?.trustOnFirstUse();
-            }
-            Navigator.of(context).pop(_Action.allow);
-          },
-          child: Text(L10n.of(context).continueText),
-        ),
-        if (room.isDirectChat)
-          AdaptiveDialogAction(
-            bigButtons: true,
-            onPressed: () => Navigator.of(context).pop(_Action.verification),
-            child: Text(L10n.of(context).interactiveVerification),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              spacing: NotionSpace.xs,
+              children: [
+                NotionButton.primary(
+                  key: const Key('trust_user_continue_button'),
+                  expand: true,
+                  label: l10n.continueText,
+                  onPressed: () {
+                    for (final user in users) {
+                      room.client.userDeviceKeys[user.id]?.masterKey
+                          ?.trustOnFirstUse();
+                    }
+                    Navigator.of(context).pop(_Action.allow);
+                  },
+                ),
+                if (room.isDirectChat)
+                  NotionButton(
+                    expand: true,
+                    label: l10n.interactiveVerification,
+                    onPressed: () =>
+                        Navigator.of(context).pop(_Action.verification),
+                  ),
+                NotionButton.ghost(
+                  expand: true,
+                  label: l10n.cancel,
+                  onPressed: () => Navigator.of(context).pop(_Action.deny),
+                ),
+              ],
+            ),
           ),
-        AdaptiveDialogAction(
-          bigButtons: true,
-          onPressed: () => Navigator.of(context).pop(_Action.deny),
-          child: Text(l10n.cancel),
-        ),
-      ],
-    ),
+        ],
+      );
+    },
   );
 
   if (action == null) return false;

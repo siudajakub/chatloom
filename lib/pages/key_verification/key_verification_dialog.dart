@@ -466,7 +466,8 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
     }
 
     final step = widget.request.state;
-    return AlertDialog.adaptive(
+    // The glass dialog on every platform (no Cupertino alert on macOS).
+    return NotionAlertDialog(
       // Every verification step fades through to the next one.
       title: NotionFadeThrough(
         alignment: Alignment.center,
@@ -474,7 +475,6 @@ class KeyVerificationPageState extends State<KeyVerificationDialog> {
       ),
       content: SizedBox(
         height: 256,
-        width: 256,
         child: NotionFadeThrough(
           child: ListView(key: ValueKey(step), children: [body]),
         ),

@@ -69,9 +69,7 @@ class _UndecryptableFixBodyState extends State<_UndecryptableFixBody> {
                     ? _actions(null)
                     : const Padding(
                         padding: EdgeInsets.all(NotionSpace.md),
-                        child: Center(
-                          child: CircularProgressIndicator.adaptive(),
-                        ),
+                        child: Center(child: NotionDelayedSpinner()),
                       );
               }
               return Column(

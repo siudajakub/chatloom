@@ -3,10 +3,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:chatloom/config/app_config.dart';
-import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
+/// The text field of a dialog: the themed Notion field (rounded `field`
+/// corners, `surface` fill) with the label above it, on every platform (no
+/// Cupertino field on macOS).
 class DialogTextField extends StatelessWidget {
   final TextEditingController? controller;
   final String? hintText;
@@ -22,9 +24,12 @@ class DialogTextField extends StatelessWidget {
   final int? maxLines;
   final TextInputType? keyboardType;
   final int? maxLength;
-  final bool autocorrect = true;
+  final bool autocorrect;
   final bool readOnly;
+  final bool autofocus;
   final TextStyle? textStyle;
+  final TextInputAction? textInputAction;
+  final ValueChanged<String>? onSubmitted;
 
   const DialogTextField({
     super.key,
@@ -42,79 +47,49 @@ class DialogTextField extends StatelessWidget {
     this.errorText,
     this.obscureText = false,
     this.readOnly = false,
+    this.autofocus = false,
+    this.autocorrect = true,
     this.textStyle,
+    this.textInputAction,
+    this.onSubmitted,
   });
 
   @override
   Widget build(BuildContext context) {
-    final prefixText = this.prefixText;
-    final suffixText = this.suffixText;
-    final errorText = this.errorText;
-    final theme = Theme.of(context);
-    switch (theme.platform) {
-      case TargetPlatform.android:
-      case TargetPlatform.fuchsia:
-      case TargetPlatform.linux:
-      case TargetPlatform.windows:
-        return TextField(
-          readOnly: readOnly,
-          controller: controller,
-          obscureText: obscureText,
-          minLines: minLines,
-          maxLines: maxLines,
-          maxLength: maxLength,
-          keyboardType: keyboardType,
-          autocorrect: autocorrect,
-          style: textStyle,
-          decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-              borderSide: BorderSide(color: theme.dividerColor),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-              borderSide: BorderSide(color: theme.dividerColor),
-            ),
-            filled: true,
-            fillColor: theme.colorScheme.surfaceBright,
-            errorText: errorText,
-            hintText: hintText,
-            labelText: labelText,
-            prefixText: prefixText,
-            suffixText: suffixText,
-            counterText: counterText,
-          ),
-        );
-      case TargetPlatform.iOS:
-      case TargetPlatform.macOS:
-        final placeholder = labelText ?? hintText;
-        return Column(
-          children: [
-            SizedBox(
-              height: placeholder == null ? null : ((maxLines ?? 1) + 1) * 20,
-              child: CupertinoTextField(
-                controller: controller,
-                readOnly: readOnly,
-                obscureText: obscureText,
-                minLines: minLines,
-                maxLines: maxLines,
-                maxLength: maxLength,
-                keyboardType: keyboardType,
-                autocorrect: autocorrect,
-                style: textStyle,
-                prefix: prefixText != null ? Text(prefixText) : null,
-                suffix: suffixText != null ? Text(suffixText) : null,
-                placeholder: placeholder,
-              ),
-            ),
-            if (errorText != null)
-              Text(
-                errorText,
-                style: TextStyle(fontSize: 11, color: theme.colorScheme.error),
-                textAlign: TextAlign.left,
-              ),
-          ],
-        );
-    }
+    final tokens = context.notion;
+    final field = TextField(
+      readOnly: readOnly,
+      controller: controller,
+      obscureText: obscureText,
+      autofocus: autofocus,
+      minLines: minLines,
+      maxLines: obscureText ? 1 : maxLines,
+      maxLength: maxLength,
+      keyboardType: keyboardType,
+      autocorrect: autocorrect,
+      textInputAction: textInputAction,
+      onSubmitted: onSubmitted,
+      style: textStyle ?? tokens.typography.callout,
+      decoration: InputDecoration(
+        errorText: errorText,
+        hintText: hintText,
+        prefixText: prefixText,
+        suffixText: suffixText,
+        counterText: counterText,
+      ),
+    );
+    final label = labelText;
+    if (label == null) return field;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: NotionSpace.xxs),
+          child: Text(label, style: tokens.typography.sectionLabel),
+        ),
+        field,
+      ],
+    );
   }
 }

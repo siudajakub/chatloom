@@ -6,13 +6,10 @@
 import 'dart:io';
 
 import 'package:chatloom/config/setting_keys.dart';
-import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/utils/about_dialog.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:url_launcher/url_launcher_string.dart';
-
-import '../config/app_config.dart';
 
 abstract class PlatformInfos {
   static bool get isWeb => kIsWeb;
@@ -67,33 +64,10 @@ abstract class PlatformInfos {
     return version;
   }
 
+  /// Settings → About (a glass Notion dialog, `about_dialog.dart`).
   static Future<void> showDialog(BuildContext context) async {
-    final l10n = L10n.of(context);
     final version = await PlatformInfos.getVersion();
     if (!context.mounted) return;
-    showAboutDialog(
-      context: context,
-      children: [
-        Text(l10n.versionWithNumber(version)),
-        Text(AppConfig.upstreamCredit),
-        TextButton.icon(
-          onPressed: () => launchUrlString(AppConfig.upstreamSourceCodeUrl),
-          icon: const Icon(Icons.source_outlined),
-          label: Text('${AppConfig.upstreamName} ${l10n.sourceCode}'),
-        ),
-        // Logs and the configuration editor are in Settings › Advanced ›
-        // Developer (developer options).
-      ],
-      applicationIcon: ClipRRect(
-        borderRadius: BorderRadius.circular(64),
-        child: Image.asset(
-          './assets/logo/mini/logo_mini.png',
-          width: 64,
-          height: 64,
-        ),
-      ),
-      applicationName: AppSettings.applicationName.value,
-      applicationLegalese: 'AGPL-3.0-or-later',
-    );
+    await showChatLoomAboutDialog(context, version: version);
   }
 }

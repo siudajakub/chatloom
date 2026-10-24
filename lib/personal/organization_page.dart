@@ -353,10 +353,10 @@ class _ThemeDialogState extends State<_ThemeDialog> {
   late int? outgoing = widget.initial?.outgoingColor;
   late int? background = widget.initial?.backgroundColor;
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Conversation colors'),
+  Widget build(BuildContext context) => NotionDialog(
+    title: 'Conversation colors',
     content: SizedBox(
-      width: 440,
+      width: double.infinity,
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -389,24 +389,25 @@ class _ThemeDialogState extends State<_ThemeDialog> {
               value: background,
               onChanged: (v) => setState(() => background = v),
             ),
-            TextButton(
+            NotionButton.ghost(
+              label: 'Use default colors',
               onPressed: () => setState(() {
                 incoming = null;
                 outgoing = null;
                 background = null;
               }),
-              child: const Text('Use default colors'),
             ),
           ],
         ),
       ),
     ),
     actions: [
-      TextButton(
+      NotionButton.ghost(
+        label: 'Cancel',
         onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
       ),
-      FilledButton(
+      NotionButton.primary(
+        label: 'Save',
         onPressed: () => Navigator.pop(
           context,
           ChatTheme(
@@ -415,7 +416,6 @@ class _ThemeDialogState extends State<_ThemeDialog> {
             backgroundColor: background,
           ),
         ),
-        child: const Text('Save'),
       ),
     ],
   );
