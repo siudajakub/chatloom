@@ -40,6 +40,7 @@ import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/network_rejections.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -1534,7 +1535,10 @@ class ChatController extends State<ChatPageWithRoom>
     timeline
         .setReadMarker(
           eventId: eventId,
-          public: AppSettings.sendPublicReadReceipts.value,
+          // No public receipt for an unaccepted message request (FX-02).
+          public:
+              AppSettings.sendPublicReadReceipts.value &&
+              !isMessageRequest(room),
         )
         .whenComplete(() {
           if (_setReadMarkerEventId == eventId) _setReadMarkerEventId = null;
@@ -2842,7 +2846,22 @@ class ChatController extends State<ChatPageWithRoom>
       return;
     }
     unawaited(_setPinned([...pinned, event.eventId], pinning: true));
+    // No bridge carries Matrix pins to the network (BR-06): say so once.
+    final network = pinStaysInChatLoom(room);
+    if (network != null && !_pinNoticeShown) {
+      _pinNoticeShown = true;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Pinned in ChatLoom only. $network doesn’t show it.'),
+          ),
+        );
+    }
   }
+
+  /// The "pinned in ChatLoom only" notice appears once per app run.
+  static bool _pinNoticeShown = false;
 
   Timer? _storeInputTimeoutTimer;
   static const Duration _storeInputTimeout = Duration(milliseconds: 500);

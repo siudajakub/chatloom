@@ -23,6 +23,7 @@
 /// localized fallback without an extra prefix.
 library;
 
+import 'package:chatloom/personal/bridge_notices.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:matrix/matrix.dart';
@@ -111,8 +112,10 @@ String? _label(Event event) {
       return 'Location';
     case MessageTypes.Emote:
       return '* ${_body(event)}';
-    case MessageTypes.Text:
     case MessageTypes.Notice:
+      // A bridge's own notice reads in ChatLoom's words (BR-08).
+      return bridgeServiceNotice(event)?.text ?? _body(event);
+    case MessageTypes.Text:
       return _body(event);
     default:
       return null;

@@ -58,6 +58,10 @@ class NotionInboxRow extends StatelessWidget {
   /// Networks marked on the avatar (UX-17, FT-12): set only while the inbox
   /// shows all networks; two stacked marks for a merged person. Empty: none.
   final List<String> networks;
+
+  /// A short tag before the preview, e.g. "Request" for a message request
+  /// not accepted yet (FX-02). Null: none.
+  final String? tag;
   const NotionInboxRow({
     super.key,
     required this.avatar,
@@ -83,6 +87,7 @@ class NotionInboxRow extends StatelessWidget {
     this.highlight,
     this.highlightOnMount = false,
     this.networks = const [],
+    this.tag,
   });
 
   @override
@@ -116,6 +121,7 @@ class NotionInboxRow extends StatelessWidget {
         'Unread',
       if (muted) notificationLabel ?? 'Notifications limited',
       if (pinned) 'Pinned',
+      ?tag,
       ?notionNetworksAnnouncement(networks),
     ];
     final previewColor = typing
@@ -233,6 +239,10 @@ class NotionInboxRow extends StatelessWidget {
                               const SizedBox(height: NotionSpace.xxs),
                               Row(
                                 children: [
+                                  if (tag != null) ...[
+                                    _InboxTag(label: tag!),
+                                    const SizedBox(width: NotionSpace.xxs),
+                                  ],
                                   if (failed) ...[
                                     Icon(
                                       Icons.error_outline,
@@ -454,6 +464,34 @@ class NotionInboxRow extends StatelessWidget {
 
 /// "@": somebody mentioned the account. Accent even in muted chats, so a
 /// mention never drowns among grey badges (Telegram's `drawMention`).
+/// A quiet pill before the preview ("Request"): opaque, it scrolls.
+class _InboxTag extends StatelessWidget {
+  final String label;
+  const _InboxTag({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final notion = context.notion;
+    return DecoratedBox(
+      key: const ValueKey('notion_inbox_tag'),
+      decoration: BoxDecoration(
+        color: notion.colors.selected,
+        borderRadius: NotionRadius.pillAll,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
+        child: Text(
+          label,
+          maxLines: 1,
+          style: notion.typography.captionMuted.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MentionBadge extends StatelessWidget {
   const _MentionBadge({required this.color, required this.text});
 

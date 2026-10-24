@@ -60,6 +60,7 @@ class ChatListViewBody extends StatelessWidget {
             controller.availableNetworks.length > 1;
         return NotionInboxPage(
           unreadCount: controller.unreadViewCount(),
+          requestCount: controller.requestViewCount(),
           scrollController: controller.scrollController,
           rowCount: rooms.length,
           rowBuilder: (context, index) {

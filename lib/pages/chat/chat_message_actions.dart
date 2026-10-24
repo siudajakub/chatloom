@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/message_link_actions.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/media/media_export_actions.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/report_policy.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
@@ -115,6 +116,7 @@ List<ConversationMessageAction> chatMessageActions(
       ),
     if (sent &&
         !event.redacted &&
+        !isViewLimited(display) &&
         RoundMediaPolicy.fromContent(display.content).canForward)
       ConversationMessageAction(
         icon: Icons.forward_outlined,
@@ -124,7 +126,12 @@ List<ConversationMessageAction> chatMessageActions(
     if (controller.canPinEvent(event))
       ConversationMessageAction(
         icon: pinned ? Icons.push_pin : Icons.push_pin_outlined,
-        label: pinned ? l10n.unpin : l10n.pinMessage,
+        // A bridged chat's pin stays in ChatLoom (BR-06).
+        label: pinned
+            ? l10n.unpin
+            : pinStaysInChatLoom(room) != null
+            ? 'Pin in ChatLoom'
+            : l10n.pinMessage,
         onSelected: () => controller.pinEvent(event),
       ),
     if (MessageBookmarks.canBookmark(event))
@@ -142,10 +149,11 @@ List<ConversationMessageAction> chatMessageActions(
     // Stickers: favourite, view pack; GIFs: save (Telegram).
     ...stickerMessageActions(context, display),
     // Save (gallery/Downloads on Android), Save as…, Copy image (macOS).
+    // View-once media is never saved from ChatLoom (BR-10).
     ...mediaExportMenuActions(
       controller.context,
       display,
-      canSave: controller.canSaveEvent(display),
+      canSave: controller.canSaveEvent(display) && !isViewLimited(display),
     ),
     // Raw message source: developer options only (CS-23).
     if (DeveloperOptions.enabled)

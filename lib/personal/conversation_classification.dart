@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:matrix/matrix.dart';
 
 const _bridgeTypes = ['m.bridge', 'uk.half-shot.bridge', 'com.beeper.bridge'];
@@ -37,7 +38,16 @@ class ConversationClassification {
   /// never declare kinds, a complete member list with one contact.
   final bool isGroup;
   final bool technical;
-  const ConversationClassification(this.network, this.isGroup, this.technical);
+
+  /// The bridge flags this chat as a message request not accepted yet
+  /// (Instagram/Messenger, `channel["com.beeper.message_request"]`).
+  final bool messageRequest;
+  const ConversationClassification(
+    this.network,
+    this.isGroup,
+    this.technical, {
+    this.messageRequest = false,
+  });
 }
 
 /// Uses only already-loaded state. A name or a message never identifies a bot.
@@ -220,6 +230,7 @@ class ConversationClassifier {
           : 'other',
       !room.isDirectChatForDisplay,
       technical,
+      messageRequest: !technical && isMessageRequest(room),
     );
   }
 }

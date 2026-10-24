@@ -5,6 +5,7 @@ import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -367,6 +368,7 @@ class _ChatListItemState extends State<ChatListItem> {
         redacted: lastEvent?.redacted == true && draft == null && !showsTyping,
         typing: showsTyping,
         pinned: metadata.isPinned,
+        tag: !invite && isMessageRequest(room) ? 'Request' : null,
         failed: showsFailed && !showsTyping,
         // Sending keeps its delayed spinner; a failure its danger mark.
         delivery: invite || conflict || draft != null

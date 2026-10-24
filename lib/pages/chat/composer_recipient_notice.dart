@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/pages/chat/message_deletion.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
 import 'package:material_ui/material_ui.dart';
@@ -24,6 +26,15 @@ class ComposerRecipientNotice extends StatefulWidget {
   const ComposerRecipientNotice({super.key, required this.room, this.confirm});
 
   static const text = 'No one in this chat can read encrypted messages yet.';
+
+  /// Above the composer of an unaccepted message request: bridgev2 accepts
+  /// the request when the user replies (`autoAcceptMessageRequest`).
+  static String requestText(String name) =>
+      'Replying accepts the request from $name.';
+
+  /// Above the composer of a DM whose contact is blocked on the network.
+  static String blockedText(String name, String network) =>
+      'You blocked $name on $network. They can’t message you there.';
 
   @override
   State<ComposerRecipientNotice> createState() =>
@@ -65,6 +76,45 @@ class _ComposerRecipientNoticeState extends State<ComposerRecipientNotice> {
     final unreachable = !room.otherPartyCanReceiveMessages;
     if (unreachable) _confirm(room);
     final visible = unreachable && _confirmedRoom == room.id;
+    // Network state of a bridged chat (FX-01, FX-02), from loaded state.
+    final features = NetworkChatFeatures.of(room);
+    final name = room.getLocalizedDisplayname();
+    final network = bridgedNetworkLabel(room);
+    final request =
+        room.membership == Membership.join && features.messageRequest;
+    final blocked =
+        network != null && room.isDirectChatForDisplay && features.userBlocked;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _line(
+          context,
+          visible: visible,
+          icon: Icons.lock_outline,
+          text: ComposerRecipientNotice.text,
+        ),
+        _line(
+          context,
+          visible: request,
+          icon: Icons.mark_email_read_outlined,
+          text: ComposerRecipientNotice.requestText(name),
+        ),
+        _line(
+          context,
+          visible: blocked,
+          icon: Icons.block_outlined,
+          text: ComposerRecipientNotice.blockedText(name, network ?? ''),
+        ),
+      ],
+    );
+  }
+
+  Widget _line(
+    BuildContext context, {
+    required bool visible,
+    required IconData icon,
+    required String text,
+  }) {
     final tokens = context.notion;
     return NotionSizeReveal(
       visible: visible,
@@ -80,16 +130,13 @@ class _ComposerRecipientNoticeState extends State<ComposerRecipientNotice> {
           child: Row(
             children: [
               Icon(
-                Icons.lock_outline,
+                icon,
                 size: NotionSize.iconSm,
                 color: tokens.colors.textSecondary,
               ),
               const SizedBox(width: NotionSpace.xs),
               Expanded(
-                child: Text(
-                  ComposerRecipientNotice.text,
-                  style: tokens.typography.footnoteMuted,
-                ),
+                child: Text(text, style: tokens.typography.footnoteMuted),
               ),
             ],
           ),

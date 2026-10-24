@@ -497,6 +497,44 @@ void main() {
   );
 
   testWidgets(
+    'without a bridge chat, Sign in opens a chat with the known bot (BR-11)',
+    (tester) async {
+      final fixture = _Fixture();
+      final chats = <Room>[];
+      final started = <String>[];
+      Widget page() => _host(
+        NetworkDetailPage(
+          personal: fixture.personal,
+          network: 'whatsapp',
+          monitor: fixture.monitor,
+          onOpenChat: chats.add,
+          clock: () => _clock,
+          startBridgeChat: (bot) async {
+            started.add(bot);
+            return fixture.management.id;
+          },
+        ),
+        fixture.client,
+      );
+      await tester.pumpWidget(page());
+      await tester.pumpAndSettle();
+      expect(find.text('WhatsApp is signed out'), findsOneWidget);
+      // The bridge chat is gone from this device (left, fresh device).
+      fixture.management.membership = Membership.leave;
+      await tester.pumpWidget(page());
+      await tester.pumpAndSettle();
+      expect(find.text('Sign in'), findsOneWidget);
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      expect(started, [_whatsappBot]);
+      expect(chats, [fixture.management]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      fixture.personal.dispose();
+    },
+  );
+
+  testWidgets(
     'placement and group notifications save the private network rule',
     (tester) async {
       final fixture = _Fixture();

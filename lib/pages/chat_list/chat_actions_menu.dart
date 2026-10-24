@@ -7,6 +7,8 @@ import 'package:material_ui/material_ui.dart';
 /// The long-press actions of an inbox row (Telegram, Messenger). Deliberately
 /// short: everything else (leave, block, tags, spaces, low priority) lives in
 /// chat details; notification details sit at the end of the Mute menu.
+/// "Delete chat…" appears only where the chat's bridge can delete it on the
+/// network (FX-01) and always asks first.
 enum ChatMenuAction {
   read,
   unread,
@@ -19,6 +21,7 @@ enum ChatMenuAction {
   unmerge,
   notifications,
   ignore,
+  deleteChat,
 }
 
 /// The second step of "Mute…": how long (Telegram's durations), or the
@@ -41,7 +44,16 @@ class ChatMenuItem<T extends Object> {
   final IconData icon;
   final String label;
   final bool enabled;
-  const ChatMenuItem(this.action, this.icon, this.label, {this.enabled = true});
+
+  /// Irreversible on the network: drawn in the danger colour.
+  final bool destructive;
+  const ChatMenuItem(
+    this.action,
+    this.icon,
+    this.label, {
+    this.enabled = true,
+    this.destructive = false,
+  });
 
   String get keyName => switch (action) {
     final Enum value => value.name,
@@ -253,9 +265,11 @@ class _ChatMenuRow<T extends Object> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.notion;
-    final color = item.enabled
-        ? tokens.colors.text
-        : tokens.colors.textTertiary;
+    final color = !item.enabled
+        ? tokens.colors.textTertiary
+        : item.destructive
+        ? tokens.colors.danger
+        : tokens.colors.text;
     return NotionPressable(
       enabled: item.enabled,
       scale: NotionMotion.pressRow,

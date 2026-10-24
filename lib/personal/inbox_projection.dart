@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -54,6 +55,13 @@ class InboxProjection {
     // choices but never loosens a fully muted network default.
     if (metadata.muted || source.muted) {
       return explicit == null && inherited == PersonalNotificationMode.muted
+          ? PersonalNotificationMode.muted
+          : PersonalNotificationMode.mentionsOnly;
+    }
+    // An unaccepted message request stays quiet (Messenger, Instagram):
+    // only an explicit choice for this chat lets it alert.
+    if (explicit == null && kind.messageRequest) {
+      return inherited == PersonalNotificationMode.muted
           ? PersonalNotificationMode.muted
           : PersonalNotificationMode.mentionsOnly;
     }
@@ -362,8 +370,12 @@ class InboxProjection {
     _metadata.remove(entity);
   }
 
+  /// A chat whose network deletion is in flight is hidden at once
+  /// ([NetworkChatActions.deleteChat]) and comes back if it is refused.
   static bool _candidate(Room room) =>
-      !room.isSpace && !PersonalPrivacy.isJournal(room);
+      !room.isSpace &&
+      !PersonalPrivacy.isJournal(room) &&
+      !NetworkChatActions.isDeleting(room);
 
   /// All inbox records of [input], unfiltered. Reusable across filter/search
   /// changes; [InboxIndex.updateRooms] refreshes single rooms in place.
@@ -438,6 +450,7 @@ class InboxProjection {
       labelKeys: labels,
       isGroup: group == null && kinds.single.isGroup,
       technical: kinds.every((kind) => kind.technical),
+      messageRequest: group == null && kinds.single.messageRequest,
       placement: placementFor(representative),
       unread: sourceRooms.any((r) => r.isUnread),
       unreadCount: sourceRooms.fold(0, (n, r) => n + r.notificationCount),

@@ -31,6 +31,7 @@ String inboxViewLabel(InboxFilter filter) => switch (filter) {
   InboxFilter.lowPriority => 'Low priority',
   InboxFilter.label => 'Messages',
   InboxFilter.all => 'All chats',
+  InboxFilter.requests => 'Requests',
 };
 
 String notionNetworkLabel(String network) => switch (network.toLowerCase()) {

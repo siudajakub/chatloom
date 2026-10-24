@@ -43,7 +43,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Fictional contact'), findsOneWidget);
     final l10n = L10n.of(tester.element(find.byType(UserDialog)));
-    expect(find.text(l10n.block), findsOneWidget);
+    // The Matrix ignore list is labelled as what it is (FX-01).
+    expect(find.text('Ignore'), findsOneWidget);
+    expect(find.text(l10n.block), findsNothing);
     expect(find.text(l10n.report), findsOneWidget);
     expect(find.text('Currently active'), findsNothing);
     expect(tester.takeException(), isNull);

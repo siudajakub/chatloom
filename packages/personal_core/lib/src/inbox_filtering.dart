@@ -15,6 +15,10 @@ enum InboxFilter {
   archive,
   lowPriority,
   all,
+
+  /// Message requests from people the user has not accepted yet (Instagram,
+  /// Messenger). They also stay in their usual views, tagged.
+  requests,
 }
 
 class InboxRecord {
@@ -25,6 +29,9 @@ class InboxRecord {
   final Set<String> labelKeys;
   final bool isGroup;
   final bool technical;
+
+  /// An unaccepted message request (bridge-declared).
+  final bool messageRequest;
   final ChatPlacement placement;
   final bool unread;
   final int unreadCount;
@@ -41,6 +48,7 @@ class InboxRecord {
     Iterable<String> labelKeys = const [],
     this.isGroup = false,
     this.technical = false,
+    this.messageRequest = false,
     this.placement = ChatPlacement.inbox,
     this.unread = false,
     this.unreadCount = 0,
@@ -109,6 +117,8 @@ List<InboxRecord> projectInbox(
       InboxFilter.archive => record.metadata.archived,
       InboxFilter.lowPriority => record.metadata.lowPriority,
       InboxFilter.all => placement == ChatPlacement.inbox,
+      InboxFilter.requests =>
+        record.messageRequest && !record.metadata.archived,
     };
     final searchable = '${record.displayName}\n${record.networks.join(' ')}'
         .toLowerCase();

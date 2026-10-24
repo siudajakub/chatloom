@@ -9,6 +9,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat/chat_app_bar_list_tile.dart';
 import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:flutter/foundation.dart';
@@ -83,6 +84,20 @@ class _PinnedEventsState extends State<PinnedEvents> {
                 title: personalEventPreview(event, i18n: MatrixLocals(l10n)),
                 onTap: () => Navigator.of(context).pop(event.eventId),
               ),
+          // A bridged chat's pins are personal (BR-06).
+          if (pinStaysInChatLoom(controller.room) case final network?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                NotionSpace.md,
+                NotionSpace.xs,
+                NotionSpace.md,
+                0,
+              ),
+              child: Text(
+                'Only visible in ChatLoom. $network doesn’t show pins.',
+                style: context.notion.typography.footnoteMuted,
+              ),
+            ),
         ],
       ),
     );

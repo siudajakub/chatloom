@@ -5,6 +5,7 @@ import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/network_sign_out.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -520,6 +521,7 @@ class NetworkDetailPage extends StatefulWidget {
     this.onOpenChat,
     this.clock,
     this.signOut,
+    this.startBridgeChat,
   });
 
   final PersonalClient personal;
@@ -533,6 +535,11 @@ class NetworkDetailPage extends StatefulWidget {
   /// Sends the bridge's sign-out command for a network (default
   /// [NetworkSignOut.signOut]).
   final Future<void> Function(String network)? signOut;
+
+  /// Opens a DM with the bridge bot when no management room is known
+  /// (BR-11); returns its room id. Default: `Client.startDirectChat`
+  /// without encryption (bridgev2 management rooms are unencrypted).
+  final Future<String> Function(String bot)? startBridgeChat;
 
   @override
   State<NetworkDetailPage> createState() => _NetworkDetailPageState();
@@ -657,6 +664,37 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
     final open = widget.onOpenChat;
     if (open != null) return open(room);
     context.push('/rooms/${room.id}');
+  }
+
+  bool _openingBot = false;
+
+  /// Starts (or finds) the DM with the bridge bot and opens it (BR-11).
+  Future<void> _openBotChat(String bot) async {
+    if (_openingBot || !_active) return;
+    setState(() => _openingBot = true);
+    try {
+      final start =
+          widget.startBridgeChat ??
+          (String bot) =>
+              personal.client.startDirectChat(bot, enableEncryption: false);
+      final id = await start(bot);
+      if (!mounted) return;
+      final room = personal.client.getRoomById(id);
+      if (room != null) {
+        _openChat(room);
+      } else {
+        context.push('/rooms/$id');
+      }
+    } catch (error, stack) {
+      if (!mounted) return;
+      await ErrorReporter.action(
+        context,
+        message: 'Open the bridge chat',
+        onRetry: () => _openBotChat(bot),
+      ).onErrorCallback(error, stack);
+    } finally {
+      if (mounted) setState(() => _openingBot = false);
+    }
   }
 
   Future<T?> _pick<T>({
@@ -801,6 +839,12 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
     if (health != null && health.state.isProblem) {
       final signIn = health.state == BridgeHealthState.loggedOut;
       final reason = health.describe(now);
+      // No bridge chat on this device (signed out, fresh device): any
+      // portal names the bot, so Sign in opens a chat with it (BR-11).
+      final bot = bridgeChat == null && signIn
+          ? knownBridgeBot(personal.client, _network)
+          : null;
+      final canSignIn = bridgeChat != null || bot != null;
       return Padding(
         padding: const EdgeInsets.only(bottom: NotionSpace.md),
         child: NotionCallout(
@@ -815,15 +859,20 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
               : NotionCalloutTone.danger,
           title: health.title,
           // bridgev2 signs in through its bot: say what to send there.
-          message: signIn && bridgeChat != null
+          message: signIn && canSignIn
               ? '$reason Tap Sign in, then send “login” in the bridge chat.'
               : reason,
-          actionLabel: bridgeChat == null
+          actionLabel: !canSignIn
               ? null
               : signIn
               ? 'Sign in'
               : 'Open bridge chat',
-          onAction: bridgeChat == null ? null : () => _openChat(bridgeChat),
+          actionBusy: _openingBot,
+          onAction: bridgeChat != null
+              ? () => _openChat(bridgeChat)
+              : bot != null
+              ? () => _openBotChat(bot)
+              : null,
         ),
       );
     }

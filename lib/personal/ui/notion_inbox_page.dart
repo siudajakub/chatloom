@@ -44,6 +44,10 @@ class NotionInboxPage extends StatelessWidget {
 
   /// Unread chats of the current network selection, on the "Unread" chip.
   final int unreadCount;
+
+  /// Message requests waiting for an answer; the "Requests" chip shows
+  /// while there are some (FX-02).
+  final int requestCount;
   const NotionInboxPage({
     super.key,
     this.rows = const [],
@@ -67,6 +71,7 @@ class NotionInboxPage extends StatelessWidget {
     this.loading = false,
     this.emptyMessage,
     this.unreadCount = 0,
+    this.requestCount = 0,
   });
   int? _indexOfRow(Key key) {
     final index = rows.indexWhere((row) => row.key == key);
@@ -167,6 +172,7 @@ class NotionInboxPage extends StatelessWidget {
                     selected: selectedView,
                     onViewSelected: onViewSelected,
                     unreadCount: unreadCount,
+                    requestCount: requestCount,
                   ),
                 ),
               ),

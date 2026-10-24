@@ -27,6 +27,7 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_hub.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
+import 'package:chatloom/personal/ui/message_request_callout.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -368,6 +369,11 @@ class ChatView extends StatelessWidget {
                                                 : Column(
                                                     mainAxisSize: .min,
                                                     children: [
+                                                      // FX-02: Accept / Delete /
+                                                      // Block of a request.
+                                                      MessageRequestCallout(
+                                                        room: controller.room,
+                                                      ),
                                                       ReplyDisplay(controller),
                                                       ChatInputRow(controller),
                                                       ChatEmojiPicker(

@@ -26,6 +26,7 @@ class NotionInboxViewChips extends StatelessWidget {
     required this.selected,
     required this.onViewSelected,
     this.unreadCount = 0,
+    this.requestCount = 0,
   });
 
   final InboxFilter selected;
@@ -34,13 +35,18 @@ class NotionInboxViewChips extends StatelessWidget {
   /// Unread chats of the current network selection; shown on "Unread".
   final int unreadCount;
 
+  /// Message requests waiting for an answer (Instagram, Messenger): the
+  /// "Requests" chip appears only while there are some (FX-02).
+  final int requestCount;
+
   @override
   Widget build(BuildContext context) {
     final palette = context.notion.palette;
-    final views = [
+    final chips = [
       ...notionInboxChipViews,
-      if (!notionInboxChipViews.contains(selected)) selected,
+      if (requestCount > 0) InboxFilter.requests,
     ];
+    final views = [...chips, if (!chips.contains(selected)) selected];
     return Semantics(
       container: true,
       label: 'Views',
@@ -54,7 +60,13 @@ class NotionInboxViewChips extends StatelessWidget {
                 key: ValueKey('notion_inbox_chip_${view.name}'),
                 label: notionInboxChipLabel(view),
                 selected: view == selected,
-                trailing: view == InboxFilter.unread && unreadCount > 0
+                trailing: view == InboxFilter.requests && requestCount > 0
+                    ? Text(
+                        '$requestCount',
+                        semanticsLabel: '$requestCount waiting',
+                        style: context.notion.typography.captionMuted,
+                      )
+                    : view == InboxFilter.unread && unreadCount > 0
                     ? Container(
                         constraints: const BoxConstraints(
                           minWidth: 20,

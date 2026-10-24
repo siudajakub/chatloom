@@ -23,6 +23,7 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/message_notification.dart'
     show personalAppLockConfigured;
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/person_route.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -31,6 +32,7 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
+import 'package:chatloom/personal/ui/network_action_flows.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_search_page.dart';
@@ -151,6 +153,15 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
       ignored ? 'Restore chat' : 'Ignore chat',
       enabled: canWrite,
     ),
+    // On the network itself, only where its bridge declares it (FX-01); a
+    // merged person has several chats and is deleted per source instead.
+    if (group == null && joined && NetworkChatFeatures.of(room).deleteChat)
+      const ChatMenuItem(
+        ChatMenuAction.deleteChat,
+        Icons.delete_outline,
+        'Delete chat…',
+        destructive: true,
+      ),
   ];
 }
 
@@ -765,6 +776,16 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       case ChatMenuAction.notifications:
         await _openNotificationSettings(owner, room);
         return;
+      case ChatMenuAction.deleteChat:
+        // The row hides itself while the network deletes the chat
+        // (InboxController listens to NetworkChatActions).
+        await deleteNetworkChatFlow(
+          context,
+          room,
+          name: title,
+          fromRequest: isMessageRequest(room),
+        );
+        return;
       case ChatMenuAction.ignore:
         final target = entity();
         if (!canEditChatPreferences(owner, 'org:$target')) return;
@@ -965,6 +986,21 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
 
   Object? _unreadKey;
   int _unreadChats = 0;
+  Object? _requestKey;
+  int _requestChats = 0;
+
+  /// Message requests waiting for an answer (FX-02): the "Requests" chip
+  /// appears only while there are some. Memoised like [unreadViewCount].
+  int requestViewCount() {
+    final inbox = this.inbox;
+    final key = (inbox, inbox.generation);
+    if (key == _requestKey) return _requestChats;
+    _requestChats = inbox.projection
+        .select(inbox.index, filter: InboxFilter.requests)
+        .length;
+    _requestKey = key;
+    return _requestChats;
+  }
 
   /// Chats in the Unread view for the selected network: the "Unread" chip's
   /// count (UX-16). Memoised per inbox change, like [filterRooms].

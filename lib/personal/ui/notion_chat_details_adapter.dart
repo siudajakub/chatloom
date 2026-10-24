@@ -2,14 +2,19 @@
 import 'dart:async';
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/pages/chat_details/chat_details.dart';
+import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/round_video/round_availability.dart';
 import 'package:chatloom/personal/ui/capabilities_dialog.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
+import 'package:chatloom/personal/ui/contact_sheet.dart';
+import 'package:chatloom/personal/ui/network_action_flows.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_notifications.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
@@ -356,6 +361,11 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
       await context.push('/rooms/${room.id}/details/members');
       return;
     }
+    // A bridged contact gets the network's contact card (FX-05).
+    if (isBridgedRoom(room)) {
+      await showContactSheet(context, room: room, userId: user.id);
+      return;
+    }
     await UserDialog.show(
       context: context,
       profile: Profile(
@@ -478,12 +488,18 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     );
   }
 
+  /// BR-07: bridgev2 drops the user's own leave unless the bridge runs with
+  /// `bridge_matrix_leave` (default false), so a bridged chat stays on the
+  /// network; "Delete chat" is the network action where it exists.
   Future<void> _leave(Room room) async {
+    final network = bridgedNetworkLabel(room);
     final confirmed = await showOkCancelAlertDialog(
       context: context,
-      title: 'Leave this chat?',
-      message:
-          'You leave it on the network too. To only hide it here, archive it instead.',
+      title: network == null ? 'Leave this chat?' : 'Leave in ChatLoom?',
+      message: network == null
+          ? 'You leave the chat for good. To only hide it, archive it instead.'
+          : 'It stays on $network, and new messages may bring it back. To '
+                'hide it, archive it instead.',
       isDestructive: true,
       okLabel: 'Leave',
       cancelLabel: 'Cancel',
@@ -493,6 +509,68 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
       await room.leave();
       if (mounted) context.go('/rooms');
     });
+  }
+
+  /// Block / Unblock and Delete chat on the network where the bridge
+  /// declares them (FX-01), then Leave. A bridged DM that can be deleted has
+  /// no Leave: leaving would only hide it until the next message (BR-07).
+  List<Widget> _networkRows(Room room, String name) {
+    final features = NetworkChatFeatures.of(room);
+    final network = bridgedNetworkLabel(room);
+    final joined = room.membership == Membership.join;
+    final danger = context.notion.colors.danger;
+    final direct = room.isDirectChatForDisplay;
+    return [
+      if (network != null && joined && direct && features.blockUser)
+        NotionListRow(
+          key: const ValueKey('details-network-block'),
+          leading: Icon(
+            features.userBlocked
+                ? Icons.lock_open_outlined
+                : Icons.block_outlined,
+            color: features.userBlocked ? null : danger,
+          ),
+          title: features.userBlocked
+              ? 'Unblock on $network'
+              : 'Block on $network',
+          subtitle: features.userBlocked
+              ? 'They can’t message you there now'
+              : 'They can’t message or call you there',
+          onTap: () => blockNetworkUserFlow(
+            context,
+            room,
+            name: name,
+            block: !features.userBlocked,
+          ),
+        ),
+      if (network != null && joined && features.deleteChat)
+        NotionListRow(
+          key: const ValueKey('details-network-delete'),
+          leading: Icon(Icons.delete_outline, color: danger),
+          title: 'Delete chat',
+          subtitle: 'Also deletes it from $network',
+          onTap: () {
+            final router = GoRouter.of(context);
+            deleteNetworkChatFlow(
+              context,
+              room,
+              name: name,
+              fromRequest: features.messageRequest,
+              onStarted: () => router.go('/rooms'),
+            );
+          },
+        ),
+      if (network == null || !direct || !features.deleteChat)
+        NotionListRow(
+          key: const ValueKey('details-leave'),
+          leading: const Icon(Icons.logout_outlined),
+          title: network == null ? 'Leave chat' : 'Leave in ChatLoom',
+          subtitle: network == null
+              ? null
+              : 'Remove it from ChatLoom. It stays on $network.',
+          onTap: () => _leave(room),
+        ),
+    ];
   }
 
   @override
@@ -641,12 +719,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           onTap: () => context.push('/rooms/${room.id}/details/members'),
         ),
         const Divider(),
-        NotionListRow(
-          leading: const Icon(Icons.logout_outlined),
-          title: 'Leave chat',
-          subtitle: 'You also leave it on the network',
-          onTap: () => _leave(room),
-        ),
+        ..._networkRows(room, name),
       ],
     ];
     final networkAvatar = room != null

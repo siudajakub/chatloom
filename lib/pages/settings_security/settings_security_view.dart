@@ -41,9 +41,15 @@ class SettingsSecurityView extends StatelessWidget {
             ),
           ),
           NotionListRow(
-            leading: const Icon(Icons.block_outlined),
-            title: 'Blocked users',
-            subtitle: '${client.ignoredUsers.length} blocked',
+            // The Matrix ignore list, not a network block (FX-01): blocking
+            // on WhatsApp/Telegram/Instagram lives on the contact.
+            leading: const Icon(Icons.visibility_off_outlined),
+            title: 'Ignored people',
+            subtitle: client.ignoredUsers.isEmpty
+                ? 'Hidden in ChatLoom and other Beeper apps. To block someone '
+                      'on their network, open their contact.'
+                : '${client.ignoredUsers.length} hidden in ChatLoom and other '
+                      'Beeper apps · not blocked on their networks',
             onTap: () => context.push('/rooms/settings/security/ignorelist'),
           ),
           if (PlatformInfos.supportsAppLock) ...[

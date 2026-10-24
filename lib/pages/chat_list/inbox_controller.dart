@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/performance_probe_client.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -47,6 +48,10 @@ class InboxController extends ChangeNotifier {
       BridgeDeliveryLedger.of(
         client,
       ).changes.listen((room) => _mark(rooms: [room]), onError: (_) {}),
+      // A chat hidden while its network deletion runs, or restored.
+      NetworkChatActions.changes(
+        client,
+      ).listen((_) => _mark(all: true), onError: (_) {}),
     ]);
   }
 

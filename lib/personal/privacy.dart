@@ -8,6 +8,7 @@ import 'package:personal_core/personal_core.dart';
 
 import 'capabilities.dart';
 import 'journal_trust.dart';
+import 'network_chat_actions.dart';
 import 'privacy_transport.dart';
 import 'round_video/telegram_media_protocol.dart';
 import 'round_video/telegram_room_binding.dart';
@@ -67,8 +68,12 @@ abstract final class PersonalPrivacy {
       () => room.setReadMarker(
         eventId,
         mRead: eventId,
+        // An unaccepted message request never gets a public receipt: the
+        // bridge would tell the requester "Seen" (FX-02). Replying accepts
+        // it, so the read after an accepted reply may be public again.
         public:
             !privateReceipt &&
+            (acceptedReply || !isMessageRequest(room)) &&
             ((manual && publicReceipt) ||
                 AppSettings.sendPublicReadReceipts.value),
       ),

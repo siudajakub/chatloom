@@ -11,6 +11,7 @@ import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
 import 'package:chatloom/pages/chat/media_album.dart';
+import 'package:chatloom/personal/bridge_notices.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
@@ -19,6 +20,7 @@ import 'package:chatloom/personal/instagram_share.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/ui/bridge_notice_line.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
@@ -154,6 +156,12 @@ class Message extends StatelessWidget {
     }
     if (event.messageType == EventTypes.KeyVerificationRequest) {
       return StateMessage(event);
+    }
+    // A bridge's own notice is a service line, not the contact's bubble
+    // (BR-08). Only notices pay for the display-event lookup.
+    if (event.messageType == MessageTypes.Notice) {
+      final notice = bridgeServiceNotice(event.getDisplayEvent(timeline));
+      if (notice != null) return BridgeNoticeLine(notice: notice);
     }
     final own = event.senderId == event.room.client.userID;
     final boundary = seriesBoundary;

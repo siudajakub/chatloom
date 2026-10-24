@@ -5,6 +5,7 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/report_policy.dart';
+import 'package:chatloom/personal/ui/contact_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/chatloom_share.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
@@ -28,16 +29,28 @@ import '../mxc_image_viewer.dart';
 // ignore: unused_import
 
 class UserDialog extends StatelessWidget {
+  /// A person seen through a bridge gets the contact sheet instead (FX-05):
+  /// their Matrix ID is the bridge's ghost account, not worth copying or
+  /// sharing, and "Block" there means the network.
   static Future<void> show({
     required BuildContext context,
     required Profile profile,
     bool noProfileWarning = false,
-  }) => showNotionAdaptiveDialog(
-    context: context,
-    barrierDismissible: true,
-    builder: (context) =>
-        UserDialog(profile, noProfileWarning: noProfileWarning),
-  );
+  }) {
+    final bridged = bridgedContactRoom(
+      Matrix.of(context).client,
+      profile.userId,
+    );
+    if (bridged != null) {
+      return showContactSheet(context, room: bridged, userId: profile.userId);
+    }
+    return showNotionAdaptiveDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) =>
+          UserDialog(profile, noProfileWarning: noProfileWarning),
+    );
+  }
 
   final Profile profile;
   final bool noProfileWarning;
@@ -203,9 +216,11 @@ class UserDialog extends StatelessWidget {
                 mainAxisAlignment: .spaceBetween,
                 spacing: 4,
                 children: [
+                  // The Matrix ignore list hides the person in ChatLoom and
+                  // other Matrix apps; it is not a block (FX-01).
                   AdaptiveIconTextButton(
-                    label: L10n.of(context).block,
-                    icon: Icons.block_outlined,
+                    label: 'Ignore',
+                    icon: Icons.visibility_off_outlined,
                     onTap: client.userID == profile.userId
                         ? null
                         : () {
