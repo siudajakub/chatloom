@@ -242,6 +242,7 @@ in new code; read `context.notion` instead.
 | `NotionLinkPreviewCard(title:, description:, site:, image:, fill:, textColor:, mutedColor:, onTap:)` | a bridged link preview inside a text bubble: opaque card, image on top (1:1 to 16:9), site, title, description; colours from the bubble, no blur, never fetches the URL (`notion_link_preview.dart`) |
 | `NotionMediaPlaybackControls`, `NotionMediaActionsButton` | Focused media transport over `stageScrim`: play/pause, time, seek, speed; secondary actions in one menu. Data and callbacks only; `seekControl` accepts a voice waveform instead of the slider. |
 | `NotionSwipeAction(startToEnd:, endToStart:, child:)` + `NotionSwipeActionSide(icon:, label:, onCommit:)` | Telegram-style row swipe (inbox: archive / mark read): the row follows the finger over an opaque `accentTint` pill whose icon scales in, arms at 30 % of the width with one `NotionHaptics.selection()`, commits on release and springs back (`snappy`, instant under reduced motion); touch only, never from the back-gesture edges, off under a screen reader (custom semantics actions instead); no controller until the first swipe (`notion_swipe_action.dart`) |
+| `NotionContentLoopGate(enabled:, child:)`, `NotionContentLoop.isVisible(box, screen)` | content loops (animated stickers, GIF images, Lottie): a `TickerMode` that is on only while at least half of the child is in its viewport, tickers are on and motion is not reduced; `enabled` carries the caller's "autoplay" policy. `MxcImage` gates animated media itself; `InlineLoopVideo` uses the same visibility rule. Gated children show their first frame without a fade (`notion_content_loop.dart`) |
 | `NotionPressable`, `NotionEntrance`, `NotionSkeleton`, `NotionFadeThrough`, `NotionPop`, ... | motion (see Motion) |
 | `NotionTapTarget(onTap:, onLongPress:, onSecondaryTap:, behavior:, child:)` | a `GestureDetector` replacement for custom tap targets with pointer affordances (Mac): the click cursor while `onTap` is set, and a right click doing what the long press does. Every long-press-only action needs a right-click equivalent; `NotionPressable(onLongPress:)` gets one too. Non-visual, no golden (`notion_pressable.dart`) |
 
@@ -507,7 +508,8 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
    states): a wait that never ends (failed media, an offline worker) must
    not draw frames forever. Failed media shows a static fallback, never a
    spinner. Content loops (Lottie stickers, inline GIFs) play only while
-   visible, under `TickerMode` on and outside reduced motion. Never leave a
+   visible, under `TickerMode` on and outside reduced motion
+   (`NotionContentLoopGate`). Never leave a
    skeleton enabled in a settled golden; use fixed pumps for loops.
 5. No timers for motion. flutter_animate's `Animate` widget, `.animate()`
    and `AnimateList` always schedule a `Future.delayed` (even with zero

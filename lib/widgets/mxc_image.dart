@@ -8,6 +8,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/bounded_byte_cache.dart';
@@ -71,6 +72,40 @@ class MxcImage extends StatefulWidget {
 
   static void clearCache(String cacheName) =>
       _MxcImageState._imageDataCache.removeWhere((key) => key.$2 == cacheName);
+
+  /// Whether [bytes] may hold more than one frame: a GIF, an animated WebP
+  /// (`VP8X` with the animation flag) or an APNG (`acTL` before the image
+  /// data). A cheap header sniff; a still GIF counts too (it costs only the
+  /// visibility gate).
+  static bool isAnimatedImage(Uint8List bytes) {
+    bool at(int offset, String tag) {
+      if (bytes.length < offset + tag.length) return false;
+      for (var i = 0; i < tag.length; i++) {
+        if (bytes[offset + i] != tag.codeUnitAt(i)) return false;
+      }
+      return true;
+    }
+
+    if (at(0, 'GIF8')) return true;
+    if (at(0, 'RIFF') && at(8, 'WEBP')) {
+      return at(12, 'VP8X') && bytes.length > 20 && bytes[20] & 0x02 != 0;
+    }
+    if (at(0, '\x89PNG')) {
+      // Chunks: length (4) + type (4) + data + CRC (4), from offset 8.
+      var offset = 8;
+      while (offset + 8 <= bytes.length) {
+        final length =
+            (bytes[offset] << 24) |
+            (bytes[offset + 1] << 16) |
+            (bytes[offset + 2] << 8) |
+            bytes[offset + 3];
+        if (at(offset + 4, 'acTL')) return true;
+        if (at(offset + 4, 'IDAT') || length < 0) return false;
+        offset += 12 + length;
+      }
+    }
+    return false;
+  }
 
   /// Drops parsed Lottie stickers (tests, memory pressure).
   static void clearLottieCache() => _MxcImageState._lottieCache.clear();
@@ -157,6 +192,23 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   MxcImageLoad _reported = MxcImageLoad.loading;
   Client? _dependencyClient;
   double? _dependencyDpr;
+
+  /// Bytes last sniffed by [_loops] and the answer, so a rebuild does not
+  /// sniff again.
+  Uint8List? _sniffed;
+  bool _sniffedAnimated = false;
+
+  /// The content animates (Lottie, animated GIF/WebP/PNG): it plays only
+  /// while visible ([NotionContentLoopGate]).
+  bool _loops(Uint8List? data, LottieComposition? lottie) {
+    if (lottie != null) return true;
+    if (data == null) return false;
+    if (!identical(data, _sniffed)) {
+      _sniffed = data;
+      _sniffedAnimated = MxcImage.isAnimatedImage(data);
+    }
+    return _sniffedAnimated;
+  }
 
   /// Tells [MxcImage.onLoadStateChanged] after this frame, once per change.
   void _report(MxcImageLoad state) {
@@ -628,7 +680,20 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       );
     }
 
-    final imageChild = data == null
+    final loops = hasData && _loops(data, lottie);
+    // A gated loop shows its first frame at once: a fade-in would be stuck
+    // under the gate's muted tickers.
+    Widget firstFrame(
+      BuildContext context,
+      Widget child,
+      int? frame,
+      bool wasSynchronouslyLoaded,
+    ) {
+      if (frame != null) _report(MxcImageLoad.ready);
+      return child;
+    }
+
+    var imageChild = data == null
         ? _MxcImagePlaceholder(
             width: widget.width,
             height: widget.height,
@@ -654,9 +719,18 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
                   filterQuality: widget.isThumbnail
                       ? FilterQuality.low
                       : FilterQuality.medium,
-                  frameBuilder: fadeInFrame,
+                  frameBuilder: loops ? firstFrame : fadeInFrame,
                   errorBuilder: errorFallback,
                 ));
+    if (loops) {
+      // Animated stickers and GIF images loop only while on screen
+      // (DESIGN.md motion rule 4); timeline and grid media also follow the
+      // "autoplay" setting, the viewer (originals) always plays.
+      imageChild = NotionContentLoopGate(
+        enabled: !widget.isThumbnail || AppSettings.autoplayImages.value,
+        child: imageChild,
+      );
+    }
 
     final clipped =
         widget.borderRadius ==

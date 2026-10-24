@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -295,6 +296,20 @@ class _StickerSettingsPageState extends State<StickerSettingsPage> {
             title: 'Add from a link',
             subtitle: 't.me/addstickers/… or wa.me/stickerpack/…',
             onTap: _addFromLink,
+          ),
+          const NotionSettingsSection('Suggestions'),
+          NotionListRow(
+            key: const ValueKey('sticker-suggest-by-emoji'),
+            leading: const Icon(Icons.emoji_emotions_outlined),
+            title: 'Suggest stickers by emoji',
+            subtitle: 'Typing a single emoji shows matching stickers',
+            trailing: Switch.adaptive(
+              value: AppSettings.stickerSuggestions.value,
+              onChanged: (value) async {
+                await AppSettings.stickerSuggestions.setItem(value);
+                if (mounted) setState(() {});
+              },
+            ),
           ),
           const NotionSettingsSection('Recent'),
           NotionListRow(

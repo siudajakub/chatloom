@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/conversation_bubble.dart'
+    show ConversationMedia;
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
@@ -11,7 +13,6 @@ import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/blur_hash.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
@@ -58,10 +59,7 @@ class InlineLoopVideo extends StatefulWidget {
   static const maxPlayers = InlineLoopSlots.max;
 
   /// Share of the frame that must be visible to play.
-  static const visibleFraction = .5;
-
-  /// Side of a video sticker's box (as for image stickers).
-  static const stickerSize = 128.0;
+  static const visibleFraction = NotionContentLoop.visibleFraction;
 
   /// Tests: creates the player instead of downloading the attachment.
   @visibleForTesting
@@ -101,20 +99,15 @@ class InlineLoopVideo extends StatefulWidget {
         (info['fi.mau.autoplay'] == true && info['fi.mau.loop'] == true);
   }
 
-  /// The box of a video sticker: [stickerSize] on the long side.
-  static Size stickerBox(Event event) {
+  /// The box of a video sticker: [side] (see
+  /// [ConversationMedia.stickerSide]) on the long side, as image stickers.
+  static Size stickerBox(Event event, double side) {
     final info = _info(event);
-    final w = info?.tryGet<num>('w');
-    final h = info?.tryGet<num>('h');
-    var width = stickerSize, height = stickerSize;
-    if (w != null && h != null && w > 0 && h > 0) {
-      if (w > h) {
-        height = (stickerSize * h / w).clamp(32.0, stickerSize);
-      } else {
-        width = (stickerSize * w / h).clamp(32.0, stickerSize);
-      }
-    }
-    return Size(width, height);
+    return ConversationMedia.stickerFrame(
+      side,
+      width: info?.tryGet<num>('w'),
+      height: info?.tryGet<num>('h'),
+    );
   }
 
   /// WebM does not decode on macOS (AVFoundation); elsewhere it is tried.
@@ -236,24 +229,12 @@ class _InlineLoopVideoState extends State<InlineLoopVideo>
       if (!mounted) return;
       final box = context.findRenderObject();
       if (box is! RenderBox || !box.hasSize || !box.attached) return;
-      final bounds = box.localToGlobal(Offset.zero) & box.size;
-      var viewportBounds = Offset.zero & MediaQuery.sizeOf(context);
-      final viewport = RenderAbstractViewport.maybeOf(box);
-      if (viewport is RenderBox) {
-        final viewportBox = viewport as RenderBox;
-        if (viewportBox.hasSize) {
-          viewportBounds = viewportBounds.intersect(
-            viewportBox.localToGlobal(Offset.zero) & viewportBox.size,
-          );
-        }
-      }
-      final overlap = bounds.intersect(viewportBounds);
-      final visible =
-          bounds.width > 0 &&
-          bounds.height > 0 &&
-          !overlap.isEmpty &&
-          overlap.width * overlap.height / (bounds.width * bounds.height) >=
-              InlineLoopVideo.visibleFraction;
+      // The shared content-loop rule (DESIGN.md motion rule 4).
+      final visible = NotionContentLoop.isVisible(
+        box,
+        MediaQuery.sizeOf(context),
+        fraction: InlineLoopVideo.visibleFraction,
+      );
       if (!visible) _evicted = false;
       _visible = visible;
       _sync();
@@ -455,7 +436,7 @@ class _InlineLoopVideoState extends State<InlineLoopVideo>
     return Semantics(
       label: _sticker ? 'Sticker' : 'GIF',
       button: true,
-      child: GestureDetector(
+      child: NotionTapTarget(
         onTap: _open,
         child: SizedBox(
           width: widget.width,

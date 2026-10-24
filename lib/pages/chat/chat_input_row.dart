@@ -16,6 +16,7 @@ import 'package:chatloom/personal/round_video/round_availability.dart'
     show RoundAvailability;
 import 'package:chatloom/personal/round_video/round_outbox_sync.dart';
 import 'package:chatloom/personal/round_video/round_record_button.dart';
+import 'package:chatloom/personal/stickers/sticker_suggestions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/avatar.dart';
@@ -425,6 +426,8 @@ class _ChatInputRowState extends State<ChatInputRow> {
         if (PlatformInfos.supportsRoundCapture &&
             PersonalClient.networkOf(controller.room) == 'telegram')
           RoundOutboxSync(room: controller.room),
+        // Telegram: a single emoji suggests matching stickers.
+        StickerSuggestionStrip(host: controller),
         RecordingViewModel(
           builder: (context, recordingViewModel) {
             // A held recording keeps the composer (and this pointer) mounted.

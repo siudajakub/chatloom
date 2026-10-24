@@ -34,6 +34,10 @@ enum AppSettings<T> {
   hideRedactedEvents<bool>('chat.fluffy.hideRedactedEvents', false),
   hideUnknownEvents<bool>('chat.fluffy.hideUnknownEvents', true),
   autoplayImages<bool>('chat.fluffy.autoplay_images', true),
+
+  /// Telegram's emoji → sticker suggestions above the composer when the
+  /// message is a single emoji. Settings › Stickers.
+  stickerSuggestions<bool>('pl.personal.stickers.suggest_by_emoji', true),
   personalIncognito<bool>('pl.personal.incognito', true),
 
   /// Accent preset of the colour system (`NotionAccent.name`). Read by

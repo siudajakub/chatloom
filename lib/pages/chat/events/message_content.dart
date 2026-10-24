@@ -2,8 +2,6 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'dart:math';
-
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
@@ -151,7 +149,13 @@ class MessageContent extends StatelessWidget {
             final sticker = event.messageType == MessageTypes.Sticker;
             // A video sticker (`m.sticker` with a video file) loops inline.
             if (InlineLoopVideo.isVideoSticker(event)) {
-              final box = InlineLoopVideo.stickerBox(event);
+              final box = InlineLoopVideo.stickerBox(
+                event,
+                ConversationMedia.stickerSide(
+                  context,
+                  desktop: PlatformInfos.isDesktop,
+                ),
+              );
               return InlineLoopVideo(
                 event,
                 width: box.width,
@@ -167,27 +171,22 @@ class MessageContent extends StatelessWidget {
                 .tryGetMap<String, Object?>('info')
                 ?.tryGet<int>('h');
             // Photos follow the one media rule (bubble width, aspect kept
-            // within limits, cropped beyond); stickers stay small and whole.
-            final Size box;
-            if (sticker) {
-              const maxSize = 128.0;
-              var width = maxSize;
-              var height = maxSize;
-              if (w != null && h != null && w > 0 && h > 0) {
-                if (w > h) {
-                  height = max(32, maxSize * (h / w));
-                } else {
-                  width = max(32, maxSize * (w / h));
-                }
-              }
-              box = Size(width, height);
-            } else {
-              box = ConversationMedia.frame(
-                maxWidth: NotionBubble.mediaMaxWidth,
-                width: w,
-                height: h,
-              );
-            }
+            // within limits, cropped beyond); stickers are whole and about
+            // half the screen's short side (Telegram).
+            final box = sticker
+                ? ConversationMedia.stickerFrame(
+                    ConversationMedia.stickerSide(
+                      context,
+                      desktop: PlatformInfos.isDesktop,
+                    ),
+                    width: w,
+                    height: h,
+                  )
+                : ConversationMedia.frame(
+                    maxWidth: NotionBubble.mediaMaxWidth,
+                    width: w,
+                    height: h,
+                  );
             final fit = sticker ? BoxFit.contain : BoxFit.cover;
             return ImageBubble(
               event,
@@ -257,7 +256,13 @@ class MessageContent extends StatelessWidget {
               return LayoutBuilder(
                 builder: (context, constraints) {
                   final box = sticker
-                      ? InlineLoopVideo.stickerBox(event)
+                      ? InlineLoopVideo.stickerBox(
+                          event,
+                          ConversationMedia.stickerSide(
+                            context,
+                            desktop: PlatformInfos.isDesktop,
+                          ),
+                        )
                       : ConversationMedia.frame(
                           maxWidth: constraints.maxWidth,
                           width: info?.tryGet<num>('w'),

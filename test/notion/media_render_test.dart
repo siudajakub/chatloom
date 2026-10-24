@@ -303,7 +303,8 @@ void main() {
       });
       expect(InlineLoopVideo.applies(sticker), isTrue);
       expect(InlineLoopVideo.isVideoSticker(sticker), isTrue);
-      expect(InlineLoopVideo.stickerBox(sticker), const Size(128, 64));
+      expect(InlineLoopVideo.stickerBox(sticker, 128), const Size(128, 64));
+      expect(InlineLoopVideo.stickerBox(sticker, 200), const Size(200, 100));
       final video = event(r'$v', {
         'msgtype': MessageTypes.Video,
         'body': 'clip.mp4',

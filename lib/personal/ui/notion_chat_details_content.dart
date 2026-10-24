@@ -9,12 +9,14 @@ import 'package:chatloom/personal/ui/conversation_content_controller.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/url_launcher.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:personal_core/personal_core.dart' show RoundMediaPolicy;
+import 'package:personal_core/personal_core.dart'
+    show RoundMediaPolicy, RoundVideoDescriptor;
 
 bool _thumbnailAllowed(Event event) =>
     event.showThumbnail &&
@@ -25,6 +27,75 @@ Widget _thumbnailPlaceholder(BuildContext context) => ColoredBox(
   color: Theme.of(context).colorScheme.surfaceContainerHigh,
   child: const Center(child: Icon(Icons.image_outlined)),
 );
+
+/// Month header of the shared media grid: "October 2026" (Telegram's
+/// shared media sections). English, like the rest of the app; no locale
+/// data needs to be loaded.
+@visibleForTesting
+String sharedMonthLabel(DateTime local) =>
+    '${_months[local.month - 1]} ${local.year}';
+
+const _months = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/// A media length as Telegram prints it: "0:07", "1:13", "1:02:05".
+@visibleForTesting
+String sharedDurationLabel(Duration duration) {
+  final seconds = duration.inSeconds;
+  final h = seconds ~/ 3600, m = (seconds % 3600) ~/ 60, s = seconds % 60;
+  final ss = s.toString().padLeft(2, '0');
+  return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$ss' : '$m:$ss';
+}
+
+/// The `info.duration` (ms) of [event] as [sharedDurationLabel], or null.
+String? _durationOf(Event event) {
+  final ms = event.infoMap['duration'];
+  return ms is num && ms > 0
+      ? sharedDurationLabel(Duration(milliseconds: ms.toInt()))
+      : null;
+}
+
+/// [events] (newest first) grouped by local calendar month, newest month
+/// first, each month keeping the events' order.
+@visibleForTesting
+List<(String, List<Event>)> groupSharedMediaByMonth(Iterable<Event> events) {
+  final months = <int, (String, List<Event>)>{};
+  for (final event in events) {
+    final date = event.originServerTs.toLocal();
+    months
+        .putIfAbsent(
+          date.year * 12 + date.month,
+          () => (sharedMonthLabel(date), <Event>[]),
+        )
+        .$2
+        .add(event);
+  }
+  return months.values.toList();
+}
+
+/// Media the full-screen viewer opens itself (photos, playable videos);
+/// rounds, protected media and other kinds go to their conversation.
+@visibleForTesting
+bool sharedOpensInViewer(Event event, {bool? supportsVideo}) {
+  if (event.redacted || !event.showThumbnail) return false;
+  if (event.messageType == MessageTypes.Image) return true;
+  if (event.messageType != MessageTypes.Video) return false;
+  return (supportsVideo ?? PlatformInfos.supportsVideoPlayer) &&
+      RoundMediaPolicy.fromContent(event.content).canPlay &&
+      RoundVideoDescriptor.fromContent(event.content) == null;
+}
 
 /// A bounded local preview. No total is inferred from a partial history page.
 class NotionLocalSharedPreview extends StatefulWidget {
@@ -136,7 +207,7 @@ class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
                 afterRoute: false,
                 rise: 0,
                 scale: NotionMotion.dialogFrom,
-                child: _SharedPreviewBlock(events[index]),
+                child: _SharedPreviewBlock(events[index], media: events),
               ),
             ),
           ),
@@ -148,7 +219,8 @@ class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
 
 class _SharedPreviewBlock extends StatelessWidget {
   final Event event;
-  const _SharedPreviewBlock(this.event);
+  final List<Event> media;
+  const _SharedPreviewBlock(this.event, {required this.media});
   @override
   Widget build(BuildContext context) {
     final image =
@@ -180,7 +252,7 @@ class _SharedPreviewBlock extends StatelessWidget {
             : null,
         audio: event.messageType == MessageTypes.Audio,
         video: event.messageType == MessageTypes.Video,
-        onTap: () => _openEvent(context, event),
+        onTap: () => _openEvent(context, event, media: media),
       ),
     );
   }
@@ -209,7 +281,10 @@ class _MediaSource extends StatelessWidget {
   );
 }
 
-void _openEvent(BuildContext context, Event event) {
+/// Opens [event] from the shared content: photos and videos in the
+/// full-screen viewer, swiping through [media] (newest first, as listed;
+/// the viewer gets them oldest first); anything else in its conversation.
+void _openEvent(BuildContext context, Event event, {List<Event>? media}) {
   if (!PersonalPrivacy.surfaceUnlocked || event.redacted) return;
   if (event.room.client.userID == null) return;
   final source = PersonalClient.of(event.room.client).source(event);
@@ -219,16 +294,28 @@ void _openEvent(BuildContext context, Event event) {
     );
     return;
   }
-  if (event.messageType == MessageTypes.Image && event.showThumbnail) {
+  if (sharedOpensInViewer(event)) {
+    // Swipes stay within the same account's rooms (a merged person may mix
+    // accounts; the viewer downloads through each event's own client).
+    final set = [
+      for (final item in media ?? const <Event>[])
+        if (identical(item.room.client, event.room.client) &&
+            sharedOpensInViewer(item))
+          item,
+    ].reversed.toList();
     showImageViewer(
       context,
       event,
+      mediaEvents: set.any((e) => e.eventId == event.eventId) ? set : [event],
+      // Follow-up (lane media-view): a per-event hero tag, so a swiped-to
+      // item also flies back into its own tile.
       heroTag: _mediaHeroTag(event),
       sourceRadius: NotionRadius.smAll,
     );
   } else {
-    // Reuse the actual source conversation for protected/video/audio playback,
-    // with its consent and capability controls. Never create a new player here.
+    // Reuse the actual source conversation for protected/round/audio
+    // playback, with its consent and capability controls. Never create a
+    // new player here.
     Navigator.of(context).push<void>(
       MaterialPageRoute(builder: (_) => SourceChatPage(source: source)),
     );
@@ -602,7 +689,12 @@ class _NotionConversationContentPageState
     itemBuilder: (context, index) {
       if (index == events.length) return _end(events.isEmpty);
       final event = events[index];
+      // Search hits that are not files read as messages, not file rows.
+      if (!sharedFile(event)) {
+        return _entering(event.eventId, _messageRow(event, events));
+      }
       final info = event.content['info'];
+      final duration = _durationOf(event);
       final size = info is Map && info['size'] is num
           ? ' · ${((info['size'] as num) / 1024).ceil()} KB'
           : '';
@@ -620,12 +712,44 @@ class _NotionConversationContentPageState
               ? 'Shared file'
               : event.body,
           subtitle:
-              '${event.messageType == MessageTypes.Audio ? 'Audio · ' : ''}${info is Map && info['mimetype'] is String ? '${info['mimetype']} · ' : ''}${info is Map && info['duration'] is num ? '${Duration(milliseconds: (info['duration'] as num).toInt()).inMinutes}:${(Duration(milliseconds: (info['duration'] as num).toInt()).inSeconds % 60).toString().padLeft(2, '0')} · ' : ''}${_date(event)}$size',
+              '${event.messageType == MessageTypes.Audio ? 'Audio · ' : ''}${info is Map && info['mimetype'] is String ? '${info['mimetype']} · ' : ''}${duration == null ? '' : '$duration · '}${_date(event)}$size',
           onTap: () => _openEvent(context, event),
         ),
       );
     },
   );
+
+  /// A search hit that is a message (text, photo, video, sticker): who
+  /// sent it, a one-paragraph snippet and when. A photo or video opens the
+  /// viewer, anything else its conversation.
+  Widget _messageRow(Event event, List<Event> listed) {
+    final (icon, kind) = switch (event.messageType) {
+      MessageTypes.Image => (Icons.image_outlined, 'Photo'),
+      MessageTypes.Video => (Icons.videocam_outlined, 'Video'),
+      MessageTypes.Sticker => (Icons.emoji_emotions_outlined, 'Sticker'),
+      MessageTypes.Location => (Icons.place_outlined, 'Location'),
+      _ => (Icons.chat_bubble_outline, null),
+    };
+    // A photo's or video's body is its file name unless it has a caption.
+    final filename = event.content['filename'];
+    final media = {
+      MessageTypes.Image,
+      MessageTypes.Video,
+    }.contains(event.messageType);
+    final body = media && (filename is! String || filename == event.body)
+        ? ''
+        : event.body;
+    final text = body.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final snippet = text.length > 160 ? '${text.substring(0, 160)}…' : text;
+    final line = [?kind, if (snippet.isNotEmpty) snippet].join(' · ');
+    return NotionListRow(
+      leading: Icon(icon),
+      title: event.senderFromMemoryOrFallback.calcDisplayname(),
+      subtitle: line.isEmpty ? _date(event) : '$line\n${_date(event)}',
+      onTap: () =>
+          _openEvent(context, event, media: listed.where(sharedMedia).toList()),
+    );
+  }
 
   /// First-screenful entrance of a list row (the enclosing scope stops it
   /// for rows built later by scrolling or filtering).
@@ -643,18 +767,20 @@ class _NotionConversationContentPageState
                   (MediaQuery.textScalerOf(context).scale(1) > 1.5 ? 150 : 120))
               .floor()
               .clamp(2, 6);
-      final months = <String, List<Event>>{};
-      for (final event in events.where(sharedMedia)) {
-        final date = event.originServerTs.toLocal().toString().substring(0, 7);
-        (months[date] ??= []).add(event);
-      }
+      final media = events.where(sharedMedia).toList();
+      final months = groupSharedMediaByMonth(media);
       return CustomScrollView(
         key: const PageStorageKey('content-media'),
         slivers: [
-          for (final month in months.entries) ...[
+          for (final (label, monthEvents) in months) ...[
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-              sliver: SliverToBoxAdapter(child: Text(month.key)),
+              sliver: SliverToBoxAdapter(
+                child: Semantics(
+                  header: true,
+                  child: Text(label, style: NotionType.bodyStrong),
+                ),
+              ),
             ),
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -665,7 +791,7 @@ class _NotionConversationContentPageState
                   mainAxisSpacing: 4,
                 ),
                 delegate: SliverChildBuilderDelegate((context, index) {
-                  final event = month.value[index];
+                  final event = monthEvents[index];
                   final video = event.messageType == MessageTypes.Video;
                   // Tiles of the first screenful grow in; later ones do not.
                   return NotionEntrance(
@@ -679,7 +805,7 @@ class _NotionConversationContentPageState
                       child: NotionPressable(
                         scale: NotionMotion.pressRow,
                         child: InkWell(
-                          onTap: () => _openEvent(context, event),
+                          onTap: () => _openEvent(context, event, media: media),
                           borderRadius: NotionRadius.smAll,
                           // Rounded tiles; a clip per tile is cheap next to
                           // the image decode (no blur in the grid).
@@ -736,11 +862,11 @@ class _NotionConversationContentPageState
                                               color: NotionMediaColors.onScrim,
                                               size: 18,
                                             ),
-                                            if (event.infoMap['duration']
-                                                is num) ...[
+                                            if (_durationOf(event)
+                                                case final duration?) ...[
                                               const SizedBox(width: 4),
                                               Text(
-                                                '${Duration(milliseconds: (event.infoMap['duration'] as num).toInt()).inSeconds}s',
+                                                duration,
                                                 style: NotionType.caption
                                                     .copyWith(
                                                       color: NotionMediaColors
@@ -760,7 +886,7 @@ class _NotionConversationContentPageState
                       ),
                     ),
                   );
-                }, childCount: month.value.length),
+                }, childCount: monthEvents.length),
               ),
             ),
           ],

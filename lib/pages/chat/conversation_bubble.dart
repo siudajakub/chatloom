@@ -735,6 +735,51 @@ abstract final class ConversationMedia {
     return Size(frameWidth, math.max(0.0, frameHeight));
   }
 
+  /// Smallest long side of a sticker (small phones, the old fixed size).
+  static const double stickerMinSide = 128;
+
+  /// Largest long side on a phone (Telegram: about 205 dp on a Pixel 8).
+  static const double stickerMaxSide = 200;
+
+  /// Largest long side on a desktop or a tablet-sized window, where half
+  /// the short side would be huge next to the text.
+  static const double stickerWideSide = 180;
+
+  /// Share of the screen's short side a sticker takes (Telegram
+  /// `ChatMessageCell`: `min(width, height) * 0.5` on phones).
+  static const double stickerScreenShare = .5;
+
+  /// The short side (logical px) from which a window counts as wide.
+  static const double stickerWideBreakpoint = 600;
+
+  /// Short side of the shortest sticker edge (a very wide sticker).
+  static const double stickerMinEdge = 32;
+
+  /// The long side of a sticker (image, Lottie or video) on [screen]:
+  /// half the short side, between [stickerMinSide] and [stickerMaxSide]
+  /// (phones) or [stickerWideSide] ([desktop] or a wide window).
+  static double stickerSideFor(Size screen, {required bool desktop}) {
+    final wide = desktop || screen.shortestSide >= stickerWideBreakpoint;
+    final share = screen.shortestSide * stickerScreenShare;
+    return share.clamp(stickerMinSide, wide ? stickerWideSide : stickerMaxSide);
+  }
+
+  /// [stickerSideFor] the current screen.
+  static double stickerSide(BuildContext context, {required bool desktop}) =>
+      stickerSideFor(MediaQuery.sizeOf(context), desktop: desktop);
+
+  /// A sticker's box: [side] on the long edge, aspect kept, the short edge
+  /// at least [stickerMinEdge]; square without dimensions.
+  static Size stickerFrame(double side, {num? width, num? height}) {
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      return Size.square(side);
+    }
+    if (width > height) {
+      return Size(side, (side * height / width).clamp(stickerMinEdge, side));
+    }
+    return Size((side * width / height).clamp(stickerMinEdge, side), side);
+  }
+
   /// Height limit of a frame: a share of the viewport, and the incoming
   /// [constraints] (grid tiles).
   static double maxHeightOf(BuildContext context, BoxConstraints constraints) =>

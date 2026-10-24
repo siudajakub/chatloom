@@ -65,6 +65,10 @@ class ReplyContent extends StatelessWidget {
       leading: thumbnail
           ? MxcImage(
               event: display,
+              // The memory cache: remounting a quote (scrolling, rebuilds)
+              // does not read and decrypt the attachment again.
+              cacheKey: 'reply:${display.eventId}',
+              cacheName: display.room.id,
               isThumbnail: true,
               fit: BoxFit.cover,
               width: NotionBubble.quoteThumbnail,
