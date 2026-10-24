@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/bootstrap/view_model/bootstrap_view_model.dart';
 import 'package:chatloom/pages/key_verification/key_verification_dialog.dart';
@@ -39,7 +38,6 @@ class RestoreBootstrapView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final keyVerification = viewModel.value.keyVerification;
     if (keyVerification != null) {
       Logs().v('Key verification state:', keyVerification.state);
@@ -71,7 +69,7 @@ class RestoreBootstrapView extends StatelessWidget {
         : 'Verification is requested automatically. Accept it in your existing client or use your existing recovery key. The list below shows your devices; it does not select one.';
     return NotionEntranceScope(
       child: ListView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(NotionSpace.md),
         children: NotionEntrance.stagger([
           if (keyVerification != null) ...[
             ListTile(
@@ -102,11 +100,14 @@ class RestoreBootstrapView extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: NotionSpace.md),
             Material(
-              color: theme.colorScheme.surfaceContainer,
-              clipBehavior: Clip.hardEdge,
-              borderRadius: BorderRadius.circular(AppConfig.borderRadius),
+              color: context.notion.colors.surface,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: NotionRadius.mdAll,
+                side: BorderSide(color: context.notion.colors.border),
+              ),
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxHeight: 128),
                 child: Scrollbar(
@@ -118,22 +119,18 @@ class RestoreBootstrapView extends StatelessWidget {
                     shrinkWrap: true,
                     itemCount: devices.length,
                     itemBuilder: (context, i) => ListTile(
-                      leading: CircleAvatar(
-                        foregroundColor: theme.colorScheme.onPrimary,
-                        backgroundColor: theme.colorScheme.primary,
-                        child: Icon(devices[i].icon),
-                      ),
+                      leading: Icon(devices[i].icon, size: NotionSize.iconMd),
                       title: Text(
                         devices[i].title,
                         maxLines: 1,
                         overflow: .ellipsis,
-                        style: TextStyle(fontSize: 14),
+                        style: context.notion.typography.callout,
                       ),
                       subtitle: Text(
                         L10n.of(context).lastActiveAgo(
                           devices[i].lastActive.localizedTime(context),
                         ),
-                        style: TextStyle(fontSize: 11),
+                        style: context.notion.typography.captionMuted,
                       ),
                     ),
                   ),
@@ -142,21 +139,27 @@ class RestoreBootstrapView extends StatelessWidget {
             ),
             Row(
               children: [
-                Expanded(child: Divider(height: 64)),
+                const Expanded(child: Divider(height: 64)),
                 Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: Text(L10n.of(context).or),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: NotionSpace.md,
+                  ),
+                  child: Text(
+                    L10n.of(context).or,
+                    style: context.notion.typography.footnoteMuted,
+                  ),
                 ),
-                Expanded(child: Divider(height: 64)),
+                const Expanded(child: Divider(height: 64)),
               ],
             ),
           ] else ...[
-            const Text(
+            Text(
               'Enter your recovery key (or its passphrase) to verify this '
               'device and unlock your message history.',
               textAlign: .center,
+              style: context.notion.typography.callout,
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: NotionSpace.xxl),
           ],
           ErrorShake(
             error: viewModel.value.unlockWithError,
@@ -170,6 +173,9 @@ class RestoreBootstrapView extends StatelessWidget {
               decoration: InputDecoration(
                 hintText: 'Recovery key or passphrase',
                 prefixIcon: IconButton(
+                  tooltip: viewModel.value.obscureText
+                      ? 'Show recovery key'
+                      : 'Hide recovery key',
                   icon: Icon(
                     viewModel.value.obscureText
                         ? Icons.visibility_outlined
@@ -191,13 +197,6 @@ class RestoreBootstrapView extends StatelessWidget {
                           key: ValueKey(
                             viewModel.value.passphraseOrRecoveryKeyEntered,
                           ),
-                          style: TextButton.styleFrom(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(
-                                AppConfig.borderRadius / 2,
-                              ),
-                            ),
-                          ),
                           onPressed:
                               viewModel.value.passphraseOrRecoveryKeyEntered
                               ? viewModel.unlock
@@ -218,10 +217,12 @@ class RestoreBootstrapView extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: NotionSpace.md),
           // The last resort, guarded: a new recovery key replaces the
           // lost one (the bootstrap reset flow, unchanged).
-          TextButton(
+          NotionButton.ghost(
+            expand: true,
+            label: 'Lost your recovery key?',
             onPressed: () async {
               final consent = await showOkCancelAlertDialog(
                 context: context,
@@ -238,10 +239,6 @@ class RestoreBootstrapView extends StatelessWidget {
               if (!context.mounted) return;
               viewModel.startResetAccount();
             },
-            style: TextButton.styleFrom(
-              foregroundColor: theme.colorScheme.error,
-            ),
-            child: const Text('Lost your recovery key?'),
           ),
         ]),
       ),

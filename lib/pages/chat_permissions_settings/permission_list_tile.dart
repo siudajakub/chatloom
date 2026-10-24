@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -75,56 +75,59 @@ class PermissionsListTile extends StatelessWidget {
     return permissionKey;
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+  /// The three standard levels around [permission]: a custom value stays
+  /// in its band, so "Moderator (60)" is shown and kept as such.
+  List<(int, String)> _levels(L10n l10n) {
+    final user = permission < 50 ? permission : 0;
+    final moderator = permission < 100 && permission >= 50 ? permission : 50;
+    final admin = permission >= 100 ? permission : 100;
+    return [
+      (user, l10n.userLevel(user)),
+      (moderator, l10n.moderatorLevel(moderator)),
+      (admin, l10n.adminLevel(admin)),
+    ];
+  }
 
-    final color = permission >= 100
-        ? Colors.orangeAccent
-        : permission >= 50
-        ? Colors.blueAccent
-        : Colors.greenAccent;
-    return ListTile(
-      title: Text(
-        getLocalizedPowerLevelString(context),
-        style: theme.textTheme.titleSmall,
-      ),
-      trailing: Material(
-        color: color.withAlpha(32),
-        borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-        child: DropdownButton<int>(
-          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-          borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-          underline: const SizedBox.shrink(),
-          onChanged: canEdit ? onChanged : null,
-          value: permission,
-          items: [
-            DropdownMenuItem(
-              value: permission < 50 ? permission : 0,
-              child: Text(
-                L10n.of(context).userLevel(permission < 50 ? permission : 0),
+  Future<void> _choose(BuildContext context) async {
+    final l10n = L10n.of(context);
+    final levels = _levels(l10n);
+    // A record so "Custom" (null level) differs from a dismissed sheet.
+    final choice = await showNotionSheet<({int? level})>(
+      context: context,
+      title: getLocalizedPowerLevelString(context),
+      builder: (context) => SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final (level, label) in levels)
+              NotionChoiceRow(
+                title: label,
+                selected: level == permission,
+                onTap: () => Navigator.of(context).pop((level: level)),
               ),
+            NotionChoiceRow(
+              title: l10n.custom,
+              selected: false,
+              onTap: () => Navigator.of(context).pop((level: null)),
             ),
-            DropdownMenuItem(
-              value: permission < 100 && permission >= 50 ? permission : 50,
-              child: Text(
-                L10n.of(context).moderatorLevel(
-                  permission < 100 && permission >= 50 ? permission : 50,
-                ),
-              ),
-            ),
-            DropdownMenuItem(
-              value: permission >= 100 ? permission : 100,
-              child: Text(
-                L10n.of(
-                  context,
-                ).adminLevel(permission >= 100 ? permission : 100),
-              ),
-            ),
-            DropdownMenuItem(value: null, child: Text(L10n.of(context).custom)),
           ],
         ),
       ),
+    );
+    if (choice == null || choice.level == permission) return;
+    onChanged?.call(choice.level);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = L10n.of(context);
+    final current = _levels(
+      l10n,
+    ).firstWhere((entry) => entry.$1 == permission).$2;
+    return NotionListRow(
+      title: getLocalizedPowerLevelString(context),
+      subtitle: current,
+      onTap: canEdit && onChanged != null ? () => _choose(context) : null,
     );
   }
 }

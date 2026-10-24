@@ -3,13 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:particles_network/particles_network.dart';
 
 class LoginScaffold extends StatelessWidget {
   final Widget body;
@@ -25,8 +23,6 @@ class LoginScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return LayoutBuilder(
       builder: (context, constraints) {
         final isMobileMode = !ChatLoomThemes.isColumnModeByWidth(
@@ -40,69 +36,54 @@ class LoginScaffold extends StatelessWidget {
             bottomNavigationBar: bottomNavigationBar,
           );
         }
-        return Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                theme.colorScheme.surfaceContainerLow,
-                theme.colorScheme.surfaceContainer,
-                theme.colorScheme.surfaceContainerHighest,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-          child: Stack(
+        // Column mode (a Mac window): the page colour, no gradient or
+        // particles, and the steps in one opaque card with the glass
+        // hairline and dialog corners (DESIGN.md "Don't: gradients,
+        // shadows"). Opaque, because the card's scaffold would hide a blur.
+        final colors = context.notion.colors;
+        return ColoredBox(
+          color: colors.background,
+          child: Column(
             children: [
-              if (!NotionMotion.reduced(context))
-                ParticleNetwork(
-                  maxSpeed: 0.25,
-                  particleColor: theme.colorScheme.primary,
-                  lineColor: theme.colorScheme.secondary,
-                ),
-              Column(
-                children: [
-                  const SizedBox(height: 16),
-                  Expanded(
-                    child: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                        // The card settles in once; its pages animate inside.
-                        child: NotionEntrance(
-                          afterRoute: false,
-                          rise: NotionMotion.riseSheet,
-                          scale: NotionMotion.dialogFrom,
-                          duration: NotionMotion.long,
-                          child: Material(
-                            borderRadius: BorderRadius.circular(
-                              AppConfig.borderRadius,
-                            ),
-                            clipBehavior: Clip.hardEdge,
-                            elevation:
-                                theme.appBarTheme.scrolledUnderElevation ?? 4,
-                            shadowColor: theme.appBarTheme.shadowColor,
-                            child: ConstrainedBox(
-                              constraints: isMobileMode
-                                  ? const BoxConstraints()
-                                  : const BoxConstraints(
-                                      maxWidth: 480,
-                                      maxHeight: 640,
-                                    ),
-                              child: Scaffold(
-                                key: const Key('LoginScaffold'),
-                                appBar: appBar,
-                                body: SafeArea(child: body),
-                                bottomNavigationBar: bottomNavigationBar,
-                              ),
-                            ),
+              const SizedBox(height: NotionSpace.md),
+              Expanded(
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: NotionSpace.md,
+                    ),
+                    // The card settles in once; its pages animate inside.
+                    child: NotionEntrance(
+                      afterRoute: false,
+                      rise: NotionMotion.riseSheet,
+                      scale: NotionMotion.dialogFrom,
+                      duration: NotionMotion.long,
+                      child: Material(
+                        color: colors.background,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: NotionGlass.dialogRadius,
+                          side: BorderSide(color: context.notion.glass.border),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: 480,
+                            maxHeight: 640,
+                          ),
+                          child: Scaffold(
+                            key: const Key('LoginScaffold'),
+                            appBar: appBar,
+                            body: SafeArea(child: body),
+                            bottomNavigationBar: bottomNavigationBar,
                           ),
                         ),
                       ),
                     ),
                   ),
-                  const _PrivacyButtons(mainAxisAlignment: .center),
-                ],
+                ),
               ),
+              const _PrivacyButtons(mainAxisAlignment: .center),
             ],
           ),
         );
@@ -117,20 +98,18 @@ class _PrivacyButtons extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final shadowTextStyle = TextStyle(color: theme.colorScheme.secondary);
     return SizedBox(
       height: 64,
       child: Padding(
-        padding: const EdgeInsets.all(8.0),
+        padding: const EdgeInsets.all(NotionSpace.xs),
         child: Row(
           mainAxisAlignment: mainAxisAlignment,
           children: [
             // ChatLoom has no website, help desk or privacy page of its own;
             // upstream FluffyChat links would be misleading here.
-            TextButton(
+            NotionButton.ghost(
+              label: L10n.of(context).about,
               onPressed: () => PlatformInfos.showDialog(context),
-              child: Text(L10n.of(context).about, style: shadowTextStyle),
             ),
           ],
         ),

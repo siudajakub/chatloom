@@ -580,6 +580,7 @@ class NotionTextField extends StatelessWidget {
   final bool autofocus;
   final bool enabled;
   final bool readOnly;
+  final bool autocorrect;
   final int? minLines;
   final int maxLines;
   final int? maxLength;
@@ -604,6 +605,7 @@ class NotionTextField extends StatelessWidget {
     this.autofocus = false,
     this.enabled = true,
     this.readOnly = false,
+    this.autocorrect = true,
     this.minLines,
     this.maxLines = 1,
     this.maxLength,
@@ -625,6 +627,7 @@ class NotionTextField extends StatelessWidget {
       autofocus: autofocus,
       enabled: enabled,
       readOnly: readOnly,
+      autocorrect: autocorrect,
       minLines: minLines,
       maxLines: obscureText ? 1 : maxLines,
       maxLength: maxLength,

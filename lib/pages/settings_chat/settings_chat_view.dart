@@ -3,11 +3,13 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:math' as math;
+
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/stickers/notion_emoji_picker.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/adaptive_bottom_sheet.dart';
 import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:go_router/go_router.dart';
@@ -21,8 +23,6 @@ class SettingsChatView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return NotionSettingsScaffold(
       title: 'Chats',
       child: Column(
@@ -50,12 +50,13 @@ class SettingsChatView extends StatelessWidget {
             onChanged: (_) => controller.updateState(),
           ),
           if (AppSettings.doubleTapToReact.value)
-            ListTile(
-              title: Text(L10n.of(context).doubleTapReaction),
+            NotionListRow(
+              key: const Key('settings_double_tap_reaction_row'),
+              title: L10n.of(context).doubleTapReaction,
               // Empty: the network's first quick reaction (a heart
               // wherever the network has one).
               subtitle: AppSettings.doubleTapReaction.value.isEmpty
-                  ? const Text('Automatic: each network’s first reaction')
+                  ? 'Automatic: each network’s first reaction'
                   : null,
               trailing: Text(
                 AppSettings.doubleTapReaction.value.isEmpty
@@ -64,55 +65,7 @@ class SettingsChatView extends StatelessWidget {
                 style: NotionType.heading,
               ),
               onTap: () async {
-                final emoji = await showAdaptiveBottomSheet<String>(
-                  context: context,
-                  builder: (context) => Scaffold(
-                    appBar: AppBar(
-                      title: Text(L10n.of(context).doubleTapReaction),
-                      leading: CloseButton(
-                        onPressed: () => Navigator.of(context).pop(null),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(''),
-                          child: const Text('Automatic'),
-                        ),
-                      ],
-                    ),
-                    body: SizedBox(
-                      height: double.infinity,
-                      child: EmojiPicker(
-                        onEmojiSelected: (_, emoji) =>
-                            Navigator.of(context).pop(emoji.emoji),
-                        config: Config(
-                          locale: Localizations.localeOf(context),
-                          emojiViewConfig: const EmojiViewConfig(
-                            backgroundColor: Colors.transparent,
-                          ),
-                          bottomActionBarConfig: const BottomActionBarConfig(
-                            enabled: false,
-                          ),
-                          categoryViewConfig: CategoryViewConfig(
-                            initCategory: Category.SMILEYS,
-                            backspaceColor: theme.colorScheme.primary,
-                            iconColor: theme.colorScheme.primary.withAlpha(128),
-                            iconColorSelected: theme.colorScheme.primary,
-                            indicatorColor: theme.colorScheme.primary,
-                            backgroundColor: theme.colorScheme.surface,
-                          ),
-                          skinToneConfig: SkinToneConfig(
-                            dialogBackgroundColor: Color.lerp(
-                              theme.colorScheme.surface,
-                              theme.colorScheme.primaryContainer,
-                              0.75,
-                            )!,
-                            indicatorColor: theme.colorScheme.onSurface,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
+                final emoji = await showDoubleTapReactionPicker(context);
                 if (emoji != null) {
                   await AppSettings.doubleTapReaction.setItem(emoji);
                   controller.updateState();
@@ -157,3 +110,39 @@ class SettingsChatView extends StatelessWidget {
     );
   }
 }
+
+/// The double-tap reaction picker as a Notion sheet (Telegram's "Quick
+/// reaction"): the emoji grid, and "Automatic" to follow each network's
+/// first quick reaction. Returns the emoji, '' for Automatic, or null when
+/// dismissed.
+Future<String?> showDoubleTapReactionPicker(BuildContext context) =>
+    showNotionSheet<String>(
+      context: context,
+      title: L10n.of(context).doubleTapReaction,
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Flexible(
+            child: SizedBox(
+              height: math.min(420.0, MediaQuery.sizeOf(context).height * .5),
+              child: EmojiPicker(
+                onEmojiSelected: (_, emoji) =>
+                    Navigator.of(context).pop(emoji.emoji),
+                config: notionEmojiPickerConfig(
+                  context,
+                  initCategory: Category.SMILEYS,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: NotionSpace.sm),
+          NotionButton(
+            key: const Key('double_tap_reaction_automatic'),
+            expand: true,
+            label: 'Automatic',
+            onPressed: () => Navigator.of(context).pop(''),
+          ),
+        ],
+      ),
+    );

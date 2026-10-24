@@ -29,6 +29,7 @@ class IntroPagePresenter extends StatefulWidget {
 
 class _IntroPagePresenterState extends State<IntroPagePresenter> {
   bool isLoading = kIsWeb;
+  bool loginBusy = false;
   String? loggingInToHomeserver;
 
   @override
@@ -98,19 +99,31 @@ class _IntroPagePresenterState extends State<IntroPagePresenter> {
     }
   }
 
-  void _login() {
+  /// "Sign in with Beeper": straight to the built-in default homeserver
+  /// (matrix.beeper.com, or a preset/managed one), without the server
+  /// picker. "Use another server" on the intro page keeps the picker.
+  Future<void> _login() async {
     final presetHomeserver = AppSettings.presetHomeserver.value;
-    if (presetHomeserver.isEmpty) {
-      context.go('${GoRouterState.of(context).uri.path}/sign_in');
-      return;
+    final homeserver = presetHomeserver.isNotEmpty
+        ? presetHomeserver
+        : AppSettings.defaultHomeserver.defaultValue;
+    try {
+      await connectToHomeserverFlow(
+        PublicHomeserverData(name: homeserver),
+        context,
+        (snapshot) {
+          if (!mounted) return;
+          setState(
+            () =>
+                loginBusy = snapshot.connectionState == ConnectionState.waiting,
+          );
+        },
+        false,
+      );
+    } finally {
+      // A declined consent dialog returns without a final state.
+      if (mounted && loginBusy) setState(() => loginBusy = false);
     }
-
-    connectToHomeserverFlow(
-      PublicHomeserverData(name: presetHomeserver),
-      context,
-      (snapshot) {},
-      false,
-    );
   }
 
   @override
@@ -123,6 +136,10 @@ class _IntroPagePresenterState extends State<IntroPagePresenter> {
           ? null
           : AppSettings.welcomeText.value,
       login: _login,
+      loginBusy: loginBusy,
+      addMultiAccount: Matrix.of(
+        context,
+      ).widget.clients.any((client) => client.isLogged()),
     );
   }
 }

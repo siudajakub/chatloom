@@ -13,10 +13,23 @@ import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+/// The first screen: ChatLoom brings the Beeper networks together, so the
+/// primary action signs in to Beeper directly. Any other Matrix homeserver
+/// stays available as "Use another server" (the server picker), and the
+/// header's "More" sheet keeps the Matrix ID login and backup restore.
+/// Creating an account is not offered here: Beeper registration over the
+/// Matrix API is unverified (the server picker still offers it where a
+/// server supports it).
 class IntroPage extends StatelessWidget {
   final bool isLoading, hasPresetHomeserver;
   final String? loggingInToHomeserver, welcomeText;
   final VoidCallback login;
+
+  /// The Beeper sign-in is checking the server (inline spinner).
+  final bool loginBusy;
+
+  /// Another account is already signed in ("Add account" title).
+  final bool addMultiAccount;
 
   const IntroPage({
     required this.isLoading,
@@ -25,13 +38,66 @@ class IntroPage extends StatelessWidget {
     required this.hasPresetHomeserver,
     required this.welcomeText,
     required this.login,
+    this.loginBusy = false,
+    this.addMultiAccount = false,
   });
+
+  static const title = 'All your chats in one place';
+  static const description =
+      'Sign in with your Beeper account to bring WhatsApp, Telegram, '
+      'Instagram, Messenger and Slack together.';
+
+  Future<void> _loginWithMatrixId(BuildContext context) async {
+    final client = await Matrix.of(context).getLoginClient();
+    if (!context.mounted) return;
+    context.go('${GoRouterState.of(context).uri.path}/login', extra: client);
+  }
+
+  Future<void> _more(BuildContext context) => showNotionSheet<void>(
+    context: context,
+    title: 'More options',
+    builder: (sheetContext) {
+      void run(void Function() action) {
+        Navigator.of(sheetContext).pop();
+        action();
+      }
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!hasPresetHomeserver)
+            NotionListRow(
+              key: const Key('intro_matrix_id_login'),
+              leading: const Icon(
+                Icons.alternate_email_outlined,
+                size: NotionSize.iconMd,
+              ),
+              title: 'Sign in with a Matrix ID',
+              subtitle: 'For an account on any Matrix server',
+              onTap: () => run(() => _loginWithMatrixId(context)),
+            ),
+          NotionListRow(
+            leading: const Icon(
+              Icons.import_export_outlined,
+              size: NotionSize.iconMd,
+            ),
+            title: L10n.of(context).hydrate,
+            onTap: isLoading
+                ? null
+                : () => run(() => restoreBackupFlow(context)),
+          ),
+          NotionListRow(
+            leading: const Icon(Icons.info_outlined, size: NotionSize.iconMd),
+            title: L10n.of(context).about,
+            onTap: () => run(() => PlatformInfos.showDialog(context)),
+          ),
+        ],
+      );
+    },
+  );
 
   @override
   Widget build(BuildContext context) {
-    final addMultiAccount = Matrix.of(
-      context,
-    ).widget.clients.any((client) => client.isLogged());
     final loggingInToHomeserver = this.loggingInToHomeserver;
 
     return LoginScaffold(
@@ -41,38 +107,11 @@ class IntroPage extends StatelessWidget {
             ? Text(L10n.of(context).addAccount)
             : Text(AppSettings.applicationName.value),
         actions: [
-          PopupMenuButton(
-            useRootNavigator: true,
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                onTap: isLoading ? null : () => restoreBackupFlow(context),
-                child: Row(
-                  mainAxisSize: .min,
-                  spacing: 12,
-                  children: [
-                    const Icon(Icons.import_export_outlined),
-                    Expanded(
-                      child: Text(
-                        L10n.of(context).hydrate,
-                        maxLines: 1,
-                        overflow: .ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                onTap: () => PlatformInfos.showDialog(context),
-                child: Row(
-                  mainAxisSize: .min,
-                  spacing: 12,
-                  children: [
-                    const Icon(Icons.info_outlined),
-                    Text(L10n.of(context).about),
-                  ],
-                ),
-              ),
-            ],
+          NotionIconButton(
+            key: const Key('intro_more'),
+            icon: Icons.more_horiz,
+            label: 'More options',
+            onPressed: () => _more(context),
           ),
         ],
       ),
@@ -129,7 +168,7 @@ class IntroPage extends StatelessWidget {
                             NotionEntrance(
                               index: 2,
                               child: Text(
-                                L10n.of(context).appSubtitle,
+                                title,
                                 textAlign: TextAlign.center,
                                 style: context.notion.typography.heading,
                               ),
@@ -142,9 +181,13 @@ class IntroPage extends StatelessWidget {
                                   horizontal: NotionSpace.xl,
                                 ),
                                 child: Text(
-                                  welcomeText ??
-                                      L10n.of(context).appDescription,
+                                  welcomeText ?? description,
                                   textAlign: TextAlign.center,
+                                  style: context.notion.typography.callout
+                                      .copyWith(
+                                        color:
+                                            context.notion.colors.textSecondary,
+                                      ),
                                 ),
                               ),
                             ),
@@ -158,39 +201,30 @@ class IntroPage extends StatelessWidget {
                                 crossAxisAlignment: .stretch,
                                 spacing: NotionSpace.md,
                                 children: _staggerFrom(4, [
-                                  if (!hasPresetHomeserver)
-                                    NotionButton(
-                                      label: L10n.of(context).createNewAccount,
-                                      expand: true,
-                                      onPressed: () => context.go(
-                                        '${GoRouterState.of(context).uri.path}/sign_up',
-                                      ),
-                                    ),
                                   NotionButton.primary(
-                                    label: L10n.of(context).signIn,
+                                    key: const Key('intro_sign_in'),
+                                    label: hasPresetHomeserver
+                                        ? L10n.of(context).signIn
+                                        : 'Sign in with Beeper',
                                     expand: true,
-                                    onPressed: login,
+                                    busy: loginBusy,
+                                    onPressed: loginBusy ? null : login,
                                   ),
                                   if (!hasPresetHomeserver)
-                                    NotionButton(
-                                      variant: NotionButtonVariant.ghost,
-                                      label: L10n.of(context).loginWithMatrixId,
+                                    NotionButton.ghost(
+                                      key: const Key('intro_other_server'),
+                                      label: 'Use another server',
                                       expand: true,
-                                      onPressed: () async {
-                                        final client = await Matrix.of(
-                                          context,
-                                        ).getLoginClient();
-                                        if (!context.mounted) return;
-                                        context.go(
-                                          '${GoRouterState.of(context).uri.path}/login',
-                                          extra: client,
-                                        );
-                                      },
+                                      onPressed: loginBusy
+                                          ? null
+                                          : () => context.go(
+                                              '${GoRouterState.of(context).uri.path}/sign_in',
+                                            ),
                                     ),
                                 ]),
                               ),
                             ),
-                            const SizedBox(height: 36),
+                            const SizedBox(height: NotionSpace.xxl),
                           ],
                         ),
                       ),

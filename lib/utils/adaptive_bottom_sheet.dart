@@ -9,6 +9,14 @@ import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
+/// A full-page body ([Scaffold] with its own header) as a sheet on phones and
+/// a centred panel in column mode. Only for bodies that are whole pages (QR
+/// scanner, message info); a picker or form uses `showNotionSheet` instead.
+///
+/// Both forms stay opaque in the page colour (an opaque scaffold would hide
+/// any blur behind it), with the Notion radius, the glass hairline and no
+/// elevation (DESIGN.md "Don't: shadows"). The phone sheet carries the
+/// NotionSheet drag handle above the page.
 Future<T?> showAdaptiveBottomSheet<T>({
   required BuildContext context,
   required Widget Function(BuildContext) builder,
@@ -27,8 +35,7 @@ Future<T?> showAdaptiveBottomSheet<T>({
           margin: const EdgeInsets.all(16),
           constraints: const BoxConstraints(maxWidth: 480, maxHeight: 720),
           child: Material(
-            elevation: Theme.of(context).dialogTheme.elevation ?? 4,
-            shadowColor: Theme.of(context).dialogTheme.shadowColor,
+            elevation: 0,
             // Rounded like every dialog; the body is a full page, so the
             // fill stays opaque (no blur behind an opaque scaffold).
             shape: RoundedRectangleBorder(
@@ -36,7 +43,7 @@ Future<T?> showAdaptiveBottomSheet<T>({
               side: BorderSide(color: context.notion.glass.border),
             ),
             color: Theme.of(context).scaffoldBackgroundColor,
-            clipBehavior: Clip.hardEdge,
+            clipBehavior: Clip.antiAlias,
             child: builder(context),
           ),
         ),
@@ -44,8 +51,17 @@ Future<T?> showAdaptiveBottomSheet<T>({
     );
   }
 
+  final page = Theme.of(context).scaffoldBackgroundColor;
   return showModalBottomSheet<T>(
     context: context,
+    // The handle strip takes the page colour, so it reads as the top of the
+    // page below it rather than a second surface.
+    backgroundColor: page,
+    showDragHandle: true,
+    shape: NotionShapes.sheet.copyWith(
+      side: BorderSide(color: context.notion.glass.border),
+    ),
+    elevation: 0,
     builder: (context) => ConstrainedBox(
       constraints: BoxConstraints(
         maxHeight:
@@ -59,6 +75,6 @@ Future<T?> showAdaptiveBottomSheet<T>({
     useRootNavigator: useRootNavigator,
     isDismissible: isDismissible,
     isScrollControlled: isScrollControlled,
-    clipBehavior: Clip.hardEdge,
+    clipBehavior: Clip.antiAlias,
   );
 }

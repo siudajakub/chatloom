@@ -16,7 +16,6 @@ class NewPassphraseView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final canCreatePassphrase =
         viewModel.value.newPassphraseEqualsRepeatPassphrase &&
         viewModel.value.newPassphraseNumbers &&
@@ -27,40 +26,42 @@ class NewPassphraseView extends StatelessWidget {
 
     return NotionEntranceScope(
       child: ListView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(NotionSpace.md),
         children: NotionEntrance.stagger([
-          const Text(
+          Text(
             'Choose a passphrase for your recovery key, or skip and keep '
             'only the recovery key.',
             textAlign: .center,
+            style: context.notion.typography.callout,
           ),
-          const SizedBox(height: 16),
-          TextField(
+          const SizedBox(height: NotionSpace.md),
+          NotionTextField(
             obscureText: viewModel.value.obscureText,
             readOnly: viewModel.value.isLoading,
             controller: viewModel.newPassphraseController,
-            decoration: InputDecoration(
-              suffixIcon: IconButton(
-                icon: Icon(
-                  viewModel.value.obscureText
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                ),
-                onPressed: viewModel.toggleObscureText,
+            autocorrect: false,
+            suffix: IconButton(
+              tooltip: viewModel.value.obscureText
+                  ? 'Show passphrase'
+                  : 'Hide passphrase',
+              icon: Icon(
+                viewModel.value.obscureText
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
               ),
-              hintText: L10n.of(context).newPassphrase,
+              onPressed: viewModel.toggleObscureText,
             ),
+            hint: L10n.of(context).newPassphrase,
           ),
-          const SizedBox(height: 16),
-          TextField(
+          const SizedBox(height: NotionSpace.md),
+          NotionTextField(
             obscureText: viewModel.value.obscureText,
             readOnly: viewModel.value.isLoading,
             controller: viewModel.repeatPassphraseController,
-            decoration: InputDecoration(
-              hintText: L10n.of(context).repeatPassphrase,
-            ),
+            autocorrect: false,
+            hint: L10n.of(context).repeatPassphrase,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: NotionSpace.md),
           // One inline error with "Try again" (no dialog, no snackbar).
           NotionSizeReveal(
             visible: setupError != null,
@@ -87,37 +88,35 @@ class NewPassphraseView extends StatelessWidget {
                   )
                 : null,
           ),
-          const SizedBox(height: 16),
-          TextButton(
+          const SizedBox(height: NotionSpace.md),
+          NotionButton.ghost(
+            expand: true,
+            label: 'Skip the passphrase',
             onPressed: viewModel.value.isLoading
                 ? null
                 : () => viewModel.setOrSkipPassphrase(null),
-            style: TextButton.styleFrom(
-              foregroundColor: theme.colorScheme.error,
-            ),
-            child: const Text('Skip the passphrase'),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: NotionSpace.md),
           _PassphraseCheckListTile(
             checked: viewModel.value.newPassphraseEqualsRepeatPassphrase,
             label: L10n.of(context).passphrasesMatch,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: NotionSpace.md),
           _PassphraseCheckListTile(
             checked: viewModel.value.newPassphraseLongEnough,
             label: L10n.of(context).passphraseLengthRequirement,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: NotionSpace.md),
           _PassphraseCheckListTile(
             checked: viewModel.value.newPassphraseUpperAndLowerCase,
             label: L10n.of(context).passphraseUpperAndLowerCaseRequirement,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: NotionSpace.md),
           _PassphraseCheckListTile(
             checked: viewModel.value.newPassphraseSpecialCharacters,
             label: L10n.of(context).passphraseSpecialCharactersRequirement,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: NotionSpace.md),
           _PassphraseCheckListTile(
             checked: viewModel.value.newPassphraseNumbers,
             label: L10n.of(context).passphraseNumberRequirement,

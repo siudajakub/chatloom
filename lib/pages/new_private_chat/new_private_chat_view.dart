@@ -3,14 +3,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/new_private_chat/new_private_chat.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/avatar.dart';
-import 'package:chatloom/widgets/layouts/max_width_body.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -27,291 +25,218 @@ class NewPrivateChatView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
+    final l10n = L10n.of(context);
     final searchResponse = controller.searchResponse;
     final userId = Matrix.of(context).client.userID!;
-    return Scaffold(
-      appBar: AppBar(
-        scrolledUnderElevation: 0,
-        leading: const Center(child: BackButton()),
-        title: Text(L10n.of(context).newChat),
-        backgroundColor: theme.scaffoldBackgroundColor,
-      ),
-      body: MaxWidthBody(
-        withScrolling: false,
-        innerPadding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16.0,
-                vertical: 8.0,
-              ),
-              child: TextField(
-                controller: controller.controller,
-                onChanged: controller.searchUsers,
-                decoration: InputDecoration(
-                  hintText: L10n.of(context).searchForUsers,
-                  filled: true,
-                  fillColor: theme.colorScheme.secondaryContainer,
-                  border: OutlineInputBorder(
-                    borderSide: BorderSide.none,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                  hintStyle: TextStyle(
-                    color: theme.colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.normal,
-                  ),
-                  // Search glyph ↔ spinner morph while a lookup runs.
-                  prefixIcon: FutureBuilder(
-                    future: searchResponse,
-                    builder: (context, snapshot) => NotionMorphSwitcher(
-                      rotate: false,
-                      child:
-                          searchResponse != null &&
-                              snapshot.connectionState != ConnectionState.done
-                          ? const SizedBox.square(
-                              key: ValueKey('busy'),
-                              dimension: NotionSize.touchTarget,
-                              child: Center(child: NotionDelayedSpinner()),
-                            )
-                          : const Icon(
-                              Icons.search_outlined,
-                              key: ValueKey('search'),
-                            ),
-                    ),
-                  ),
-                  suffixIcon: NotionPop(
-                    visible: controller.controller.text.isNotEmpty,
-                    playOnMount: false,
-                    bounce: false,
-                    child: IconButton(
+    return NotionScaffold(
+      title: l10n.newChat,
+      onBack: () => Navigator.of(context).maybePop(),
+      children: [
+        NotionTextField(
+          controller: controller.controller,
+          onChanged: controller.searchUsers,
+          hint: l10n.searchForUsers,
+          prefixIcon: Icons.search_outlined,
+          // Spinner while a lookup runs, clear once there is text.
+          suffix: FutureBuilder(
+            future: searchResponse,
+            builder: (context, snapshot) => NotionMorphSwitcher(
+              rotate: false,
+              child:
+                  searchResponse != null &&
+                      snapshot.connectionState != ConnectionState.done
+                  ? const SizedBox.square(
+                      key: ValueKey('busy'),
+                      dimension: NotionSize.touchTarget,
+                      child: Center(child: NotionDelayedSpinner()),
+                    )
+                  : controller.controller.text.isNotEmpty
+                  ? IconButton(
+                      key: const ValueKey('clear'),
+                      tooltip: l10n.clear,
                       icon: const Icon(Icons.clear_outlined),
                       onPressed: () {
                         controller.controller.clear();
                         controller.searchUsers();
                       },
-                    ),
-                  ),
-                ),
-              ),
+                    )
+                  : const SizedBox.shrink(key: ValueKey('idle')),
             ),
-            Expanded(
-              // Start page ↔ results fade through; each result set too.
-              child: NotionFadeThrough(
-                child: searchResponse == null
-                    ? ListView(
-                        key: const ValueKey('start'),
-                        children: NotionEntrance.stagger([
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 18.0,
-                            ),
-                            child: SelectableText.rich(
-                              TextSpan(
-                                children: [
-                                  TextSpan(
-                                    text: L10n.of(context).yourGlobalUserIdIs,
-                                  ),
-                                  TextSpan(
-                                    text: Matrix.of(context).client.userID,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              style: TextStyle(
-                                color: theme.colorScheme.onSurface,
-                                fontSize: 12,
-                              ),
+          ),
+        ),
+        const SizedBox(height: NotionSpace.sm),
+        // Start page ↔ results fade through; each result set too.
+        NotionFadeThrough(
+          child: searchResponse == null
+              ? Column(
+                  key: const ValueKey('start'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: NotionEntrance.stagger([
+                    NotionListRow(
+                      leading: Icon(
+                        Icons.adaptive.share_outlined,
+                        size: NotionSize.iconMd,
+                      ),
+                      title: l10n.shareInviteLink,
+                      onTap: controller.inviteAction,
+                    ),
+                    NotionListRow(
+                      leading: const Icon(
+                        Icons.group_add_outlined,
+                        size: NotionSize.iconMd,
+                      ),
+                      title: l10n.createGroup,
+                      onTap: () => context.go('/rooms/newgroup'),
+                    ),
+                    if (PlatformInfos.isMobile)
+                      NotionListRow(
+                        leading: const Icon(
+                          Icons.qr_code_scanner_outlined,
+                          size: NotionSize.iconMd,
+                        ),
+                        title: l10n.scanQrCode,
+                        onTap: controller.openScannerAction,
+                      ),
+                    const NotionSectionHeader(title: 'Your Matrix ID'),
+                    NotionListRow(
+                      title: userId,
+                      trailing: NotionIconButton(
+                        icon: Icons.copy_outlined,
+                        label: 'Copy your ID',
+                        onPressed: controller.copyUserId,
+                      ),
+                    ),
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: NotionSpace.xl,
+                        ),
+                        child: Material(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: NotionRadius.mdAll,
+                            side: BorderSide(
+                              color: context.notion.colors.border,
                             ),
                           ),
-                          const SizedBox(height: 8),
-                          ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor:
-                                  theme.colorScheme.secondaryContainer,
-                              foregroundColor:
-                                  theme.colorScheme.onSecondaryContainer,
-                              child: Icon(Icons.adaptive.share_outlined),
-                            ),
-                            title: Text(L10n.of(context).shareInviteLink),
-                            onTap: controller.inviteAction,
-                          ),
-                          ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor:
-                                  theme.colorScheme.tertiaryContainer,
-                              foregroundColor:
-                                  theme.colorScheme.onTertiaryContainer,
-                              child: const Icon(Icons.group_add_outlined),
-                            ),
-                            title: Text(L10n.of(context).createGroup),
-                            onTap: () => context.go('/rooms/newgroup'),
-                          ),
-                          if (PlatformInfos.isMobile)
-                            ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor:
-                                    theme.colorScheme.primaryContainer,
-                                foregroundColor:
-                                    theme.colorScheme.onPrimaryContainer,
-                                child: const Icon(
-                                  Icons.qr_code_scanner_outlined,
-                                ),
-                              ),
-                              title: Text(L10n.of(context).scanQrCode),
-                              onTap: controller.openScannerAction,
-                            ),
-                          Center(
+                          color: context.notion.colors.surface,
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            onTap: () => showQrCodeViewer(context, userId),
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 64.0,
-                                vertical: 24.0,
-                              ),
-                              child: Material(
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(
-                                    AppConfig.borderRadius,
-                                  ),
-                                  side: BorderSide(
-                                    width: 3,
-                                    color: theme.colorScheme.primary,
-                                  ),
+                              padding: const EdgeInsets.all(NotionSpace.md),
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 200,
                                 ),
-                                color: Colors.transparent,
-                                clipBehavior: Clip.hardEdge,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(
-                                    AppConfig.borderRadius,
-                                  ),
-                                  onTap: () =>
-                                      showQrCodeViewer(context, userId),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(16.0),
-                                    child: ConstrainedBox(
-                                      constraints: const BoxConstraints(
-                                        maxWidth: 200,
-                                      ),
-                                      child: PrettyQrView.data(
-                                        data: 'https://matrix.to/#/$userId',
-                                        decoration: PrettyQrDecoration(
-                                          shape: PrettyQrSmoothSymbol(
-                                            roundFactor: 1,
-                                            color: theme.colorScheme.primary,
-                                          ),
-                                        ),
-                                      ),
+                                child: PrettyQrView.data(
+                                  data: 'https://matrix.to/#/$userId',
+                                  decoration: PrettyQrDecoration(
+                                    shape: PrettyQrSmoothSymbol(
+                                      roundFactor: 1,
+                                      color: theme.colorScheme.onSurface,
                                     ),
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        ]),
-                      )
-                    : FutureBuilder(
-                        key: ValueKey(searchResponse),
-                        future: searchResponse,
-                        builder: (context, snapshot) {
-                          final result = snapshot.data;
-                          final error = snapshot.error;
-                          if (error != null) {
-                            return Column(
-                              key: const ValueKey('error'),
-                              mainAxisAlignment: .center,
-                              children: [
-                                Text(
-                                  error.toLocalizedString(context),
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: theme.colorScheme.error,
-                                  ),
+                        ),
+                      ),
+                    ),
+                  ]),
+                )
+              : FutureBuilder(
+                  key: ValueKey(searchResponse),
+                  future: searchResponse,
+                  builder: (context, snapshot) {
+                    final result = snapshot.data;
+                    final error = snapshot.error;
+                    if (error != null) {
+                      return NotionEmptyState(
+                        key: const ValueKey('error'),
+                        icon: Icons.cloud_off_outlined,
+                        title: 'Couldn’t search for people',
+                        message: error.toLocalizedString(context),
+                        action: NotionButton(
+                          icon: Icons.refresh_outlined,
+                          label: l10n.tryAgain,
+                          onPressed: controller.searchUsers,
+                        ),
+                      );
+                    }
+                    if (result == null) {
+                      return NotionSkeleton(
+                        child: Column(
+                          children: [
+                            for (var i = 0; i < 6; i++)
+                              const NotionSkeletonRow(),
+                          ],
+                        ),
+                      );
+                    }
+                    if (result.isEmpty) {
+                      return NotionEmptyState(
+                        key: const ValueKey('empty'),
+                        icon: Icons.search_off_outlined,
+                        title: l10n.noUsersFoundWithQuery(
+                          controller.controller.text,
+                        ),
+                      );
+                    }
+                    return NotionEntranceScope(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (final (i, contact) in result.indexed)
+                            _ResultEntrance(
+                              index: i,
+                              playKey: contact.userId,
+                              child: NotionListRow(
+                                leading: Avatar(
+                                  name:
+                                      contact.displayName ??
+                                      contact.userId.localpart ??
+                                      contact.userId,
+                                  mxContent: contact.avatarUrl,
+                                  presenceUserId: contact.userId,
                                 ),
-                                const SizedBox(height: 12),
-                                OutlinedButton.icon(
-                                  onPressed: controller.searchUsers,
-                                  icon: const Icon(Icons.refresh_outlined),
-                                  label: Text(L10n.of(context).tryAgain),
-                                ),
-                              ],
-                            );
-                          }
-                          if (result == null) {
-                            return NotionSkeleton(
-                              child: ListView(
-                                physics: const NeverScrollableScrollPhysics(),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: NotionSpace.md,
-                                ),
-                                children: [
-                                  for (var i = 0; i < 6; i++)
-                                    const NotionSkeletonRow(),
-                                ],
-                              ),
-                            );
-                          }
-                          if (result.isEmpty) {
-                            return Column(
-                              mainAxisAlignment: .center,
-                              children: [
-                                const NotionPop(
-                                  bounce: true,
-                                  child: Icon(Icons.search_outlined, size: 86),
-                                ),
-                                Padding(
-                                  padding: const EdgeInsets.all(16.0),
-                                  child: Text(
-                                    L10n.of(context).noUsersFoundWithQuery(
-                                      controller.controller.text,
-                                    ),
-                                    style: TextStyle(
-                                      color: theme.colorScheme.primary,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              ],
-                            );
-                          }
-                          return NotionEntranceScope(
-                            child: ListView.builder(
-                              itemCount: result.length,
-                              itemBuilder: (context, i) {
-                                final contact = result[i];
-                                final displayname =
+                                title:
                                     contact.displayName ??
                                     contact.userId.localpart ??
-                                    contact.userId;
-                                return NotionEntrance(
-                                  playKey: contact.userId,
-                                  rise: NotionMotion.riseList,
-                                  child: NotionPressable(
-                                    scale: NotionMotion.pressRow,
-                                    child: ListTile(
-                                      leading: Avatar(
-                                        name: displayname,
-                                        mxContent: contact.avatarUrl,
-                                        presenceUserId: contact.userId,
-                                      ),
-                                      title: Text(displayname),
-                                      subtitle: Text(contact.userId),
-                                      onTap: () =>
-                                          controller.openUserModal(contact),
-                                    ),
-                                  ),
-                                );
-                              },
+                                    contact.userId,
+                                subtitle: contact.userId,
+                                onTap: () => controller.openUserModal(contact),
+                              ),
                             ),
-                          );
-                        },
+                        ],
                       ),
-              ),
-            ),
-          ],
+                    );
+                  },
+                ),
         ),
-      ),
+      ],
     );
   }
+}
+
+/// Only the first screenful rises in; the results are one column, so later
+/// rows stay still.
+class _ResultEntrance extends StatelessWidget {
+  final int index;
+  final Object playKey;
+  final Widget child;
+  const _ResultEntrance({
+    required this.index,
+    required this.playKey,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) => index < NotionMotion.staggerCap
+      ? NotionEntrance(
+          playKey: playKey,
+          rise: NotionMotion.riseList,
+          child: child,
+        )
+      : child;
 }

@@ -6,6 +6,7 @@
 import 'dart:async';
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
@@ -93,7 +94,8 @@ class LoginController extends State<Login> {
       setState(() => passwordError = exception.errorMessage);
       return setState(() => loading = false);
     } catch (exception) {
-      setState(() => passwordError = exception.toString());
+      // Never a raw exception (DESIGN.md: errors in human language).
+      setState(() => passwordError = humanErrorText(exception));
       return setState(() => loading = false);
     }
 

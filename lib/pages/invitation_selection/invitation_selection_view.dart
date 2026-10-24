@@ -7,7 +7,6 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/invitation_selection/invitation_selection.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/avatar.dart';
-import 'package:chatloom/widgets/layouts/max_width_body.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -25,59 +24,43 @@ class InvitationSelectionView extends StatelessWidget {
       context,
     ).client.getRoomById(controller.widget.roomId);
     if (room == null) {
-      return Scaffold(
-        appBar: AppBar(title: Text(L10n.of(context).oopsSomethingWentWrong)),
-        body: Center(
-          child: Text(L10n.of(context).youAreNoLongerParticipatingInThisChat),
+      return NotionScaffold(
+        title: L10n.of(context).inviteContact,
+        onBack: () => Navigator.of(context).maybePop(),
+        body: NotionEmptyState(
+          icon: Icons.group_off_outlined,
+          title: L10n.of(context).youAreNoLongerParticipatingInThisChat,
         ),
       );
     }
 
     final groupName = room.name.isEmpty ? L10n.of(context).group : room.name;
-    final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        leading: const Center(child: BackButton()),
-        titleSpacing: 0,
-        title: Text(L10n.of(context).inviteContact),
-      ),
-      body: MaxWidthBody(
-        innerPadding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: TextField(
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: theme.colorScheme.secondaryContainer,
-                  border: OutlineInputBorder(
-                    borderSide: BorderSide.none,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                  hintStyle: TextStyle(
-                    color: theme.colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.normal,
-                  ),
-                  hintText: L10n.of(context).inviteContactToGroup(groupName),
-                  prefixIcon: NotionMorphSwitcher(
-                    rotate: false,
-                    child: controller.loading
-                        ? const SizedBox.square(
-                            key: ValueKey('busy'),
-                            dimension: NotionSize.touchTarget,
-                            child: Center(child: NotionDelayedSpinner()),
-                          )
-                        : const Icon(
-                            Icons.search_outlined,
-                            key: ValueKey('search'),
-                          ),
-                  ),
-                ),
-                onChanged: controller.searchUserWithCoolDown,
-              ),
+    return NotionScaffold(
+      title: L10n.of(context).inviteContact,
+      onBack: () => Navigator.of(context).maybePop(),
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: NotionSpace.sm),
+          child: NotionTextField(
+            textInputAction: TextInputAction.search,
+            hint: L10n.of(context).inviteContactToGroup(groupName),
+            prefixIcon: Icons.search_outlined,
+            // The lookup's progress sits at the end of the field.
+            suffix: NotionMorphSwitcher(
+              rotate: false,
+              child: controller.loading
+                  ? const SizedBox.square(
+                      key: ValueKey('busy'),
+                      dimension: NotionSize.touchTarget,
+                      child: Center(child: NotionDelayedSpinner()),
+                    )
+                  : const SizedBox.shrink(key: ValueKey('idle')),
             ),
+            onChanged: controller.searchUserWithCoolDown,
+          ),
+        ),
+        Column(
+          children: [
             StreamBuilder<Object>(
               stream: room.client.onRoomState.stream.where(
                 (update) => update.roomId == room.id,
@@ -129,12 +112,7 @@ class InvitationSelectionView extends StatelessWidget {
                                 child: Column(
                                   children: [
                                     for (var i = 0; i < 6; i++)
-                                      const Padding(
-                                        padding: EdgeInsets.symmetric(
-                                          horizontal: NotionSpace.md,
-                                        ),
-                                        child: NotionSkeletonRow(),
-                                      ),
+                                      const NotionSkeletonRow(),
                                   ],
                                 ),
                               );
@@ -181,7 +159,7 @@ class InvitationSelectionView extends StatelessWidget {
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 }
@@ -201,40 +179,24 @@ class _InviteContactListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final l10n = L10n.of(context);
-
-    return ListTile(
+    final name = profile.displayName ?? profile.userId.localpart ?? l10n.user;
+    return NotionListRow(
       leading: Avatar(
         mxContent: profile.avatarUrl,
         name: profile.displayName,
         presenceUserId: profile.userId,
         onTap: () => UserDialog.show(context: context, profile: profile),
       ),
-      title: Text(
-        profile.displayName ?? profile.userId.localpart ?? l10n.user,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Text(
-        profile.userId,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: theme.colorScheme.secondary),
-      ),
+      title: name,
+      subtitle: profile.userId,
       // Invite → participant morphs once the invite lands.
-      trailing: NotionPressable(
-        enabled: !isMember,
-        child: TextButton(
-          onPressed: isMember ? null : onTap,
-          child: NotionFadeThrough(
-            alignment: Alignment.center,
-            child: Text(
-              isMember ? l10n.participant : l10n.invite,
-              key: ValueKey(isMember),
-            ),
-          ),
-        ),
+      trailing: NotionButton(
+        variant: isMember
+            ? NotionButtonVariant.ghost
+            : NotionButtonVariant.secondary,
+        label: isMember ? l10n.participant : l10n.invite,
+        onPressed: isMember ? null : onTap,
       ),
     );
   }

@@ -21,6 +21,7 @@ class NotionDialogRoute<T> extends DialogRoute<T> {
     super.useSafeArea,
     super.settings,
     super.anchorPoint,
+    super.requestFocus,
   });
 
   @override
@@ -55,6 +56,7 @@ Future<T?> showNotionCustomDialog<T>({
   bool useRootNavigator = true,
   bool useSafeArea = true,
   RouteSettings? routeSettings,
+  bool? requestFocus,
 }) {
   final navigator = Navigator.of(context, rootNavigator: useRootNavigator);
   final theme = Theme.of(context);
@@ -70,6 +72,7 @@ Future<T?> showNotionCustomDialog<T>({
       barrierDismissible: barrierDismissible,
       useSafeArea: useSafeArea,
       settings: routeSettings,
+      requestFocus: requestFocus,
     ),
   );
 }

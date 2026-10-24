@@ -2,6 +2,7 @@
 import 'package:chatloom/pages/chat_details/chat_details.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_adapter.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -13,15 +14,13 @@ class ChatDetailsView extends StatelessWidget {
     final client = Matrix.of(context).client;
     final room = client.getRoomById(controller.roomId!);
     if (room == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Chat details')),
-        body: const Center(
-          child: Padding(
-            padding: EdgeInsets.all(20),
-            child: Text(
-              'This source is no longer available. Your private preferences have not been changed.',
-            ),
-          ),
+      return NotionScaffold(
+        title: 'Chat details',
+        onBack: () => Navigator.of(context).maybePop(),
+        body: const NotionEmptyState(
+          icon: Icons.link_off_outlined,
+          title: 'This source is no longer available',
+          message: 'Your private preferences have not been changed.',
         ),
       );
     }

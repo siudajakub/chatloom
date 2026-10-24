@@ -5,30 +5,30 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat_access_settings/chat_access_settings_controller.dart';
+import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/chatloom_share.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
-import 'package:chatloom/widgets/layouts/max_width_body.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart' hide Visibility;
 import 'package:matrix/matrix.dart';
 
+/// Access & visibility, Notion style: glass header, section headers and
+/// single-choice rows with a check (Telegram's group type / history pages).
+/// Every option applies at once, as before.
 class ChatAccessSettingsPageView extends StatelessWidget {
   final ChatAccessSettingsController controller;
   const ChatAccessSettingsPageView(this.controller, {super.key});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
+    final l10n = L10n.of(context);
     final room = controller.room;
-    return Scaffold(
-      appBar: AppBar(
-        leading: const Center(child: BackButton()),
-        title: Text(L10n.of(context).accessAndVisibility),
-      ),
-      body: MaxWidthBody(
-        child: StreamBuilder<Object>(
+    return NotionScaffold(
+      title: l10n.accessAndVisibility,
+      onBack: () => Navigator.of(context).maybePop(),
+      children: [
+        StreamBuilder<Object>(
           stream: room.client.onRoomState.stream.where(
             (update) => update.roomId == controller.room.id,
           ),
@@ -40,76 +40,57 @@ class ChatAccessSettingsPageView extends StatelessWidget {
                     ?.content
                     .tryGetList<String>('alt_aliases') ??
                 [];
+            final canEditAliases = room.canChangeStateEvent(
+              EventTypes.RoomCanonicalAlias,
+            );
+            final canHistory =
+                !controller.historyVisibilityLoading &&
+                room.canChangeHistoryVisibility;
+            final canJoinRules =
+                !controller.joinRulesLoading && room.canChangeJoinRules;
+            final canGuests =
+                !controller.guestAccessLoading && room.canChangeGuestAccess;
             return NotionSettingsBody.staggered(
               Column(
                 mainAxisSize: .min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  ListTile(
-                    title: Text(
-                      L10n.of(context).visibilityOfTheChatHistory,
-                      style: TextStyle(
-                        color: theme.colorScheme.secondary,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  RadioGroup<HistoryVisibility>(
-                    groupValue: room.historyVisibility,
-                    onChanged:
-                        controller.historyVisibilityLoading ||
-                            !room.canChangeHistoryVisibility
-                        ? (_) {}
-                        : controller.setHistoryVisibility,
-                    child: Column(
-                      mainAxisSize: .min,
-                      children: [
-                        for (final historyVisibility
-                            in HistoryVisibility.values)
-                          RadioListTile<HistoryVisibility>.adaptive(
-                            title: Text(
-                              historyVisibility.getLocalizedString(
-                                MatrixLocals(L10n.of(context)),
-                              ),
-                            ),
-                            value: historyVisibility,
+                  NotionSectionHeader(title: l10n.visibilityOfTheChatHistory),
+                  Column(
+                    mainAxisSize: .min,
+                    children: [
+                      for (final historyVisibility in HistoryVisibility.values)
+                        NotionChoiceRow(
+                          title: historyVisibility.getLocalizedString(
+                            MatrixLocals(l10n),
                           ),
-                      ],
-                    ),
+                          selected: room.historyVisibility == historyVisibility,
+                          onTap: canHistory
+                              ? () => controller.setHistoryVisibility(
+                                  historyVisibility,
+                                )
+                              : null,
+                        ),
+                    ],
                   ),
-                  Divider(color: theme.dividerColor),
-                  ListTile(
-                    title: Text(
-                      L10n.of(context).whoIsAllowedToJoinThisGroup,
-                      style: TextStyle(
-                        color: theme.colorScheme.secondary,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  RadioGroup(
-                    groupValue: room.joinRules,
-                    onChanged: controller.setJoinRule,
-                    child: Column(
-                      mainAxisSize: .min,
-                      children: [
-                        for (final joinRule in controller.availableJoinRules)
-                          if (joinRule != JoinRules.private)
-                            RadioListTile<JoinRules>.adaptive(
-                              enabled:
-                                  !controller.joinRulesLoading &&
-                                  room.canChangeJoinRules,
-                              title: Text(
-                                joinRule.localizedString(
-                                  L10n.of(context),
-                                  controller.knownSpaceParents,
-                                ),
-                              ),
-                              value: joinRule,
+                  NotionSectionHeader(title: l10n.whoIsAllowedToJoinThisGroup),
+                  Column(
+                    mainAxisSize: .min,
+                    children: [
+                      for (final joinRule in controller.availableJoinRules)
+                        if (joinRule != JoinRules.private)
+                          NotionChoiceRow(
+                            title: joinRule.localizedString(
+                              l10n,
+                              controller.knownSpaceParents,
                             ),
-                      ],
-                    ),
+                            selected: room.joinRules == joinRule,
+                            onTap: canJoinRules
+                                ? () => controller.setJoinRule(joinRule)
+                                : null,
+                          ),
+                    ],
                   ),
-                  Divider(color: theme.dividerColor),
                   // Guest access and addresses open only for joinable rooms.
                   NotionSizeReveal(
                     visible: {
@@ -118,59 +99,31 @@ class ChatAccessSettingsPageView extends StatelessWidget {
                     }.contains(room.joinRules),
                     child: Column(
                       mainAxisSize: .min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        ListTile(
-                          title: Text(
-                            L10n.of(context).areGuestsAllowedToJoin,
-                            style: TextStyle(
-                              color: theme.colorScheme.secondary,
-                              fontWeight: FontWeight.bold,
+                        NotionSectionHeader(title: l10n.areGuestsAllowedToJoin),
+                        for (final guestAccess in GuestAccess.values)
+                          NotionChoiceRow(
+                            title: guestAccess.getLocalizedString(
+                              MatrixLocals(l10n),
                             ),
+                            selected: room.guestAccess == guestAccess,
+                            onTap: canGuests
+                                ? () => controller.setGuestAccess(guestAccess)
+                                : null,
                           ),
-                        ),
-                        RadioGroup(
-                          groupValue: room.guestAccess,
-                          onChanged: controller.setGuestAccess,
-                          child: Column(
-                            mainAxisSize: .min,
-                            children: [
-                              for (final guestAccess in GuestAccess.values)
-                                RadioListTile<GuestAccess>.adaptive(
-                                  enabled:
-                                      !controller.guestAccessLoading &&
-                                      room.canChangeGuestAccess,
-                                  title: Text(
-                                    guestAccess.getLocalizedString(
-                                      MatrixLocals(L10n.of(context)),
-                                    ),
-                                  ),
-                                  value: guestAccess,
-                                ),
-                            ],
-                          ),
-                        ),
-                        Divider(color: theme.dividerColor),
-                        ListTile(
-                          title: Text(
-                            L10n.of(context).publicChatAddresses,
-                            style: TextStyle(
-                              color: theme.colorScheme.secondary,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.add_outlined),
-                            tooltip: L10n.of(context).createNewAddress,
+                        NotionSectionHeader(
+                          title: l10n.publicChatAddresses,
+                          trailing: NotionIconButton(
+                            icon: Icons.add_outlined,
+                            label: l10n.createNewAddress,
                             onPressed: controller.addAlias,
                           ),
                         ),
                         if (canonicalAlias.isNotEmpty)
                           _AliasListTile(
                             alias: canonicalAlias,
-                            onDelete:
-                                room.canChangeStateEvent(
-                                  EventTypes.RoomCanonicalAlias,
-                                )
+                            onDelete: canEditAliases
                                 ? () => controller.deleteAlias(canonicalAlias)
                                 : null,
                             isCanonicalAlias: true,
@@ -178,10 +131,7 @@ class ChatAccessSettingsPageView extends StatelessWidget {
                         for (final alias in altAliases)
                           _AliasListTile(
                             alias: alias,
-                            onDelete:
-                                room.canChangeStateEvent(
-                                  EventTypes.RoomCanonicalAlias,
-                                )
+                            onDelete: canEditAliases
                                 ? () => controller.deleteAlias(alias)
                                 : null,
                           ),
@@ -209,60 +159,63 @@ class ChatAccessSettingsPageView extends StatelessWidget {
                             );
                           },
                         ),
-                        Divider(color: theme.dividerColor),
                         FutureBuilder(
                           future: room.client.getRoomVisibilityOnDirectory(
                             room.id,
                           ),
-                          builder: (context, snapshot) =>
-                              SwitchListTile.adaptive(
-                                value: snapshot.data == Visibility.public,
-                                title: Text(
-                                  L10n.of(
-                                    context,
-                                  ).chatCanBeDiscoveredViaSearchOnServer(
-                                    room.client.userID!.domain!,
-                                  ),
-                                ),
-                                onChanged:
-                                    controller.setChatVisibilityOnDirectory,
-                              ),
+                          builder: (context, snapshot) => NotionSettingsToggle(
+                            value: snapshot.data == Visibility.public,
+                            title: l10n.chatCanBeDiscoveredViaSearchOnServer(
+                              room.client.userID!.domain!,
+                            ),
+                            onChanged: controller.setChatVisibilityOnDirectory,
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  ListTile(
-                    title: Text(L10n.of(context).globalChatId),
-                    subtitle: SelectableText(room.id),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.copy_outlined),
-                      onPressed: () => ChatLoomShare.share(room.id, context),
+                  const NotionSectionHeader(title: 'Advanced'),
+                  NotionListRow(
+                    title: l10n.globalChatId,
+                    subtitle: room.id,
+                    trailing: NotionIconButton(
+                      icon: Icons.copy_outlined,
+                      label: 'Copy chat ID',
+                      onPressed: () => _copy(context, room.id),
                     ),
                   ),
-                  ListTile(
-                    title: Text(L10n.of(context).roomVersion),
-                    subtitle: SelectableText(
-                      room
-                              .getState(EventTypes.RoomCreate)!
-                              .content
-                              .tryGet<String>('room_version') ??
-                          'Unknown',
-                    ),
+                  NotionListRow(
+                    title: l10n.roomVersion,
+                    subtitle:
+                        room
+                            .getState(EventTypes.RoomCreate)
+                            ?.content
+                            .tryGet<String>('room_version') ??
+                        'Unknown',
                     trailing: room.canSendEvent(EventTypes.RoomTombstone)
-                        ? IconButton(
-                            icon: const Icon(Icons.upgrade_outlined),
+                        ? NotionIconButton(
+                            icon: Icons.upgrade_outlined,
+                            label: l10n.replaceRoomWithNewerVersion,
                             onPressed: controller.updateRoomAction,
                           )
-                        : null,
+                        : const SizedBox.shrink(),
                   ),
                 ],
               ),
             );
           },
         ),
-      ),
+      ],
     );
   }
+}
+
+/// Copies [text] (an address or the chat ID) instead of opening the share
+/// sheet, and confirms unless the system already does (Android 13+).
+Future<void> _copy(BuildContext context, String text) async {
+  await Clipboard.setData(ClipboardData(text: text));
+  if (!context.mounted) return;
+  await showCopiedNotice(context, L10n.of(context).copiedToClipboard);
 }
 
 class _AliasListTile extends StatelessWidget {
@@ -280,31 +233,26 @@ class _AliasListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return ListTile(
-      leading: isCanonicalAlias
-          ? const Icon(Icons.star)
-          : const Icon(Icons.link_outlined),
-      title: InkWell(
-        onTap: () => ChatLoomShare.share('https://matrix.to/#/$alias', context),
-        child: SelectableText(
-          alias,
-          style: TextStyle(
-            decoration: TextDecoration.underline,
-            decorationColor: theme.colorScheme.primary,
-            color: theme.colorScheme.primary,
-            fontSize: 14,
-          ),
-        ),
+    final l10n = L10n.of(context);
+    return NotionListRow(
+      leading: Icon(
+        isCanonicalAlias ? Icons.star_outline : Icons.link_outlined,
+        size: NotionSize.icon,
       ),
+      title: alias,
+      subtitle: isCanonicalAlias
+          ? 'Main address'
+          : published
+          ? null
+          : 'Not published',
+      onTap: () => _copy(context, 'https://matrix.to/#/$alias'),
       trailing: onDelete != null
-          ? IconButton(
-              color: theme.colorScheme.error,
-              icon: const Icon(Icons.delete_outlined),
+          ? NotionIconButton(
+              icon: Icons.delete_outlined,
+              label: l10n.delete,
               onPressed: onDelete,
             )
-          : null,
+          : const SizedBox.shrink(),
     );
   }
 }

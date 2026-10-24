@@ -223,6 +223,7 @@ in new code; read `context.notion` instead.
 | `NotionSectionHeader(title:, trailing:)` | muted label above a group of rows |
 | `NotionListRow(leading:, title:, subtitle:, trailing:, onTap:)` | navigation/setting row |
 | `NotionPropertyRow(label:, value:, onTap:)` | label → value pair |
+| `NotionChoiceRow(title:, subtitle:, selected:, onTap:)` | one option of a single-choice list (history visibility, join rule, permission level): accent check on the selected option, `onTap: null` disables; instead of `RadioListTile`/`DropdownButton` (`notion_choice_row.dart`) |
 | `NotionIconButton(icon:, label:, onPressed:)` | header and inline icon actions (label is the tooltip) |
 | `NotionButton(label:, onPressed:, variant:)` / `.primary` / `.ghost` / `.destructive` | every text button; `icon:`, `expand:`, `busy:` |
 | `NotionDialog` + `showNotionDialog(...)` / `showNotionConfirmDialog(...)` | modal questions and confirmations (glass panel, `xl` corners) |

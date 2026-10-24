@@ -7,7 +7,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat_permissions_settings/chat_permissions_settings.dart';
 import 'package:chatloom/pages/chat_permissions_settings/permission_list_tile.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
-import 'package:chatloom/widgets/layouts/max_width_body.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -19,131 +19,102 @@ class ChatPermissionsSettingsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Scaffold(
-      appBar: AppBar(
-        leading: const Center(child: BackButton()),
-        title: Text(L10n.of(context).chatPermissions),
-      ),
-      body: MaxWidthBody(
-        child: StreamBuilder(
-          stream: controller.onChanged,
-          builder: (context, _) {
-            final roomId = controller.roomId;
-            final room = roomId == null
-                ? null
-                : Matrix.of(context).client.getRoomById(roomId);
-            if (room == null) {
-              return Center(child: Text(L10n.of(context).noRoomsFound));
-            }
-            final powerLevelsContent = Map<String, Object?>.from(
-              room.getState(EventTypes.RoomPowerLevels)?.content ?? {},
-            );
-            final powerLevels = Map<String, dynamic>.from(powerLevelsContent)
-              ..removeWhere((k, v) => v is! int);
-            final eventsPowerLevels = Map<String, int?>.from(
-              powerLevelsContent.tryGetMap<String, int?>('events') ?? {},
-            )..removeWhere((k, v) => v is! int);
+    final l10n = L10n.of(context);
+    return StreamBuilder(
+      stream: controller.onChanged,
+      builder: (context, _) {
+        final roomId = controller.roomId;
+        final room = roomId == null
+            ? null
+            : Matrix.of(context).client.getRoomById(roomId);
+        if (room == null) {
+          return NotionScaffold(
+            title: l10n.chatPermissions,
+            onBack: () => Navigator.of(context).maybePop(),
+            body: NotionEmptyState(
+              icon: Icons.forum_outlined,
+              title: l10n.noRoomsFound,
+            ),
+          );
+        }
+        final powerLevelsContent = Map<String, Object?>.from(
+          room.getState(EventTypes.RoomPowerLevels)?.content ?? {},
+        );
+        final powerLevels = Map<String, dynamic>.from(powerLevelsContent)
+          ..removeWhere((k, v) => v is! int);
+        final eventsPowerLevels = Map<String, int?>.from(
+          powerLevelsContent.tryGetMap<String, int?>('events') ?? {},
+        )..removeWhere((k, v) => v is! int);
+        const notificationsKey = 'rooms';
+        final notificationsLevel =
+            powerLevelsContent
+                .tryGetMap<String, Object?>('notifications')
+                ?.tryGet<int>(notificationsKey) ??
+            0;
+        return NotionScaffold(
+          title: l10n.chatPermissions,
+          onBack: () => Navigator.of(context).maybePop(),
+          children: [
             // Rows rise in once after the push (first screenful only).
-            return NotionSettingsBody.staggered(
+            NotionSettingsBody.staggered(
               Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  ListTile(
-                    leading: const Icon(Icons.info_outlined),
-                    subtitle: Text(L10n.of(context).chatPermissionsDescription),
-                  ),
-                  Divider(color: theme.dividerColor),
-                  ListTile(
-                    title: Text(
-                      L10n.of(context).chatPermissions,
-                      style: TextStyle(
-                        color: theme.colorScheme.primary,
-                        fontWeight: FontWeight.bold,
-                      ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: NotionSpace.xs),
+                    child: Text(
+                      l10n.chatPermissionsDescription,
+                      style: context.notion.typography.footnoteMuted,
                     ),
                   ),
-                  ...[
-                    for (final entry in powerLevels.entries)
-                      PermissionsListTile(
-                        permissionKey: entry.key,
-                        permission: entry.value,
-                        onChanged: (level) => controller.editPowerLevel(
-                          context,
-                          entry.key,
-                          entry.value,
-                          newLevel: level,
-                        ),
-                        canEdit: room.canChangePowerLevel,
+                  NotionSectionHeader(title: l10n.chatPermissions),
+                  for (final entry in powerLevels.entries)
+                    PermissionsListTile(
+                      permissionKey: entry.key,
+                      permission: entry.value,
+                      onChanged: (level) => controller.editPowerLevel(
+                        context,
+                        entry.key,
+                        entry.value,
+                        newLevel: level,
                       ),
-                    Divider(color: theme.dividerColor),
-                    ListTile(
-                      title: Text(
-                        L10n.of(context).notifications,
-                        style: TextStyle(
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      canEdit: room.canChangePowerLevel,
                     ),
-                    Builder(
-                      builder: (context) {
-                        const key = 'rooms';
-                        final value =
-                            powerLevelsContent.containsKey('notifications')
-                            ? powerLevelsContent
-                                      .tryGetMap<String, Object?>(
-                                        'notifications',
-                                      )
-                                      ?.tryGet<int>('rooms') ??
-                                  0
-                            : 0;
-                        return PermissionsListTile(
-                          permissionKey: key,
-                          permission: value,
-                          category: 'notifications',
-                          canEdit: room.canChangePowerLevel,
-                          onChanged: (level) => controller.editPowerLevel(
-                            context,
-                            key,
-                            value,
-                            newLevel: level,
-                            category: 'notifications',
-                          ),
-                        );
-                      },
+                  NotionSectionHeader(title: l10n.notifications),
+                  PermissionsListTile(
+                    permissionKey: notificationsKey,
+                    permission: notificationsLevel,
+                    category: 'notifications',
+                    canEdit: room.canChangePowerLevel,
+                    onChanged: (level) => controller.editPowerLevel(
+                      context,
+                      notificationsKey,
+                      notificationsLevel,
+                      newLevel: level,
+                      category: 'notifications',
                     ),
-                    Divider(color: theme.dividerColor),
-                    ListTile(
-                      title: Text(
-                        L10n.of(context).configureChat,
-                        style: TextStyle(
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    for (final entry in eventsPowerLevels.entries)
-                      PermissionsListTile(
-                        permissionKey: entry.key,
+                  ),
+                  NotionSectionHeader(title: l10n.configureChat),
+                  for (final entry in eventsPowerLevels.entries)
+                    PermissionsListTile(
+                      permissionKey: entry.key,
+                      category: 'events',
+                      permission: entry.value ?? 0,
+                      canEdit: room.canChangePowerLevel,
+                      onChanged: (level) => controller.editPowerLevel(
+                        context,
+                        entry.key,
+                        entry.value ?? 0,
+                        newLevel: level,
                         category: 'events',
-                        permission: entry.value ?? 0,
-                        canEdit: room.canChangePowerLevel,
-                        onChanged: (level) => controller.editPowerLevel(
-                          context,
-                          entry.key,
-                          entry.value ?? 0,
-                          newLevel: level,
-                          category: 'events',
-                        ),
                       ),
-                  ],
+                    ),
                 ],
               ),
-            );
-          },
-        ),
-      ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

@@ -7,8 +7,6 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
 
-import 'conversation_motion.dart';
-
 /// Optional for a composer host that sends through a chosen source (the
 /// merged person chat): the editor hint names that source, for example
 /// "Message via Telegram". Other hosts keep the plain hint.
@@ -85,19 +83,19 @@ Future<ConversationRef?> showConversationSourcePicker(
       ),
     );
   }
-  return showDialog<ConversationRef>(
+  // The Notion dialog route (scale + fade, instant under reduced motion);
+  // the composer keeps its focus and keyboard.
+  return showNotionCustomDialog<ConversationRef>(
     context: context,
     requestFocus: false,
-    animationStyle: ConversationMotion.reduced(context)
-        ? AnimationStyle.noAnimation
-        : null,
     builder: (context) => Dialog(
       backgroundColor: Colors.transparent,
+      elevation: 0,
       shape: const RoundedRectangleBorder(
         borderRadius: NotionGlass.dialogRadius,
       ),
       child: SizedBox(
-        width: 420,
+        width: NotionSize.dialogMaxWidth,
         child: NotionGlassPanel(
           borderRadius: NotionGlass.dialogRadius,
           child: contents(context),
@@ -122,7 +120,12 @@ class _ConversationSourceList extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Padding(
-        padding: const EdgeInsetsDirectional.fromSTEB(20, 8, 8, 4),
+        padding: const EdgeInsetsDirectional.only(
+          start: NotionSpace.lg,
+          end: NotionSpace.xs,
+          top: NotionSpace.xs,
+          bottom: NotionSpace.xxs,
+        ),
         child: Row(
           children: [
             Expanded(
@@ -130,28 +133,27 @@ class _ConversationSourceList extends StatelessWidget {
                 header: true,
                 child: Text(
                   'Send via',
-                  style: Theme.of(context).textTheme.titleMedium,
+                  style: context.notion.typography.headline,
                 ),
               ),
             ),
-            IconButton(
-              tooltip: 'Cancel source selection',
-              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            NotionIconButton(
+              icon: Icons.close,
+              label: 'Cancel source selection',
               onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.close),
             ),
           ],
         ),
       ),
       Flexible(
         child: sources.isEmpty
-            ? const Padding(
-                padding: EdgeInsets.all(20),
-                child: Text('No sending sources available'),
+            ? const NotionEmptyState(
+                icon: Icons.send_outlined,
+                title: 'No sending sources available',
               )
             : ListView.builder(
                 shrinkWrap: true,
-                padding: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.only(bottom: NotionSpace.xs),
                 itemCount: sources.length,
                 itemBuilder: (context, index) =>
                     _option(context, sources[index]),
@@ -170,7 +172,7 @@ class _ConversationSourceList extends StatelessWidget {
       network,
       option.title,
       if (option.subtitle != null) option.subtitle!,
-      if (reason != null) reason,
+      ?reason,
     ].join(', ');
     void select() => Navigator.of(context).pop(option.conversation);
     return Semantics(
@@ -185,9 +187,7 @@ class _ConversationSourceList extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
         child: Material(
-          color: active
-              ? Theme.of(context).colorScheme.surfaceContainerHighest
-              : Colors.transparent,
+          color: active ? context.notion.colors.selected : Colors.transparent,
           shape: NotionShapes.row,
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -201,36 +201,51 @@ class _ConversationSourceList extends StatelessWidget {
                 children: [
                   NotionNetworkGlyph(
                     network: option.conversation.network.toLowerCase(),
-                    size: 24,
+                    size: NotionSize.iconLg,
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: NotionSpace.sm),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           network,
-                          style: Theme.of(context).textTheme.labelLarge,
+                          style: context.notion.typography.captionMuted,
                         ),
-                        Text(option.title),
+                        Text(
+                          option.title,
+                          style: context.notion.typography.callout.copyWith(
+                            color: option.available
+                                ? null
+                                : context.notion.colors.textTertiary,
+                          ),
+                        ),
                         if (option.subtitle != null)
                           Text(
                             option.subtitle!,
-                            style: Theme.of(context).textTheme.bodySmall,
+                            style: context.notion.typography.footnoteMuted,
                           ),
                         if (reason != null)
                           Text(
                             reason,
-                            style: Theme.of(context).textTheme.bodySmall,
+                            style: context.notion.typography.footnoteMuted,
                           ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: NotionSpace.xs),
                   if (active)
-                    const Icon(Icons.check, size: 20)
+                    Icon(
+                      Icons.check,
+                      size: NotionSize.icon,
+                      color: context.notion.colors.accent,
+                    )
                   else if (!option.available)
-                    const Icon(Icons.block_outlined, size: 20),
+                    Icon(
+                      Icons.block_outlined,
+                      size: NotionSize.icon,
+                      color: context.notion.colors.textTertiary,
+                    ),
                 ],
               ),
             ),

@@ -17,7 +17,6 @@ class LoginView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     var order = 0;
     Widget enter(Widget child) => NotionEntrance(
       index: order++,
@@ -28,8 +27,13 @@ class LoginView extends StatelessWidget {
     final homeserver = controller.widget.client.homeserver
         ?.toString()
         .replaceFirst('https://', '');
+    final isBeeper =
+        controller.widget.client.homeserver?.host.endsWith('beeper.com') ??
+        false;
     final title = homeserver == null
-        ? L10n.of(context).loginWithMatrixId
+        ? 'Sign in with a Matrix ID'
+        : isBeeper
+        ? 'Sign in to Beeper'
         : L10n.of(context).logInTo(homeserver);
 
     return LoginScaffold(
@@ -43,14 +47,16 @@ class LoginView extends StatelessWidget {
         builder: (context) {
           return AutofillGroup(
             child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(
+                horizontal: NotionSpace.xl,
+                vertical: NotionSpace.md,
+              ),
               children: <Widget>[
                 // The logo flies in as a Hero from the intro page.
                 Center(
                   child: Hero(
                     tag: 'info-logo',
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(128),
+                    child: ClipOval(
                       child: Image.asset(
                         './assets/logo/mini/logo_mini.png',
                         width: 128,
@@ -59,99 +65,85 @@ class LoginView extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: NotionSpace.xl),
                 enter(
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                    child: ErrorShake(
+                  ErrorShake(
+                    error: controller.usernameError,
+                    child: NotionTextField(
+                      readOnly: controller.loading,
+                      autocorrect: false,
+                      autofocus: true,
+                      onChanged: controller.checkWellKnownWithCoolDown,
+                      controller: controller.usernameController,
+                      textInputAction: TextInputAction.next,
+                      keyboardType: TextInputType.emailAddress,
+                      autofillHints: controller.loading
+                          ? null
+                          : [AutofillHints.username],
+                      prefixIcon: Icons.account_box_outlined,
                       error: controller.usernameError,
-                      child: TextField(
-                        readOnly: controller.loading,
-                        autocorrect: false,
-                        autofocus: true,
-                        onChanged: controller.checkWellKnownWithCoolDown,
-                        controller: controller.usernameController,
-                        textInputAction: TextInputAction.next,
-                        keyboardType: TextInputType.emailAddress,
-                        autofillHints: controller.loading
-                            ? null
-                            : [AutofillHints.username],
-                        decoration: InputDecoration(
-                          prefixIcon: const Icon(Icons.account_box_outlined),
-                          errorText: controller.usernameError,
-                          errorStyle: const TextStyle(color: Colors.orange),
-                          hintText: '@username:domain',
-                          labelText: L10n.of(context).matrixId,
-                        ),
-                      ),
+                      label: isBeeper
+                          ? 'Username or email'
+                          : L10n.of(context).matrixId,
+                      hint: isBeeper ? 'username' : '@username:domain',
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: NotionSpace.md),
                 enter(
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                    child: ErrorShake(
+                  ErrorShake(
+                    error: controller.passwordError,
+                    child: NotionTextField(
+                      readOnly: controller.loading,
+                      autocorrect: false,
+                      autofillHints: controller.loading
+                          ? null
+                          : [AutofillHints.password],
+                      controller: controller.passwordController,
+                      textInputAction: TextInputAction.go,
+                      obscureText: !controller.showPassword,
+                      onSubmitted: (_) => controller.login(),
+                      prefixIcon: Icons.lock_outlined,
                       error: controller.passwordError,
-                      child: TextField(
-                        readOnly: controller.loading,
-                        autocorrect: false,
-                        autofillHints: controller.loading
-                            ? null
-                            : [AutofillHints.password],
-                        controller: controller.passwordController,
-                        textInputAction: TextInputAction.go,
-                        obscureText: !controller.showPassword,
-                        onSubmitted: (_) => controller.login(),
-                        decoration: InputDecoration(
-                          prefixIcon: const Icon(Icons.lock_outlined),
-                          errorText: controller.passwordError,
-                          errorStyle: const TextStyle(color: Colors.orange),
-                          suffixIcon: IconButton(
-                            onPressed: controller.toggleShowPassword,
-                            icon: Icon(
-                              controller.showPassword
-                                  ? Icons.visibility_off_outlined
-                                  : Icons.visibility_outlined,
-                              color: Colors.black,
-                            ),
-                          ),
-                          hintText: '******',
-                          labelText: L10n.of(context).password,
+                      // The theme colours the icon for both themes.
+                      suffix: IconButton(
+                        tooltip: controller.showPassword
+                            ? 'Hide password'
+                            : 'Show password',
+                        onPressed: controller.toggleShowPassword,
+                        icon: Icon(
+                          controller.showPassword
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
                         ),
                       ),
+                      hint: '******',
+                      label: L10n.of(context).password,
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: NotionSpace.lg),
                 enter(
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                    child: NotionButton.primary(
-                      expand: true,
-                      busy: controller.loading,
-                      label: L10n.of(context).login,
-                      onPressed: controller.login,
-                    ),
+                  NotionButton.primary(
+                    expand: true,
+                    busy: controller.loading,
+                    label: L10n.of(context).login,
+                    onPressed: controller.login,
                   ),
                 ),
-                const SizedBox(height: 16),
-                if (homeserver != null)
+                if (homeserver != null) ...[
+                  const SizedBox(height: NotionSpace.xs),
                   enter(
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                      child: TextButton(
-                        onPressed: controller.loading
-                            ? () {}
-                            : controller.passwordForgotten,
-                        style: TextButton.styleFrom(
-                          foregroundColor: theme.colorScheme.error,
-                        ),
-                        child: Text(L10n.of(context).passwordForgotten),
-                      ),
+                    NotionButton.ghost(
+                      expand: true,
+                      label: L10n.of(context).passwordForgotten,
+                      onPressed: controller.loading
+                          ? null
+                          : controller.passwordForgotten,
                     ),
                   ),
-                const SizedBox(height: 16),
+                ],
+                const SizedBox(height: NotionSpace.md),
               ],
             ),
           );
