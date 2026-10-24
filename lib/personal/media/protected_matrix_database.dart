@@ -12,6 +12,11 @@ import 'encrypted_media_cache.dart';
 class ProtectedMatrixDatabase extends MatrixSdkDatabase {
   final EncryptedMediaCache _media;
 
+  /// Clears media kept outside this database (the ciphertext video cache,
+  /// opened-file copies) on logout and "clear cache". Its failure never
+  /// blocks clearing the database.
+  final Future<void> Function()? clearFileCaches;
+
   ProtectedMatrixDatabase(
     super.name, {
     required Database database,
@@ -19,6 +24,7 @@ class ProtectedMatrixDatabase extends MatrixSdkDatabase {
     super.maxFileSize = 10 * 1000 * 1000,
     int maxCacheBytes = 128 * 1024 * 1024,
     Duration retention = const Duration(days: 30),
+    this.clearFileCaches,
   }) : _media = EncryptedMediaCache(
          database,
          maxFileSize: maxFileSize,
@@ -58,13 +64,23 @@ class ProtectedMatrixDatabase extends MatrixSdkDatabase {
 
   @override
   Future<void> clearCache() => preserveOnStorageFailure(() async {
+    await _clearFileCaches();
     await _media.clear();
     await super.clearCache();
   });
 
   @override
   Future<void> clear() => preserveOnStorageFailure(() async {
+    await _clearFileCaches();
     await _media.clear();
     await super.clear();
   });
+
+  Future<void> _clearFileCaches() async {
+    try {
+      await clearFileCaches?.call();
+    } catch (_) {
+      // Best effort: the files are ciphertext or short-lived copies.
+    }
+  }
 }

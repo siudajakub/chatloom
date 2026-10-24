@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/media/open_file.dart';
 import 'package:chatloom/personal/media/protected_matrix_database.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/storage/database_policy.dart';
@@ -135,6 +136,7 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
     database: database,
     factory: factory,
     maxFileSize: 1000 * 1000 * 10,
+    clearFileCaches: clearPrivateFileCaches,
   );
   await matrixDatabase.open();
   return matrixDatabase;

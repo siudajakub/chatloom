@@ -114,6 +114,18 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- "Open" on a received file: read-only content URIs of the
+             short-lived copies in cache/chatloom_open (open_file.dart). -->
+        <provider
+            android:name="pl.personal.chatloom.media.OpenFileProvider"
+            android:authorities="${applicationId}.open_files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/chatloom_open_paths" />
+        </provider>
+
         <activity
           android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
           android:exported="true">

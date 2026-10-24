@@ -27,6 +27,8 @@ import java.util.concurrent.Executors
  * `saveToCollection` takes `displayName`, `mimeType`, `collection`
  * (images | video | downloads) and either `bytes` or `path` (a private
  * lease under the app cache, read once; Dart deletes it afterwards).
+ * `openFile` takes `path` (a copy under `cache/chatloom_open/`) and
+ * `mimeType` and answers whether an app took it.
  */
 class MediaStorePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private var context: Context? = null
@@ -48,6 +50,7 @@ class MediaStorePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method == "openFile") return openFile(call, result)
         if (call.method != "saveToCollection") return result.notImplemented()
         val appContext = context ?: return result.error("unavailable", null, null)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return result.success(false)
@@ -72,6 +75,21 @@ class MediaStorePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 // No paths or names in the error: Dart shows a plain message.
                 main.post { result.error("save_failed", e.javaClass.simpleName, null) }
             }
+        }
+    }
+
+    /** Opens a private copy in the default app (ExternalFileOpener). */
+    private fun openFile(call: MethodCall, result: MethodChannel.Result) {
+        val appContext = context ?: return result.error("unavailable", null, null)
+        val path = call.argument<String>("path")
+        val mimeType = call.argument<String>("mimeType")
+        if (path.isNullOrBlank() || mimeType.isNullOrBlank()) {
+            return result.error("invalid_arguments", null, null)
+        }
+        try {
+            result.success(ExternalFileOpener.open(appContext, path, mimeType))
+        } catch (e: Exception) {
+            result.error("open_failed", e.javaClass.simpleName, null)
         }
     }
 

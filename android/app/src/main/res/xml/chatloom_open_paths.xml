@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the short-lived copies a person opened in another app
+     (lib/personal/media/open_file.dart); nothing else in the cache. -->
+<paths>
+    <cache-path name="open" path="chatloom_open/" />
+</paths>

@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:async/async.dart' as async;
+import 'package:chatloom/personal/media/cancellable_download.dart';
+import 'package:chatloom/personal/media/open_file.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/size_string.dart';
@@ -66,7 +68,11 @@ extension LocalizedBody on Event {
           final fileSize = infoMap['size'] is int
               ? infoMap['size'] as int
               : null;
-          return downloadAndDecryptAttachment(
+          // Same transfer as the viewer: a large video already watched
+          // comes from the encrypted video cache instead of the network.
+          return downloadAttachmentCancellable(
+            this,
+            token: MediaDownloadToken(),
             onDownloadProgress: fileSize == null
                 ? null
                 : (bytes) => onProgress(bytes / fileSize),
@@ -93,6 +99,17 @@ extension LocalizedBody on Event {
     if (file == null || !context.mounted) return;
     await file.save(context);
   }
+
+  /// Telegram's file tap: download (progress in the bubble, a second tap
+  /// cancels), then open in the system's default app from a short-lived
+  /// private copy; "Save" where that is not possible (see
+  /// [openEventAttachment]).
+  Future<void> openFile(BuildContext context) => openEventAttachment(
+    context,
+    this,
+    guard: () => _guardMediaExport(context),
+    save: () => saveFile(context),
+  );
 
   /// The system "Save as" dialog (Android: choose folder and name).
   Future<void> saveFileAs(BuildContext context) async {

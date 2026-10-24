@@ -10,6 +10,7 @@ import 'dart:ui';
 
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/media/open_file.dart';
 import 'package:chatloom/personal/media/stale_recordings.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -201,6 +202,8 @@ Future<void> _cleanupPrivateMedia() async {
     ]) {
       await MediaAccess.open(directory: Directory('${temporary.path}/$folder'));
     }
+    // Files opened in another app by an earlier process (plaintext copies).
+    await OpenedFileCopies.sweepShared();
   } catch (error) {
     Logs().w('private_media_cleanup_failed', error.runtimeType.toString());
   }
