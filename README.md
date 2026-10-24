@@ -52,3 +52,16 @@ All your chats in one calm, private place. ChatLoom brings WhatsApp, Telegram, S
 - Sync, transcription and reminders use a companion service. **Settings → Sync & transcriptions** shows whether it's online.
 - On a Mac, new messages arrive only while ChatLoom is open, and there are no system notifications.
 - What you can do in a chat (reactions, edits, voice) depends on what the original network supports.
+
+## Bridges and self-hosting
+
+ChatLoom works with any Beeper account. Some features need bridges you run yourself with Beeper's [Bridge Manager](https://github.com/beeper/bridge-manager): Telegram round videos and GIF search, and Instagram links that play in the app. **[Self-hosting ChatLoom](docs/SELF-HOSTING.md)** walks through the whole setup.
+
+| Network | Bridge |
+|---|---|
+| Telegram | [chatloom-telegram-bridge](https://github.com/siudajakub/chatloom-telegram-bridge) — fork of mautrix-telegram with round videos, GIF search and sticker formats |
+| Instagram | [chatloom-instagram-bridge](https://github.com/siudajakub/chatloom-instagram-bridge) — fork of mautrix-meta with native link previews for posts, reels and stories |
+| WhatsApp | [mautrix/whatsapp](https://github.com/mautrix/whatsapp) (official) |
+| Messenger | [mautrix/meta](https://github.com/mautrix/meta) (official) |
+| Slack | [mautrix/slack](https://github.com/mautrix/slack) (official) |
+| Others | [official Beeper bridges](https://github.com/beeper/bridge-manager#official-bridge-list) |
