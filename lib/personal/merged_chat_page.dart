@@ -44,6 +44,7 @@ import 'package:chatloom/personal/conversation_mute.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
@@ -320,6 +321,10 @@ class _MergedChatPageState extends State<_MergedChatView>
     super.initState();
     _personalSignature = _computePersonalSignature();
     personal.addListener(_personalChanged);
+    // "Remove for you" (FX-16): refilter the rows when it changes.
+    HiddenMessages.instance
+      ..load(personal.client)
+      ..addListener(_hiddenMessagesChanged);
     scrollController.addListener(_onScroll);
     inputFocus.addListener(_inputFocusChanged);
     WidgetsBinding.instance.addObserver(this);
@@ -466,7 +471,9 @@ class _MergedChatPageState extends State<_MergedChatView>
       _rowTypes.contains(e.type) &&
       e.relationshipType != RelationshipTypes.edit &&
       // A message the user just deleted disappears at once.
-      !MessageDeletions.hides(e);
+      !MessageDeletions.hides(e) &&
+      // "Remove for you" (FX-16): hidden in ChatLoom only.
+      !HiddenMessages.hides(e);
 
   static String _rowKey(Event e) => '${e.room.id}\u0000${e.eventId}';
 
@@ -1802,6 +1809,13 @@ class _MergedChatPageState extends State<_MergedChatView>
           label: l10n.messageInfo,
           onSelected: () => showEventInfo(event),
         ),
+      // FX-16: hidden in ChatLoom only, never redacted or sent.
+      if (HiddenMessages.canHide(event))
+        ConversationMessageAction(
+          icon: Icons.visibility_off_outlined,
+          label: 'Remove for you',
+          onSelected: () => HiddenMessages.hideWithUndo(this.context, event),
+        ),
       if (!failed && _canRedact(event))
         ConversationMessageAction(
           icon: Icons.delete_outlined,
@@ -2858,8 +2872,13 @@ class _MergedChatPageState extends State<_MergedChatView>
 
   NetworkRejectionWatcher? _rejections;
 
+  void _hiddenMessagesChanged() {
+    if (mounted) setState(_recomputeMerged);
+  }
+
   @override
   void dispose() {
+    HiddenMessages.instance.removeListener(_hiddenMessagesChanged);
     _rejections?.dispose();
     MacDesktopCommands.unbindChat(this);
     ConversationJumpTargets.unregister(this);

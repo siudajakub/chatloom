@@ -3,6 +3,7 @@
 import 'package:chatloom/pages/chat_list/chat_list.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/pages/chat_list/inbox_health_status.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
@@ -24,7 +25,9 @@ class ChatListViewBody extends StatelessWidget {
     final client = Matrix.of(context).client;
     final inbox = controller.inbox;
     return ListenableBuilder(
-      listenable: inbox,
+      // "Remove for you" (FX-16) changes a row's preview; the rows' own
+      // signatures keep that to the rows it concerns.
+      listenable: Listenable.merge([inbox, HiddenMessages.instance]),
       builder: (context, _) {
         final projection = inbox.projection;
         final rooms = controller.filterRooms();

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/message_preview.dart';
@@ -129,6 +130,7 @@ List<Object?> chatListItemSignature(
         event.content['body'],
         event.content['m.new_content'],
         inboxDeliveryProgress(source, event),
+        HiddenMessages.hides(event),
       ] else
         null,
     ],
@@ -288,7 +290,12 @@ class _ChatListItemState extends State<ChatListItem> {
     String? lastPreview;
     var failed = false;
     var delivery = DeliveryProgress.none;
-    if (lastEvent != null) {
+    // FX-16: a newest message removed for you shows as such (Messenger);
+    // no ticks or failure mark of a message the user no longer sees.
+    final hiddenLast = lastEvent != null && HiddenMessages.hides(lastEvent);
+    if (hiddenLast) {
+      lastPreview = 'Removed for you';
+    } else if (lastEvent != null) {
       final own = OwnSenderResolver.of(room.client).isOwnEvent(lastEvent);
       // Telegram and Messenger mark a chat whose last own message failed.
       failed =

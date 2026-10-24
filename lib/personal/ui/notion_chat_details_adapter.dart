@@ -9,6 +9,7 @@ import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/conversation_mute.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/disappearing_label.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/organization_page.dart';
@@ -185,6 +186,44 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Messages removed for you here (FX-16), with "Show again". Absent
+  /// while there are none.
+  Widget? _hiddenMessagesRow(List<Room> rooms) {
+    final hidden = HiddenMessages.instance;
+    final count = hidden.countIn(rooms);
+    if (count == 0) return null;
+    return NotionListRow(
+      key: const ValueKey('details-hidden-messages'),
+      leading: const Icon(Icons.visibility_off_outlined),
+      title: count == 1
+          ? '1 message removed for you'
+          : '$count messages removed for you',
+      subtitle: 'Only hidden in ChatLoom. Tap to show again.',
+      onTap: () {
+        final shown = hidden.unhideAll(rooms);
+        setState(() {});
+        ScaffoldMessenger.maybeOf(context)
+          ?..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                shown.length == 1
+                    ? 'The message is shown again.'
+                    : '${shown.length} messages are shown again.',
+              ),
+              action: SnackBarAction(
+                label: 'Undo',
+                onPressed: () {
+                  hidden.restore(shown);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+          );
+      },
+    );
   }
 
   /// Whether round videos can be recorded here, and why not.
@@ -672,6 +711,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           const Text(
             'Some sources are unavailable. Their settings cannot be changed.',
           ),
+        ?_hiddenMessagesRow(sourceRooms),
       ],
       if (room != null) ...[
         NotionListRow(
@@ -760,6 +800,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           title: 'Participants',
           onTap: () => context.push('/rooms/${room.id}/details/members'),
         ),
+        ?_hiddenMessagesRow([room]),
         const Divider(),
         ..._networkRows(room, name),
       ],

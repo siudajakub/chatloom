@@ -19,6 +19,7 @@ import 'package:chatloom/personal/bridge_contact_search.dart'
     show BridgeDirectory;
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/conversation_shortcuts.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/message_notification.dart'
@@ -594,6 +595,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     PersonalClient.of(client)
         .load()
         .then((_) {
+          // Messages removed for you (FX-16), from the store just opened.
+          HiddenMessages.instance.load(client);
           if (mounted && Matrix.of(context).client == client) setState(() {});
         })
         .catchError((Object error, StackTrace stack) {

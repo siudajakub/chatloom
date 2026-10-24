@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:chatloom/personal/bridge_contact_search.dart'
     show searchFold, searchTerms;
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
@@ -21,9 +22,11 @@ import 'package:matrix/matrix.dart';
 /// What one stored event contributes to a search: the text of a message
 /// ([targetId] is its own id) or, for an edit, the new text standing for the
 /// edited message ([targetId] is the original). Null for everything that is
-/// not a readable message (state, reactions, redacted, undecryptable).
+/// not a readable message (state, reactions, redacted, undecryptable) and
+/// for messages removed for you (FX-16).
 ({String targetId, String text, bool edit})? localMessageText(Event event) {
   if (event.type != EventTypes.Message || event.redacted) return null;
+  if (HiddenMessages.hides(event)) return null;
   if (event.relationshipType == RelationshipTypes.edit) {
     final target = event.relationshipEventId;
     final replacement = event.content['m.new_content'];
@@ -173,6 +176,8 @@ class LocalMessagePool {
       for (final entry in _entries.values)
         if (entry.original != null &&
             entry.current != null &&
+            // Removed for you after it was read into this search (FX-16).
+            !HiddenMessages.hides(entry.original!) &&
             localTextMatches(entry.folded, terms))
           LocalMessageHit(event: entry.original!, text: entry.current!),
     ];

@@ -8,6 +8,7 @@ import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
 import 'package:chatloom/pages/chat/message_link_actions.dart';
 import 'package:chatloom/personal/developer_options.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/media/media_export_actions.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
@@ -169,6 +170,14 @@ List<ConversationMessageAction> chatMessageActions(
         icon: Icons.shield_outlined,
         label: l10n.reportMessage,
         onSelected: () => controller.reportEventAction(event),
+      ),
+    // FX-16: Messenger's "Remove for you" — hidden in ChatLoom only, never
+    // redacted or sent; Undo in the snackbar.
+    if (HiddenMessages.canHide(event))
+      ConversationMessageAction(
+        icon: Icons.visibility_off_outlined,
+        label: 'Remove for you',
+        onSelected: () => HiddenMessages.hideWithUndo(controller.context, event),
       ),
     // A sending own message is deleted as soon as it goes through.
     if (!failed &&

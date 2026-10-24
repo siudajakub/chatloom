@@ -5,6 +5,7 @@
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:matrix/matrix.dart';
@@ -45,7 +46,9 @@ extension IsStateExtension on Event {
       // if we enabled to hide all unknown events, don't show those
       (!AppSettings.hideUnknownEvents.value || isEventTypeKnown) &&
       // a message the user just deleted disappears at once
-      !MessageDeletions.hides(this);
+      !MessageDeletions.hides(this) &&
+      // "Remove for you": hidden in ChatLoom only (FX-16)
+      !HiddenMessages.hides(this);
 
   /// Runs of these fold into one "more events" line. Encrypted events are
   /// messages waiting for a key, never folded state.

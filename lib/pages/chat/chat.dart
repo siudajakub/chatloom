@@ -38,6 +38,7 @@ import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/composer_commands.dart';
 import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/developer_options.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
@@ -289,6 +290,10 @@ class ChatController extends State<ChatPageWithRoom>
   /// [setState] for state the timeline rows render: events, history and
   /// thread switches, collapsed runs, the jump highlight, a failed load.
   /// Everything else (composer, header) uses plain [setState].
+  void _hiddenMessagesChanged() {
+    if (mounted) setTimelineState(() {});
+  }
+
   void setTimelineState(VoidCallback fn) {
     _timelineRevision++;
     setState(fn);
@@ -771,6 +776,10 @@ class ChatController extends State<ChatPageWithRoom>
       jump: (event) => scrollToEventId(event.eventId),
     );
     _loadDraft();
+    // "Remove for you" (FX-16): refilter the rows when it changes.
+    HiddenMessages.instance
+      ..load(widget.room.client)
+      ..addListener(_hiddenMessagesChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _openProbe.mark('first_frame');
@@ -1547,6 +1556,7 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void dispose() {
+    HiddenMessages.instance.removeListener(_hiddenMessagesChanged);
     _rejections?.dispose();
     MacDesktopCommands.unbindChat(this);
     ConversationJumpTargets.unregister(this);
