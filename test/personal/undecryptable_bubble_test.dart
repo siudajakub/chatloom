@@ -7,6 +7,7 @@ import 'package:chatloom/pages/chat/events/waiting_message_view.dart';
 import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
 import 'package:chatloom/pages/chat/undecryptable_chat_hint.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
+import 'package:chatloom/ui/notion/notion_switchers.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -134,11 +135,11 @@ void main() {
     ]) {
       await show(stage);
       expect(find.text(WaitingMessageView.detail(stage)), findsOneWidget);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byType(NotionDelayedSpinner), findsOneWidget);
       expect(find.text('Try again'), findsNothing);
     }
     await show(KeyRecoveryStage.failed);
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(NotionDelayedSpinner), findsNothing);
     await tester.tap(find.text('Try again'));
     expect(retried, 1);
     await show(KeyRecoveryStage.verifySession);
