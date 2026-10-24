@@ -304,9 +304,11 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      // The same caption field and quality choice as any chat.
+      // The same caption field and HD chip as any chat; no compression
+      // question in a merged chat either.
       expect(find.text('Fictional caption'), findsOneWidget);
-      expect(find.text('Compressed'), findsOneWidget);
+      expect(find.byTooltip('Send in HD'), findsOneWidget);
+      expect(find.text('Compressed'), findsNothing);
       await tester.tap(find.byTooltip(L10n.of(page).send));
       await tester.pumpAndSettle();
       expect(checks, 1);

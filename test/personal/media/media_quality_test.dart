@@ -243,6 +243,139 @@ void main() {
     });
   });
 
+  group('profiles: automatic by default, HD per send', () {
+    test('the default profile is the sweet spot, HD is Telegram HD', () {
+      expect(MediaProfile.standard.photoMaxSide, 2048);
+      expect(MediaProfile.standard.photoJpegQuality, 80);
+      expect(MediaProfile.standard.videoMaxSide, 1280);
+      expect(MediaProfile.standard.videoBitrate, 2500000);
+      expect(MediaProfile.hd.photoMaxSide, 2560);
+      expect(MediaProfile.hd.photoJpegQuality, 85);
+      expect(MediaProfile.hd.videoMaxSide, 1920);
+      expect(MediaProfile.hd.videoBitrate, 5000000);
+      expect(MediaProfile.hd.videoMaxFps, 30);
+    });
+
+    test('the photo long side selects the profile (and survives Retry)', () {
+      expect(MediaProfile.ofPhotoMaxSide(2048), MediaProfile.standard);
+      expect(MediaProfile.ofPhotoMaxSide(2560), MediaProfile.hd);
+      expect(
+        MediaProfile.ofPhotoMaxSide(MediaQuality.thumbnailMaxSide),
+        MediaProfile.standard,
+      );
+    });
+
+    test('a 50 MP photo: 2048 q80 by default, 2560 q85 in HD', () {
+      final normal = photo(PhotoFormat.jpeg, 8160, 6144, 12000000);
+      expect(normal.action, PhotoAction.jpeg);
+      expect((normal.width, normal.height), (2048, 1542));
+      expect(normal.quality, 80);
+      final hd = photo(
+        PhotoFormat.jpeg,
+        8160,
+        6144,
+        12000000,
+        maxSide: MediaProfile.hd.photoMaxSide,
+      );
+      expect(hd.action, PhotoAction.jpeg);
+      expect((hd.width, hd.height), (2560, 1928));
+      expect(hd.quality, 85);
+      expect(hd.fullChroma, isFalse);
+    });
+
+    test('HD still re-encodes HEIF (no EXIF/GPS) and never upscales', () {
+      final heif = photo(
+        PhotoFormat.heif,
+        1600,
+        1200,
+        900000,
+        maxSide: MediaQuality.photoHdMaxSide,
+      );
+      expect(heif.action, PhotoAction.jpeg);
+      expect((heif.width, heif.height), (1600, 1200));
+      expect(heif.quality, 85);
+    });
+
+    test('HD thumbnails stay 800 px q75', () {
+      final thumb = photo(
+        PhotoFormat.jpeg,
+        8160,
+        6144,
+        12000000,
+        maxSide: MediaQuality.thumbnailMaxSide,
+      );
+      expect(thumb.quality, 75);
+    });
+
+    test('a 4K60 clip: 720p30 ~2.5 Mbit/s by default, 1080p30 ~5 in HD', () {
+      VideoPlan plan(MediaProfile profile) => VideoPlan.decide(
+        width: 3840,
+        height: 2160,
+        durationMs: 60000,
+        bytes: 400 * 1000 * 1000,
+        bitrate: 50000000,
+        frameRate: 60,
+        mimeType: 'video/mp4',
+        profile: profile,
+      );
+      final normal = plan(MediaProfile.standard);
+      expect((normal.width, normal.height), (1280, 720));
+      expect(normal.fps, 30);
+      expect(normal.targetSizeMb, 20);
+      expect(normal.profile, MediaProfile.standard);
+      final hd = plan(MediaProfile.hd);
+      expect(hd.skip, isFalse);
+      expect((hd.width, hd.height), (1920, 1080));
+      expect(hd.fps, 30);
+      // 60 s × (5 + 0.128) Mbit/s ÷ 8 ≈ 38.5 MB.
+      expect(hd.targetSizeMb, 39);
+      expect(hd.profile, MediaProfile.hd);
+    });
+
+    test('the default is the standard profile', () {
+      final plan = VideoPlan.decide(
+        width: 1920,
+        height: 1080,
+        durationMs: 10000,
+        bytes: 20 * 1000 * 1000,
+        bitrate: 16000000,
+        frameRate: 30,
+      );
+      expect(plan.profile, MediaProfile.standard);
+      expect((plan.width, plan.height), (1280, 720));
+    });
+
+    test('a lean 1080p30 clip is kept in HD but shrunk by default', () {
+      VideoPlan plan(MediaProfile profile) => VideoPlan.decide(
+        width: 1920,
+        height: 1080,
+        durationMs: 30000,
+        bytes: 22 * 1000 * 1000,
+        bitrate: 6000000,
+        frameRate: 30,
+        mimeType: 'video/mp4',
+        profile: profile,
+      );
+      expect(plan(MediaProfile.hd).skip, isTrue);
+      expect(plan(MediaProfile.standard).skip, isFalse);
+    });
+
+    test('HD never upscales a 720p clip', () {
+      final plan = VideoPlan.decide(
+        width: 1280,
+        height: 720,
+        durationMs: 30000,
+        bytes: 40 * 1000 * 1000,
+        bitrate: 10000000,
+        frameRate: 60,
+        mimeType: 'video/mp4',
+        profile: MediaProfile.hd,
+      );
+      expect(plan.skip, isFalse);
+      expect((plan.width, plan.height), (1280, 720));
+    });
+  });
+
   test('voice notes are 32 kbit/s Opus', () {
     expect(MediaQuality.voiceOpusBitrate, 32000);
   });

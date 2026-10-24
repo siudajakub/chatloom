@@ -135,7 +135,7 @@ void main() {
     FrozenAttachmentContext? frozen,
     List<XFile>? files,
     ValueChanged<AttachmentSendResult?>? onResult,
-    bool compress = true,
+    bool asFiles = false,
     String caption = 'Fictional caption',
   }) async {
     await tester.pumpWidget(
@@ -154,7 +154,7 @@ void main() {
                     files: files ?? [_file()],
                     outerContext: context,
                     initialCaption: caption,
-                    initialCompress: compress,
+                    sendAsFiles: asFiles,
                     composeContext: frozen,
                     replyTo: frozen?.replyTo,
                     threadRootEventId: frozen?.threadRootEventId,
@@ -385,15 +385,18 @@ void main() {
     },
   );
 
-  testWidgets('the preview is full screen with a caption, quality and send', (
+  testWidgets('the preview is full screen with a caption, HD chip and send', (
     tester,
   ) async {
     final room = _MediaRoom(_MediaClient());
     await open(tester, room, files: [_CountingImage()]);
     expect(find.text('Photo'), findsOneWidget);
     expect(find.text('Fictional caption'), findsOneWidget);
-    expect(find.text('Compressed'), findsOneWidget);
-    expect(find.textContaining('Original'), findsOneWidget);
+    // No compression question (J, 2026-10-24): only the HD chip, off.
+    expect(find.text('Compressed'), findsNothing);
+    expect(find.textContaining('Original'), findsNothing);
+    expect(find.byTooltip('Send in HD'), findsOneWidget);
+    expect(find.byIcon(Icons.hd_outlined), findsOneWidget);
     expect(find.byTooltip('Send'), findsOneWidget);
     expect(find.byTooltip('Cancel'), findsOneWidget);
     final size = tester.getSize(find.byType(SendFileDialog));
@@ -404,21 +407,21 @@ void main() {
     expect(room.sent, isEmpty);
   });
 
-  testWidgets('switching the quality never reads the files again (MD-06)', (
+  testWidgets('toggling HD never reads the files again (MD-06)', (
     tester,
   ) async {
     final room = _MediaRoom(_MediaClient());
     final a = _CountingImage('a.png'), b = _CountingImage('b.png');
     await open(tester, room, files: [a, b]);
     final before = a.reads + b.reads;
-    await tester.tap(find.textContaining('Original'));
+    await tester.tap(find.byTooltip('Send in HD'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Compressed'));
+    await tester.tap(find.byIcon(Icons.hd_rounded));
     await tester.pumpAndSettle();
     expect(a.reads + b.reads, before);
   });
 
-  testWidgets('compressed photos go to the encoder at 2048 px (MD-01)', (
+  testWidgets('photos are compressed at 2048 px without asking (MD-01)', (
     tester,
   ) async {
     OutgoingEcho.debugWriter = FakeEchoes();
@@ -430,20 +433,104 @@ void main() {
     final sent = room.sent.single;
     expect(sent.msgtype, MessageTypes.Image);
     expect(sent.shrink, MediaQuality.photoMaxSide);
+    expect(find.byType(AlertDialog), findsNothing);
   });
 
-  testWidgets('"Original" sends the photo unchanged, as a file (MD-02)', (
+  testWidgets('HD sends photos at 2560 px, for this send only', (tester) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final room = _MediaRoom(_MediaClient());
+    await open(tester, room, files: [_CountingImage()]);
+    await tester.tap(find.byTooltip('Send in HD'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.hd_rounded), findsOneWidget);
+    final toggle = tester.widget<Semantics>(
+      find
+          .ancestor(
+            of: find.byIcon(Icons.hd_rounded),
+            matching: find.byWidgetPredicate(
+              (w) => w is Semantics && w.properties.toggled != null,
+            ),
+          )
+          .first,
+    );
+    expect(toggle.properties.toggled, isTrue);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(room.sent.single.msgtype, MessageTypes.Image);
+    expect(room.sent.single.shrink, MediaQuality.photoHdMaxSide);
+    expect(
+      MediaProfile.ofPhotoMaxSide(room.sent.single.shrink!),
+      MediaProfile.hd,
+    );
+    // The next preview starts without HD (never remembered).
+    await tester.tap(find.text('Open attachments'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.hd_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.hd_rounded), findsNothing);
+  });
+
+  testWidgets('"File" sends the photo unchanged, as a file, no HD (MD-02)', (
     tester,
   ) async {
     OutgoingEcho.debugWriter = FakeEchoes();
     addTearDown(() => OutgoingEcho.debugWriter = null);
     final room = _MediaRoom(_MediaClient());
-    await open(tester, room, files: [_CountingImage()], compress: false);
+    await open(tester, room, files: [_CountingImage()], asFiles: true);
+    expect(find.byTooltip('Send in HD'), findsNothing);
+    expect(find.textContaining('Sent as a file, unchanged'), findsOneWidget);
     await tester.tap(find.byTooltip('Send'));
     await tester.pumpAndSettle();
     final sent = room.sent.single;
     expect(sent.msgtype, MessageTypes.File);
     expect(sent.shrink, isNull);
+  });
+
+  testWidgets('a video and a pasted image go out compressed, no question', (
+    tester,
+  ) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final room = _MediaRoom(_MediaClient());
+    await open(
+      tester,
+      room,
+      files: [
+        XFile.fromData(
+          Uint8List.fromList(List.filled(64, 0)),
+          name: 'clip.mp4',
+          mimeType: 'video/mp4',
+        ),
+        // What paste and drag and drop hand the preview.
+        XFile.fromData(
+          base64Decode(_pixelPng),
+          name: 'pasted-image.png',
+          path: 'pasted-image.png',
+          mimeType: 'image/png',
+        ),
+      ],
+    );
+    expect(find.text('1 of 2'), findsOneWidget);
+    expect(find.byTooltip('Send in HD'), findsOneWidget);
+    expect(find.text('Compressed'), findsNothing);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(room.sent.map((s) => s.msgtype), [
+      MessageTypes.Video,
+      MessageTypes.Image,
+    ]);
+    expect(room.sent.last.shrink, MediaQuality.photoMaxSide);
+  });
+
+  testWidgets('a plain file shows no HD chip and no quality question', (
+    tester,
+  ) async {
+    final room = _MediaRoom(_MediaClient());
+    await open(tester, room, files: [_file()]);
+    expect(find.text('File'), findsOneWidget);
+    expect(find.byTooltip('Send in HD'), findsNothing);
+    expect(find.text('Compressed'), findsNothing);
   });
 
   testWidgets('an album carries its caption on the newest item only', (

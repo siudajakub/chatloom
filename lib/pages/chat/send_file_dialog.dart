@@ -148,8 +148,13 @@ class _SendPreviewRoute extends PageRoute<AttachmentSendResult> {
 /// The send preview of picked photos, videos and files, Telegram and
 /// Messenger style: a full-screen, swipeable preview of every item, a
 /// thumbnail strip to pick and remove items, the caption composer at the
-/// bottom, a quality choice (compressed, or the original as a file) and
-/// the send button. Open it with [showSendFileDialog].
+/// bottom and the send button. Open it with [showSendFileDialog].
+///
+/// It never asks whether to compress (J, 2026-10-24): photos and videos
+/// are compressed on the device before upload ([MediaProfile.standard]),
+/// unless the small "HD" chip in the header is on for this send
+/// ([MediaProfile.hd]; per send, never remembered). The exact original
+/// goes out only from the attach menu's "File" entry ([sendAsFiles]).
 class SendFileDialog extends StatefulWidget {
   final Room room;
   final List<XFile> files;
@@ -159,10 +164,11 @@ class SendFileDialog extends StatefulWidget {
   final String initialCaption;
   final FrozenAttachmentContext? composeContext;
 
-  /// The quality choice the preview opens with: true sends photos and
-  /// videos compressed ([MediaQuality]); false sends them as the original
-  /// file (the attach menu's "File" entry, MD-02).
-  final bool initialCompress;
+  /// The attach menu's "File" entry (Telegram's "Send as file", MD-02):
+  /// photos and videos go out as documents with their original bytes,
+  /// unchanged. Every other entry (gallery, camera, paste, drag and drop,
+  /// sharing into the app) compresses automatically, without a question.
+  final bool sendAsFiles;
 
   /// Checks the selection against the destination before anything is
   /// shown in the chat, e.g. a bridge's media limits for a merged chat's
@@ -189,7 +195,7 @@ class SendFileDialog extends StatefulWidget {
     this.replyTo,
     this.initialCaption = '',
     this.composeContext,
-    this.initialCompress = true,
+    this.sendAsFiles = false,
     this.preflight,
     this.onAccepted,
     super.key,
@@ -233,7 +239,10 @@ class _Item {
 }
 
 class SendFileDialogState extends State<SendFileDialog> {
-  late bool compress = widget.initialCompress;
+  /// The "HD" chip: this send only, off every time the preview opens.
+  bool hd = false;
+
+  MediaProfile get _profile => hd ? MediaProfile.hd : MediaProfile.standard;
   bool _sending = false;
   int _accepted = 0;
   String? _problem;
@@ -303,10 +312,10 @@ class SendFileDialogState extends State<SendFileDialog> {
     );
   }
 
-  /// The type the bridge sees for [item] with the current quality choice.
+  /// The type the bridge sees for [item].
   String _sendMimeType(_Item item) {
     final mime = item.mimeType ?? 'application/octet-stream';
-    if (item.kind == _Kind.other || compress) return mime;
+    if (item.kind == _Kind.other || !widget.sendAsFiles) return mime;
     // The original as a file: the bridge checks it as a document.
     return 'application/octet-stream';
   }
@@ -450,10 +459,10 @@ class SendFileDialogState extends State<SendFileDialog> {
         // The size is known before anything is read (MD-05).
         final size = await xfile.length();
         if (!mounted) return;
-        final asDocument = !compress && item.kind != _Kind.other;
+        final asDocument = widget.sendAsFiles && item.kind != _Kind.other;
         final transcode =
             item.kind == _Kind.video &&
-            compress &&
+            !widget.sendAsFiles &&
             PlatformInfos.supportsVideoTranscode &&
             xfile.path.isNotEmpty;
         if (!transcode && size > maxUploadSize) {
@@ -472,10 +481,12 @@ class SendFileDialogState extends State<SendFileDialog> {
           );
           final job = VideoPrepareJob();
           final shrink = size > minSizeToCompress;
+          final profile = _profile;
           prepare = () => xfile.prepareVideo(
             compress: shrink,
             maxUploadSize: maxUploadSize,
             job: job,
+            profile: profile,
           );
           cancelPrepare = job.cancel;
         } else {
@@ -506,8 +517,11 @@ class SendFileDialogState extends State<SendFileDialog> {
           file,
           txid: _transactionIds[i],
           inReplyTo: widget.replyTo,
-          shrinkImageMaxDimension: compress && file is MatrixImageFile
-              ? MediaQuality.photoMaxSide
+          // The long side also selects the JPEG quality (q80, HD q85) and
+          // is stored with the bubble, so Retry keeps the same profile.
+          shrinkImageMaxDimension:
+              !widget.sendAsFiles && file is MatrixImageFile
+              ? _profile.photoMaxSide
               : null,
           extraContent: captioned ? {'body': label} : null,
           threadRootEventId: widget.threadRootEventId,
@@ -665,6 +679,9 @@ class SendFileDialogState extends State<SendFileDialog> {
                   onRemove: _items.length > 1 && !_locked
                       ? () => _remove(_page)
                       : null,
+                  showHd: !widget.sendAsFiles && _hasMedia,
+                  hd: hd,
+                  onHd: _locked ? null : () => setState(() => hd = !hd),
                 ),
                 Expanded(
                   child: Stack(
@@ -751,20 +768,15 @@ class SendFileDialogState extends State<SendFileDialog> {
                                   selected: _page,
                                   onSelect: _goTo,
                                 ),
-                              if (_hasMedia)
+                              if (widget.sendAsFiles && _hasMedia)
                                 FutureBuilder<int>(
                                   future: _totalSize,
-                                  builder: (context, size) => _QualityChoice(
-                                    compress: compress,
-                                    originalSize: size.hasData
-                                        ? size.data!.toDouble().sizeString
-                                        : null,
-                                    onChanged: _locked
-                                        ? null
-                                        : (value) {
-                                            setState(() => compress = value);
-                                            _onCaptionChanged();
-                                          },
+                                  builder: (context, size) => _Notice(
+                                    _items.length > 1
+                                        ? 'Sent as files, unchanged'
+                                              '${size.hasData ? ' · ${size.data!.toDouble().sizeString}' : ''}'
+                                        : 'Sent as a file, unchanged'
+                                              '${size.hasData ? ' · ${size.data!.toDouble().sizeString}' : ''}',
                                   ),
                                 ),
                               Row(
@@ -841,6 +853,10 @@ class _PreviewHeader extends StatelessWidget {
   final VoidCallback? onClose, onEdit, onRemove;
   final String closeLabel, editLabel, removeLabel;
 
+  /// The "HD" chip (Telegram), for photos and videos.
+  final bool showHd, hd;
+  final VoidCallback? onHd;
+
   const _PreviewHeader({
     required this.title,
     required this.onClose,
@@ -849,6 +865,9 @@ class _PreviewHeader extends StatelessWidget {
     required this.editLabel,
     required this.onRemove,
     required this.removeLabel,
+    this.showHd = false,
+    this.hd = false,
+    this.onHd,
   });
 
   @override
@@ -879,6 +898,7 @@ class _PreviewHeader extends StatelessWidget {
                   ),
                 ),
               ),
+              if (showHd) _HdChip(hd: hd, onPressed: onHd),
               if (onEdit != null)
                 NotionIconButton(
                   icon: Icons.edit_outlined,
@@ -891,7 +911,7 @@ class _PreviewHeader extends StatelessWidget {
                   label: removeLabel,
                   onPressed: onRemove,
                 ),
-              if (onEdit == null && onRemove == null)
+              if (onEdit == null && onRemove == null && !showHd)
                 const SizedBox(width: NotionSize.touchTarget),
             ],
           ),
@@ -1157,48 +1177,29 @@ class _ThumbnailStrip extends StatelessWidget {
   }
 }
 
-/// Compressed (the [MediaQuality] profile) or the original file, unchanged
-/// and sent as a document (Telegram's "Send as file").
-class _QualityChoice extends StatelessWidget {
-  final bool compress;
-  final String? originalSize;
-  final ValueChanged<bool>? onChanged;
+/// Telegram's "HD" toggle: off, photos and videos go out at the automatic
+/// sweet spot ([MediaProfile.standard]); on, sharper and larger
+/// ([MediaProfile.hd]). It is not a compression question: both compress on
+/// the device and strip EXIF/GPS; the original file is the attach menu's
+/// "File" entry.
+class _HdChip extends StatelessWidget {
+  final bool hd;
+  final VoidCallback? onPressed;
 
-  const _QualityChoice({
-    required this.compress,
-    required this.originalSize,
-    required this.onChanged,
-  });
+  const _HdChip({required this.hd, required this.onPressed});
 
   @override
-  Widget build(BuildContext context) {
-    final onChanged = this.onChanged;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: NotionSpace.xs),
-      child: Wrap(
-        spacing: NotionSpace.xs,
-        runSpacing: NotionSpace.xxs,
-        children: [
-          NotionGlassPill(
-            icon: Icons.photo_size_select_large_rounded,
-            label: 'Compressed',
-            tooltip: 'Smaller, without visible loss',
-            selected: compress,
-            onPressed: onChanged == null ? null : () => onChanged(true),
-          ),
-          NotionGlassPill(
-            icon: Icons.insert_drive_file_outlined,
-            label: originalSize == null
-                ? 'Original file'
-                : 'Original · $originalSize',
-            tooltip: 'Sent as a file, unchanged',
-            selected: !compress,
-            onPressed: onChanged == null ? null : () => onChanged(false),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Semantics(
+    toggled: hd,
+    child: NotionIconButton(
+      icon: hd ? Icons.hd_rounded : Icons.hd_outlined,
+      label: hd
+          ? 'HD on: sharper photos and videos, larger files'
+          : 'Send in HD',
+      selected: hd,
+      onPressed: onPressed,
+    ),
+  );
 }
 
 class _CaptionField extends StatelessWidget {

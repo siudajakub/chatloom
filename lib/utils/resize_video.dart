@@ -58,8 +58,9 @@ extension PrepareVideo on XFile {
   /// The video to send and its thumbnail, by [MediaQuality]'s profile:
   ///
   /// - the source is probed first (size, rotation, bitrate, frame rate);
-  /// - with [compress] it is re-encoded to 720p30 H.264 at ~2.5 Mbit/s,
-  ///   unless it is already that lean ([VideoPlan]); a compressor failure,
+  /// - with [compress] it is re-encoded by [profile]: 720p30 H.264 at
+  ///   ~2.5 Mbit/s by default, 1080p30 at ~5 Mbit/s for HD, unless it is
+  ///   already that lean ([VideoPlan]); a compressor failure,
   ///   or an output larger than the source, sends the source instead;
   /// - width/height are the displayed size (a portrait clip stored rotated
   ///   is announced portrait), with the duration;
@@ -73,9 +74,10 @@ extension PrepareVideo on XFile {
     required bool compress,
     required int maxUploadSize,
     VideoPrepareJob? job,
+    MediaProfile profile = MediaProfile.standard,
   }) {
     final run = _videoTail.then(
-      (_) => _prepareVideo(compress, maxUploadSize, job),
+      (_) => _prepareVideo(compress, maxUploadSize, job, profile),
     );
     _videoTail = run.then<void>((_) {}, onError: (Object _) {});
     return run;
@@ -85,6 +87,7 @@ extension PrepareVideo on XFile {
     bool compress,
     int maxUploadSize,
     VideoPrepareJob? job,
+    MediaProfile profile,
   ) async {
     if (job?.cancelled ?? false) throw const VideoPrepareCancelled();
     final native = PlatformInfos.supportsVideoTranscode && path.isNotEmpty;
@@ -106,6 +109,7 @@ extension PrepareVideo on XFile {
             bitrate: source.bitrate,
             frameRate: source.frameRate,
             mimeType: source.mimeType ?? mimeType ?? lookupMimeType(path),
+            profile: profile,
           )
         : VideoPlan.keep;
     String? output;

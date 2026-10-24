@@ -2415,7 +2415,7 @@ class _MergedChatPageState extends State<_MergedChatView>
           threadLastEventId: null,
           replyTo: sourceReply,
           initialCaption: oldText,
-          initialCompress: !asFiles,
+          sendAsFiles: asFiles,
           composeContext: FrozenAttachmentContext(
             room: room,
             replyTo: sourceReply,

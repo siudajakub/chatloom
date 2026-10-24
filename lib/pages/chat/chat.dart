@@ -1991,8 +1991,9 @@ class ChatController extends State<ChatPageWithRoom>
 
   /// One picker/preview at a time. All routes keep their original source and
   /// reply, and a cancelled picker never consumes the editor's draft.
-  /// [asFiles]: photos and videos start as "Original" (sent as files,
-  /// unchanged); the attach menu's "File" entry (Telegram, MD-02).
+  /// [asFiles]: photos and videos are sent as files, unchanged; only the
+  /// attach menu's "File" entry (Telegram, MD-02). Every other route
+  /// compresses on the device without asking (HD chip in the preview).
   Future<void> _pickAttachments(
     Future<List<XFile>> Function() pick, {
     bool asFiles = false,
@@ -2017,7 +2018,7 @@ class ChatController extends State<ChatPageWithRoom>
           outerContext: context,
           replyTo: frozen.replyTo,
           initialCaption: originalValue.text,
-          initialCompress: !asFiles,
+          sendAsFiles: asFiles,
           composeContext: frozen,
           threadRootEventId: frozen.threadRootEventId,
           threadLastEventId: frozen.threadLastEventId,

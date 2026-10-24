@@ -15,6 +15,13 @@
 /// | Thumbnail | long side ≤ [thumbnailMaxSide] px, JPEG q[thumbnailJpegQuality] + blurhash |
 /// | Video | long side ≤ [videoMaxSide] (720p), ≤ [videoMaxFps] fps, H.264 ≈ [videoBitrate] bit/s, AAC; skipped when already that small |
 /// | Voice | Opus mono 48 kHz at [voiceOpusBitrate] bit/s |
+///
+/// Sending never asks whether to compress (J, 2026-10-24): every photo and
+/// video is compressed on the device before upload by the [MediaProfile]
+/// chosen in the send preview — [MediaProfile.standard] unless the "HD"
+/// chip is on for that send ([MediaProfile.hd]: photos 2560 px JPEG q85,
+/// video 1080p30 ≈ 5 Mbit/s, still without EXIF/GPS). The exact original
+/// bytes go out only through the attach menu's "File" entry (a document).
 library;
 
 import 'dart:math' as math;
@@ -63,6 +70,64 @@ abstract final class MediaQuality {
   /// voice notes are 16–32 kbit/s).
   static const voiceOpusBitrate = 32000;
   static const voiceOpusHighQualityBitrate = 96000;
+
+  /// HD (Telegram's "HD" toggle): photos up to 2560 px at JPEG q85.
+  static const photoHdMaxSide = 2560;
+  static const photoHdJpegQuality = 85;
+
+  /// HD video: 1080p (long side 1920), ≤ 30 fps, H.264 at ~5 Mbit/s
+  /// (about 38 MB per minute).
+  static const videoHdMaxSide = 1920;
+  static const videoHdBitrate = 5000 * 1000;
+
+  /// An HD source already this lean (1080p30 at ≤ 6.5 Mbit/s, MP4) is sent
+  /// as is.
+  static const videoHdSkipBitrate = 6500 * 1000;
+}
+
+/// How strongly one send compresses its photos and videos. There is no
+/// "uncompressed" profile: the original file is sent as a document through
+/// the attach menu's "File" entry instead.
+enum MediaProfile {
+  /// The automatic sweet spot (the default of every send).
+  standard(
+    photoMaxSide: MediaQuality.photoMaxSide,
+    photoJpegQuality: MediaQuality.photoJpegQuality,
+    videoMaxSide: MediaQuality.videoMaxSide,
+    videoBitrate: MediaQuality.videoBitrate,
+    videoSkipBitrate: MediaQuality.videoSkipBitrate,
+  ),
+
+  /// The "HD" chip in the send preview: per send, never remembered.
+  hd(
+    photoMaxSide: MediaQuality.photoHdMaxSide,
+    photoJpegQuality: MediaQuality.photoHdJpegQuality,
+    videoMaxSide: MediaQuality.videoHdMaxSide,
+    videoBitrate: MediaQuality.videoHdBitrate,
+    videoSkipBitrate: MediaQuality.videoHdSkipBitrate,
+  );
+
+  const MediaProfile({
+    required this.photoMaxSide,
+    required this.photoJpegQuality,
+    required this.videoMaxSide,
+    required this.videoBitrate,
+    required this.videoSkipBitrate,
+  });
+
+  final int photoMaxSide;
+  final int photoJpegQuality;
+  final int videoMaxSide;
+  final int videoBitrate;
+  final int videoSkipBitrate;
+
+  int get videoMaxFps => MediaQuality.videoMaxFps;
+
+  /// The profile a photo send used, from the long side it was given. The
+  /// SDK hands the resizer only this number (and the outbox stores only
+  /// it for Retry), so the JPEG quality is derived from it.
+  static MediaProfile ofPhotoMaxSide(int maxSide) =>
+      maxSide >= MediaQuality.photoHdMaxSide ? hd : standard;
 }
 
 /// The encoded format of a still image, sniffed from its header.
@@ -124,7 +189,7 @@ class PhotoPlan {
     final thumbnail = maxSide <= MediaQuality.thumbnailMaxSide;
     final jpegQuality = thumbnail
         ? MediaQuality.thumbnailJpegQuality
-        : MediaQuality.photoJpegQuality;
+        : MediaProfile.ofPhotoMaxSide(maxSide).photoJpegQuality;
     if (animated) return PhotoPlan._(PhotoAction.keep, width, height);
     final alpha =
         hasAlpha ||
@@ -186,6 +251,9 @@ class VideoPlan {
   /// Frame-rate cap (frames above it are dropped).
   int get fps => MediaQuality.videoMaxFps;
 
+  /// The profile this plan was made for.
+  final MediaProfile profile;
+
   /// Whole megabytes (the plugin's unit): the bitrate solver lands at
   /// about [MediaQuality.videoBitrate] for the clip's duration.
   final int targetSizeMb;
@@ -195,12 +263,14 @@ class VideoPlan {
     this.width = 0,
     this.height = 0,
     this.targetSizeMb = 0,
+    this.profile = MediaProfile.standard,
   });
 
   static const keep = VideoPlan._(skip: true);
 
   /// [width] × [height] are the stored frame (`MediaInfo.width/height`,
-  /// before [rotation]); [bitrate] in bit/s; [bytes] the file size.
+  /// before [rotation]); [bitrate] in bit/s; [bytes] the file size;
+  /// [profile] the send's quality (720p by default, 1080p for HD).
   factory VideoPlan.decide({
     required int? width,
     required int? height,
@@ -209,6 +279,7 @@ class VideoPlan {
     int? bitrate,
     double? frameRate,
     String? mimeType,
+    MediaProfile profile = MediaProfile.standard,
   }) {
     if (width == null || height == null || width <= 0 || height <= 0) {
       // Nothing to plan with: the compressor's own defaults would guess.
@@ -224,35 +295,41 @@ class VideoPlan {
         mimeType == 'video/x-m4v';
     final fpsOk = frameRate == null || frameRate <= MediaQuality.videoSkipFps;
     if (bytes <= MediaQuality.videoSmallBytes && mp4 && fpsOk) return keep;
-    if (longSide <= MediaQuality.videoMaxSide &&
+    if (longSide <= profile.videoMaxSide &&
         fpsOk &&
         mp4 &&
         rate != null &&
-        rate <= MediaQuality.videoSkipBitrate) {
+        rate <= profile.videoSkipBitrate) {
       return keep;
     }
-    final scale = longSide <= MediaQuality.videoMaxSide
+    final scale = longSide <= profile.videoMaxSide
         ? 1.0
-        : MediaQuality.videoMaxSide / longSide;
+        : profile.videoMaxSide / longSide;
     int even(double v) => math.max(2, (v / 2).round() * 2);
     final w = even(width * scale);
     final h = even(height * scale);
     final budget = seconds > 0
         ? seconds *
-              (MediaQuality.videoBitrate + MediaQuality.videoAudioBitrate) /
+              (profile.videoBitrate + MediaQuality.videoAudioBitrate) /
               8e6
         : 0.0;
     var target = math.max(1, budget.ceil());
     // Never ask for more than the source holds (a very short or lean clip).
     final sourceMb = (bytes / 1e6).ceil();
     if (target > sourceMb) target = math.max(1, sourceMb);
-    return VideoPlan._(skip: false, width: w, height: h, targetSizeMb: target);
+    return VideoPlan._(
+      skip: false,
+      width: w,
+      height: h,
+      targetSizeMb: target,
+      profile: profile,
+    );
   }
 
   @override
   String toString() => skip
       ? 'VideoPlan(skip)'
-      : 'VideoPlan(${width}x$height ${fps}fps ${targetSizeMb}MB)';
+      : 'VideoPlan(${profile.name} ${width}x$height ${fps}fps ${targetSizeMb}MB)';
 }
 
 /// The size receivers lay a video out with: the stored frame turned by
