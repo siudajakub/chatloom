@@ -205,7 +205,7 @@ class RoundVideoView extends StatelessWidget {
                   child: ClipOval(
                     child: ColoredBox(
                       color: placeholderColor,
-                      child: GestureDetector(
+                      child: NotionTapTarget(
                         behavior: HitTestBehavior.opaque,
                         excludeFromSemantics: true,
                         onTap: tapEnabled ? onToggle : null,

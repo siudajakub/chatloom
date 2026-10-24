@@ -9,9 +9,9 @@ Voice and video calls are not supported (removed 2026-10-22).
 
 ## Build and download
 
-The `Personal macOS` GitHub Actions workflow builds Apple Silicon and Intel
-packages on the standard `macos-15` and `macos-15-intel` runners with Flutter
-3.47.4 and Xcode 26.3. It runs desktop regressions and an
+The `Personal macOS` GitHub Actions workflow builds the Apple Silicon (arm64)
+package on the standard `macos-15` runner with Flutter 3.47.4 and Xcode 26.3.
+Intel Macs are not supported: `scripts/macos/build.py` refuses an x86_64 host. It runs desktop regressions and an
 account-free native smoke test before building the release application. The
 smoke test exercises vodozemac initialization, Keychain write/read/delete and
 SQLCipher persistence, including rejection of a wrong key without changing the
@@ -31,18 +31,13 @@ default branch. Runs have a 45-minute limit; the native smoke step has a
 expire after seven days. No release, store submission, installation or service
 deployment happens automatically.
 
-Open a successful workflow run and download its `ChatLoom-macos-…` artifact:
-`ARM64` / `arm64` is for Apple Silicon (M-series), and `X64` / `x86_64` is for Intel.
-Inside it are the application ZIP, `manifest.json` and `SHA256SUMS`. The manifest
+Open a successful workflow run and download its `ChatLoom-macos-ARM64-…`
+artifact (Apple Silicon, M-series). Inside it are the application ZIP, `manifest.json` and `SHA256SUMS`. The manifest
 records the commit, actual executable architectures, version, native smoke-test
 result and ZIP digest. Every embedded Mach-O image must contain those same
 architecture slices.
-The packages contain one native architecture each. The Intel build also uses a
-scoped CMake adapter to add two existing upstream P-256 assembly files omitted
-from `webcrypto` 0.6.1's Apple source list. The adapter verifies the package's
-CMake hash and leaves dependency caches, cryptographic source code and native
-hook source files unchanged. The smoke suite exercises P-256 key agreement.
-`flutter-queue.py` and `scripts/macos/build.py` select this adapter on Intel Macs.
+The package contains only arm64 code. The smoke suite exercises P-256 key
+agreement.
 
 Extract the application ZIP with Archive Utility and copy `Personal Chat.app`
 to Applications. Its visible name is ChatLoom; the existing bundle identifier
@@ -72,9 +67,27 @@ but cannot compile this macOS target.
 - The first window uses a desktop size bounded by the screen. Later launches
   restore its saved frame. The minimum is 720 × 520 points; the existing layout
   switches to two columns above its shared width breakpoint.
-- Closing the red window button keeps the process and Matrix sync alive.
-  Clicking the Dock icon reopens the same window. Cmd+Q exits the process;
-  messages synchronize again after reopening it.
+- The app draws under a transparent title bar (Telegram for macOS): the glass
+  headers reach under the traffic lights and their rows sit below them. The
+  native side reports the title-bar height over `pl.personal.chat/window`
+  (0 in full screen); the window's appearance follows the app theme, not the
+  system setting. There is no window tabbing.
+- Closing the red window button or Cmd+W keeps the process and Matrix sync
+  alive. Clicking the Dock icon reopens the same window. Cmd+Q exits the
+  process; messages synchronize again after reopening it.
+- Menus: Edit has only Undo, Redo, Cut, Copy, Paste, Delete, Select All and
+  Find…; Window has Close (Cmd+W); Help → Keyboard Shortcuts (Cmd+/).
+- Typing while a message or the inbox has focus writes in the open chat's
+  composer. Esc works like Back (cancels a reply or edit, closes the emoji
+  panel or thread, then closes the chat); Esc in another field stays there.
+- Cmd+Return always sends. Cmd+Shift+A archives the open chat, Cmd+Shift+U
+  marks it unread (or read). Merged person chats accept dropped files, Cmd+V
+  media, Up to edit the last message and Esc, like ordinary chats.
+- Cmd+V of a copy that lists text before its image (Numbers, Excel, Word)
+  pastes the text; files from Finder and copied images attach.
+- Right click opens what a long press opens (who reacted, the pinned list,
+  sticker and GIF previews, the playback speed list); custom tap targets show
+  the pointer cursor.
 - Cmd+K and Cmd+F open the inbox search, including with focus in the chat
   composer. Cmd+, and the native Settings menu open settings. The app lock
   blocks these commands. Repeated search commands reuse the open search flow.

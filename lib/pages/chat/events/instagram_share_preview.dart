@@ -209,7 +209,7 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
           ),
         ),
       if (_assets.isNotEmpty)
-        GestureDetector(
+        NotionTapTarget(
           onTap: () =>
               showImageViewer(context, _assets.first, mediaEvents: _assets),
           child: AbsorbPointer(

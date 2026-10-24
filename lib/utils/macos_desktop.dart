@@ -1,14 +1,75 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/ui/notion/notion_tokens.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// The native window's visibility (macOS: not occluded and not minimised),
 /// reported by `MainFlutterWindow.swift` over the desktop channel. Drives
 /// `NotionActivity` together with the app lifecycle.
 abstract final class MacDesktopWindow {
   static final visible = ValueNotifier<bool>(true);
+
+  /// Height of the transparent title bar over the app (the traffic lights),
+  /// from `WindowChrome.swift`; 0 in full screen and off the Mac.
+  static final titlebarInset = ValueNotifier<double>(0);
+
+  /// Window chrome and pasteboard queries (`WindowChrome.swift`).
+  static const channel = MethodChannel('pl.personal.chat/window');
+
+  /// Whether the pasteboard holds media first (files, or an image ahead of
+  /// any text). True when the native side cannot tell, so a paste behaves
+  /// as before.
+  static Future<bool> pasteboardPrefersMedia() async {
+    try {
+      return await channel.invokeMethod<bool>('pasteboardPrefersMedia') ?? true;
+    } on PlatformException {
+      return true;
+    } on MissingPluginException {
+      return true;
+    }
+  }
+
+  /// Applies a `titlebarInset` value from the native side.
+  @visibleForTesting
+  static void applyInset(Object? value) {
+    if (value is num && value.isFinite && value >= 0 && value < 200) {
+      titlebarInset.value = value.toDouble();
+    }
+  }
+}
+
+/// Raises the top padding by the transparent title bar (Telegram for macOS):
+/// every header already reserves `MediaQuery.padding.top` for a status bar,
+/// so its glass reaches under the traffic lights and its row sits below
+/// them. The tree shape never changes with the inset.
+class MacTitlebarInset extends StatelessWidget {
+  const MacTitlebarInset({super.key, required this.inset, required this.child});
+
+  final ValueListenable<double> inset;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<double>(
+    valueListenable: inset,
+    child: child,
+    builder: (context, top, child) {
+      final media = MediaQuery.of(context);
+      return MediaQuery(
+        data: top <= 0
+            ? media
+            : media.copyWith(
+                padding: media.padding.copyWith(top: media.padding.top + top),
+                viewPadding: media.viewPadding.copyWith(
+                  top: media.viewPadding.top + top,
+                ),
+              ),
+        child: child!,
+      );
+    },
+  );
 }
 
 /// What the inbox offers to keyboard shortcuts.
@@ -18,6 +79,8 @@ class MacInboxCommands {
     this.openAt,
     this.step,
     this.nextUnread,
+    this.toggleArchived,
+    this.toggleUnread,
   });
 
   /// Global search, also where new chats start (⌘K, ⌘N).
@@ -32,6 +95,12 @@ class MacInboxCommands {
 
   /// Opens the next chat with unread messages after the open one.
   final VoidCallback? nextUnread;
+
+  /// ⌘⇧A: archives the open chat (unarchives it in the Archive view).
+  final VoidCallback? toggleArchived;
+
+  /// ⌘⇧U: marks the open chat unread, or read when it is unread.
+  final VoidCallback? toggleUnread;
 }
 
 /// What an open conversation offers to keyboard shortcuts.
@@ -40,6 +109,8 @@ class MacChatCommands {
     required this.searchInChat,
     required this.scrollToTop,
     required this.scrollToBottom,
+    this.typeIntoComposer,
+    this.escape,
   });
 
   /// ⌘F: search this conversation.
@@ -50,6 +121,15 @@ class MacChatCommands {
 
   /// ⌘↓: the newest message.
   final VoidCallback scrollToBottom;
+
+  /// Text typed while focus is elsewhere in the chat or the inbox; false
+  /// when the composer cannot take it.
+  final bool Function(String text)? typeIntoComposer;
+
+  /// Esc on the messages: what Back does (cancel the reply or edit, close
+  /// the panel or thread, then close the chat). The composer's Esc is
+  /// `ComposerBackAction`.
+  final bool Function()? escape;
 }
 
 /// One inbox and one open conversation own the shortcuts, including while
@@ -125,6 +205,91 @@ abstract final class MacDesktopCommands {
     if (_unlocked) _chat?.scrollToBottom();
   }
 
+  static void toggleArchived() {
+    if (_unlocked) _inbox?.toggleArchived?.call();
+  }
+
+  static void toggleUnread() {
+    if (_unlocked) _inbox?.toggleUnread?.call();
+  }
+
+  /// Whether [context] lies inside the bound [owner]'s widget (a `State`).
+  static bool _within(Object? owner, BuildContext context) {
+    if (owner is! State || !owner.mounted) return false;
+    final zone = owner.context;
+    if (identical(zone, context)) return true;
+    var found = false;
+    context.visitAncestorElements((element) {
+      found = identical(element, zone);
+      return !found;
+    });
+    return found;
+  }
+
+  /// A bare Esc with focus on the messages (macOS early key handler,
+  /// Telegram desktop: Back). The timeline's `SelectionArea` would swallow
+  /// it (it only hides a selection toolbar), so it is taken before the focus
+  /// tree. Text fields keep Esc for their own overlays (the composer's
+  /// reaches `ComposerBackAction`); other routes and the inbox keep theirs.
+  static KeyEventResult handleEarlyKey(KeyEvent event) {
+    final chat = _chat;
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape ||
+        chat == null ||
+        !_unlocked) {
+      return KeyEventResult.ignored;
+    }
+    final focus = FocusManager.instance.primaryFocus;
+    final context = focus?.context;
+    if (focus == null ||
+        context == null ||
+        !context.mounted ||
+        _editableOf(context) != null) {
+      return KeyEventResult.ignored;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isMetaPressed ||
+        keyboard.isControlPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isShiftPressed ||
+        !_within(_chatOwner, context)) {
+      return KeyEventResult.ignored;
+    }
+    return chat.escape?.call() == true
+        ? KeyEventResult.handled
+        : KeyEventResult.ignored;
+  }
+
+  /// Keys no widget handled (macOS late key handler). Telegram desktop:
+  /// typing with focus on a message or the inbox writes in the composer.
+  /// Never inside another route (menus, dialogs, sheets, the media viewer),
+  /// a text field, or through the app lock.
+  static KeyEventResult handleUnhandledKey(KeyEvent event) {
+    final chat = _chat;
+    if (event is! KeyDownEvent || chat == null || !_unlocked) {
+      return KeyEventResult.ignored;
+    }
+    final focus = FocusManager.instance.primaryFocus;
+    final context = focus?.context;
+    if (focus == null || context == null || !context.mounted) {
+      return KeyEventResult.ignored;
+    }
+    if (_editableOf(context) != null) return KeyEventResult.ignored;
+    final keyboard = HardwareKeyboard.instance;
+    final text = macTypedText(
+      event,
+      metaPressed: keyboard.isMetaPressed,
+      controlPressed: keyboard.isControlPressed,
+    );
+    if (text == null ||
+        (!_within(_chatOwner, context) && !_within(_inboxOwner, context))) {
+      return KeyEventResult.ignored;
+    }
+    return chat.typeIntoComposer?.call(text) == true
+        ? KeyEventResult.handled
+        : KeyEventResult.ignored;
+  }
+
   @visibleForTesting
   static void debugReset() {
     _inboxOwner = _chatOwner = null;
@@ -145,8 +310,16 @@ const macShortcutHelp = <MacShortcutHelp>[
   (keys: '⌃⇧Tab   ⌘[   ⌥↑', action: 'Previous chat'),
   (keys: '⌥⇧↓', action: 'Next unread chat'),
   (keys: '⌘↑   ⌘↓', action: 'Oldest loaded message, newest message'),
+  (keys: '⌘⇧A', action: 'Archive or unarchive the open chat'),
+  (keys: '⌘⇧U', action: 'Mark the open chat unread or read'),
   (keys: '↑', action: 'Edit your last message (empty composer)'),
-  (keys: 'Esc', action: 'Close a menu, dialog or sheet; cancel a reply'),
+  (keys: '⌘↩', action: 'Send, also when Enter adds a new line'),
+  (
+    keys: 'Esc',
+    action: 'Close a menu or dialog; cancel a reply; close the chat',
+  ),
+  (keys: 'A … Z', action: 'Typing anywhere in a chat writes in its composer'),
+  (keys: '⌘W', action: 'Close the window (ChatLoom keeps syncing)'),
   (keys: '⌘,', action: 'Settings'),
   (keys: '⌘/', action: 'Keyboard shortcuts'),
 ];
@@ -163,6 +336,8 @@ enum _MacCommand {
   nextUnread,
   top,
   bottom,
+  archive,
+  unread,
   open1,
   open2,
   open3,
@@ -189,15 +364,41 @@ const _textCommands = {
   _MacCommand.bottom,
 };
 
+/// The text field [context] (a focused node's) belongs to, if any.
+EditableTextState? _editableOf(BuildContext context) =>
+    context is StatefulElement && context.state is EditableTextState
+    ? context.state as EditableTextState
+    : context.findAncestorStateOfType<EditableTextState>();
+
 /// Whether the focused widget is a text field that holds text.
 bool _editingText() {
   final context = FocusManager.instance.primaryFocus?.context;
   if (context == null) return false;
-  final editable =
-      context is StatefulElement && context.state is EditableTextState
-      ? context.state as EditableTextState
-      : context.findAncestorStateOfType<EditableTextState>();
+  final editable = _editableOf(context);
   return editable != null && editable.textEditingValue.text.isNotEmpty;
+}
+
+/// The printable text of a key press that may type into a composer: no ⌘ or
+/// ⌃ (shortcuts, text editing), no control characters (Enter, Tab, Esc,
+/// Backspace) and no function or arrow keys. ⌥ and ⇧ type characters on
+/// the Mac (ą, ł, capitals), so they pass.
+String? macTypedText(
+  KeyEvent event, {
+  required bool metaPressed,
+  required bool controlPressed,
+}) {
+  if (event is! KeyDownEvent || metaPressed || controlPressed) return null;
+  final text = event.character;
+  if (text == null || text.isEmpty) return null;
+  for (final rune in text.runes) {
+    // C0/C1 controls, DEL, and AppKit's private-use function-key range.
+    if (rune < 0x20 ||
+        (rune >= 0x7f && rune < 0xa0) ||
+        (rune >= 0xf700 && rune <= 0xf8ff)) {
+      return null;
+    }
+  }
+  return text;
 }
 
 class _MacAction extends Action<_MacIntent> {
@@ -274,6 +475,10 @@ class MacDesktopIntegration extends StatefulWidget {
     SingleActivator(LogicalKeyboardKey.arrowDown, meta: true): _MacIntent(
       _MacCommand.bottom,
     ),
+    SingleActivator(LogicalKeyboardKey.keyA, meta: true, shift: true):
+        _MacIntent(_MacCommand.archive),
+    SingleActivator(LogicalKeyboardKey.keyU, meta: true, shift: true):
+        _MacIntent(_MacCommand.unread),
     SingleActivator(LogicalKeyboardKey.digit1, meta: true): _MacIntent(
       _MacCommand.open1,
     ),
@@ -346,6 +551,10 @@ class MacDesktopIntegration extends StatefulWidget {
         MacDesktopCommands.scrollToTop();
       case _MacCommand.bottom:
         MacDesktopCommands.scrollToBottom();
+      case _MacCommand.archive:
+        MacDesktopCommands.toggleArchived();
+      case _MacCommand.unread:
+        MacDesktopCommands.toggleUnread();
       case _MacCommand.open1 ||
           _MacCommand.open2 ||
           _MacCommand.open3 ||
@@ -367,6 +576,9 @@ class _MacDesktopIntegrationState extends State<MacDesktopIntegration> {
   static const _channel = MethodChannel('pl.personal.chat/desktop');
   static Object? _owner;
 
+  /// The appearance last given to the window (`dark`), null before.
+  bool? _dark;
+
   void _settings() {
     if (PersonalPrivacy.surfaceUnlocked) widget.onSettings();
   }
@@ -384,6 +596,9 @@ class _MacDesktopIntegrationState extends State<MacDesktopIntegration> {
           MacDesktopCommands.find();
         case 'settings':
           _settings();
+        case 'help':
+          // Help → Keyboard Shortcuts (the menu item; ⌘/ is a Flutter key).
+          if (PersonalPrivacy.surfaceUnlocked) widget.onShortcutsHelp?.call();
         case 'wake':
           widget.onWake();
         case 'visibility':
@@ -391,6 +606,41 @@ class _MacDesktopIntegrationState extends State<MacDesktopIntegration> {
           if (visible is bool) MacDesktopWindow.visible.value = visible;
       }
     });
+    MacDesktopWindow.channel.setMethodCallHandler((call) async {
+      if (call.method == 'titlebarInset') {
+        MacDesktopWindow.applyInset(call.arguments);
+      }
+    });
+    // The native side may have measured before this handler existed.
+    MacDesktopWindow.channel
+        .invokeMethod<double>('titlebarInset')
+        .then(MacDesktopWindow.applyInset, onError: (Object _) {});
+    FocusManager.instance.addEarlyKeyEventHandler(
+      MacDesktopCommands.handleEarlyKey,
+    );
+    FocusManager.instance.addLateKeyEventHandler(
+      MacDesktopCommands.handleUnhandledKey,
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!PlatformInfos.isMacOS) return;
+    // The window (traffic lights, menus, resize background) follows the app
+    // theme, not the system appearance.
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    if (dark == _dark) return;
+    _dark = dark;
+    final background = dark
+        ? NotionColors.dark.background
+        : NotionColors.light.background;
+    MacDesktopWindow.channel
+        .invokeMethod<void>('appearance', {
+          'dark': dark,
+          'background': background.toARGB32(),
+        })
+        .catchError((Object _) {});
   }
 
   @override
@@ -398,16 +648,28 @@ class _MacDesktopIntegrationState extends State<MacDesktopIntegration> {
     if (identical(_owner, this)) {
       _owner = null;
       _channel.setMethodCallHandler(null);
+      MacDesktopWindow.channel.setMethodCallHandler(null);
+    }
+    if (PlatformInfos.isMacOS) {
+      FocusManager.instance.removeEarlyKeyEventHandler(
+        MacDesktopCommands.handleEarlyKey,
+      );
+      FocusManager.instance.removeLateKeyEventHandler(
+        MacDesktopCommands.handleUnhandledKey,
+      );
     }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => PlatformInfos.isMacOS
-      ? MacDesktopIntegration.bindings(
-          onSettings: widget.onSettings,
-          onShortcutsHelp: widget.onShortcutsHelp,
-          child: widget.child,
+      ? MacTitlebarInset(
+          inset: MacDesktopWindow.titlebarInset,
+          child: MacDesktopIntegration.bindings(
+            onSettings: widget.onSettings,
+            onShortcutsHelp: widget.onShortcutsHelp,
+            child: widget.child,
+          ),
         )
       : widget.child;
 }

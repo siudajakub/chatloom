@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'notion_glass.dart';
@@ -206,15 +207,23 @@ class _NotionMediaPlaybackControlsState
                     label: 'Playback speed',
                     hint: widget.onSpeedPicker == null
                         ? null
+                        : defaultTargetPlatform == TargetPlatform.macOS
+                        ? 'Right-click for more speeds'
                         : 'Long press for more speeds',
-                    child: TextButton(
-                      style: TextButton.styleFrom(
-                        foregroundColor: NotionMediaColors.onScrim,
-                        minimumSize: const Size.square(NotionSize.touchTarget),
+                    // A right click opens the picker as a long press does.
+                    child: GestureDetector(
+                      onSecondaryTap: widget.onSpeedPicker,
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor: NotionMediaColors.onScrim,
+                          minimumSize: const Size.square(
+                            NotionSize.touchTarget,
+                          ),
+                        ),
+                        onPressed: widget.onSpeedCycle,
+                        onLongPress: widget.onSpeedPicker,
+                        child: Text('$speed×'),
                       ),
-                      onPressed: widget.onSpeedCycle,
-                      onLongPress: widget.onSpeedPicker,
-                      child: Text('$speed×'),
                     ),
                   ),
                 ?widget.trailing,

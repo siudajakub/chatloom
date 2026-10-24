@@ -359,7 +359,7 @@ class _GifResultTileState extends State<GifResultTile>
     return Semantics(
       label: 'GIF',
       button: true,
-      child: GestureDetector(
+      child: NotionTapTarget(
         onTap: widget.onTap,
         onLongPress: widget.onLongPress,
         child: ClipRRect(

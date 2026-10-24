@@ -12,8 +12,9 @@ rtk python3 scripts/macos/build.py --smoke-test
 rtk python3 scripts/macos/build.py
 ```
 
-`personal-macos.yml` builds Apple Silicon and Intel independently from `main`.
-It checks native storage/crypto/media, signatures and embedded architectures.
+`personal-macos.yml` builds Apple Silicon (arm64) only; Intel Macs are not
+supported. It checks native storage/crypto/media, signatures and embedded
+architectures.
 Linux can run shared tests and trigger Actions; it cannot compile this target.
 
 System notifications, push, notification sounds and Dock badges are disabled.

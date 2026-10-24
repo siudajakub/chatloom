@@ -243,6 +243,7 @@ in new code; read `context.notion` instead.
 | `NotionMediaPlaybackControls`, `NotionMediaActionsButton` | Focused media transport over `stageScrim`: play/pause, time, seek, speed; secondary actions in one menu. Data and callbacks only; `seekControl` accepts a voice waveform instead of the slider. |
 | `NotionSwipeAction(startToEnd:, endToStart:, child:)` + `NotionSwipeActionSide(icon:, label:, onCommit:)` | Telegram-style row swipe (inbox: archive / mark read): the row follows the finger over an opaque `accentTint` pill whose icon scales in, arms at 30 % of the width with one `NotionHaptics.selection()`, commits on release and springs back (`snappy`, instant under reduced motion); touch only, never from the back-gesture edges, off under a screen reader (custom semantics actions instead); no controller until the first swipe (`notion_swipe_action.dart`) |
 | `NotionPressable`, `NotionEntrance`, `NotionSkeleton`, `NotionFadeThrough`, `NotionPop`, ... | motion (see Motion) |
+| `NotionTapTarget(onTap:, onLongPress:, onSecondaryTap:, behavior:, child:)` | a `GestureDetector` replacement for custom tap targets with pointer affordances (Mac): the click cursor while `onTap` is set, and a right click doing what the long press does. Every long-press-only action needs a right-click equivalent; `NotionPressable(onLongPress:)` gets one too. Non-visual, no golden (`notion_pressable.dart`) |
 
 Each primitive has a golden in `test/notion/goldens/primitives/`.
 

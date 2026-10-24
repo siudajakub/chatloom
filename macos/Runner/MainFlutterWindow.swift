@@ -2,6 +2,7 @@ import Cocoa
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
+  private var windowChrome: WindowChrome?
   private var desktopChannel: FlutterMethodChannel?
   private var wakeObserver: NSObjectProtocol?
   private var occlusionObserver: NSObjectProtocol?
@@ -29,6 +30,9 @@ class MainFlutterWindow: NSWindow {
     }
     setFrameAutosaveName("ChatLoomMainWindow")
     isReleasedWhenClosed = false
+    // Transparent title bar over the app, theme and pasteboard queries.
+    windowChrome = WindowChrome(
+      window: self, messenger: flutterViewController.engine.binaryMessenger)
 
     let channel = FlutterMethodChannel(
       name: "pl.personal.chat/desktop", binaryMessenger: flutterViewController.engine.binaryMessenger)
@@ -64,6 +68,10 @@ class MainFlutterWindow: NSWindow {
         item.target = self
         item.action = #selector(openSearch)
       }
+      if item.keyEquivalent == "/" && item.keyEquivalentModifierMask == .command {
+        item.target = self
+        item.action = #selector(openShortcutsHelp)
+      }
       configureMenu(item.submenu)
     }
   }
@@ -97,6 +105,11 @@ class MainFlutterWindow: NSWindow {
   @objc private func openSearch(_ sender: Any?) {
     makeKeyAndOrderFront(nil)
     desktopChannel?.invokeMethod("search", arguments: nil)
+  }
+
+  @objc private func openShortcutsHelp(_ sender: Any?) {
+    makeKeyAndOrderFront(nil)
+    desktopChannel?.invokeMethod("help", arguments: nil)
   }
 
   deinit {

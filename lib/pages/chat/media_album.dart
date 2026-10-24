@@ -237,7 +237,7 @@ class _AlbumTile extends StatelessWidget {
     return SizedBox(
       width: width,
       height: height,
-      child: GestureDetector(
+      child: NotionTapTarget(
         onTap: uploading
             ? null
             : () => showImageViewer(context, event, timeline: timeline),

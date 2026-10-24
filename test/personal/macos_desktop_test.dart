@@ -57,6 +57,8 @@ void shortcutTests() {
         openAt: (index) => calls.add('open $index'),
         step: (delta) => calls.add('step $delta'),
         nextUnread: () => calls.add('unread'),
+        toggleArchived: () => calls.add('archive'),
+        toggleUnread: () => calls.add('mark unread'),
       ),
     );
   });
@@ -120,6 +122,8 @@ void shortcutTests() {
     await press(tester, LogicalKeyboardKey.keyF, meta: true);
     await press(tester, LogicalKeyboardKey.slash, meta: true);
     await press(tester, LogicalKeyboardKey.comma, meta: true);
+    await press(tester, LogicalKeyboardKey.keyA, meta: true, shift: true);
+    await press(tester, LogicalKeyboardKey.keyU, meta: true, shift: true);
     expect(calls, [
       'open 0',
       'open 8',
@@ -133,6 +137,8 @@ void shortcutTests() {
       'search',
       'help',
       'settings',
+      'archive',
+      'mark unread',
     ]);
   });
 
@@ -191,6 +197,7 @@ void shortcutTests() {
     await press(tester, LogicalKeyboardKey.tab, control: true);
     await press(tester, LogicalKeyboardKey.slash, meta: true);
     await press(tester, LogicalKeyboardKey.comma, meta: true);
+    await press(tester, LogicalKeyboardKey.keyA, meta: true, shift: true);
     expect(calls, isEmpty);
   });
 
@@ -209,6 +216,10 @@ void shortcutTests() {
       '⌘↓',
       '⌘,',
       '⌘/',
+      '⌘⇧A',
+      '⌘⇧U',
+      '⌘↩',
+      '⌘W',
       'Esc',
     ]) {
       expect(keys, contains(key));

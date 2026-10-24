@@ -15,6 +15,7 @@ import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart';
 import 'package:chatloom/pages/chat/composer_keyboard.dart';
 import 'package:chatloom/pages/chat/composer_send_later.dart';
+import 'package:chatloom/pages/chat/conversation_drop_target.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
@@ -213,7 +214,14 @@ class _MergedChatPageState extends State<_MergedChatView>
       value: sendController.value,
       sendOnEnter: AppSettings.sendOnEnter.value,
       shiftPressed: HardwareKeyboard.instance.isShiftPressed,
+      metaPressed:
+          !PlatformInfos.isMobile && HardwareKeyboard.instance.isMetaPressed,
       onSend: send,
+      // Desktop parity with ordinary chats: ↑ edits the last own message.
+      onEditLast:
+          PlatformInfos.isMobile || replyEvent != null || editEvent != null
+          ? null
+          : _editLastOwnMessage,
     ),
   );
   @override
@@ -329,6 +337,13 @@ class _MergedChatPageState extends State<_MergedChatView>
             scrollController.jumpTo(scrollController.position.maxScrollExtent);
           },
           scrollToBottom: () => unawaited(_jumpToLatest()),
+          typeIntoComposer: (text) => typeIntoComposer(this, text),
+          // Esc = Back: PopScope cancels a reply, edit or panel first.
+          escape: () {
+            if (!mounted) return false;
+            unawaited(Navigator.maybePop(context));
+            return true;
+          },
         ),
       );
     }
@@ -1364,6 +1379,20 @@ class _MergedChatPageState extends State<_MergedChatView>
     inputFocus.requestFocus();
   }
 
+  /// ↑ in the empty composer (desktop): the newest own text message that
+  /// its network can still edit.
+  void _editLastOwnMessage() {
+    final last = _rows.firstWhereOrNull(
+      (event) =>
+          event.type == EventTypes.Message &&
+          event.messageType == MessageTypes.Text &&
+          event.status.isSent &&
+          !event.redacted &&
+          _canEdit(event),
+    );
+    if (last != null) editEventAction(last);
+  }
+
   @override
   void cancelReplyEventAction() {
     setState(() {
@@ -2249,6 +2278,24 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
   }
 
+  /// ⌘V (desktop): files or an image open the attachment dialog for the
+  /// selected source, like an ordinary chat; text is pasted at the caret
+  /// (also while a send is in flight).
+  Future<void> _pasteFromClipboard() async {
+    final editorValue = sendController.value;
+    final media = composerEnabled ? await readClipboardMedia() : null;
+    if (!mounted) return;
+    if (media != null) {
+      await _attachMedia(() async => media);
+      return;
+    }
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (text == null || !mounted || sendController.value != editorValue) {
+      return;
+    }
+    onInputBarChanged(insertComposerText(sendController, text));
+  }
+
   /// Keeps the app lock from treating a system picker as leaving the app.
   Future<T> _picking<T>(Future<T> picker) =>
       AppLock.of(context).pauseWhile(picker);
@@ -2947,7 +2994,30 @@ class _MergedChatPageState extends State<_MergedChatView>
       ),
     );
     // One backdrop read for the glass header and composer (DESIGN.md "Glass").
-    return BackdropGroup(child: page);
+    // Desktop parity with ordinary chats: files dropped on the conversation
+    // and ⌘V media open the attachment dialog for the selected source.
+    return BackdropGroup(
+      child: Actions(
+        actions: PlatformInfos.isWeb
+            ? const {}
+            : <Type, Action<Intent>>{
+                PasteTextIntent: CallbackAction<PasteTextIntent>(
+                  onInvoke: (_) => _pasteFromClipboard(),
+                ),
+                // Mac: Esc in the composer, nothing left to cancel, is Back.
+                DismissIntent: ComposerBackAction(
+                  composer: inputFocus,
+                  enabled: PlatformInfos.isMacOS,
+                  onBack: () => unawaited(Navigator.maybePop(context)),
+                ),
+              },
+        child: ConversationDropTarget(
+          enabled: composerEnabled && anyRoom != null,
+          onFiles: (files) => unawaited(_attachMedia(() async => files)),
+          child: page,
+        ),
+      ),
+    );
   }
 }
 

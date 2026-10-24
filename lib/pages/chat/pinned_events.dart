@@ -103,7 +103,8 @@ class _PinnedEventsState extends State<PinnedEvents> {
     }
     final index = _current(pins);
     final id = pins[index];
-    return GestureDetector(
+    // A right click opens the list too (pointer platforms).
+    return NotionTapTarget(
       onLongPress: () => _list(pins),
       child: FutureBuilder<Event?>(
         future: _event(id),

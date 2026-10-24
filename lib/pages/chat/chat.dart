@@ -16,6 +16,7 @@ import 'package:chatloom/pages/chat/chat_timeline_preload.dart';
 import 'package:chatloom/pages/chat/chat_view.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart'
     show ConversationSourceChip;
+import 'package:chatloom/pages/chat/composer_keyboard.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/composer_send_later.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
@@ -79,7 +80,6 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:pasteboard/pasteboard.dart';
 import 'package:personal_core/personal_core.dart'
     show ChatTheme, RoundMediaPolicy, RoundVideoDescriptor;
 import 'package:scroll_to_index/scroll_to_index.dart';
@@ -633,9 +633,15 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   KeyEventResult _customEnterKeyHandling(FocusNode node, KeyEvent evt) {
+    final keyboard = HardwareKeyboard.instance;
+    // A bare ↑ only: ⌘↑ and ⌥↑ are scroll and chat-switching shortcuts.
     if (evt is KeyDownEvent &&
         evt.logicalKey == LogicalKeyboardKey.arrowUp &&
         !PlatformInfos.isMobile &&
+        !keyboard.isMetaPressed &&
+        !keyboard.isAltPressed &&
+        !keyboard.isControlPressed &&
+        !keyboard.isShiftPressed &&
         editEvent == null &&
         replyEvent == null &&
         sendController.text.isEmpty) {
@@ -664,9 +670,11 @@ class ChatController extends State<ChatPageWithRoom>
         !sendController.value.composing.isCollapsed) {
       return KeyEventResult.ignored;
     }
-    if (!HardwareKeyboard.instance.isShiftPressed &&
+    // ⌘↩ always sends (Telegram, Slack), also with "Send on enter" off.
+    if (!keyboard.isShiftPressed &&
         evt.logicalKey.keyLabel == 'Enter' &&
-        AppSettings.sendOnEnter.value) {
+        (AppSettings.sendOnEnter.value ||
+            (keyboard.isMetaPressed && !PlatformInfos.isMobile))) {
       if (evt is KeyDownEvent) {
         send();
       }
@@ -735,6 +743,14 @@ class ChatController extends State<ChatPageWithRoom>
             scrollController.jumpTo(scrollController.position.maxScrollExtent);
           },
           scrollToBottom: () => unawaited(scrollDown()),
+          typeIntoComposer: (text) => typeIntoComposer(this, text),
+          // Esc = Back: the page's PopScope cancels a reply, edit, panel
+          // or thread first (Telegram Desktop), then the chat closes.
+          escape: () {
+            if (!mounted) return false;
+            unawaited(Navigator.maybePop(context));
+            return true;
+          },
         ),
       );
     }
@@ -1919,38 +1935,14 @@ class ChatController extends State<ChatPageWithRoom>
     final frozen = _captureAttachmentContext();
     final editorValue = sendController.value;
     await _pickAttachments(() async {
-      final files = await Pasteboard.files();
+      // Files, then an image; text first when the Mac copy is text first.
+      final media = await readClipboardMedia();
       frozen.validate();
-      if (files.isNotEmpty) return files.map(XFile.new).toList();
-      final image = await Pasteboard.image;
-      frozen.validate();
-      if (image != null)
-        return [
-          XFile.fromData(
-            image,
-            name: 'pasted-image.png',
-            path: 'pasted-image.png',
-            mimeType: 'image/png',
-          ),
-        ];
+      if (media != null) return media;
       final textData = await Clipboard.getData('text/plain');
       frozen.validate();
       if (textData?.text != null && sendController.value == editorValue) {
-        final selection = editorValue.selection.isValid
-            ? editorValue.selection
-            : TextSelection.collapsed(offset: editorValue.text.length);
-        final text = editorValue.text.replaceRange(
-          selection.start,
-          selection.end,
-          textData!.text!,
-        );
-        sendController.value = TextEditingValue(
-          text: text,
-          selection: TextSelection.collapsed(
-            offset: selection.start + textData.text!.length,
-          ),
-        );
-        onInputBarChanged(text);
+        onInputBarChanged(insertComposerText(sendController, textData!.text!));
       }
       return [];
     });
@@ -2850,6 +2842,12 @@ class ChatController extends State<ChatPageWithRoom>
               PasteTextIntent: CallbackAction<PasteTextIntent>(
                 onInvoke: (PasteTextIntent intent) =>
                     _handleClipboardImagePaste(),
+              ),
+              // Mac: Esc in the composer, nothing left to cancel, is Back.
+              DismissIntent: ComposerBackAction(
+                composer: inputFocus,
+                enabled: PlatformInfos.isMacOS,
+                onBack: () => unawaited(Navigator.maybePop(context)),
               ),
             },
       child: Row(

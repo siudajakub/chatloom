@@ -12,8 +12,6 @@ import shutil
 import subprocess
 import sys
 
-from native_toolchain import prepare_native_environment
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -34,17 +32,13 @@ def main():
     config = ROOT / 'build' / 'personal-macos-signing.xcconfig'
     config.parent.mkdir(parents=True, exist_ok=True)
     architecture = platform.machine()
-    if architecture not in ('arm64', 'x86_64'):
-        parser.error('Unsupported macOS host architecture')
-    excluded = 'x86_64' if architecture == 'arm64' else 'arm64'
-    # webcrypto's BoringSSL assembly selection must use its native host. Build
-    # each CPU on its own runner instead of cross-compiling the Intel slice on
-    # arm64. Keep the library and all native cryptographic hooks unchanged.
+    if architecture != 'arm64':
+        parser.error('ChatLoom for macOS is Apple Silicon only')
     config.write_text('CODE_SIGN_IDENTITY = -\nCODE_SIGN_STYLE = Manual\n'
                       'DEVELOPMENT_TEAM =\nPROVISIONING_PROFILE_SPECIFIER =\n'
-                      f'ARCHS = {architecture}\nEXCLUDED_ARCHS = {excluded}\n'
+                      'ARCHS = arm64\nEXCLUDED_ARCHS = x86_64\n'
                       'ONLY_ACTIVE_ARCH = YES\n')
-    env = {**prepare_native_environment(), 'XCODE_XCCONFIG_FILE': str(config)}
+    env = {**os.environ, 'XCODE_XCCONFIG_FILE': str(config)}
     # An empty access-group array in the inherited template is invalid for
     # ad-hoc signing. Preserve all other sandbox entitlements and restore files.
     entitlements = [ROOT / 'macos/Runner' / name for name in
@@ -87,8 +81,7 @@ def main():
                         text=True).stdout.strip().split()
     if architectures != [architecture]:
         raise SystemExit(f'Expected a native {architecture} executable, got {architectures}')
-    # A universal launcher with an arm64-only native plugin is not an Intel app.
-    # Inspect every embedded Mach-O image, including native-hook dylibs.
+    # Every embedded Mach-O image, native-hook dylibs included, must be arm64.
     macho_magic = {bytes.fromhex(value) for value in
                    ('feedface', 'cefaedfe', 'feedfacf', 'cffaedfe',
                     'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca')}

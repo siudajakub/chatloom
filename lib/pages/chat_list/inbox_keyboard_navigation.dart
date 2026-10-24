@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
 import 'package:chatloom/pages/chat_list/chat_list.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
+import 'package:collection/collection.dart';
 import 'package:matrix/matrix.dart';
 
 /// The row [delta] places after [current] in a list of [length] rows, or
@@ -52,6 +54,24 @@ MacInboxCommands inboxKeyboardCommands(ChatListController controller) {
     if (index != null) controller.onChatTap(rooms[index]);
   }
 
+  /// The open row's menu entry among [actions] (whichever of the pair
+  /// applies), applied as the menu or a swipe would: at once, with Undo
+  /// for archiving. A disabled entry (private sync not ready) does nothing.
+  void toggle(Set<ChatMenuAction> actions) {
+    final rooms = rows();
+    final index = current(rooms);
+    if (index == null) return;
+    final room = rooms[index];
+    final item = chatMenuItems(
+      controller.personal,
+      room,
+      pinLabel: '',
+      unpinLabel: '',
+    ).firstWhereOrNull((item) => actions.contains(item.action));
+    if (item == null || !item.enabled) return;
+    controller.applyRowAction(room, item.action);
+  }
+
   return MacInboxCommands(
     search: controller.openSearch,
     openAt: (index) {
@@ -84,5 +104,9 @@ MacInboxCommands inboxKeyboardCommands(ChatListController controller) {
         ),
       );
     },
+    toggleArchived: () =>
+        toggle(const {ChatMenuAction.archive, ChatMenuAction.unarchive}),
+    toggleUnread: () =>
+        toggle(const {ChatMenuAction.read, ChatMenuAction.unread}),
   );
 }

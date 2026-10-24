@@ -33,8 +33,6 @@ import subprocess
 import sys
 import time
 
-from macos.native_toolchain import prepare_native_environment
-
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT.parent
 SDK_PROJECT = Path(os.environ.get('PERSONAL_CHAT_ROOT', str(PROJECT)))
@@ -117,7 +115,7 @@ def stable_env(flutter):
                 'CONVERSATION_CAPTURE_DIR', 'NOTION_CAPTURE_DIR'):
         if os.environ.get(key):
             env[key] = os.environ[key]
-    return prepare_native_environment(env)
+    return env
 
 
 def acquire(label):

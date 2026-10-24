@@ -154,6 +154,8 @@ class NotionReactionChip extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
+        // Pointer platforms: a right click shows who reacted.
+        onSecondaryTap: onLongPress,
         customBorder: const StadiumBorder(),
         child: ConstrainedBox(
           constraints: const BoxConstraints(
@@ -486,7 +488,7 @@ class _ReactionCell extends StatelessWidget {
       label: label,
       excludeSemantics: true,
       onTap: onTap,
-      child: GestureDetector(
+      child: NotionTapTarget(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
         child: NotionPressable(

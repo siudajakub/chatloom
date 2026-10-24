@@ -620,7 +620,7 @@ class _PersonPageState extends State<PersonPage> {
           Semantics(
             button: editable,
             label: 'Photo',
-            child: GestureDetector(
+            child: NotionTapTarget(
               onTap: editable ? () => _photo(group) : null,
               child: SizedBox.square(
                 dimension: NotionSize.avatarLg,

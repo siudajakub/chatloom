@@ -46,6 +46,7 @@ class NotionPressable extends StatefulWidget {
   final VoidCallback? onTap;
 
   /// Optional long-press handler; always fires [NotionHaptics.longPress].
+  /// A right click runs it too (pointer platforms).
   final VoidCallback? onLongPress;
 
   /// Fire [NotionHaptics.light] on [onTap] (send buttons only).
@@ -156,7 +157,7 @@ class _NotionPressableState extends State<NotionPressable>
   Widget build(BuildContext context) {
     var child = widget.child;
     if (widget.onTap != null || widget.onLongPress != null) {
-      child = GestureDetector(
+      child = NotionTapTarget(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap == null ? null : _tap,
         onLongPress: widget.onLongPress == null ? null : _longPress,
@@ -194,5 +195,46 @@ class _ScaleTransform extends AnimatedWidget {
     scale: (listenable as Animation<double>).value,
     alignment: alignment,
     child: child,
+  );
+}
+
+/// A [GestureDetector] for custom tap targets with the pointer affordances
+/// of a button (Telegram/Messenger desktop): the click cursor while [onTap]
+/// is set, and a right click doing what a long press does unless
+/// [onSecondaryTap] says otherwise. Same arguments as the detector it
+/// replaces, so a call site only changes its name.
+class NotionTapTarget extends StatelessWidget {
+  const NotionTapTarget({
+    super.key,
+    required this.child,
+    this.onTap,
+    this.onLongPress,
+    this.onSecondaryTap,
+    this.behavior,
+    this.excludeFromSemantics = false,
+  });
+
+  final Widget child;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+
+  /// Right click; defaults to [onLongPress].
+  final VoidCallback? onSecondaryTap;
+  final HitTestBehavior? behavior;
+  final bool excludeFromSemantics;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    // One tree shape whether or not it is tappable: nothing below remounts.
+    opaque: false,
+    cursor: onTap == null ? MouseCursor.defer : SystemMouseCursors.click,
+    child: GestureDetector(
+      behavior: behavior,
+      excludeFromSemantics: excludeFromSemantics,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      onSecondaryTap: onSecondaryTap ?? onLongPress,
+      child: child,
+    ),
   );
 }
