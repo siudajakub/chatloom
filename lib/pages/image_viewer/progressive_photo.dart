@@ -256,13 +256,13 @@ class _PhotoLoader extends StatelessWidget {
         ),
         child: Padding(
           padding: const EdgeInsets.all(NotionSpace.xs),
-          child: SizedBox.square(
-            dimension: NotionSize.iconSm,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: NotionMediaColors.onScrim,
-              semanticsLabel: L10n.of(context).loadingPleaseWait,
-            ),
+          // The disc already waited for the grace: the ring shows with it
+          // and rests after the loop cap (a stalled download stops drawing).
+          child: NotionDelayedSpinner(
+            size: NotionSize.iconSm,
+            delay: Duration.zero,
+            color: NotionMediaColors.onScrim,
+            semanticsLabel: L10n.of(context).loadingPleaseWait,
           ),
         ),
       ),

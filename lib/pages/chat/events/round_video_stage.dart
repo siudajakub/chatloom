@@ -497,9 +497,10 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
                                   size: RoundVideoStage._glyphSize,
                                 )
                               : loading
-                              ? const CircularProgressIndicator(
+                              ? const NotionDelayedSpinner(
                                   key: ValueKey('round-stage-loading'),
-                                  strokeWidth: 2,
+                                  size: RoundVideoStage._glyphSize,
+                                  delay: Duration.zero,
                                   color: roundVideoOnScrim,
                                 )
                               : const Icon(

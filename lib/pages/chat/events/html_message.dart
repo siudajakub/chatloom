@@ -4,7 +4,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/config/setting_keys.dart';
-import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/code_highlight_theme.dart';
@@ -746,9 +745,8 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        AnimatedSize(
-          duration: ChatLoomThemes.animationDuration,
-          curve: ChatLoomThemes.animationCurve,
+        // Reduced motion snaps (UI-22).
+        NotionAnimatedSize(
           alignment: AlignmentDirectional.topStart,
           child: Text.rich(
             widget.span,

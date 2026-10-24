@@ -100,6 +100,18 @@ final b = Radius.circular(2.5);
 final c = BorderRadius.circular(16);
 '''), ['radius', 'radius', 'radius', 'square-corner', 'square-corner'])
 
+    def test_fractional_legacy_radius_is_square_and_numeric(self):
+        self.assertEqual(self.hits('''
+final a = BorderRadius.circular(AppConfig.borderRadius / 3);
+final b = BorderRadius.circular(
+  AppConfig.borderRadius /
+      2,
+);
+final c = Radius.circular(AppConfig.borderRadius - 4);
+final d = BorderRadius.circular(AppConfig.borderRadius);
+final e = BorderRadius.circular(AppConfig.borderRadius / 3); // design-lint: allow test
+'''), ['radius', 'radius', 'radius', 'square-corner', 'square-corner'])
+
     def test_notion_files_are_checked_for_square_corners(self):
         self.assertEqual(self.hits('''
 final a = RoundedRectangleBorder();

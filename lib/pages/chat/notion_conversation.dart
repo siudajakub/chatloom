@@ -67,13 +67,13 @@ class NotionSendButton extends StatelessWidget {
           icon: busy
               ? NotionDelayedReveal(
                   placeholder: arrow,
-                  child: SizedBox.square(
+                  // The reveal keeps the arrow through the grace; the ring
+                  // then shows at once and rests after the loop cap.
+                  child: NotionDelayedSpinner(
                     key: const ValueKey('busy'),
-                    dimension: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: onFill,
-                    ),
+                    size: NotionSize.icon,
+                    delay: Duration.zero,
+                    color: onFill,
                   ),
                 )
               : arrow,
@@ -222,11 +222,22 @@ class _NotionAudioFileBlockState extends State<NotionAudioFileBlock> {
                             label: 'Loading audio',
                             child: Padding(
                               padding: const EdgeInsets.all(NotionSpace.sm),
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: foreground,
-                                value: widget.downloadProgress?.clamp(0.0, 1.0),
-                              ),
+                              // Unknown size: the capped spinner (it rests
+                              // after the loop cap), shown with the morph.
+                              child: widget.downloadProgress == null
+                                  ? NotionDelayedSpinner(
+                                      size: NotionSize.iconLg,
+                                      delay: Duration.zero,
+                                      color: foreground,
+                                    )
+                                  : CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: foreground,
+                                      value: widget.downloadProgress!.clamp(
+                                        0.0,
+                                        1.0,
+                                      ),
+                                    ),
                             ),
                           )
                         : IconButton(

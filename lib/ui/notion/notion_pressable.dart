@@ -243,9 +243,16 @@ class NotionTapTarget extends StatelessWidget {
       behavior: behavior,
       excludeFromSemantics: excludeFromSemantics,
       onTap: onTap,
-      onLongPress: onLongPress,
+      // A recognised long press buzzes (DESIGN.md "Haptics"); a right click
+      // does not.
+      onLongPress: onLongPress == null ? null : _longPress,
       onSecondaryTap: onSecondaryTap ?? onLongPress,
       child: child,
     ),
   );
+
+  void _longPress() {
+    NotionHaptics.longPress();
+    onLongPress?.call();
+  }
 }

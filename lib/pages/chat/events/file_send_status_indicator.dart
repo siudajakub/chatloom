@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/pages/chat/events/outgoing_upload_progress.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -38,7 +39,11 @@ class FileSendStatusIndicator extends StatelessWidget {
             ),
           },
           if (progress == null)
-            const CircularProgressIndicator(strokeWidth: 3)
+            const NotionDelayedSpinner(
+              size: 40,
+              strokeWidth: 3,
+              delay: Duration.zero,
+            )
           else
             OutgoingUploadIndicator(
               progress: progress,

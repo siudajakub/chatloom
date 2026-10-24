@@ -180,9 +180,9 @@ class _RoundRecordButtonState extends State<RoundRecordButton> {
               dimension: _size,
               child: Center(
                 child: _busy && !_heldPointerActive
-                    ? const SizedBox.square(
-                        dimension: _spinnerSize,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                    ? NotionDelayedSpinner(
+                        size: _spinnerSize,
+                        color: context.notion.palette.accent,
                       )
                     : AnimatedScale(
                         // Same press feedback as the voice button.

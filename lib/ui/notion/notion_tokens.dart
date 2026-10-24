@@ -118,6 +118,12 @@ abstract final class NotionSize {
   static const double border = 1;
   static const double dialogMaxWidth = 420;
   static const double contentMaxWidth = 720;
+
+  /// [showNotionSheet] becomes a centred dialog on desktop from this window
+  /// width (MAC-18), up to the max size below.
+  static const double sheetDialogMinWidth = 720;
+  static const double sheetDialogMaxWidth = 480;
+  static const double sheetDialogMaxHeight = 720;
 }
 
 /// Message bubble geometry (Messenger-like). A one-line bubble is about

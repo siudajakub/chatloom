@@ -195,6 +195,16 @@ abstract final class NotionMotion {
         )
       : sheetStyle;
 
+  /// Menu style honouring reduced motion (a near-instant fade instead of the
+  /// emphasized grow).
+  static AnimationStyle menuStyleOf(BuildContext context) => reduced(context)
+      ? const AnimationStyle(
+          duration: instant,
+          reverseDuration: instant,
+          curve: standard,
+        )
+      : menuStyle;
+
   /// [d], or zero under reduced motion.
   static Duration of(BuildContext context, Duration d) =>
       reduced(context) ? Duration.zero : d;
@@ -388,6 +398,10 @@ abstract final class NotionHaptics {
 
   /// Long-press recognised (context menu, reaction picker, drag start).
   static void longPress() => light();
+
+  /// A voice/round recording started (Telegram's firmer tick: the hold
+  /// became a recording).
+  static void recordStart() => unawaited(HapticFeedback.mediumImpact());
 
   /// A selection tick: the finger moved onto another choice while scrubbing
   /// (reaction bar, swipe-to-reply arming). Fires once per change, never per

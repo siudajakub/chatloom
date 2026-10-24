@@ -235,7 +235,7 @@ in new code; read `context.notion` instead.
 | `NotionButton(label:, onPressed:, variant:)` / `.primary` / `.ghost` / `.destructive` | every text button; `icon:`, `expand:`, `busy:` |
 | `NotionDialog` + `showNotionDialog(...)` / `showNotionConfirmDialog(...)` | modal questions and confirmations (glass panel, `xl` corners) |
 | `NotionDialogFrame`, `NotionAlertDialog(icon:, title:, content:, actions:)`, `NotionDialogSubmit` | the glass dialog shell, `NotionDialog` with widget slots (the replacement for `AlertDialog.adaptive`, never Cupertino on macOS), Return-to-confirm while nothing inside has focus (`notion_dialog_frame.dart`); the legacy helpers (`showOkCancelAlertDialog`, `showTextInputDialog`, `showFutureLoadingDialog`, `showModalActionPopup`) are built on them |
-| `NotionSheet` + `showNotionSheet(...)` | bottom sheets and pickers (glass panel, `sheetTop` corners) |
+| `NotionSheet` + `showNotionSheet(...)` | bottom sheets and pickers (glass panel, `sheetTop` corners). On a wide desktop window (macOS/Linux/Windows, width ≥ `NotionSize.sheetDialogMinWidth` 720) the same content opens as a centred glass dialog (`NotionDialogFrame`, ≤ 480 × 720, no drag handle, dialog motion); phones and tablets keep the bottom sheet. `asDialog:` overrides, `notionSheetAsDialog(context)` tells which |
 | `NotionEmptyState(icon:, title:, message:, action:)` | empty lists, soft errors |
 | `NotionCallout(icon:, title:, message:, actionLabel:, onAction:, onDismiss:, tone:)` | inline fixable status (inbox encryption/sync notice, connection retry); `tone` colours only the icon |
 | `NotionStatusPill(label:, tone:)` | read-only status in a row or header (network Connected / Needs attention / Disconnected); `tone` colours only the dot, changes fade through |
@@ -276,7 +276,7 @@ surfaces that stay still while content moves beneath them:
 | Composer strip (conversation) | `NotionGlassBar` behind the input row |
 | Menus and popovers (network selector, `showNotionMenu`) | `NotionGlassPanel` inside `showNotionPopover` |
 | Dialogs | `NotionDialog` (a `NotionGlassPanel` with `NotionGlass.dialogRadius`) |
-| Bottom sheets and action sheets | `showNotionSheet`, `showModalActionPopup` (a `NotionGlassPanel` with `NotionGlass.sheetRadius`) |
+| Bottom sheets and action sheets | `showNotionSheet`, `showModalActionPopup` (a `NotionGlassPanel` with `NotionGlass.sheetRadius`; on a wide desktop window `showNotionSheet` is a dialog with `NotionGlass.dialogRadius`) |
 | Floating pills over content | `NotionGlassPill(blur: true)` |
 
 An overlay (`overlay: true`, the default of `NotionGlassPanel`) keeps one
@@ -310,8 +310,9 @@ Never blur inside scrolling content (rows, bubbles, cards, chips, grid
 tiles): use the opaque roles plus the hairline, `NotionGlassPanel(blur:
 false)` or `NotionGlassPill(blur: false)` (the default). Theme-level Material
 overlays (`PopupMenuButton`, `MenuAnchor`, `AlertDialog`, `SnackBar`, legacy
-bottom sheets) cannot blur; the theme gives them the same radius, hairline and
-the dock's `surface` fill, opaque.
+bottom sheets, Material date/time pickers) cannot blur; the theme gives them
+the same radius, hairline and the dock's `surface` fill, opaque, with elevation
+0 (no shadow).
 
 ### Tokens: `context.notion.glass`
 
@@ -408,7 +409,7 @@ dialogs and sheets never bounce.
 | `pressButton` .96 · `pressIcon` .90 · `pressRow` .985 | scale | `NotionPressable` |
 | `popFrom` .6 · `dialogFrom` .94 · `popoverFrom` .92 | scale | start scales |
 | `refreshFrom` .5 | opacity | a list that changed view or network fades in from here, never from an empty frame |
-| `sheetStyle` / `sheetStyleOf(context)` · `menuStyle` | `AnimationStyle` | `showModalBottomSheet(sheetAnimationStyle:)`, `showMenu`/`PopupMenuButton(popUpAnimationStyle:)` |
+| `sheetStyle` / `sheetStyleOf(context)` · `menuStyle` / `menuStyleOf(context)` | `AnimationStyle` | `showModalBottomSheet(sheetAnimationStyle:)`, `showMenu`/`PopupMenuButton(popUpAnimationStyle:)`; the `…Of(context)` forms honour reduced motion, use them |
 | `reduced(context)` | bool | **the** reduced-motion check (Android "Remove animations", iOS Reduce Motion), also while the app is inactive (`NotionActivity`) |
 | `of(context, d)` | Duration | `d`, or zero under reduced motion |
 | `staggerFor(i)` | Duration | capped stagger delay |

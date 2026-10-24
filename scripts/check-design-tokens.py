@@ -24,6 +24,9 @@ Rules (per file, per rule counts):
                    RoundedRectangleBorder/OutlineInputBorder without a
                    borderRadius, ContinuousRectangleBorder, BeveledRectangleBorder
                    (use NotionRadius.* / NotionShapes.*; nothing is square)
+                   Also `AppConfig.borderRadius / N` (FluffyChat's fractional
+                   corners, 5.3 px at /3), which counts as radius and
+                   square-corner; other arithmetic on it counts as radius.
 
 Exempt: lib/ui/notion/ (the token source), lib/utils/code_highlight_theme.dart,
 lib/l10n/ and generated files. A line ending in `// design-lint: allow`
@@ -70,6 +73,9 @@ SQUARE = re.compile(
     r'|\b(?:ContinuousRectangleBorder|BeveledRectangleBorder)\('
     r'|\b(?:BorderRadius|Radius)\.circular\(\s*[0-5](?:\.\d+)?\s*\)'
 )
+# Arithmetic on the legacy radius constant hides a raw radius in an
+# expression (also across a line break after the operator).
+DERIVED_RADIUS = re.compile(r'\bAppConfig\.borderRadius\s*([/*+-])\s*\(?\s*\d')
 # Default radius is zero (RoundedRectangleBorder) or 4 (OutlineInputBorder).
 NEEDS_RADIUS = re.compile(r'\b(?:RoundedRectangleBorder|OutlineInputBorder)\(')
 INSETS = re.compile(r'\bEdgeInsets(?:Directional)?\.(?:all|symmetric|only|fromLTRB|fromSTEB)\(')
@@ -144,6 +150,13 @@ def scan(path, notion=False):
     allowed = {i for i, line in enumerate(lines, 1) if ALLOW in line}
     code = '\n'.join(strip_comment(line) for line in lines)
     hits = square_corners(code, allowed)
+    for match in DERIVED_RADIUS.finditer(code):
+        number = code.count('\n', 0, match.start()) + 1
+        if number in allowed:
+            continue
+        hits.append(('radius', number))
+        if match.group(1) == '/':
+            hits.append(('square-corner', number))
     if notion:
         for number, line in enumerate(code.split('\n'), 1):
             if number in allowed:

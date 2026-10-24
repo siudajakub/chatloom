@@ -2961,9 +2961,9 @@ class _MergedChatPageState extends State<_MergedChatView>
           // the dock) instead of an opaque AppBar border.
           automaticallyImplyLeading: false,
           leading: searching
-              ? IconButton(
-                  icon: const Icon(Icons.chevron_left),
-                  tooltip: 'Close search',
+              ? NotionIconButton(
+                  icon: Icons.chevron_left,
+                  label: 'Close search',
                   onPressed: () => _search?.close(),
                 )
               : columns

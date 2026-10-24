@@ -103,12 +103,10 @@ class WaitingMessageView extends StatelessWidget {
                         // Centred on the first line when the status wraps.
                         Padding(
                           padding: EdgeInsets.only(top: spinnerTop),
-                          child: SizedBox.square(
-                            dimension: _spinner,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1.5,
-                              color: muted,
-                            ),
+                          child: NotionDelayedSpinner(
+                            size: _spinner,
+                            strokeWidth: 1.5,
+                            color: muted,
                           ),
                         ),
                         const SizedBox(width: NotionSpace.xs),

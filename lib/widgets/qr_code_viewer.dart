@@ -13,7 +13,6 @@ import 'package:flutter/foundation.dart';
 import 'package:image/image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:particles_network/particles_network.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:qr_image/qr_image.dart';
 
@@ -55,38 +54,36 @@ class QrCodeViewer extends StatelessWidget {
     final theme = Theme.of(context);
     final inviteLink = 'https://matrix.to/#/$content';
     return Scaffold(
-      backgroundColor: Colors.black.withAlpha(128),
+      backgroundColor: NotionMediaColors.scrim,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         elevation: 0,
         leading: IconButton(
-          style: IconButton.styleFrom(
-            backgroundColor: Colors.black.withAlpha(128),
-          ),
+          style: IconButton.styleFrom(backgroundColor: NotionMediaColors.scrim),
           icon: const Icon(Icons.close),
           onPressed: Navigator.of(context).pop,
-          color: Colors.white,
+          color: NotionMediaColors.onScrim,
           tooltip: L10n.of(context).close,
         ),
         backgroundColor: Colors.transparent,
         actions: [
           IconButton(
             style: IconButton.styleFrom(
-              backgroundColor: Colors.black.withAlpha(128),
+              backgroundColor: NotionMediaColors.scrim,
             ),
             icon: Icon(Icons.adaptive.share_outlined),
             onPressed: () => ChatLoomShare.share(inviteLink, context),
-            color: Colors.white,
+            color: NotionMediaColors.onScrim,
             tooltip: L10n.of(context).share,
           ),
           const SizedBox(width: 8),
           IconButton(
             style: IconButton.styleFrom(
-              backgroundColor: Colors.black.withAlpha(128),
+              backgroundColor: NotionMediaColors.scrim,
             ),
             icon: const Icon(Icons.download_outlined),
             onPressed: () => _save(context),
-            color: Colors.white,
+            color: NotionMediaColors.onScrim,
             tooltip: L10n.of(context).downloadFile,
           ),
           const SizedBox(width: 8),
@@ -94,8 +91,6 @@ class QrCodeViewer extends StatelessWidget {
       ),
       body: Stack(
         children: [
-          if (!MediaQuery.disableAnimationsOf(context))
-            ParticleNetwork(maxSpeed: 0.25),
           Center(
             child: Container(
               margin: const EdgeInsets.all(32.0),

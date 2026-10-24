@@ -213,7 +213,7 @@ class ImageViewerView extends StatelessWidget {
       actions: [
         NotionMediaAction(
           label: round ? 'Forward in Telegram' : 'Forward',
-          icon: Icons.reply_outlined,
+          icon: Icons.forward_outlined,
           onPressed: canForward ? controller.forwardAction : null,
         ),
         NotionMediaAction(

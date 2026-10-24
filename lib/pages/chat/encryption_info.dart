@@ -5,11 +5,11 @@
 
 import 'dart:async';
 
-import 'package:chatloom/config/app_config.dart';
-import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_service_chip.dart';
 import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/person_location.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -39,6 +39,7 @@ class _EncryptionInfoState extends State<EncryptionInfo> {
   static const _maxAge = Duration(seconds: 30);
   Future<int>? _count;
   int _last = 0;
+  int _shown = 0;
   Object? _inputs;
   DateTime _computedAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _stale = false;
@@ -126,72 +127,52 @@ class _EncryptionInfoState extends State<EncryptionInfo> {
   @override
   Widget build(BuildContext context) {
     if (isBridgedRoom(room)) return const SizedBox.shrink();
-    final theme = Theme.of(context);
-    return AnimatedSize(
-      duration: ChatLoomThemes.animationDuration,
-      curve: ChatLoomThemes.animationCurve,
-      child: FutureBuilder(
-        future: _count,
-        initialData: _last,
-        builder: (context, asyncSnapshot) {
-          final unverifiedDevices = asyncSnapshot.data ?? _last;
-          if (unverifiedDevices == 0) return const SizedBox.shrink();
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Material(
-                  color: theme.colorScheme.surface.withAlpha(128),
-                  borderRadius: BorderRadius.circular(
-                    AppConfig.borderRadius / 3,
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8.0,
-                      vertical: 4.0,
-                    ),
-                    child: Text.rich(
-                      TextSpan(
-                        children: [
-                          WidgetSpan(
-                            child: Icon(Icons.lock_person_outlined, size: 13),
-                          ),
-                          TextSpan(text: ' '),
-                          TextSpan(
-                            text: L10n.of(
-                              context,
-                            ).countUnverifiedDevices(unverifiedDevices),
-                          ),
-                          TextSpan(text: ' '),
-                          TextSpan(
-                            style: TextStyle(
-                              color: theme.colorScheme.primary,
-                              decoration: TextDecoration.underline,
-                              decorationColor: theme.colorScheme.primary,
-                            ),
-                            recognizer: TapGestureRecognizer()
-                              ..onTap = () {
-                                // Verification there changes the count.
-                                _stale = true;
-                                context.go(
-                                  '${chatLocation(context, room.id)}/encryption',
-                                );
-                              },
-                            text: 'Check',
-                          ),
-                        ],
+    return FutureBuilder(
+      future: _count,
+      initialData: _last,
+      builder: (context, asyncSnapshot) {
+        final unverifiedDevices = asyncSnapshot.data ?? _last;
+        // The last non-zero count stays on the chip while it closes.
+        if (unverifiedDevices > 0) _shown = unverifiedDevices;
+        // UI-11: no AnimatedSize around the footer (it rebuilt with the
+        // timeline); the notice reveals only when the count appears.
+        return NotionSizeReveal(
+          visible: unverifiedDevices > 0,
+          alignment: Alignment.center,
+          child: _shown == 0
+              ? const SizedBox.shrink()
+              : ConversationServiceChip(
+                  text: TextSpan(
+                    children: [
+                      const WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Icon(
+                          Icons.lock_person_outlined,
+                          size: NotionSize.iconSm,
+                        ),
                       ),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 11),
-                    ),
+                      const TextSpan(text: ' '),
+                      TextSpan(
+                        text: L10n.of(context).countUnverifiedDevices(_shown),
+                      ),
+                      const TextSpan(text: ' '),
+                      ConversationServiceChip.link(
+                        context,
+                        recognizer: TapGestureRecognizer()
+                          ..onTap = () {
+                            // Verification there changes the count.
+                            _stale = true;
+                            context.go(
+                              '${chatLocation(context, room.id)}/encryption',
+                            );
+                          },
+                        text: 'Check',
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            ),
-          );
-        },
-      ),
+        );
+      },
     );
   }
 }

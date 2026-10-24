@@ -123,7 +123,8 @@ abstract final class NotionTheme {
     final menuStyle = MenuStyle(
       backgroundColor: WidgetStatePropertyAll(surface),
       surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-      elevation: const WidgetStatePropertyAll(2),
+      // Flat with the glass hairline (DESIGN.md: no elevation shadows).
+      elevation: const WidgetStatePropertyAll(0),
       shape: WidgetStatePropertyAll(overlayShape),
       // Items sit inset so their rounded highlight clears the menu corners.
       padding: const WidgetStatePropertyAll(
@@ -134,6 +135,19 @@ abstract final class NotionTheme {
         WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected) ? on : off,
         );
+    final pickerShape = NotionShapes.xl.copyWith(side: hairline);
+    final pickerCancel = TextButton.styleFrom(
+      foregroundColor: secondary,
+      textStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
+      shape: pill,
+    );
+    final pickerConfirm = TextButton.styleFrom(
+      backgroundColor: fill,
+      foregroundColor: onFill,
+      textStyle: t.callout.copyWith(fontWeight: FontWeight.w500),
+      padding: const EdgeInsets.symmetric(horizontal: NotionSpace.md),
+      shape: pill,
+    );
     return ThemeData(
       useMaterial3: true,
       fontFamily: 'Roboto',
@@ -240,7 +254,7 @@ abstract final class NotionTheme {
       popupMenuTheme: PopupMenuThemeData(
         color: surface,
         surfaceTintColor: Colors.transparent,
-        elevation: 2,
+        elevation: 0,
         shape: overlayShape,
         menuPadding: const EdgeInsets.symmetric(vertical: NotionSpace.xxs + 2),
         textStyle: t.callout,
@@ -263,6 +277,81 @@ abstract final class NotionTheme {
       dropdownMenuTheme: DropdownMenuThemeData(
         textStyle: t.callout,
         menuStyle: menuStyle,
+      ),
+      // Material date/time pickers (Remind me, Send later, history search):
+      // the dialog's flat surface with the glass hairline, the accent for the
+      // chosen day/hand, pill actions (ghost cancel, primary confirm).
+      datePickerTheme: DatePickerThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        elevation: 0,
+        shape: pickerShape,
+        headerBackgroundColor: surface,
+        headerForegroundColor: text,
+        headerHeadlineStyle: t.heading,
+        headerHelpStyle: t.footnoteMuted,
+        weekdayStyle: t.captionMuted,
+        dayStyle: t.callout,
+        dayForegroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? onFill
+              : states.contains(WidgetState.disabled)
+              ? c.textTertiary
+              : text,
+        ),
+        dayBackgroundColor: selectedFill(fill, Colors.transparent),
+        dayOverlayColor: WidgetStatePropertyAll(text.withValues(alpha: .06)),
+        dayShape: const WidgetStatePropertyAll(CircleBorder()),
+        todayForegroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? onFill : accent,
+        ),
+        todayBackgroundColor: selectedFill(fill, Colors.transparent),
+        todayBorder: BorderSide(color: accent),
+        yearStyle: t.callout,
+        yearForegroundColor: selectedFill(onFill, text),
+        yearBackgroundColor: selectedFill(fill, Colors.transparent),
+        yearOverlayColor: WidgetStatePropertyAll(text.withValues(alpha: .06)),
+        yearShape: const WidgetStatePropertyAll(pill),
+        rangePickerBackgroundColor: background,
+        rangePickerElevation: 0,
+        rangePickerSurfaceTintColor: Colors.transparent,
+        rangePickerHeaderBackgroundColor: background,
+        rangePickerHeaderForegroundColor: text,
+        rangeSelectionBackgroundColor: tint,
+        dividerColor: border,
+        subHeaderForegroundColor: secondary,
+        inputDecorationTheme: inputTheme,
+        cancelButtonStyle: pickerCancel,
+        confirmButtonStyle: pickerConfirm,
+      ),
+      timePickerTheme: TimePickerThemeData(
+        backgroundColor: surface,
+        elevation: 0,
+        shape: pickerShape,
+        helpTextStyle: t.footnoteMuted,
+        dialBackgroundColor: selected,
+        dialHandColor: fill,
+        dialTextColor: WidgetStateColor.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? onFill : text,
+        ),
+        dialTextStyle: t.callout,
+        hourMinuteColor: WidgetStateColor.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? tint : selected,
+        ),
+        hourMinuteTextColor: text,
+        hourMinuteShape: NotionShapes.md,
+        dayPeriodBorderSide: borderSide,
+        dayPeriodShape: NotionShapes.md,
+        dayPeriodTextColor: WidgetStateColor.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? text : secondary,
+        ),
+        dayPeriodTextStyle: t.callout,
+        entryModeIconColor: secondary,
+        timeSelectorSeparatorColor: WidgetStatePropertyAll(secondary),
+        inputDecorationTheme: inputTheme,
+        cancelButtonStyle: pickerCancel,
+        confirmButtonStyle: pickerConfirm,
       ),
       iconTheme: IconThemeData(color: text, size: NotionSize.iconMd),
       inputDecorationTheme: inputTheme,

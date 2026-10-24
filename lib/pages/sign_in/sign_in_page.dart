@@ -233,8 +233,7 @@ class SignInPage extends StatelessWidget {
               ],
             ),
           ),
-          bottomNavigationBar: AnimatedSize(
-            duration: NotionMotion.medium,
+          bottomNavigationBar: NotionAnimatedSize(
             curve: NotionMotion.emphasized,
             child:
                 selectedHomserver == null ||

@@ -280,14 +280,13 @@ class RoundVideoView extends StatelessWidget {
                   ),
                 // Painted after the × so the ring stays visible around it.
                 if (indeterminate)
+                  // Shown with the × at once; rests after the loop cap.
                   const IgnorePointer(
-                    child: SizedBox.square(
+                    child: NotionDelayedSpinner(
                       key: ValueKey('round-download-spinner'),
-                      dimension: _spinnerSize,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: roundVideoOnScrim,
-                      ),
+                      size: _spinnerSize,
+                      delay: Duration.zero,
+                      color: roundVideoOnScrim,
                     ),
                   ),
                 if (upload != null)

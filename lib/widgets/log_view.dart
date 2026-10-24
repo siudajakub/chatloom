@@ -45,7 +45,7 @@ class LogViewerState extends State<LogViewer> {
           ),
           PopupMenuButton<Level>(
             useRootNavigator: true,
-            popUpAnimationStyle: NotionMotion.menuStyle,
+            popUpAnimationStyle: NotionMotion.menuStyleOf(context),
             itemBuilder: (context) => Level.values
                 .map(
                   (level) => PopupMenuItem(

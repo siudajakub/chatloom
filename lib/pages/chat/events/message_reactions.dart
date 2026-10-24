@@ -189,7 +189,10 @@ class _MessageReactionsState extends State<MessageReactions> {
               toggle: true,
               strict: strict,
             ),
-            onLongPress: () => _showReactors(context, client: client, entry: r),
+            onLongPress: () {
+              NotionHaptics.longPress();
+              _showReactors(context, client: client, entry: r);
+            },
           ),
       ],
     );

@@ -707,10 +707,14 @@ class NotionDelayedSpinner extends StatefulWidget {
     this.color,
     this.delay = NotionMotion.loaderGrace,
     this.maxSpin = NotionMotion.loopCap,
+    this.semanticsLabel,
   });
 
   final double size;
   final double strokeWidth;
+
+  /// Read by screen readers instead of the indicator's default.
+  final String? semanticsLabel;
 
   /// Defaults to `context.notion.colors.textSecondary`.
   final Color? color;
@@ -755,13 +759,18 @@ class _NotionDelayedSpinnerState extends State<NotionDelayedSpinner>
     child: TickerMode(
       // Muting the indicator's own ticker keeps its last frame on screen.
       enabled: !_rested,
-      child: NotionDelayedReveal(
-        delay: widget.delay,
-        child: CircularProgressIndicator(
-          strokeWidth: widget.strokeWidth,
-          color: widget.color ?? context.notion.colors.textSecondary,
-        ),
-      ),
+      // A zero [delay] shows the ring on the first frame (the wait is
+      // already visible elsewhere, e.g. a busy send glyph or a loader that
+      // appeared after its own grace); only [maxSpin] applies then.
+      child: widget.delay == Duration.zero
+          ? _ring
+          : NotionDelayedReveal(delay: widget.delay, child: _ring),
     ),
+  );
+
+  Widget get _ring => CircularProgressIndicator(
+    strokeWidth: widget.strokeWidth,
+    color: widget.color ?? context.notion.colors.textSecondary,
+    semanticsLabel: widget.semanticsLabel,
   );
 }

@@ -11,11 +11,11 @@ import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/stale_recordings.dart';
 import 'package:chatloom/personal/media/voice_format.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as path_lib;
@@ -259,7 +259,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       setState(() => duration = Duration.zero);
       _subscribe();
       _listenToRecorderState(generation, session);
-      unawaited(_haptic(HapticFeedback.mediumImpact));
+      NotionHaptics.recordStart();
     } catch (_) {
       if (mounted && generation == _generation) {
         _showError();
@@ -384,12 +384,6 @@ class RecordingViewModelState extends State<RecordingViewModel> {
     }
   }
 
-  static Future<void> _haptic(Future<void> Function() feedback) async {
-    try {
-      await feedback();
-    } catch (_) {}
-  }
-
   void _stopSampling() {
     ++_sampleGeneration;
     _recorderSubscription?.cancel();
@@ -420,7 +414,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
 
   /// Discards the recording immediately (slide-to-cancel, too short holds).
   void cancel() {
-    if (_session != null) unawaited(_haptic(HapticFeedback.lightImpact));
+    if (_session != null) NotionHaptics.light();
     setState(_reset);
   }
 
@@ -551,7 +545,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       await _setAwake(false);
       if (!_current(generation, session)) return;
       if (path == null) throw StateError('Recording failed');
-      unawaited(_haptic(HapticFeedback.lightImpact));
+      NotionHaptics.send();
       // Keep the recorded file and source-bound callback until the normal send
       // path accepts it. A failed send remains available for explicit retry.
       final accepted = await onSend(

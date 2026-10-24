@@ -149,7 +149,7 @@ class _PassphraseCheckListTile extends StatelessWidget {
         ),
         Expanded(
           child: AnimatedDefaultTextStyle(
-            duration: NotionMotion.quick,
+            duration: NotionMotion.of(context, NotionMotion.quick),
             curve: NotionMotion.standard,
             style: context.notion.typography.footnote.copyWith(
               color: checked ? colors.text : colors.textSecondary,

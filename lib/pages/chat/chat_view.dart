@@ -143,36 +143,38 @@ class ChatView extends StatelessWidget {
                 extendBodyBehindAppBar: true,
                 appBar: AppBar(
                   backgroundColor: Colors.transparent,
+                  // UI-20: the glass bar draws the translucent hairline
+                  // (like the merged header and the dock); a thread keeps
+                  // the glass and tints it with the accent.
                   flexibleSpace: NotionGlassBar(
+                    hairlineBottom: true,
                     tint: controller.activeThreadId != null
-                        ? theme.colorScheme.secondaryContainer
+                        ? context.notion.palette.accentTint.withValues(
+                            alpha: context.notion.glass.tint.a,
+                          )
                         : null,
                   ),
                   toolbarHeight: NotionTokens.headerHeight,
                   elevation: 0,
                   scrolledUnderElevation: 0,
-                  shape: Border(
-                    bottom: BorderSide(color: theme.colorScheme.outlineVariant),
-                  ),
                   automaticallyImplyLeading: false,
                   leading: searching
-                      ? IconButton(
-                          icon: const Icon(Icons.chevron_left),
-                          tooltip: 'Close search',
+                      ? NotionIconButton(
+                          icon: Icons.chevron_left,
+                          label: 'Close search',
                           onPressed: controller.closeSearch,
                         )
                       : activeThreadId != null
-                      ? IconButton(
-                          icon: const Icon(Icons.close),
+                      ? NotionIconButton(
+                          icon: Icons.close,
+                          label: L10n.of(context).backToMainChat,
                           onPressed: controller.closeThread,
-                          tooltip: L10n.of(context).backToMainChat,
-                          color: theme.colorScheme.onSecondaryContainer,
                         )
                       : ChatLoomThemes.isColumnMode(context)
                       ? null
-                      : IconButton(
-                          icon: const Icon(Icons.chevron_left),
-                          tooltip: 'Back',
+                      : NotionIconButton(
+                          icon: Icons.chevron_left,
+                          label: 'Back',
                           onPressed: () => Navigator.maybePop(context),
                         ),
                   titleSpacing:

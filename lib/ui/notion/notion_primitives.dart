@@ -96,12 +96,17 @@ class NotionScaffold extends StatelessWidget {
         flexibleSpace: glassHeader ? const NotionGlassBar() : null,
         leading: onBack == null
             ? null
-            : IconButton(
-                tooltip:
-                    backLabel ??
-                    MaterialLocalizations.of(context).backButtonTooltip,
-                onPressed: onBack,
-                icon: const Icon(Icons.chevron_left),
+            // The press motion of `NotionIconButton` (UI-20), like the
+            // conversation and Settings headers.
+            : NotionPressable(
+                scale: NotionMotion.pressIcon,
+                child: IconButton(
+                  tooltip:
+                      backLabel ??
+                      MaterialLocalizations.of(context).backButtonTooltip,
+                  onPressed: onBack,
+                  icon: const Icon(Icons.chevron_left),
+                ),
               ),
         title: title == null ? null : Text(title!),
         actions: [
@@ -238,10 +243,13 @@ class NotionButton extends StatelessWidget {
     };
     final child = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis);
     final glyph = busy
-        ? SizedBox.square(
+        // The glyph morphs at once (the button is disabled while busy), so
+        // the ring has no grace; it rests after the loop cap (UI-13).
+        ? NotionDelayedSpinner(
             key: const ValueKey('busy'),
-            dimension: NotionSize.iconSm,
-            child: CircularProgressIndicator(strokeWidth: 2, color: foreground),
+            size: NotionSize.iconSm,
+            delay: Duration.zero,
+            color: foreground,
           )
         : icon == null
         ? null
@@ -404,7 +412,16 @@ class NotionSheet extends StatelessWidget {
   final String? title;
   final Widget child;
 
-  const NotionSheet({super.key, this.title, required this.child});
+  /// The drag handle; off when the sheet is shown as a centred dialog on a
+  /// wide desktop window (nothing to drag there).
+  final bool showHandle;
+
+  const NotionSheet({
+    super.key,
+    this.title,
+    required this.child,
+    this.showHandle = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -416,17 +433,18 @@ class NotionSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: NotionSpace.xxs,
-                margin: const EdgeInsets.only(bottom: NotionSpace.sm),
-                decoration: BoxDecoration(
-                  color: tokens.colors.border,
-                  borderRadius: NotionRadius.pillAll,
+            if (showHandle)
+              Center(
+                child: Container(
+                  width: 36,
+                  height: NotionSpace.xxs,
+                  margin: const EdgeInsets.only(bottom: NotionSpace.sm),
+                  decoration: BoxDecoration(
+                    color: tokens.colors.border,
+                    borderRadius: NotionRadius.pillAll,
+                  ),
                 ),
               ),
-            ),
             if (title != null)
               NotionEntrance(
                 afterRoute: false,
@@ -455,29 +473,78 @@ class NotionSheet extends StatelessWidget {
 }
 
 /// Presents [builder] inside a [NotionSheet].
+///
+/// Phones and tablets get the glass bottom sheet. A wide desktop window
+/// (macOS, Linux, Windows at [NotionSize.sheetDialogMinWidth] or more) shows
+/// the same content as a centred glass dialog ([NotionDialogFrame], at most
+/// [NotionSize.sheetDialogMaxWidth] × [NotionSize.sheetDialogMaxHeight]) with
+/// the dialog motion: a sheet sliding up from the bottom edge of a 1100 px
+/// window reads as a phone port (MAC-18). [asDialog] overrides the choice.
 Future<T?> showNotionSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   String? title,
   bool isDismissible = true,
-}) => showModalBottomSheet<T>(
-  context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
-  isDismissible: isDismissible,
-  showDragHandle: false,
-  sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
-  constraints: const BoxConstraints(maxWidth: NotionSize.contentMaxWidth),
-  // The sheet is a glass panel: it blurs once settled and paints the opaque
-  // tint while it slides or is dragged.
-  backgroundColor: Colors.transparent,
-  elevation: 0,
-  shape: NotionShapes.sheet,
-  builder: (context) => NotionGlassPanel(
-    borderRadius: NotionGlass.sheetRadius,
-    child: NotionSheet(title: title, child: builder(context)),
-  ),
-);
+  bool? asDialog,
+}) {
+  if (asDialog ?? notionSheetAsDialog(context)) {
+    return showNotionCustomDialog<T>(
+      context: context,
+      barrierDismissible: isDismissible,
+      // The same navigator as the bottom sheet, so callers that pop through
+      // an outer context behave the same in both presentations.
+      useRootNavigator: false,
+      builder: (context) => NotionDialogFrame(
+        padding: EdgeInsets.zero,
+        maxWidth: NotionSize.sheetDialogMaxWidth,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxHeight: NotionSize.sheetDialogMaxHeight,
+          ),
+          child: NotionSheet(
+            title: title,
+            showHandle: false,
+            child: builder(context),
+          ),
+        ),
+      ),
+    );
+  }
+  return showModalBottomSheet<T>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    isDismissible: isDismissible,
+    showDragHandle: false,
+    sheetAnimationStyle: NotionMotion.sheetStyleOf(context),
+    constraints: const BoxConstraints(maxWidth: NotionSize.contentMaxWidth),
+    // The sheet is a glass panel: it blurs once settled and paints the opaque
+    // tint while it slides or is dragged.
+    backgroundColor: Colors.transparent,
+    elevation: 0,
+    shape: NotionShapes.sheet,
+    builder: (context) => NotionGlassPanel(
+      borderRadius: NotionGlass.sheetRadius,
+      child: NotionSheet(title: title, child: builder(context)),
+    ),
+  );
+}
+
+/// Whether [showNotionSheet] presents as a centred dialog here: a pointer
+/// platform (macOS, Linux, Windows) with a window at least
+/// [NotionSize.sheetDialogMinWidth] wide.
+bool notionSheetAsDialog(BuildContext context) {
+  switch (Theme.of(context).platform) {
+    case TargetPlatform.macOS:
+    case TargetPlatform.linux:
+    case TargetPlatform.windows:
+      return MediaQuery.sizeOf(context).width >= NotionSize.sheetDialogMinWidth;
+    case TargetPlatform.android:
+    case TargetPlatform.iOS:
+    case TargetPlatform.fuchsia:
+      return false;
+  }
+}
 
 /// Centred placeholder for empty lists, missing content and soft errors.
 class NotionEmptyState extends StatelessWidget {
