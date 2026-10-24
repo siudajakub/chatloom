@@ -112,11 +112,11 @@ void main() {
     test('macOS save panel opens in the real Downloads', () {
       expect(
         macDownloadsDirectory(
-          '/Users/j/Library/Containers/pl.personal.chatloom/Data',
+          '/Users/example/Library/Containers/pl.personal.chatloom/Data',
         ),
-        '/Users/j/Downloads',
+        '/Users/example/Downloads',
       );
-      expect(macDownloadsDirectory('/Users/j'), '/Users/j/Downloads');
+      expect(macDownloadsDirectory('/Users/example'), '/Users/example/Downloads');
       expect(macDownloadsDirectory(null), isNull);
     });
   });
