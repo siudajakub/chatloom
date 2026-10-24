@@ -9,8 +9,7 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat_timeline_preload.dart';
 import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
-import 'package:chatloom/pages/chat_list/chat_list_body.dart'
-    show InboxRowMemo;
+import 'package:chatloom/pages/chat_list/chat_list_body.dart' show InboxRowMemo;
 import 'package:chatloom/pages/chat_list/chat_list_item.dart'
     show notionInboxAvatar;
 import 'package:chatloom/pages/chat_list/chat_list_view.dart';
@@ -171,14 +170,25 @@ List<Room> inboxSources(PersonalClient owner, Room room) {
 /// gets a manual read marker through the privacy filter (the same rule as
 /// the chat's own "Mark as read": incognito allows an explicit action, the
 /// receipt is public only when public receipts are on) and loses a manual
-/// unread flag (room account data, no receipt).
-Future<void> markInboxRowRead(PersonalClient owner, Room room) async {
+/// unread flag (room account data, no receipt). [privateReceipt] keeps the
+/// receipt private whatever the receipt setting says (bulk "Mark all as
+/// read" under incognito, FX-17).
+Future<void> markInboxRowRead(
+  PersonalClient owner,
+  Room room, {
+  bool privateReceipt = false,
+}) async {
   for (final source in inboxSources(owner, room)) {
     if (source.membership != Membership.join || !source.isUnread) continue;
     if (source.markedUnread) await source.markUnread(false);
     final id = source.lastEvent?.eventId;
     if (source.notificationCount > 0 && id != null) {
-      await PersonalPrivacy.markRead(source, id, manual: true);
+      await PersonalPrivacy.markRead(
+        source,
+        id,
+        manual: true,
+        privateReceipt: privateReceipt,
+      );
     }
   }
 }
@@ -728,11 +738,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
           ),
           failure: 'Couldn’t mute the chat. Check private sync and try again.',
           done: muteLabel(choice),
-          undo: () => NotionMetadataActions.setMuted(
-            owner,
-            target,
-            muted: false,
-          ),
+          undo: () =>
+              NotionMetadataActions.setMuted(owner, target, muted: false),
         );
         return;
       case ChatMenuAction.unmute:
@@ -782,10 +789,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
           owner,
           account,
           () => write(
-            {
-              ...?previous,
-              ...updated.toJson(),
-            }.cast<String, dynamic>(),
+            {...?previous, ...updated.toJson()}.cast<String, dynamic>(),
           ),
           failure: ignored
               ? 'Couldn’t restore the chat. Check private sync and try again.'
@@ -984,6 +988,88 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         .length;
     _unreadKey = key;
     return _unreadChats;
+  }
+
+  /// "Mark all as read" for the current view and network (FX-17, Telegram's
+  /// folder action): every unread row through [markInboxRowRead], i.e.
+  /// manual read markers through the privacy filter, private receipts while
+  /// incognito. Applied at once with Undo, which puts the manual unread dot
+  /// back on those rows (a read marker cannot be taken back).
+  void markViewRead() {
+    final personal = this.personal;
+    final rows = [
+      for (final room in filterRooms())
+        if (room.membership == Membership.join &&
+            inboxSources(personal, room).any(
+              (source) =>
+                  source.membership == Membership.join && source.isUnread,
+            ))
+          room,
+    ];
+    if (rows.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('No unread chats in this view.')),
+        );
+      return;
+    }
+    final incognito = AppSettings.personalIncognito.value;
+    _runChange(
+      personal,
+      inboxAccountKey,
+      () async {
+        // One failing chat does not stop the others.
+        Object? error;
+        for (final room in rows) {
+          try {
+            await markInboxRowRead(personal, room, privateReceipt: incognito);
+          } catch (e) {
+            error ??= e;
+          }
+        }
+        if (error != null) throw error;
+      },
+      failure: 'Couldn’t mark every chat as read. Try again.',
+      done: rows.length == 1
+          ? '1 chat marked as read'
+          : '${rows.length} chats marked as read',
+      undo: () async {
+        for (final room in rows) {
+          await markInboxRowUnread(personal, room);
+        }
+      },
+    );
+  }
+
+  /// Saves the order the user dragged the pinned cards into (FX-17): pin
+  /// orders live in the private store (`org:<entity>.pinOrder`). The
+  /// carousel already shows the new order; a failure explains itself and
+  /// completes with the error, so the pins fall back to the stored order.
+  Future<void> reorderPins(List<String> entities) {
+    final owner = personal;
+    final account = inboxAccountKey;
+    final messenger = ScaffoldMessenger.of(context);
+    return NotionMetadataActions.reorderPins(owner, entities).then(
+      (_) {
+        if (_sameInbox(owner, account)) _refreshInbox();
+      },
+      onError: (Object error) {
+        if (_sameInbox(owner, account)) {
+          _refreshInbox();
+          messenger
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Couldn’t move the pinned chat. Check private sync and try again.',
+                ),
+              ),
+            );
+        }
+        throw error;
+      },
+    );
   }
 
   /// Runs a private change without blocking the UI: the inbox shows it as

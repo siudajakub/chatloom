@@ -24,6 +24,7 @@ import 'package:chatloom/pages/chat/conversation_source_picker.dart';
 import 'package:chatloom/pages/chat/event_info_dialog.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
+import 'package:chatloom/pages/chat/message_link_actions.dart';
 import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/pages/chat/reply_display.dart';
 import 'package:chatloom/pages/chat/send_file_dialog.dart';
@@ -1527,6 +1528,8 @@ class _MergedChatPageState extends State<_MergedChatView>
           label: l10n.copy,
           onSelected: () => _copy(event),
         ),
+      // FX-20: Telegram's link sheet "Copy link".
+      ...messageLinkActions(this.context, display),
       if (conversationMessageSelectable(display))
         ConversationMessageAction(
           icon: Icons.text_fields_rounded,

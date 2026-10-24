@@ -27,6 +27,12 @@ class NotionInboxPage extends StatelessWidget {
   final InboxFilter selectedView;
   final ValueChanged<InboxFilter>? onViewSelected;
   final VoidCallback? onManageNetworks;
+
+  /// "Mark all as read" in the dock's "Show chats" menu (FX-17).
+  final VoidCallback? onMarkAllRead;
+
+  /// New order of the pin keys after a drag (FX-17); null: pins stay put.
+  final Future<void> Function(List<String> keys)? onReorderPins;
   final ScrollController? scrollController;
   final Widget? status;
 
@@ -53,6 +59,8 @@ class NotionInboxPage extends StatelessWidget {
     this.selectedView = InboxFilter.inbox,
     this.onViewSelected,
     this.onManageNetworks,
+    this.onMarkAllRead,
+    this.onReorderPins,
     this.scrollController,
     this.status,
     this.headerStatus,
@@ -136,7 +144,10 @@ class NotionInboxPage extends StatelessWidget {
                           padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                           child: NotionEntrance(
                             rise: NotionMotion.riseList,
-                            child: NotionPinnedShortcuts(pins: pins),
+                            child: NotionPinnedShortcuts(
+                              pins: pins,
+                              onReorder: onReorderPins,
+                            ),
                           ),
                         )
                       : null,
@@ -232,6 +243,7 @@ class NotionInboxPage extends StatelessWidget {
             selectedView: selectedView,
             onViewSelected: onViewSelected,
             onManageNetworks: onManageNetworks,
+            onMarkAllRead: onMarkAllRead,
           ),
         ),
       ),

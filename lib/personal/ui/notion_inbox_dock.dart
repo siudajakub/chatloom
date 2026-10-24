@@ -29,6 +29,7 @@ class NotionInboxDock extends StatefulWidget {
   final InboxFilter selectedView;
   final ValueChanged<InboxFilter>? onViewSelected;
   final VoidCallback? onManageNetworks;
+  final VoidCallback? onMarkAllRead;
   const NotionInboxDock({
     super.key,
     required this.onSettings,
@@ -39,6 +40,7 @@ class NotionInboxDock extends StatefulWidget {
     this.selectedView = InboxFilter.inbox,
     this.onViewSelected,
     this.onManageNetworks,
+    this.onMarkAllRead,
   });
   @override
   State<NotionInboxDock> createState() => _NotionInboxDockState();
@@ -67,6 +69,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
       selectedView: widget.selectedView,
       onViewSelected: widget.onViewSelected,
       onManageNetworks: widget.onManageNetworks,
+      onMarkAllRead: widget.onMarkAllRead,
     );
     if (!mounted) return;
     setState(() => _expanded = false);

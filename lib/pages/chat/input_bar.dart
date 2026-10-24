@@ -7,14 +7,16 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
+import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
+import 'package:chatloom/personal/mention_suggestions.dart';
+import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/utils/markdown_context_builder.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:slugify/slugify.dart';
 
 import '../../widgets/avatar.dart';
 import '../../widgets/matrix.dart';
@@ -156,61 +158,55 @@ class InputBar extends StatelessWidget {
         }
       }
     }
-    final userMatch = RegExp(r'(?:\s|^)@([-\w]+)$').firstMatch(searchText);
+    // FX-08: any script and diacritics ("@Łu", "@zan" finds "Żaneta"), on
+    // word starts of the name or private nickname; not the own account or
+    // bridge bots (lib/personal/mention_suggestions.dart).
+    final userMatch = mentionQueryPattern.firstMatch(searchText);
     if (userMatch != null) {
-      final userSearch = userMatch[1]!.toLowerCase();
-      for (final user in room.getParticipants()) {
-        if ((user.displayName != null &&
-                (user.displayName!.toLowerCase().contains(userSearch) ||
-                    slugify(
-                      user.displayName!.toLowerCase(),
-                    ).contains(userSearch))) ||
-            user.id.localpart!.toLowerCase().contains(userSearch)) {
-          ret.add({
-            'type': 'user',
-            'mxid': user.id,
-            'mention': user.mention,
-            'displayname': user.displayName,
-            'avatar_url': user.avatarUrl?.toString(),
-          });
-        }
-        if (ret.length > maxResults) {
-          break;
+      String? privateName;
+      if (room.isDirectChat) {
+        try {
+          privateName = InboxProjection.snapshot(
+            PersonalClient.of(room.client),
+          ).displayName(room);
+        } catch (_) {
+          privateName = null; // no private store (tests, signed out)
         }
       }
+      for (final candidate in mentionSuggestions(
+        room,
+        userMatch[1]!,
+        privateName: privateName,
+        limit: maxResults - ret.length,
+      )) {
+        final user = candidate.user;
+        ret.add({
+          'type': 'user',
+          'mxid': user.id,
+          'mention': user.mention,
+          'displayname': user.calcDisplayname(),
+          'avatar_url': user.avatarUrl?.toString(),
+        });
+      }
     }
-    final roomMatch = RegExp(r'(?:\s|^)#([-\w]+)$').firstMatch(searchText);
+    // `#` only in native Matrix chats, only rooms with an alias: a raw room
+    // ID never ends up in a message, and a bridged chat never gets a Matrix
+    // room link its network cannot open.
+    final roomMatch = roomSuggestionsAllowed(room)
+        ? roomQueryPattern.firstMatch(searchText)
+        : null;
     if (roomMatch != null) {
-      final roomSearch = roomMatch[1]!.toLowerCase();
-      for (final r in room.client.rooms) {
-        if (r.getState(EventTypes.RoomTombstone) != null) {
-          continue; // we don't care about tombstoned rooms
-        }
-        final state = r.getState(EventTypes.RoomCanonicalAlias);
-        if ((state != null &&
-                ((state.content['alias'] is String &&
-                        state.content
-                            .tryGet<String>('alias')!
-                            .localpart!
-                            .toLowerCase()
-                            .contains(roomSearch)) ||
-                    (state.content['alt_aliases'] is List &&
-                        (state.content['alt_aliases'] as List).any(
-                          (l) =>
-                              l is String &&
-                              l.localpart!.toLowerCase().contains(roomSearch),
-                        )))) ||
-            (r.name.toLowerCase().contains(roomSearch))) {
-          ret.add({
-            'type': 'room',
-            'mxid': (r.canonicalAlias.isNotEmpty) ? r.canonicalAlias : r.id,
-            'displayname': r.getLocalizedDisplayname(),
-            'avatar_url': r.avatar?.toString(),
-          });
-        }
-        if (ret.length > maxResults) {
-          break;
-        }
+      for (final r in roomSuggestions(
+        room.client,
+        roomMatch[1]!,
+        limit: maxResults - ret.length,
+      )) {
+        ret.add({
+          'type': 'room',
+          'mxid': r.canonicalAlias,
+          'displayname': r.getLocalizedDisplayname(),
+          'avatar_url': r.avatar?.toString(),
+        });
       }
     }
     return ret;
@@ -372,14 +368,14 @@ class InputBar extends StatelessWidget {
     if (suggestion['type'] == 'user') {
       insertText = '${suggestion['mention']!} ';
       startText = replaceText.replaceAllMapped(
-        RegExp(r'(\s|^)(@[-\w]+)$'),
+        mentionTokenPattern,
         (Match m) => '${m[1]}$insertText',
       );
     }
     if (suggestion['type'] == 'room') {
       insertText = '${suggestion['mxid']!} ';
       startText = replaceText.replaceAllMapped(
-        RegExp(r'(\s|^)(#[-\w]+)$'),
+        roomTokenPattern,
         (Match m) => '${m[1]}$insertText',
       );
     }

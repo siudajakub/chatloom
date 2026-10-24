@@ -45,6 +45,7 @@ class ChatListViewBody extends StatelessWidget {
                         controller.chatContextAction(room, context),
                     order: projection.metadataFor(room).pinOrder!,
                     isGroup: !room.isDirectChatForDisplay,
+                    id: projection.entityFor(room),
                   ),
                 )
                 .toList();
@@ -132,6 +133,8 @@ class ChatListViewBody extends StatelessWidget {
           onViewSelected: (view) => controller.setPersonalFilter(view, null),
           onManageNetworks: () => context.push('/rooms/settings/networks'),
           onNetworkSelected: controller.setNetwork,
+          onMarkAllRead: controller.markViewRead,
+          onReorderPins: controller.reorderPins,
         );
       },
     );

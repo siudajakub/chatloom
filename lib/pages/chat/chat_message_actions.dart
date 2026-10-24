@@ -6,6 +6,7 @@ import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
+import 'package:chatloom/pages/chat/message_link_actions.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -101,6 +102,8 @@ List<ConversationMessageAction> chatMessageActions(
         label: l10n.copy,
         onSelected: () => controller.copyEventAction(event),
       ),
+    // FX-20: Telegram's link sheet "Copy link".
+    ...messageLinkActions(controller.context, display),
     if (conversationMessageSelectable(display))
       ConversationMessageAction(
         icon: Icons.text_fields_rounded,

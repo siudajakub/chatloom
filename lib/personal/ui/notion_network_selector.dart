@@ -158,6 +158,7 @@ Future<String?> showNotionNetworkSelector(
   InboxFilter selectedView = InboxFilter.inbox,
   ValueChanged<InboxFilter>? onViewSelected,
   VoidCallback? onManageNetworks,
+  VoidCallback? onMarkAllRead,
 }) {
   // Grow from the dock pill: the reveal origin is the middle of the pill's
   // top edge, in the root navigator's coordinates (the same space as
@@ -240,6 +241,12 @@ Future<String?> showNotionNetworkSelector(
                                     Navigator.of(context).pop();
                                     onManageNetworks();
                                   },
+                            onMarkAllRead: onMarkAllRead == null
+                                ? null
+                                : () {
+                                    Navigator.of(context).pop();
+                                    onMarkAllRead();
+                                  },
                             onSelected: (network) {
                               onSelected(network);
                               Navigator.of(context).pop(network);
@@ -266,6 +273,10 @@ class NotionNetworkMenu extends StatelessWidget {
   final InboxFilter selectedView;
   final ValueChanged<InboxFilter>? onViewSelected;
   final VoidCallback? onManageNetworks;
+
+  /// Marks every chat of the current view and network read (FX-17,
+  /// Telegram's folder "Mark as read").
+  final VoidCallback? onMarkAllRead;
   const NotionNetworkMenu({
     super.key,
     required this.networks,
@@ -274,6 +285,7 @@ class NotionNetworkMenu extends StatelessWidget {
     this.selectedView = InboxFilter.inbox,
     this.onViewSelected,
     this.onManageNetworks,
+    this.onMarkAllRead,
   });
   @override
   Widget build(BuildContext context) => Column(
@@ -335,6 +347,15 @@ class NotionNetworkMenu extends StatelessWidget {
         leading: const Icon(Icons.tune),
         title: 'Manage networks',
         onTap: onManageNetworks,
+      ),
+    ],
+    if (onMarkAllRead != null) ...[
+      const NotionGlassDivider(vertical: false),
+      NotionGlassMenuRow(
+        key: const ValueKey('notion_mark_all_read'),
+        leading: const Icon(Icons.done_all),
+        title: 'Mark all as read',
+        onTap: onMarkAllRead,
       ),
     ],
     const SizedBox(height: NotionSpace.xxs + 2),
