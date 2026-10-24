@@ -7,6 +7,7 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/settings_notifications/push_rule_extensions.dart';
+import 'package:chatloom/personal/push_rule_mirror.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/personal/ui/push_diagnostics_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -58,7 +59,12 @@ class SettingsNotificationsView extends StatelessWidget {
         ),
       );
     }
-    final pushRules = Matrix.of(context).client.globalPushRules;
+    // ChatLoom's own per-chat mute rules follow the chat's mute and are
+    // changed there, not in this list (push_rule_mirror.dart).
+    final allPushRules = Matrix.of(context).client.globalPushRules;
+    final pushRules = allPushRules == null
+        ? null
+        : withoutChatLoomRules(allPushRules);
     final pushCategories = [
       if (pushRules?.override?.isNotEmpty ?? false)
         (rules: pushRules?.override ?? [], kind: PushRuleKind.override),

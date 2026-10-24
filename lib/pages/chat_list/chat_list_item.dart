@@ -11,6 +11,7 @@ import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/private_avatar.dart';
+import 'package:chatloom/personal/push_rule_mirror.dart';
 import 'package:chatloom/personal/ui/notion_inbox_network_badge.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
@@ -116,6 +117,7 @@ List<Object?> chatListItemSignature(
       source.notificationCount,
       source.highlightCount,
       source.markedUnread,
+      chatLoomSilencedUnread(source),
       source.pushRuleState,
       source.membership,
       source.typingUsers
@@ -365,7 +367,7 @@ class _ChatListItemState extends State<ChatListItem> {
         preview: preview,
         time: lastEvent?.originServerTs.localizedTimeShort(context),
         unreadCount: projection.unreadCount(room),
-        unread: sources.any((source) => source.isUnread),
+        unread: sources.any(personalRoomUnread),
         mentioned:
             !invite && sources.any((source) => source.highlightCount > 0),
         muted: metadata.muted || nativeLimited,

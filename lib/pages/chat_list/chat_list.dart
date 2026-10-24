@@ -30,6 +30,7 @@ import 'package:chatloom/personal/person_route.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_search_page.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/push_rule_mirror.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
@@ -86,7 +87,7 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
   final metadata = projection.metadataFor(room);
   final pinned = metadata.isPinned;
   final ignored = projection.placementFor(room) == ChatPlacement.ignored;
-  final unread = inboxSources(owner, room).any((source) => source.isUnread);
+  final unread = inboxSources(owner, room).any(personalRoomUnread);
   final canWrite = joined && canEditChatPreferences(owner, 'org:$entity');
   return [
     unread
@@ -191,10 +192,14 @@ Future<void> markInboxRowRead(
   bool privateReceipt = false,
 }) async {
   for (final source in inboxSources(owner, room)) {
-    if (source.membership != Membership.join || !source.isUnread) continue;
+    if (source.membership != Membership.join || !personalRoomUnread(source)) {
+      continue;
+    }
     if (source.markedUnread) await source.markUnread(false);
     final id = source.lastEvent?.eventId;
-    if (source.notificationCount > 0 && id != null) {
+    // A chat ChatLoom silences on the server has no count (push_rule_mirror).
+    if ((source.notificationCount > 0 || chatLoomSilencedUnread(source)) &&
+        id != null) {
       await PersonalPrivacy.markRead(
         source,
         id,

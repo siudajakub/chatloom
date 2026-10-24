@@ -18,8 +18,13 @@
 ///   both cases the phone cannot evaluate faithfully, so it defers to the
 ///   server, which already decided to notify. Do Not Disturb (the master
 ///   rule) is always honoured.
+///
+/// Rules ChatLoom itself writes for chats muted for good or ignored
+/// (`push_rule_mirror.dart`) are left out: ChatLoom's private mute state
+/// already decides those chats, with a precise diagnostics outcome.
 library;
 
+import 'package:chatloom/personal/push_rule_mirror.dart';
 import 'package:matrix/matrix.dart';
 
 enum PushRuleVerdict {
@@ -131,7 +136,8 @@ int roomMemberCount(Room room) {
 PushRuleVerdict personalPushRuleVerdict(Client client, Event event) {
   final PushRuleSet? rules;
   try {
-    rules = client.globalPushRules;
+    final all = client.globalPushRules;
+    rules = all == null ? null : withoutChatLoomRules(all);
   } catch (_) {
     return PushRuleVerdict.notLoaded;
   }
@@ -173,6 +179,9 @@ class AccountPushRulesSummary {
   final AccountRuleState encryptedOneToOne;
   final AccountRuleState encryptedGroups;
   final bool unknownConditions;
+
+  /// Chats ChatLoom silences on the server (muted for good or ignored).
+  final int chatLoomMutedChats;
   const AccountPushRulesSummary({
     required this.loaded,
     this.doNotDisturb = false,
@@ -181,6 +190,7 @@ class AccountPushRulesSummary {
     this.encryptedOneToOne = AccountRuleState.missing,
     this.encryptedGroups = AccountRuleState.missing,
     this.unknownConditions = false,
+    this.chatLoomMutedChats = 0,
   });
 
   static const notLoaded = AccountPushRulesSummary(loaded: false);
@@ -188,7 +198,8 @@ class AccountPushRulesSummary {
   factory AccountPushRulesSummary.of(Client client) {
     final PushRuleSet? rules;
     try {
-      rules = client.globalPushRules;
+      final all = client.globalPushRules;
+      rules = all == null ? null : withoutChatLoomRules(all);
     } catch (_) {
       return notLoaded;
     }
@@ -213,6 +224,7 @@ class AccountPushRulesSummary {
       encryptedOneToOne: state('.m.rule.encrypted_room_one_to_one'),
       encryptedGroups: state('.m.rule.encrypted'),
       unknownConditions: _hasUnknownConditions(rules),
+      chatLoomMutedChats: chatLoomSilencedRooms(client).length,
     );
   }
 

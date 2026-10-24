@@ -324,6 +324,8 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
           rules.encryptedGroups,
         ),
         'Account rules with unknown conditions': yesNo(rules.unknownConditions),
+        'Chats silenced on the server by ChatLoom':
+            '${rules.chatLoomMutedChats}',
       },
     };
   }
@@ -719,6 +721,13 @@ class _PushDiagnosticsPageState extends State<PushDiagnosticsPage>
                 title: 'Some rules can’t be evaluated on this phone',
                 subtitle: 'For those, the server’s decision to notify is used.',
               ),
+            NotionListRow(
+              title: 'Chats silenced on the server',
+              subtitle:
+                  'Ignored chats and chats muted with no end don’t wake '
+                  'your devices.',
+              trailing: _value(context, '${rules.chatLoomMutedChats}'),
+            ),
             NotionListRow(
               title: 'Change account notification rules',
               subtitle: 'Rules shared by all your Beeper apps',

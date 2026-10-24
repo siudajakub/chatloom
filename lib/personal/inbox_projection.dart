@@ -5,6 +5,7 @@ import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/private_avatar.dart';
+import 'package:chatloom/personal/push_rule_mirror.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -435,7 +436,7 @@ class InboxProjection {
       technical: kinds.every((kind) => kind.technical),
       messageRequest: group == null && kinds.single.messageRequest,
       placement: placementFor(representative),
-      unread: sourceRooms.any((r) => r.isUnread),
+      unread: sourceRooms.any(personalRoomUnread),
       unreadCount: sourceRooms.fold(0, (n, r) => n + r.notificationCount),
       hasDraft:
           (_text(personal.values['draft:$entity']?['text']) ?? '').isNotEmpty ||

@@ -13,6 +13,7 @@ import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/push_rule_mirror.dart';
 import 'package:chatloom/personal/round_video/round_capture_controller.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
@@ -450,6 +451,7 @@ class MatrixState extends State<Matrix> {
           _cancelSubs(c.clientName);
           backgroundPush?.forgetClients([c]);
           PersonalPrivacy.forget(c);
+          PushRuleMirror.stopFor(c);
           PersonalClient.of(c).dispose();
           // Launcher shortcuts name this account's chats (FT-21).
           if (PlatformInfos.isAndroid) clearConversationShortcuts();
@@ -482,6 +484,8 @@ class MatrixState extends State<Matrix> {
         });
       }
       unawaited(personal.load());
+      // Chats muted for good or ignored stop waking devices (BP-07).
+      PushRuleMirror.startFor(c, personal);
     }
 
     if (PlatformInfos.isWeb || PlatformInfos.isDesktop) {

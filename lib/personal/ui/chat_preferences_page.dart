@@ -27,7 +27,8 @@ String privateNotificationLabel(PersonalNotificationMode mode) =>
 bool canEditChatPreferences(PersonalClient personal, String key) =>
     !kIsWeb && personal.ready && !personal.conflicts.containsKey(key);
 
-/// Account-bound private rules. Does not write native Matrix notification rules.
+/// Account-bound private rules. They write no native Matrix notification rule
+/// except the ones `push_rule_mirror.dart` keeps for chats silent for good.
 class ChatPreferencesPage extends StatefulWidget {
   final PersonalClient personal;
   final Room room;
