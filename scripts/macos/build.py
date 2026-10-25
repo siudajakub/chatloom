@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Build an ad-hoc signed private macOS app; never install or use an account."""
+"""Build a private macOS app; never install or use an account.
+
+Release builds are ad-hoc signed unless --sign-identity (or
+CHATLOOM_MACOS_SIGN_IDENTITY) names a local code-signing certificate. A
+stable certificate keeps the designated requirement unchanged across builds,
+so Keychain "Always Allow" decisions survive app updates.
+"""
 import argparse
 import hashlib
 import json
@@ -19,9 +25,44 @@ def run(*args, **kwargs):
     return subprocess.run(args, cwd=ROOT, check=True, **kwargs)
 
 
+def disk_image(bundle, path, identity):
+    """Package the app with an Applications link for drag-and-drop install."""
+    staging = ROOT / 'build/macos-dmg'
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    run('ditto', str(bundle), str(staging / bundle.name))
+    (staging / 'Applications').symlink_to('/Applications')
+    run('hdiutil', 'create', '-volname', 'ChatLoom', '-srcfolder', str(staging),
+        '-fs', 'HFS+', '-format', 'UDZO', '-ov', str(path))
+    shutil.rmtree(staging)
+    if identity:
+        run('codesign', '--force', '--sign', identity, str(path))
+    run('hdiutil', 'verify', str(path), capture_output=True)
+
+
+def resign(bundle, identity):
+    """Replace the ad-hoc signature, keeping identifier and entitlements."""
+    identities = run('security', 'find-identity', '-p', 'codesigning',
+                     capture_output=True, text=True).stdout
+    if f'"{identity}"' not in identities:
+        raise SystemExit(f'Code-signing identity "{identity}" was not found in '
+                         'the Keychain; see docs/macos-client.md')
+    run('codesign', '--force', '--deep', '--sign', identity,
+        '--preserve-metadata=identifier,entitlements,flags,runtime', str(bundle))
+    requirement = run('codesign', '-d', '-r-', str(bundle), capture_output=True,
+                      text=True)
+    designated = requirement.stdout + requirement.stderr
+    # An ad-hoc designated requirement pins the cdhash, which changes per build.
+    if 'designated =>' not in designated or 'cdhash' in designated:
+        raise SystemExit('The signature has no stable designated requirement')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--smoke-test', action='store_true')
+    parser.add_argument('--sign-identity',
+                        default=os.environ.get('CHATLOOM_MACOS_SIGN_IDENTITY'),
+                        help='code-signing certificate name for the release app')
     args = parser.parse_args()
     if sys.platform != 'darwin':
         parser.error('macOS and full Xcode are required; use Personal macOS Actions')
@@ -69,13 +110,15 @@ def main():
         for path, content in originals.items():
             path.write_bytes(content)
 
-    bundle = ROOT / 'build/macos/Build/Products/Release/Personal Chat.app'
+    bundle = ROOT / 'build/macos/Build/Products/Release/ChatLoom.app'
     if not bundle.is_dir():
-        raise SystemExit('Expected Personal Chat.app was not produced')
+        raise SystemExit('Expected ChatLoom.app was not produced')
     info = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
     if info['CFBundleIdentifier'] != 'pl.personal.chat':
         raise SystemExit('Unexpected bundle identifier')
     executable = bundle / 'Contents/MacOS' / info['CFBundleExecutable']
+    if args.sign_identity:
+        resign(bundle, args.sign_identity)
     run('codesign', '--verify', '--deep', '--strict', str(bundle))
     architectures = run('lipo', '-archs', str(executable), capture_output=True,
                         text=True).stdout.strip().split()
@@ -102,11 +145,16 @@ def main():
     archive = output / f'ChatLoom-macos-{architecture}-{revision[:12]}.zip'
     run('ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(bundle), str(archive))
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    image = archive.with_suffix('.dmg')
+    disk_image(bundle, image, args.sign_identity)
+    image_digest = hashlib.sha256(image.read_bytes()).hexdigest()
     manifest = {
         'revision': revision, 'bundle_id': info['CFBundleIdentifier'],
         'version': info['CFBundleShortVersionString'],
         'build': info['CFBundleVersion'], 'architectures': architectures,
-        'archive': archive.name, 'sha256': digest, 'signing': 'ad-hoc',
+        'archive': archive.name, 'sha256': digest,
+        'disk_image': image.name, 'disk_image_sha256': image_digest,
+        'signing': args.sign_identity or 'ad-hoc',
         'notarized': False, 'system_notifications': False,
         'minimum_macos': info.get('LSMinimumSystemVersion'),
         'verified_native_images': native_images,
@@ -119,7 +167,8 @@ def main():
         if result.get('revision') == revision:
             manifest['native_smoke'] = result
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    (output / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')
+    (output / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n'
+                                       f'{image_digest}  {image.name}\n')
     print(json.dumps(manifest, indent=2))
 
 

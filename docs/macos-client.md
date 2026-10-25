@@ -32,19 +32,26 @@ expire after seven days. No release, store submission, installation or service
 deployment happens automatically.
 
 Open a successful workflow run and download its `ChatLoom-macos-ARM64-…`
-artifact (Apple Silicon, M-series). Inside it are the application ZIP, `manifest.json` and `SHA256SUMS`. The manifest
-records the commit, actual executable architectures, version, native smoke-test
-result and ZIP digest. Every embedded Mach-O image must contain those same
+artifact (Apple Silicon, M-series). Inside it are the application DMG and ZIP, `manifest.json` and `SHA256SUMS`.
+The manifest records the commit, actual executable architectures, version,
+native smoke-test result and the DMG and ZIP digests. Every embedded Mach-O image must contain those same
 architecture slices.
 The package contains only arm64 code. The smoke suite exercises P-256 key
 agreement.
 
-Extract the application ZIP with Archive Utility and copy `Personal Chat.app`
-to Applications. Its visible name is ChatLoom; the existing bundle identifier
-`pl.personal.chat` and bundle filename remain stable. Do not delete an existing
-installation's application data, Keychain items or Matrix devices.
+Open the DMG and drag `ChatLoom.app` onto the Applications shortcut next to
+it, replacing an older copy when Finder asks; then eject the disk image. A DMG
+cannot copy itself, so this one drag is the install step. The ZIP is the same
+app for Archive Utility. When `--sign-identity` is used, the DMG is signed with
+the same certificate. The bundle identifier `pl.personal.chat` stays unchanged, so
+the app keeps its sandbox data, Keychain items and Matrix session. Builds
+before 25 October 2026 were named `Personal Chat.app`: after `ChatLoom.app`
+opens with your account, move the old bundle to the Trash so Launchpad and
+Spotlight show one app. Removing the bundle does not remove its data. Do not
+delete an existing installation's application data, Keychain items or Matrix
+devices.
 
-The artifact has an ad-hoc signature verified by `codesign`. It is not Apple
+The CI artifact has an ad-hoc signature verified by `codesign`. It is not Apple
 notarized. macOS may require explicit approval in System Settings → Privacy &
 Security on the first launch. Developer ID signing and notarization require the
 owner's Apple certificate and notary credentials; this workflow does not
@@ -61,6 +68,46 @@ The script requires full Xcode and 10 GiB free disk space. It uses a temporary
 Xcode signing override, preserves sandbox permissions and restores the original
 entitlement files. It does not install the app. Linux can run the shared tests
 but cannot compile this macOS target.
+
+### Stable local signature (no repeated Keychain prompts)
+
+An ad-hoc signature identifies the app by its code hash, which changes with
+every build. The login Keychain then treats each build as a new program and
+asks for the Mac password once per stored item at startup. Signing local
+release builds with one self-signed certificate keeps the app's designated
+requirement stable, so "Always Allow" survives later builds.
+
+Create the certificate once on the Mac:
+
+1. Open Keychain Access → menu Keychain Access → Certificate Assistant →
+   Create a Certificate…
+2. Name: `ChatLoom Local Signing`; Identity Type: Self-Signed Root;
+   Certificate Type: Code Signing. Create it in the `login` keychain.
+3. Check it is listed:
+
+   ```sh
+   rtk security find-identity -p codesigning
+   ```
+
+The certificate and its private key stay in the Mac's login Keychain. Never
+export them to the repository, the devbox or CI. Build with it:
+
+```sh
+rtk python3 scripts/macos/build.py --sign-identity "ChatLoom Local Signing"
+```
+
+`CHATLOOM_MACOS_SIGN_IDENTITY` may be set instead of the flag. The script
+re-signs the release bundle after Xcode, keeping its identifier and sandbox
+entitlements, and fails if the designated requirement still pins a code hash.
+The manifest's `signing` field records the identity. On the first build,
+`codesign` may ask for access to the private key; choose Always Allow.
+
+On the first launch after switching from ad-hoc to this certificate, macOS
+asks for each Keychain item one last time: enter the password and choose
+**Always Allow**. Existing Keychain items, sessions and data are kept. Later
+builds signed with the same certificate do not ask again. If the certificate
+is deleted or replaced, the prompts return once for the new one. The smoke
+test and the CI workflow remain ad-hoc signed.
 
 ## Desktop behavior
 
