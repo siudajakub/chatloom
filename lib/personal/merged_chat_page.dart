@@ -3144,6 +3144,15 @@ class _MergedChatPageState extends State<_MergedChatView>
                           uri: wallpaper.wallpaperUrl!,
                           opacity: wallpaper.wallpaperOpacity ?? 0.5,
                           blur: wallpaper.wallpaperBlur ?? 0.0,
+                        )
+                      else
+                        NotionPresetWallpaper(
+                          preset: NotionDisplayPreferences.of(
+                            context,
+                          ).wallpaperPreset,
+                          strength: NotionDisplayPreferences.of(
+                            context,
+                          ).wallpaperStrength,
                         ),
                       // Composer keystrokes, notices and send state rebuild
                       // this page; the gate hands back the previous list

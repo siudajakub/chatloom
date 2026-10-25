@@ -49,6 +49,17 @@ enum AppSettings<T> {
   /// Local inbox, conversation layout and motion preferences (JSON).
   appearanceDisplay<String>('pl.personal.appearance.display', '{}'),
 
+  /// A custom accent colour as `#RRGGBB`; empty uses the accent preset.
+  appearanceCustomAccent<String>('pl.personal.appearance.custom_accent', ''),
+
+  /// Show the bridge's preview card under messages with links.
+  showLinkPreviews<bool>('pl.personal.chat.link_previews', true),
+
+  /// The long-press reaction bar as a JSON list of emoji; empty uses
+  /// `NotionReactions.defaults`. Networks with a fixed reaction set still
+  /// keep only what they allow.
+  quickReactions<String>('pl.personal.chat.quick_reactions', ''),
+
   /// Prefetch voice notes and round videos (ciphertext into the encrypted
   /// media cache) as soon as a chat is open, so playback starts instantly.
   personalAutoDownloadVoiceRounds<bool>(
@@ -130,6 +141,11 @@ enum AppSettings<T> {
   /// Inbox row swipes (Telegram): left archives (with Undo), right marks
   /// read or unread. Settings › Chats › "Swipe chats in the list" (UX-14).
   inboxSwipeActions<bool>('pl.personal.inbox.swipe_actions', true),
+
+  /// What a swipe towards the start (left) and the end (right) does:
+  /// `InboxSwipeChoice.name` (archive, read, pin, none).
+  inboxSwipeLeft<String>('pl.personal.inbox.swipe_left', 'archive'),
+  inboxSwipeRight<String>('pl.personal.inbox.swipe_right', 'read'),
   benchmarksInLogs<bool>('chat.fluffy.benchmarks_in_logs', false);
 
   final String key;

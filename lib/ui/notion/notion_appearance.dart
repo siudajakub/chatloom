@@ -38,12 +38,15 @@ enum NotionIntensity {
 enum NotionAccent {
   /// Messenger blue (default); its gradient ends in Messenger violet.
   blue('Blue', Color(0xFF0A7CFF), Color(0xFFA033FF)),
+  indigo('Indigo', Color(0xFF6366F1), Color(0xFFA855F7)),
   violet('Violet', Color(0xFF8B5CF6), Color(0xFFE0409F)),
   pink('Pink', Color(0xFFEC4899), Color(0xFFFF6A3D)),
   red('Red', Color(0xFFEF4444), Color(0xFFF97316)),
   orange('Orange', Color(0xFFF97316), Color(0xFFF43F5E)),
+  amber('Amber', Color(0xFFF59E0B), Color(0xFFEF4444)),
   green('Green', Color(0xFF22C55E), Color(0xFF0FB5A6)),
   teal('Teal', Color(0xFF14B8A6), Color(0xFF0A7CFF)),
+  cyan('Cyan', Color(0xFF06B6D4), Color(0xFF6366F1)),
 
   /// No hue: the original monochrome Notion look.
   graphite('Graphite', null, null);
@@ -85,12 +88,22 @@ enum NotionAccent {
   }
 }
 
-/// The user's colour preference: an accent preset and an intensity.
+/// The user's colour preference: an accent preset (or a custom colour) and
+/// an intensity.
 @immutable
 class NotionAppearance {
   final NotionAccent accent;
   final NotionIntensity intensity;
-  const NotionAppearance({required this.accent, required this.intensity});
+
+  /// A colour the user picked instead of a preset; it replaces [accent]'s
+  /// hue. Contrast is computed from it like from a preset, so any pick
+  /// stays readable.
+  final Color? custom;
+  const NotionAppearance({
+    required this.accent,
+    required this.intensity,
+    this.custom,
+  });
 
   /// What a new install shows: Messenger blue, balanced.
   static const standard = NotionAppearance(
@@ -104,25 +117,43 @@ class NotionAppearance {
     intensity: NotionIntensity.muted,
   );
 
+  /// The hue the palette derives from; null for monochrome (graphite).
+  Color? get seed => custom ?? accent.seed;
+
+  /// Where the Vivid gradient ends: a custom colour turns 40° around the
+  /// colour wheel, like the presets' hand-picked ends.
+  Color? get gradientEnd {
+    final custom = this.custom;
+    if (custom == null) return accent.gradientEnd;
+    final hsl = HSLColor.fromColor(custom);
+    return hsl.withHue((hsl.hue + 40) % 360).toColor();
+  }
+
   NotionAppearance copyWith({
     NotionAccent? accent,
     NotionIntensity? intensity,
+    Color? custom,
+    bool clearCustom = false,
   }) => NotionAppearance(
     accent: accent ?? this.accent,
     intensity: intensity ?? this.intensity,
+    custom: clearCustom ? null : custom ?? this.custom,
   );
 
   @override
   bool operator ==(Object other) =>
       other is NotionAppearance &&
       other.accent == accent &&
-      other.intensity == intensity;
+      other.intensity == intensity &&
+      other.custom == custom;
 
   @override
-  int get hashCode => Object.hash(accent, intensity);
+  int get hashCode => Object.hash(accent, intensity, custom);
 
   @override
-  String toString() => 'NotionAppearance(${accent.name}, ${intensity.name})';
+  String toString() =>
+      'NotionAppearance(${accent.name}, ${intensity.name}'
+      '${custom == null ? '' : ', custom ${custom!.toARGB32().toRadixString(16)}'})';
 }
 
 /// Background and initials of a letter avatar.
@@ -226,7 +257,7 @@ class NotionPalette {
     final intensity = appearance.intensity;
     final legacyOutgoing = dark ? legacyOutgoingDark : base.selected;
     final legacyText = dark ? legacyBubbleTextDark : base.text;
-    final seed = appearance.accent.seed;
+    final seed = appearance.seed;
 
     final avatars = [
       for (final hue in avatarHues)
@@ -304,7 +335,7 @@ class NotionPalette {
       case NotionIntensity.vivid:
         final start = fillFor(_saturate(seed, 1.1), _white);
         final end = fillFor(
-          _saturate(appearance.accent.gradientEnd ?? seed, 1.1),
+          _saturate(appearance.gradientEnd ?? seed, 1.1),
           _white,
         );
         gradient = [start, end];

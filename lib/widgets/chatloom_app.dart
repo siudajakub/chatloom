@@ -10,6 +10,7 @@ import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/ui/keyboard_shortcuts_sheet.dart';
 import 'package:chatloom/ui/notion/notion_activity.dart';
+import 'package:chatloom/ui/notion/notion_display_preferences.dart';
 import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/desktop_sync_pause.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
@@ -107,50 +108,54 @@ class ChatLoomApp extends StatelessWidget {
         routerConfig: router,
         // Decorative animation pauses while the app is not in front of the
         // user (PF-08); sync and sending are unaffected.
-        builder: (context, child) => NotionActivity(
-          windowVisible: PlatformInfos.isMacOS
-              ? MacDesktopWindow.visible
-              : null,
-          // Battery Saver / Low Power Mode: lite mode (BP-08).
-          powerSaving: PowerSaving.watch(),
-          child: AppLockWidget(
-            controller: appLock,
-            pincode: appLockSettings.pincode,
-            useBiometrics: appLockSettings.useBiometrics,
-            isLoggedIn: clients.any((client) => client.isLogged()),
-            // Need a navigator above the Matrix widget for
-            // displaying dialogs
-            child: MacDesktopIntegration(
-              onSettings: () {
-                if (clients.any((client) => client.isLogged())) {
-                  router.go('/rooms/settings');
-                }
-              },
-              onShortcutsHelp: () {
-                final navigator =
-                    router.routerDelegate.navigatorKey.currentContext;
-                if (navigator != null) showKeyboardShortcutsSheet(navigator);
-              },
-              onWake: () {
-                // A window hidden long enough has stopped syncing; showing
-                // it resumes (battery-lifecycle, BP-02).
-                if (DesktopSyncPause.current?.paused ?? false) return;
-                for (final client in clients.where(
-                  (client) => client.isLogged(),
-                )) {
-                  client.restartSync().catchError((Object _) {});
-                }
-              },
-              child: Matrix(
-                clients: clients,
-                store: store,
-                child: Column(
-                  children: [
-                    if (startup != null) ClientStartupNotice(startup: startup!),
-                    Expanded(
-                      child: testWidget ?? child ?? const SizedBox.shrink(),
-                    ),
-                  ],
+        // Interface text size and clock format (Appearance) apply app-wide.
+        builder: (context, child) => NotionDisplayScope(
+          child: NotionActivity(
+            windowVisible: PlatformInfos.isMacOS
+                ? MacDesktopWindow.visible
+                : null,
+            // Battery Saver / Low Power Mode: lite mode (BP-08).
+            powerSaving: PowerSaving.watch(),
+            child: AppLockWidget(
+              controller: appLock,
+              pincode: appLockSettings.pincode,
+              useBiometrics: appLockSettings.useBiometrics,
+              isLoggedIn: clients.any((client) => client.isLogged()),
+              // Need a navigator above the Matrix widget for
+              // displaying dialogs
+              child: MacDesktopIntegration(
+                onSettings: () {
+                  if (clients.any((client) => client.isLogged())) {
+                    router.go('/rooms/settings');
+                  }
+                },
+                onShortcutsHelp: () {
+                  final navigator =
+                      router.routerDelegate.navigatorKey.currentContext;
+                  if (navigator != null) showKeyboardShortcutsSheet(navigator);
+                },
+                onWake: () {
+                  // A window hidden long enough has stopped syncing; showing
+                  // it resumes (battery-lifecycle, BP-02).
+                  if (DesktopSyncPause.current?.paused ?? false) return;
+                  for (final client in clients.where(
+                    (client) => client.isLogged(),
+                  )) {
+                    client.restartSync().catchError((Object _) {});
+                  }
+                },
+                child: Matrix(
+                  clients: clients,
+                  store: store,
+                  child: Column(
+                    children: [
+                      if (startup != null)
+                        ClientStartupNotice(startup: startup!),
+                      Expanded(
+                        child: testWidget ?? child ?? const SizedBox.shrink(),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

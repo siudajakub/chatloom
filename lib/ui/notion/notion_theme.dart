@@ -30,12 +30,18 @@ abstract final class NotionTheme {
     },
   );
 
+  /// [trueBlack] swaps the dark page for pure black (OLED); it has no
+  /// effect on the light theme.
   static ThemeData build(
     Brightness brightness, [
     NotionAppearance appearance = NotionAppearance.standard,
+    bool trueBlack = false,
   ]) {
     final dark = brightness == Brightness.dark;
-    final base = dark ? NotionColors.dark : NotionColors.light;
+    final black = dark && trueBlack;
+    final base = black
+        ? NotionColors.black
+        : (dark ? NotionColors.dark : NotionColors.light);
     final palette = NotionPalette.resolve(appearance, base, brightness);
     final accent = palette.accent;
     final fill = palette.accentFill;
@@ -44,7 +50,9 @@ abstract final class NotionTheme {
     final c = base.copyWith(accent: accent, onAccent: palette.onAccent);
     final tokens = NotionTokens(
       colors: c,
-      glass: dark ? NotionGlass.dark : NotionGlass.light,
+      glass: black
+          ? NotionGlass.black
+          : (dark ? NotionGlass.dark : NotionGlass.light),
       palette: palette,
     );
     final t = tokens.typography;

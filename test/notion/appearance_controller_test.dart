@@ -40,6 +40,11 @@ class _Matrix extends MatrixState {
   Matrix get widget => Matrix(clients: [active], store: preferences);
 }
 
+/// Scrolls [finder] to the middle of the page: at the top edge it would sit
+/// under the glass header and a tap would miss it.
+Future<void> _reveal(WidgetTester tester, Finder finder) =>
+    Scrollable.ensureVisible(tester.element(finder), alignment: .5);
+
 void main() {
   group('ThemeBuilder', () {
     test('reads stored choices and migrates the old colour seed', () async {
@@ -190,7 +195,7 @@ void main() {
       tester,
     ) async {
       final preferences = await mount(tester);
-      await tester.ensureVisible(find.text('Network badges'));
+      await _reveal(tester, find.text('Network badges'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Network badges'));
       await tester.pumpAndSettle();
@@ -198,7 +203,7 @@ void main() {
         ThemeBuilder.readDisplayPreferences(preferences).inboxNetworkBadges,
         isFalse,
       );
-      await tester.ensureVisible(find.text('Reduce motion'));
+      await _reveal(tester, find.text('Reduce motion'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Reduce motion'));
       await tester.pumpAndSettle();
@@ -206,13 +211,82 @@ void main() {
         ThemeBuilder.readDisplayPreferences(preferences).reduceMotion,
         isTrue,
       );
-      await tester.ensureVisible(find.text('Reset layout and effects'));
+      await _reveal(tester, find.text('Reset layout and effects'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Reset layout and effects'));
       await tester.pumpAndSettle();
       expect(
         ThemeBuilder.readDisplayPreferences(preferences),
         NotionDisplayPreferences.standard,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('wave 8 options persist from the page', (tester) async {
+      final preferences = await mount(tester);
+      Future<void> tapText(String text) async {
+        await _reveal(tester, find.text(text));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(text));
+        await tester.pumpAndSettle();
+      }
+
+      await tapText('Pure black');
+      await tapText('Two-line previews');
+      await tapText('Sender names');
+      await tapText('Delivery ticks');
+      await tapText('Haptic feedback');
+      var stored = ThemeBuilder.readDisplayPreferences(preferences);
+      expect(stored.trueBlack, isTrue);
+      expect(stored.inboxPreviewLines, 2);
+      expect(stored.senderNames, isFalse);
+      expect(stored.deliveryTicks, isFalse);
+      expect(stored.haptics, isFalse);
+
+      final ocean = find.bySemanticsLabel('Ocean background');
+      await _reveal(tester, ocean);
+      await tester.pumpAndSettle();
+      await tester.tap(ocean);
+      await tester.pumpAndSettle();
+      stored = ThemeBuilder.readDisplayPreferences(preferences);
+      expect(stored.wallpaperPreset, NotionWallpaperPreset.ocean);
+      expect(find.text('Background strength · 50%'), findsOneWidget);
+
+      await tapText('Message times');
+      await tester.tap(find.text('Every message').last);
+      await tester.pumpAndSettle();
+      await tapText('Clock');
+      await tester.tap(find.text('24-hour').last);
+      await tester.pumpAndSettle();
+      stored = ThemeBuilder.readDisplayPreferences(preferences);
+      expect(stored.messageTimestamps, NotionTimestampMode.every);
+      expect(stored.clockFormat, NotionClockFormat.h24);
+
+      // Custom accent: the picker's colour replaces the preset.
+      final custom = find.bySemanticsLabel('Custom accent');
+      await _reveal(tester, custom);
+      await tester.pumpAndSettle();
+      await tester.tap(custom);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('custom_accent_apply')));
+      await tester.pumpAndSettle();
+      expect(
+        preferences.getString(AppSettings.appearanceCustomAccent.key),
+        matches(RegExp(r'^#[0-9A-F]{6}$')),
+      );
+      // A preset clears it again.
+      final pink = find.bySemanticsLabel('Pink accent');
+      await _reveal(tester, pink);
+      await tester.pumpAndSettle();
+      await tester.tap(pink);
+      await tester.pumpAndSettle();
+      expect(preferences.getString(AppSettings.appearanceCustomAccent.key), '');
+
+      // Reset colours returns to a new install's accent and intensity.
+      await tapText('Reset colours');
+      expect(
+        ThemeBuilder.readAppearance(preferences),
+        NotionAppearance.standard,
       );
       expect(tester.takeException(), isNull);
     });

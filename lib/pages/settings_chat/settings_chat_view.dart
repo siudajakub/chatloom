@@ -7,12 +7,15 @@ import 'dart:math' as math;
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_message_actions.dart';
+import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
 import 'package:chatloom/personal/stickers/notion_emoji_picker.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -59,9 +62,35 @@ class SettingsChatView extends StatelessWidget {
           ),
           SettingsSwitchListTile.adaptive(
             title: 'Swipe chats in the list',
-            subtitle: 'Left to archive, right to mark as read or unread',
+            subtitle: 'Choose what each direction does below',
             setting: AppSettings.inboxSwipeActions,
+            onChanged: (_) => controller.updateState(),
           ),
+          if (AppSettings.inboxSwipeActions.value) ...[
+            for (final (setting, label, fallback) in [
+              (
+                AppSettings.inboxSwipeLeft,
+                'Swipe left',
+                InboxSwipeChoice.archive,
+              ),
+              (
+                AppSettings.inboxSwipeRight,
+                'Swipe right',
+                InboxSwipeChoice.read,
+              ),
+            ])
+              NotionPickerRow<InboxSwipeChoice>(
+                key: Key('settings_${setting.name}'),
+                label: label,
+                value: InboxSwipeChoice.parse(setting.value, fallback),
+                options: [
+                  for (final choice in InboxSwipeChoice.values)
+                    NotionChoice(choice, choice.label),
+                ],
+                onChanged: (value) =>
+                    _saveSetting(context, () => setting.setItem(value.name)),
+              ),
+          ],
           NotionPickerRow<String>(
             key: const Key('settings_emoji_suggestion_language'),
             label: 'Emoji suggestion language',
@@ -101,6 +130,19 @@ class SettingsChatView extends StatelessWidget {
             setting: AppSettings.doubleTapToReact,
             onChanged: (_) => controller.updateState(),
           ),
+          NotionListRow(
+            key: const Key('settings_quick_reactions_row'),
+            title: 'Quick reactions',
+            subtitle: 'The reactions above a long-pressed message',
+            trailing: Text(
+              ConversationMessageActions.preferredReactions().join(' '),
+              style: NotionType.body,
+            ),
+            onTap: () async {
+              await showQuickReactionsEditor(context);
+              controller.updateState();
+            },
+          ),
           if (AppSettings.doubleTapToReact.value)
             NotionListRow(
               key: const Key('settings_double_tap_reaction_row'),
@@ -112,7 +154,7 @@ class SettingsChatView extends StatelessWidget {
                   : null,
               trailing: Text(
                 AppSettings.doubleTapReaction.value.isEmpty
-                    ? NotionReactions.defaults.first
+                    ? ConversationMessageActions.preferredReactions().first
                     : AppSettings.doubleTapReaction.value,
                 style: NotionType.heading,
               ),
@@ -133,6 +175,11 @@ class SettingsChatView extends StatelessWidget {
             title: 'Play GIFs and animated stickers',
             subtitle: 'Animations pause when reduced motion is on',
             setting: AppSettings.autoplayImages,
+          ),
+          SettingsSwitchListTile.adaptive(
+            title: 'Link previews',
+            subtitle: 'Show a card for the first link in a message',
+            setting: AppSettings.showLinkPreviews,
           ),
           SettingsSwitchListTile.adaptive(
             title: 'Formatted messages',
@@ -193,6 +240,130 @@ class SettingsChatView extends StatelessWidget {
     );
   }
 }
+
+/// Edits the quick reaction bar (Telegram's "Reactions", Messenger's
+/// "Customize reactions"): tap a slot to replace its emoji; the order is
+/// the bar's order. Saves on every change.
+Future<void> showQuickReactionsEditor(BuildContext context) =>
+    showNotionSheet<void>(
+      context: context,
+      title: 'Quick reactions',
+      builder: (context) => const _QuickReactionsEditor(),
+    );
+
+class _QuickReactionsEditor extends StatefulWidget {
+  const _QuickReactionsEditor();
+
+  @override
+  State<_QuickReactionsEditor> createState() => _QuickReactionsEditorState();
+}
+
+class _QuickReactionsEditorState extends State<_QuickReactionsEditor> {
+  late List<String> _emoji = [
+    ...ConversationMessageActions.preferredReactions(),
+  ];
+
+  Future<void> _save(List<String> emoji) async {
+    setState(() => _emoji = emoji);
+    try {
+      await ConversationMessageActions.saveQuickReactions(emoji);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not save this setting. Try again.'),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _replace(int index) async {
+    final picked = await showEmojiChoiceSheet(
+      context,
+      title: 'Reaction ${index + 1}',
+    );
+    if (picked == null || picked.isEmpty || !mounted) return;
+    final next = [..._emoji];
+    // Picking one already in the bar swaps the two.
+    final existing = next.indexOf(picked);
+    if (existing >= 0) next[existing] = next[index];
+    next[index] = picked;
+    await _save(next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.notion;
+    final isDefault = listEquals(_emoji, NotionReactions.defaults);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Tap a reaction to change it. Networks with a fixed set of '
+          'reactions keep only the ones they allow.',
+          style: tokens.typography.footnoteMuted,
+        ),
+        const SizedBox(height: NotionSpace.sm),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: NotionSpace.xs,
+          runSpacing: NotionSpace.xs,
+          children: [
+            for (var i = 0; i < _emoji.length; i++)
+              Semantics(
+                button: true,
+                label: 'Reaction ${i + 1}: ${_emoji[i]}. Change',
+                excludeSemantics: true,
+                child: InkWell(
+                  key: Key('quick_reaction_slot_$i'),
+                  customBorder: const CircleBorder(),
+                  onTap: () => _replace(i),
+                  child: Container(
+                    width: NotionSize.touchTarget,
+                    height: NotionSize.touchTarget,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: tokens.colors.surface,
+                      border: Border.all(color: tokens.colors.border),
+                    ),
+                    child: Text(_emoji[i], style: NotionType.heading),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: NotionSpace.md),
+        NotionButton(
+          key: const Key('quick_reactions_reset'),
+          expand: true,
+          label: 'Restore defaults',
+          onPressed: isDefault
+              ? null
+              : () => _save([...NotionReactions.defaults]),
+        ),
+      ],
+    );
+  }
+}
+
+/// One emoji from the full picker as a Notion sheet; null when dismissed.
+Future<String?> showEmojiChoiceSheet(
+  BuildContext context, {
+  required String title,
+}) => showNotionSheet<String>(
+  context: context,
+  title: title,
+  builder: (context) => SizedBox(
+    height: math.min(420.0, MediaQuery.sizeOf(context).height * .5),
+    child: EmojiPicker(
+      onEmojiSelected: (_, emoji) => Navigator.of(context).pop(emoji.emoji),
+      config: notionEmojiPickerConfig(context, initCategory: Category.SMILEYS),
+    ),
+  ),
+);
 
 /// The double-tap reaction picker as a Notion sheet (Telegram's "Quick
 /// reaction"): the emoji grid, and "Automatic" to follow each network's

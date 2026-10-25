@@ -4,6 +4,20 @@ import 'dart:math' as math;
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
+/// What swiping an inbox row does (Settings → Chats → Swipe left / right).
+enum InboxSwipeChoice {
+  archive('Archive'),
+  read('Mark as read or unread'),
+  pin('Pin or unpin'),
+  none('Nothing');
+
+  final String label;
+  const InboxSwipeChoice(this.label);
+
+  static InboxSwipeChoice parse(String? name, InboxSwipeChoice fallback) =>
+      values.firstWhere((value) => value.name == name, orElse: () => fallback);
+}
+
 /// The long-press actions of an inbox row (Telegram, Messenger). Deliberately
 /// short: everything else (leave, block, tags, spaces, low priority) lives in
 /// chat details; notification details sit at the end of the Mute menu.

@@ -105,8 +105,8 @@ class ChatListViewBody extends StatelessWidget {
             if (sides == null) return row;
             return NotionSwipeAction(
               key: ValueKey(chatListItemKey(room.id)),
-              endToStart: sides.archive,
-              startToEnd: sides.read,
+              endToStart: sides.toStart,
+              startToEnd: sides.toEnd,
               child: row,
             );
           },

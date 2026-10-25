@@ -265,6 +265,16 @@ class ChatView extends StatelessWidget {
                               uri: accountConfig.wallpaperUrl!,
                               opacity: accountConfig.wallpaperOpacity ?? 0.5,
                               blur: accountConfig.wallpaperBlur ?? 0.0,
+                            )
+                          else
+                            // A built-in background (Appearance), local.
+                            NotionPresetWallpaper(
+                              preset: NotionDisplayPreferences.of(
+                                context,
+                              ).wallpaperPreset,
+                              strength: NotionDisplayPreferences.of(
+                                context,
+                              ).wallpaperStrength,
                             ),
                           timelineBody,
                           ChatBridgeNotice(room: controller.room),

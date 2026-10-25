@@ -923,17 +923,32 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
                 )
               : null,
         );
+      case ChatMenuAction.pin:
+        // A swipe toggles; the menu has its own pin handling.
+        final projection = InboxProjection(personal);
+        final pinned = projection.metadataFor(room).isPinned;
+        final target = projection.entityFor(room);
+        _runChange(
+          personal,
+          key,
+          () => NotionMetadataActions.setPinned(personal, target, !pinned),
+          failure: pinned
+              ? 'Couldn’t unpin the chat. Check private sync and try again.'
+              : 'Couldn’t pin the chat. Check private sync and try again.',
+        );
       default:
         return;
     }
   }
 
-  /// The swipe sides of an inbox row (UX-14, Telegram): towards the start
-  /// archives (unarchives in the Archive view), towards the end marks read
-  /// or unread. Null without the setting, for invites and left chats. The
-  /// menu's rules decide at release, so a swipe never does what its menu
-  /// row would refuse.
-  ({NotionSwipeActionSide? archive, NotionSwipeActionSide? read})?
+  /// The swipe sides of an inbox row (UX-14, Telegram). By default a swipe
+  /// towards the start archives (unarchives in the Archive view) and one
+  /// towards the end marks read or unread; Settings → Chats chooses either
+  /// side's action (archive, read/unread, pin/unpin or nothing). Null
+  /// without the setting, for invites and left chats. The menu's rules
+  /// decide at release, so a swipe never does what its menu row would
+  /// refuse.
+  ({NotionSwipeActionSide? toStart, NotionSwipeActionSide? toEnd})?
   rowSwipeSides(Room room, InboxProjection projection) {
     if (!AppSettings.inboxSwipeActions.value ||
         room.membership != Membership.join) {
@@ -947,7 +962,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
               ?room.client.getRoomById(member.roomId),
           ];
     final unread = sources.any((source) => source.isUnread);
-    final archived = projection.metadataFor(room).archived;
+    final metadata = projection.metadataFor(room);
+    final archived = metadata.archived;
+    final pinned = metadata.isPinned;
     final ignored = projection.placementFor(room) == ChatPlacement.ignored;
     void commit(ChatMenuAction action, String refused) {
       if (!mounted) return;
@@ -966,20 +983,21 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       applyRowAction(room, action);
     }
 
-    return (
-      archive: ignored
-          ? null
-          : NotionSwipeActionSide(
-              icon: archived
-                  ? Icons.unarchive_outlined
-                  : Icons.archive_outlined,
-              label: archived ? 'Unarchive' : 'Archive',
-              onCommit: () => commit(
-                archived ? ChatMenuAction.unarchive : ChatMenuAction.archive,
-                'Archive needs private sync. Try again in a moment.',
+    NotionSwipeActionSide? side(InboxSwipeChoice choice) => switch (choice) {
+      InboxSwipeChoice.archive =>
+        ignored
+            ? null
+            : NotionSwipeActionSide(
+                icon: archived
+                    ? Icons.unarchive_outlined
+                    : Icons.archive_outlined,
+                label: archived ? 'Unarchive' : 'Archive',
+                onCommit: () => commit(
+                  archived ? ChatMenuAction.unarchive : ChatMenuAction.archive,
+                  'Archive needs private sync. Try again in a moment.',
+                ),
               ),
-            ),
-      read: NotionSwipeActionSide(
+      InboxSwipeChoice.read => NotionSwipeActionSide(
         icon: unread
             ? Icons.mark_chat_read_outlined
             : Icons.mark_chat_unread_outlined,
@@ -987,6 +1005,33 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         onCommit: () => commit(
           unread ? ChatMenuAction.read : ChatMenuAction.unread,
           'Couldn’t change this chat right now. Try again.',
+        ),
+      ),
+      InboxSwipeChoice.pin =>
+        ignored
+            ? null
+            : NotionSwipeActionSide(
+                icon: pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                label: pinned ? 'Unpin' : 'Pin',
+                onCommit: () => commit(
+                  ChatMenuAction.pin,
+                  'Pinning needs private sync. Try again in a moment.',
+                ),
+              ),
+      InboxSwipeChoice.none => null,
+    };
+
+    return (
+      toStart: side(
+        InboxSwipeChoice.parse(
+          AppSettings.inboxSwipeLeft.value,
+          InboxSwipeChoice.archive,
+        ),
+      ),
+      toEnd: side(
+        InboxSwipeChoice.parse(
+          AppSettings.inboxSwipeRight.value,
+          InboxSwipeChoice.read,
         ),
       ),
     );
