@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show RoundVideoDescriptor;
@@ -648,14 +650,14 @@ abstract final class ConversationMessageActions {
   /// only the allowed ones, in this order and in the network's spelling;
   /// when none of them is allowed, the network's own first reactions.
   static List<String> quickReactions(Room room) {
+    final preferred = preferredReactions();
     final allowed = _allowedReactions(room);
-    if (allowed == null) return NotionReactions.defaults;
+    if (allowed == null) return preferred;
     final byKey = <String, String>{
       for (final key in allowed.reversed) NotionReactions.normalize(key): key,
     };
     final kept = [
-      for (final emoji in NotionReactions.defaults)
-        ?byKey[NotionReactions.normalize(emoji)],
+      for (final emoji in preferred) ?byKey[NotionReactions.normalize(emoji)],
     ];
     if (kept.isNotEmpty) return kept;
     return allowed
@@ -663,6 +665,39 @@ abstract final class ConversationMessageActions {
         .take(NotionReactions.defaults.length)
         .toList(growable: false);
   }
+
+  /// The user's quick reactions (Settings → Chats → Quick reactions), in
+  /// their order; [NotionReactions.defaults] until they pick their own.
+  static List<String> preferredReactions() =>
+      parseQuickReactions(AppSettings.quickReactions.value);
+
+  /// A stored reaction set: a JSON list of 1–[NotionReactions.defaults]
+  /// length distinct, non-empty strings. Anything else (an older or a
+  /// damaged value) falls back to the defaults.
+  static List<String> parseQuickReactions(String? raw) {
+    if (raw == null || raw.isEmpty) return NotionReactions.defaults;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return NotionReactions.defaults;
+      final emoji = <String>[];
+      for (final item in decoded) {
+        if (item is! String) return NotionReactions.defaults;
+        final value = item.trim();
+        if (value.isEmpty || emoji.contains(value)) continue;
+        emoji.add(value);
+      }
+      if (emoji.isEmpty) return NotionReactions.defaults;
+      return List.unmodifiable(emoji.take(NotionReactions.defaults.length));
+    } on FormatException {
+      return NotionReactions.defaults;
+    }
+  }
+
+  /// Stores [emoji] as the quick reactions; the defaults clear the entry.
+  static Future<void> saveQuickReactions(List<String> emoji) =>
+      listEquals(emoji, NotionReactions.defaults)
+      ? AppSettings.quickReactions.setItem('')
+      : AppSettings.quickReactions.setItem(jsonEncode(emoji));
 
   /// The double-tap reaction of [room]: the emoji the user picked in the
   /// settings when the network allows it, otherwise the first quick reaction
