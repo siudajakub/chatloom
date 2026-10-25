@@ -1,0 +1,194 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../kit/kit.css">
+<style>
+  svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
+  .chathead .more { font: 700 18px Roboto; letter-spacing: 1px; padding: 8px 6px; border-radius: 16px; }
+  .chathead .bar { width: 1px; height: 26px; background: var(--border); }
+  .composer .send { transition: transform .2s, background .2s; }
+  .composer .send.mic { background: transparent; }
+  .composer .waic { color: var(--text2); display: flex; align-items: center; gap: 10px; }
+  .composer .waic::after { content: ""; width: 1px; height: 26px; background: var(--border); }
+  .composer .ph { color: var(--text3); }
+  .composer .field .typed { min-width: 0; flex: 1; }
+  #lifted { position: absolute; z-index: 5; transition: transform .3s var(--ease); }
+  .msg.lift { position: relative; z-index: 5; transform: translateY(-180px) scale(1.03); }
+  .msg.lift .bub { box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+  .marker { font: 400 12px Roboto; color: var(--text3); }
+
+  /* Popup menus */
+  .menu { position: absolute; z-index: 6; padding: 6px 0; min-width: 210px; transform-origin: bottom right; }
+  .menu .mrow { padding: 11px 18px; font-size: 15.5px; }
+  .menu .mrow.on { background: var(--selected); }
+  .menu .mrow .ic { width: 20px; }
+  .menu.tr { transform-origin: top right; }
+  .menu.tl { transform-origin: top left; }
+  .scale { animation: scale .26s var(--ease) both; }
+  @keyframes scale { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: none; } }
+  .out-fade { opacity: 0 !important; transition: opacity .2s; }
+
+  .rbar { position: absolute; z-index: 6; display: flex; gap: 4px; padding: 6px 10px; border-radius: 26px; font-size: 24px; }
+  .rbar span { width: 36px; text-align: center; }
+  .rbar .plus { font: 300 24px Roboto; color: var(--text2); }
+
+  /* Sheets */
+  .sheet { z-index: 7; padding: 10px 20px 28px; }
+  .sheet h3 { font: 700 20px Roboto; margin-bottom: 10px; }
+  .foot { font: 400 13px Roboto; color: var(--text2); }
+  .prev { font: 400 15.5px/1.35 Roboto; margin: 4px 0 14px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 10px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 18px; background: rgba(255,255,255,.05);
+    border: 1px solid var(--border); font: 400 14px Roboto; color: var(--text); transition: background .2s, border-color .2s, color .2s; }
+  .pill svg.i { width: 16px; height: 16px; color: var(--text2); }
+  .pill.on { background: #10335a; border-color: #2a5b93; color: #CFE5FF; }
+  .prop { display: flex; justify-content: space-between; padding: 10px 2px; border-bottom: 1px solid #2F2F2F; font: 400 15px Roboto; }
+  .prop span:first-child { color: var(--text2); }
+  .btn { margin-top: 16px; height: 46px; border-radius: 23px; display: grid; place-items: center; font: 500 15.5px Roboto; background: var(--accent); color: #fff; transition: filter .2s; }
+  .btn.ghost { margin-top: 6px; background: transparent; color: var(--text2); display: flex; justify-content: center; gap: 8px; align-items: center; }
+  .btn.press { filter: brightness(1.25); }
+  .tog { display: flex; align-items: center; gap: 12px; padding: 12px 2px 2px; }
+  .tog .t b { display: block; font: 400 15.5px Roboto; }
+  .tog .t small { display: block; font: 400 12.5px/1.3 Roboto; color: var(--text2); margin-top: 2px; }
+
+  /* Snackbar */
+  .snack { position: absolute; left: 12px; right: 12px; bottom: 96px; z-index: 8; padding: 14px 18px; border-radius: 16px;
+    display: flex; align-items: center; justify-content: space-between; font: 400 15px Roboto; opacity: 0; transform: translateY(16px);
+    transition: opacity .25s, transform .3s var(--ease); }
+  .snack.on { opacity: 1; transform: none; }
+  .snack b { color: #5AB4FF; font-weight: 500; }
+</style>
+<div class="screen">
+  <div class="status"><span>16:20</span><span class="ind"><i></i><i></i></span></div>
+  <div class="chathead">
+    <div class="back">‹</div><div class="bar"></div>
+    <div class="av md h7">G<span class="net wa">W</span></div>
+    <div class="who"><b>Grace Patel</b><small>WhatsApp</small></div>
+    <div class="more" id="more">•••</div>
+  </div>
+  <div class="timeline" id="tl">
+    <div class="day">Today</div>
+    <div class="msg"><div class="av sm h7">G</div><div class="bub">Are we still on for Saturday?</div></div>
+    <div class="time">15:58</div>
+    <div class="msg out"><div class="bub">Yes! Can't wait 😊</div></div>
+    <div class="time out">16:02</div>
+    <div class="msg" id="gmsg"><div class="av sm h7">G</div><div class="bub" id="gbub">Can you review my slides before Friday?</div></div>
+    <div class="time" id="gtime">16:11 <span class="marker hidden fade" id="bm">· <svg class="i" style="width:13px;height:13px;vertical-align:-2px" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg> Bookmarked</span></div>
+  </div>
+  <div class="composer">
+    <div class="plus">+</div>
+    <div class="field" id="field"><span class="waic"><svg class="i" viewBox="0 0 24 24"><path d="M4 20l1.3-4A8 8 0 1 1 8 18.7z"/></svg></span><span class="ph" id="ph">Message…</span><span class="typed" id="typed"></span></div>
+    <div class="send mic" id="send"><svg class="i" id="micic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><svg class="i gone" id="sendic" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></div>
+  </div>
+
+  <div class="scrim" id="scrim" style="z-index:4"></div>
+
+  <!-- Long press on Send -->
+  <div class="menu glass gone" id="sendmenu" style="right:12px; bottom:84px">
+    <div class="mrow" id="m-later"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>Send later</div>
+    <div class="mrow"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 10v3l2 2M5 4L2 7M19 4l3 3"/></svg></span>Remind me</div>
+  </div>
+
+  <!-- Send later sheet -->
+  <div class="sheet" id="later">
+    <div class="grab"></div>
+    <h3>Send later</h3>
+    <div class="foot">Grace Patel</div>
+    <div class="prev">Happy birthday, Grace! 🎂 Dinner's on me tonight.</div>
+    <div class="pills">
+      <span class="pill">In 1 hour</span><span class="pill">In 3 hours</span><span class="pill">This evening</span>
+      <span class="pill on" id="l-tm">Tomorrow morning</span><span class="pill">Next week</span>
+      <span class="pill"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Pick date &amp; time</span>
+    </div>
+    <div class="prop"><span>Date</span><span>Tomorrow</span></div>
+    <div class="prop"><span>Time</span><span>09:00</span></div>
+    <div class="btn" id="l-go">Schedule message</div>
+    <div class="btn ghost"><svg class="i" viewBox="0 0 24 24"><path d="M8 12l7-7a3.5 3.5 0 0 1 5 5l-9 9a5 5 0 0 1-7-7l8-8"/></svg>Schedule an attachment</div>
+  </div>
+
+  <!-- Message long-press menu -->
+  <div class="rbar glass gone" id="rbar" style="left:40px; top:440px"><span>👍</span><span>❤️</span><span>😂</span><span>😮</span><span>😢</span><span>🙏</span><span class="plus">+</span></div>
+  <div class="menu glass tl gone" id="msgmenu" style="left:44px; top:572px; min-width:230px">
+    <div class="mrow"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M10 8L4 13l6 5M4 13h10a6 6 0 0 1 6 6"/></svg></span>Reply</div>
+    <div class="mrow"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg></span>Copy</div>
+    <div class="mrow"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M14 6l6 6-6 6M20 12H8a4 4 0 0 0-4 4v2"/></svg></span>Forward</div>
+    <div class="mrow" id="m-bm"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></span>Bookmark</div>
+  </div>
+
+  <!-- Conversation menu -->
+  <div class="menu glass tr gone" id="chatmenu" style="right:12px; top:100px; min-width:240px">
+    <div class="mrow"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>Search conversation</div>
+    <div class="mrow"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>Send later</div>
+    <div class="mrow" id="m-rem"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 10v3l2 2M5 4L2 7M19 4l3 3"/></svg></span>Remind me</div>
+    <div class="mrow"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4zM9 10l2 2 4-4"/></svg></span>Mark as read</div>
+  </div>
+
+  <!-- Remind me sheet -->
+  <div class="sheet" id="remind">
+    <div class="grab"></div>
+    <h3>Remind me</h3>
+    <div class="foot">Grace Patel</div>
+    <div class="pills">
+      <span class="pill on" id="r-1h">In 1 hour</span><span class="pill">In 3 hours</span><span class="pill" id="r-eve">This evening</span>
+      <span class="pill">Tomorrow morning</span><span class="pill">Next week</span>
+      <span class="pill"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Pick date &amp; time</span>
+    </div>
+    <div class="prop"><span>Date</span><span>Today</span></div>
+    <div class="prop"><span>Time</span><span id="r-time">17:20</span></div>
+    <div class="tog" id="r-tog"><div class="t"><b>Only if they don’t reply</b><small id="r-sub">Off: you are reminded at this time in any case.</small></div><div class="switch" id="r-sw"></div></div>
+    <div class="btn" id="r-go">Save reminder</div>
+  </div>
+
+  <div class="snack glass" id="snack"><span id="snacktext"></span><b id="snackact"></b></div>
+</div>
+<script src="../kit/kit.js"></script>
+<script>
+  const on = (s, c = 'on') => $(s).classList.add(c);
+  const off = (s, c = 'on') => $(s).classList.remove(c);
+  const show = (s) => { $(s).classList.remove('gone'); $(s).classList.add('scale'); };
+  const hide = (s) => { $(s).classList.add('gone'); $(s).classList.remove('scale'); };
+  const snack = (text, act = '') => { $('#snacktext').textContent = text; $('#snackact').textContent = act; on('#snack'); };
+  const text = "Happy birthday, Grace! 🎂 Dinner's on me tonight.";
+
+  const typedEnd = type('#typed', text, 550, 22);
+  // The field scrolls with the caret, like a one-line text field.
+  during(550, typedEnd - 550, () => {
+    const t = $('#typed'); t.scrollLeft = t.scrollWidth;
+  });
+
+  scene(13800, [
+    [350, () => tap('#field')],
+    [550, () => { $('#ph').classList.add('gone'); off('#send', 'mic'); $('#micic').classList.add('gone'); $('#sendic').classList.remove('gone'); }],
+    // Long press on Send: Send later / Remind me
+    [typedEnd + 250, () => tap('#send', true)],
+    [typedEnd + 700, () => { on('#scrim'); $('#scrim').style.background = 'rgba(0,0,0,.35)'; show('#sendmenu'); }],
+    [typedEnd + 1250, () => { tap('#m-later'); on('#m-later'); }],
+    [typedEnd + 1500, () => { hide('#sendmenu'); $('#scrim').style.background = ''; on('#later', 'open'); }],
+    // "Tomorrow morning" is preselected; confirm it with a tap.
+    [typedEnd + 2200, () => tap('#l-tm')],
+    [typedEnd + 2750, () => { tap('#l-go'); on('#l-go', 'press'); }],
+    [typedEnd + 3000, () => {
+      off('#later', 'open'); off('#scrim');
+      $('#typed').classList.add('gone'); $('#ph').classList.remove('gone');
+      on('#send', 'mic'); $('#micic').classList.remove('gone'); $('#sendic').classList.add('gone');
+      snack('Scheduled · Tomorrow · 09:00', 'View');
+    }],
+    [typedEnd + 4300, () => off('#snack')],
+
+    // Long press on Grace's message: lifted bubble, reactions, actions.
+    [7400, () => tap('#gbub', true)],
+    [7850, () => { on('#scrim'); on('#gmsg', 'lift'); show('#rbar'); show('#msgmenu'); }],
+    [8750, () => { tap('#m-bm'); on('#m-bm'); }],
+    [9000, () => { hide('#rbar'); hide('#msgmenu'); off('#scrim'); off('#gmsg', 'lift'); off('#bm', 'hidden'); snack('Saved to Bookmarks'); }],
+    [9900, () => off('#snack')],
+
+    // Conversation menu → Remind me
+    [9850, () => tap('#more')],
+    [10050, () => { on('#scrim'); $('#scrim').style.background = 'rgba(0,0,0,.35)'; show('#chatmenu'); }],
+    [10600, () => { tap('#m-rem'); on('#m-rem'); }],
+    [10850, () => { hide('#chatmenu'); $('#scrim').style.background = ''; on('#remind', 'open'); }],
+    [11550, () => { tap('#r-eve'); off('#r-1h'); on('#r-eve'); $('#r-time').textContent = '18:00'; }],
+    [12050, () => { tap('#r-sw'); on('#r-sw'); $('#r-sub').textContent = 'Skipped when a new message arrives in this chat first.'; }],
+    [12600, () => { tap('#r-go'); on('#r-go', 'press'); }],
+    [12850, () => { off('#remind', 'open'); off('#scrim'); snack('Reminder set · Today · 18:00'); }],
+  ]);
+</script>

@@ -1,0 +1,227 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../kit/kit.css">
+<style>
+  /* Palette and theme roles as registered colours so they interpolate. */
+  @property --bg { syntax: '<color>'; inherits: true; initial-value: #191919; }
+  @property --surface { syntax: '<color>'; inherits: true; initial-value: #252525; }
+  @property --selected { syntax: '<color>'; inherits: true; initial-value: #2F2F2F; }
+  @property --border { syntax: '<color>'; inherits: true; initial-value: #383838; }
+  @property --text { syntax: '<color>'; inherits: true; initial-value: #E8E7E5; }
+  @property --text2 { syntax: '<color>'; inherits: true; initial-value: #AAAAA5; }
+  @property --bubble-in { syntax: '<color>'; inherits: true; initial-value: #2B2B2B; }
+  @property --acc { syntax: '<color>'; inherits: true; initial-value: #0A7CFF; }
+  @property --fill { syntax: '<color>'; inherits: true; initial-value: #0A7CFF; }
+  @property --tint { syntax: '<color>'; inherits: true; initial-value: #252525; }
+  @property --bub-a { syntax: '<color>'; inherits: true; initial-value: #0A7CFF; }
+  @property --bub-b { syntax: '<color>'; inherits: true; initial-value: #0A7CFF; }
+  @property --on-bub { syntax: '<color>'; inherits: true; initial-value: #fff; }
+  @property --sa { syntax: '<color>'; inherits: false; initial-value: #0A7CFF; }
+  @property --sb { syntax: '<color>'; inherits: false; initial-value: #0A7CFF; }
+  @property --ts { syntax: '<number>'; inherits: true; initial-value: 1; }
+
+  .screen { 
+    transition: --bg, --surface, --selected, --border, --text, --text2,
+      --bubble-in, --acc, --fill, --tint, --bub-a, --bub-b, --on-bub;
+    transition-duration: .5s; transition-timing-function: cubic-bezier(.2,.8,.2,1); color: var(--text); }
+  .bar { height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 16px; }
+  .bar .back { font: 400 30px/1 Roboto; width: 22px; margin-top: -4px; }
+  .bar b { font: 700 20px Roboto; }
+  .sh { font: 500 13.5px Roboto; color: var(--text2); padding: 18px 20px 9px; }
+
+  /* Live preview */
+  .preview { margin: 4px 16px 0; height: 268px; border-radius: 20px; border: 1px solid var(--border); background: var(--bg); padding: 4px 12px 12px;
+    display: flex; flex-direction: column; overflow: hidden; }
+  .prow { display: flex; align-items: center; gap: 12px; padding: 8px 2px 10px; border-bottom: 1px solid var(--border); }
+  .prow .mid { flex: 1; } .prow .name { font: 500 15.5px Roboto; } .prow .last { font: 400 13.5px Roboto; color: var(--text); }
+  .prow .meta { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; font: 400 12.5px Roboto; color: var(--text2); }
+  .prow .av { transition: background-color .5s, color .5s; }
+  .vivid .prow .av { background: #8E4EC6; color: #fff; }
+  .pbadge { min-width: 20px; height: 20px; border-radius: 10px; padding: 0 6px; background: var(--fill); color: #fff; font: 500 12px/20px Roboto; text-align: center; }
+  .chat { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; }
+  .pm { display: flex; } .pm.out { justify-content: flex-end; }
+  .pb { max-width: 250px; padding: calc(7px * var(--ts)) calc(12px * var(--ts)); border-radius: 18px; font: 400 calc(15.5px * var(--ts))/1.35 Roboto;
+    background: var(--bubble-in); color: var(--text); }
+  .pm.in .pb { border-bottom-left-radius: 6px; }
+  .pm.out .pb { background: linear-gradient(135deg, var(--bub-a), var(--bub-b)); color: var(--on-bub); }
+  .pm.out.first .pb { border-bottom-right-radius: 6px; }
+  .pm.out.last .pb { border-top-right-radius: 6px; }
+
+  /* Intensity cards */
+  .ints { display: flex; gap: 10px; padding: 0 16px; }
+  .int { flex: 1; border-radius: 14px; border: 2px solid var(--border); background: var(--surface); padding: 10px 10px 9px;
+    transition: border-color .35s, background-color .35s; }
+  .int.sel { border-color: var(--acc); background: var(--tint); }
+  .int i { display: block; height: 14px; border-radius: 7px; }
+  .int .mi { width: 58%; background: var(--bubble-in); filter: brightness(1.25); }
+  .int .mo { width: 68%; margin: 4px 0 0 auto; background: linear-gradient(90deg, var(--sa), var(--sb)); transition: --sa .5s, --sb .5s; }
+  .int span { display: block; text-align: center; font: 400 14px Roboto; margin-top: 9px; }
+  .int.sel span { font-weight: 700; }
+  .desc { position: relative; height: 20px; margin: 6px 20px 0; font: 400 12.5px Roboto; color: var(--text2); }
+  .desc div { position: absolute; inset: 0; transition: opacity .3s; }
+
+  /* Accent swatches */
+  .sw { display: flex; justify-content: space-between; padding: 0 14px; }
+  .s { width: 40px; height: 40px; border-radius: 50%; border: 2px solid transparent; display: grid; place-items: center; transition: border-color .3s; }
+  .s.sel { border-color: var(--text); }
+  .s i { width: 31px; height: 31px; border-radius: 50%; background: linear-gradient(135deg, var(--sa), var(--sb)); transition: --sa .5s, --sb .5s;
+    display: grid; place-items: center; color: #fff; font: 700 15px Roboto; font-style: normal; }
+  .s i b { opacity: 0; transform: scale(.3); transition: opacity .25s, transform .3s var(--ease); }
+  .s.sel i b { opacity: 1; transform: none; }
+
+  /* Theme segmented button */
+  .seg3 { display: flex; margin: 0 16px; height: 40px; border: 1px solid var(--border); border-radius: 20px; overflow: hidden; }
+  .seg3 div { flex: 1; display: grid; place-items: center; font: 500 14px Roboto; color: var(--text); transition: background-color .3s, color .3s; }
+  .seg3 div + div { border-left: 1px solid var(--border); }
+  .seg3 div.sel { background: var(--tint); color: var(--acc); }
+
+  /* Slider */
+  .sl-label { font: 400 14px Roboto; color: var(--text2); padding: 2px 20px 0; }
+  .slider { position: relative; height: 40px; margin: 0 24px; }
+  .slider .track { position: absolute; left: 0; right: 0; top: 18px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--acc) 26%, transparent); }
+  .slider .act { position: absolute; left: 0; top: 17px; height: 6px; border-radius: 3px; background: var(--acc); }
+  .slider .thumb { position: absolute; top: 10px; width: 20px; height: 20px; margin-left: -10px; border-radius: 50%; background: var(--acc); }
+  .slider .halo { position: absolute; top: 0; width: 40px; height: 40px; margin-left: -20px; border-radius: 50%; background: var(--acc); opacity: 0; transition: opacity .2s; }
+  .slider.drag .halo { opacity: .16; }
+  .finger { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; background: rgba(255,255,255,.28);
+    border: 2px solid rgba(255,255,255,.55); z-index: 99; opacity: 0; transition: opacity .2s; }
+  .finger.on { opacity: 1; }
+  .light .finger, body.lt .touch { background: rgba(0,0,0,.18); border-color: rgba(0,0,0,.35); }
+</style>
+<div class="screen" id="scr">
+  <div class="status"><span>9:41</span><span class="ind"><i></i><i></i></span></div>
+  <div class="bar"><span class="back">‹</span><b>Appearance</b></div>
+  <div class="preview">
+    <div class="prow"><div class="av md h6">A</div><div class="mid"><div class="name">Ava Bennett</div><div class="last">How's the new look?</div></div>
+      <div class="meta">12:04<span class="pbadge">2</span></div></div>
+    <div class="chat">
+      <div class="pm in"><div class="pb">How's the new look?</div></div>
+      <div class="pm out first"><div class="pb">Loving the violet 💜</div></div>
+      <div class="pm out last"><div class="pb">Even better in vivid</div></div>
+    </div>
+  </div>
+  <div class="sh">Colour intensity</div>
+  <div class="ints">
+    <div class="int" data-i="muted"><i class="mi"></i><i class="mo"></i><span>Muted</span></div>
+    <div class="int sel" data-i="balanced"><i class="mi"></i><i class="mo"></i><span>Balanced</span></div>
+    <div class="int" data-i="vivid"><i class="mi"></i><i class="mo"></i><span>Vivid</span></div>
+  </div>
+  <div class="desc">
+    <div data-i="muted" class="hidden">Calm and grey, a hint of colour</div>
+    <div data-i="balanced">Coloured bubbles and accents</div>
+    <div data-i="vivid" class="hidden">Gradients, coloured avatars and networks</div>
+  </div>
+  <div class="sh">Accent colour</div>
+  <div class="sw" id="sw"></div>
+  <div class="sh">Theme</div>
+  <div class="seg3"><div class="sel" id="th-dark">Dark</div><div id="th-light">Light</div><div>System</div></div>
+  <div class="sh">Conversations</div>
+  <div class="sl-label">Message text size · <span id="tsv">100%</span></div>
+  <div class="slider" id="sl"><div class="track"></div><div class="act"></div><div class="halo"></div><div class="thumb"></div></div>
+  <div class="finger" id="finger"></div>
+</div>
+<script src="../kit/kit.js"></script>
+<script>
+  // Port of NotionPalette.resolve (lib/ui/notion/notion_appearance.dart): contrast-driven fills.
+  const ACCENTS = [['blue', '#0A7CFF', '#A033FF'], ['violet', '#8B5CF6', '#E0409F'], ['pink', '#EC4899', '#FF6A3D'],
+    ['red', '#EF4444', '#F97316'], ['orange', '#F97316', '#F43F5E'], ['green', '#22C55E', '#0FB5A6'],
+    ['teal', '#14B8A6', '#0A7CFF'], ['graphite', null, null]];
+  const BASE = {
+    dark: { bg: '#191919', surface: '#252525', selected: '#2F2F2F', border: '#383838', text: '#E8E7E5', text2: '#AAAAA5', bin: '#2B2B2B', legacy: '#414141', legacyText: '#EEEEEC' },
+    light: { bg: '#FAF9F6', surface: '#F0EFEB', selected: '#E8E7E3', border: '#D6D5D0', text: '#242424', text2: '#65655F', bin: '#ECEBE7', legacy: '#E8E7E3', legacyText: '#242424' },
+  };
+  const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+  const rgb2hex = (c) => '#' + c.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0')).join('');
+  function rgb2hsl([r, g, b]) {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    if (!d) return [0, 0, l];
+    const s = d / (1 - Math.abs(2 * l - 1));
+    const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [(h * 60 + 360) % 360, s, l];
+  }
+  function hsl2rgb([h, s, l]) {
+    const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+    const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return [r + m, g + m, b + m];
+  }
+  const lum = (h) => { const [r, g, b] = hex2rgb(h).map((v) => (v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)); return .2126 * r + .7152 * g + .0722 * b; };
+  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + .05) / (y + .05); };
+  const sat = (h, f) => { const [H, S, L] = rgb2hsl(hex2rgb(h)); return rgb2hex(hsl2rgb([H, Math.min(1, S * f), L])); };
+  function shiftUntil(h, other, min, dir) {
+    let [H, S, L] = rgb2hsl(hex2rgb(h)), c = h;
+    while (contrast(c, other) < min && L > 0 && L < 1) { L += dir * .005; c = rgb2hex(hsl2rgb([H, S, L])); }
+    return c;
+  }
+  const fillFor = (h, min = 4.5) => shiftUntil(h, '#ffffff', min, -1);
+  const inkOn = (h, bg, dark) => shiftUntil(h, bg, 4.5, dark ? 1 : -1);
+  const blend = (fg, a, bg) => { const f = hex2rgb(fg), b = hex2rgb(bg); return rgb2hex(f.map((v, i) => v * a + b[i] * (1 - a))); };
+
+  function palette(accent, intensity, theme) {
+    const b = BASE[theme], dark = theme === 'dark';
+    const [, seed, end] = ACCENTS.find((a) => a[0] === accent);
+    if (!seed) return { acc: b.text, fill: b.text, tint: b.selected, a: intensity === 'vivid' ? b.text : b.legacy, on: intensity === 'vivid' ? b.bg : b.legacyText, get b() { return this.a; } };
+    const hue = intensity === 'muted' ? sat(seed, .45) : intensity === 'vivid' ? sat(seed, 1.1) : seed;
+    const fill = fillFor(hue);
+    const tint = blend(fill, { muted: dark ? .16 : .12, balanced: dark ? .26 : .16, vivid: dark ? .34 : .22 }[intensity], b.surface);
+    const p = { acc: inkOn(hue, b.bg, dark), fill, tint, on: '#ffffff' };
+    if (intensity === 'muted') { p.a = blend(seed, dark ? .16 : .14, b.legacy); p.on = b.legacyText; }
+    else if (intensity === 'balanced') p.a = fillFor(sat(seed, .85), 5.2);
+    else { p.a = fillFor(sat(seed, 1.1)); p.b = fillFor(sat(end, 1.1)); }
+    p.b ||= p.a;
+    return p;
+  }
+
+  const scr = $('#scr');
+  const state = { accent: 'blue', intensity: 'balanced', theme: 'dark' };
+  $('#sw').append(...ACCENTS.map(([n]) => html(`<div class="s${n === 'blue' ? ' sel' : ''}" data-a="${n}"><i><b>✓</b></i></div>`)));
+
+  function apply() {
+    const { accent, intensity, theme } = state, b = BASE[theme], p = palette(accent, intensity, theme);
+    const set = (el, k, v) => el.style.setProperty(k, v);
+    Object.entries({ '--bg': b.bg, '--surface': b.surface, '--selected': b.selected, '--border': b.border, '--text': b.text, '--text2': b.text2,
+      '--bubble-in': b.bin, '--acc': p.acc, '--fill': p.fill, '--tint': p.tint, '--bub-a': p.a, '--bub-b': p.b, '--on-bub': p.on }).forEach(([k, v]) => set(scr, k, v));
+    $$('.s').forEach((s) => {
+      const q = palette(s.dataset.a, intensity, theme);
+      set(s.firstChild, '--sa', intensity === 'vivid' ? q.a : q.fill); set(s.firstChild, '--sb', intensity === 'vivid' ? q.b : q.fill);
+      s.classList.toggle('sel', s.dataset.a === accent);
+    });
+    $$('.int').forEach((c) => {
+      const q = palette(accent, c.dataset.i, theme);
+      set($('.mo', c), '--sa', q.a); set($('.mo', c), '--sb', q.b);
+      c.classList.toggle('sel', c.dataset.i === intensity);
+    });
+    $$('.desc div').forEach((d) => d.classList.toggle('hidden', d.dataset.i !== intensity));
+    $('#th-dark').classList.toggle('sel', theme === 'dark'); $('#th-light').classList.toggle('sel', theme === 'light');
+    scr.classList.toggle('light', theme === 'light'); document.body.classList.toggle('lt', theme === 'light'); scr.classList.toggle('vivid', intensity === 'vivid');
+  }
+
+  // Slider: Message text size, .85-1.4 in 5 % steps (settings_style_view.dart).
+  const MIN = .85, MAX = 1.4;
+  function setScale(v) {
+    const f = (v - MIN) / (MAX - MIN), w = $('#sl').clientWidth, x = f * w;
+    $('#sl .act').style.width = x + 'px'; $('#sl .thumb').style.left = x + 'px'; $('#sl .halo').style.left = x + 'px';
+    scr.style.setProperty('--ts', v);
+    $('#tsv').textContent = Math.round(v * 20) * 5 + '%';
+    const r = $('#sl').getBoundingClientRect(), fg = $('#finger');
+    fg.style.left = r.left + x + 'px'; fg.style.top = r.top + 20 + 'px';
+  }
+  apply(); setScale(1);
+  const ease = (p) => (p < .5 ? 4 * p * p * p : 1 - (-2 * p + 2) ** 3 / 2);
+  during(5500, 1300, (p) => setScale(1 + .25 * ease(p)));
+
+  const pick = (k, v) => () => { state[k] = v; apply(); };
+  scene(10200, [
+    [900, () => tap('.s[data-a="violet"]')],
+    [1000, pick('accent', 'violet')],
+    [2500, () => tap('.int[data-i="vivid"]')],
+    [2600, pick('intensity', 'vivid')],
+    [4100, () => tap('.s[data-a="green"]')],
+    [4200, pick('accent', 'green')],
+    [5250, () => { $('#finger').classList.add('on'); $('#sl').classList.add('drag'); }],
+    [6950, () => { $('#finger').classList.remove('on'); $('#sl').classList.remove('drag'); }],
+    [7500, () => tap('#th-light')],
+    [7600, pick('theme', 'light')],
+    [8900, () => tap('#th-dark')],
+    [9000, pick('theme', 'dark')],
+  ]);
+</script>

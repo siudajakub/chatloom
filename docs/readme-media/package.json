@@ -1,0 +1,12 @@
+{
+  "name": "chatloom-readme-media",
+  "private": true,
+  "type": "module",
+  "description": "Renders the animated README demos from HTML mockups with fictional data",
+  "scripts": {
+    "render": "node render.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}
