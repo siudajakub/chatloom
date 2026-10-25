@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../kit/kit.css">
+<style>
+  .pins { display: flex; gap: 12px; padding: 0 20px; }
+  .pin { flex: 1; height: 96px; border-radius: 18px; border: 1px solid var(--border); overflow: hidden; background: var(--surface); }
+  .pin .cov { height: 52px; background: var(--cover); display: grid; place-items: center; }
+  .pin .cov img { height: 40px; opacity: .9; }
+  .pin .who { display: flex; align-items: center; gap: 10px; padding: 8px 12px; font: 500 15px Roboto; }
+  #list { position: relative; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 15px; background: var(--surface); border: 1px solid var(--border); font: 400 13px Roboto; color: var(--text2); }
+  .chip.on { background: #10335a; border-color: #10335a; color: #CFE5FF; }
+  .chips { display: flex; gap: 8px; padding: 4px 20px 6px; }
+  .nets .mrow .net { position: static; border: none; width: 26px; height: 26px; font-size: 11px; }
+  .nets .mrow .sub { font-size: 13px; }
+  .tick { color: var(--accent); margin-left: 8px; }
+</style>
+<div class="screen">
+  <div class="status"><span>9:41</span><span class="ind"><i></i><i></i></span></div>
+  <h1 class="title">Chats</h1>
+  <div class="label">Pinned</div>
+  <div class="pins">
+    <div class="pin"><div class="cov"><img src="../../../assets/notion/pinned/coffee.svg"></div>
+      <div class="who"><div class="av sm h0">E</div>Emma</div></div>
+    <div class="pin"><div class="cov"><img src="../../../assets/notion/pinned/desk.svg"></div>
+      <div class="who"><div class="av sm h5">D</div>Design team</div></div>
+  </div>
+  <div class="chips"><span class="chip on" id="c-all">All</span><span class="chip">Unread</span><span class="chip">Groups</span><span class="chip">Drafts</span></div>
+  <div id="list">
+    <div class="row unread" data-n="tg"><div class="av h0">E<span class="net tg">T</span></div><div class="mid"><div class="name">Emma Lane</div><div class="last">Coffee tomorrow at 5? ☕</div></div><div class="meta">16:45<span class="badge">2</span></div></div>
+    <div class="row" data-n="wa"><div class="av h6">M<span class="net wa">W</span></div><div class="mid"><div class="name">Marcus Webb</div><div class="last">I'll send the files tonight.</div></div><div class="meta">15:20</div></div>
+    <div class="row unread" data-n="sl"><div class="av h5">D<span class="net sl">S</span></div><div class="mid"><div class="name">Design team</div><div class="last">Priya: new mockups are up</div></div><div class="meta">14:08<span class="badge">3</span></div></div>
+    <div class="row" data-n="tg"><div class="av h3">H<span class="net tg">T</span></div><div class="mid"><div class="name">Hiking club</div><div class="last">Leo: 🎥 Round video</div></div><div class="meta">13:02</div></div>
+    <div class="row" data-n="ig"><div class="av h7">S<span class="net ig">I</span></div><div class="mid"><div class="name">Sofia Reyes</div><div class="last">Shared a reel</div></div><div class="meta">12:31</div></div>
+    <div class="row" data-n="ms"><div class="av h1">F<span class="net ms">M</span></div><div class="mid"><div class="name">Family</div><div class="last">Mom: Have a lovely day 💛</div></div><div class="meta">10:12</div></div>
+    <div class="row" data-n="sg"><div class="av h4">N<span class="net sg">S</span></div><div class="mid"><div class="name">Noah Kim</div><div class="last">Voice message · 0:24</div></div><div class="meta">09:40</div></div>
+    <div class="row" data-n="tg"><div class="av h2">O<span class="net tg">T</span></div><div class="mid"><div class="name">Oliver Grant</div><div class="last">Thanks for your help!</div></div><div class="meta">Yesterday</div></div>
+  </div>
+  <div class="dock">
+    <div class="seg" style="font-size:20px">⚙︎</div><div class="sep"></div>
+    <div class="seg grow" style="color:var(--text2)">⌕&nbsp; Search</div><div class="sep"></div>
+    <div class="seg" id="netseg"><span id="netlabel">All networks</span> ▾</div>
+  </div>
+  <div class="scrim" id="scrim"></div>
+  <div class="sheet nets" id="sheet">
+    <div class="grab"></div>
+    <div class="label" style="padding-top:0">Show chats from</div>
+    <div class="mrow" id="n-all"><span class="ic">◎</span>All networks<span class="sub">8</span><span class="tick" id="t-all">✓</span></div>
+    <div class="mrow" id="n-tg"><span class="net tg">T</span>Telegram<span class="sub">3</span><span class="tick hidden" id="t-tg">✓</span></div>
+    <div class="mrow"><span class="net wa">W</span>WhatsApp<span class="sub">1</span></div>
+    <div class="mrow"><span class="net ms">M</span>Messenger<span class="sub">1</span></div>
+    <div class="mrow"><span class="net ig">I</span>Instagram<span class="sub">1</span></div>
+    <div class="mrow"><span class="net sg">S</span>Signal<span class="sub">1</span></div>
+    <div class="mrow"><span class="net sl">S</span>Slack<span class="sub">1</span></div>
+  </div>
+</div>
+<script src="../kit/kit.js"></script>
+<script>
+  const rows = $$('#list .row');
+  const openSheet = () => { $('#sheet').classList.add('open'); $('#scrim').classList.add('on'); };
+  const closeSheet = () => { $('#sheet').classList.remove('open'); $('#scrim').classList.remove('on'); };
+  function filter(net) {
+    // Fade the other networks out, then collapse them so the rest slides up.
+    rows.forEach((r) => { r.style.opacity = !net || r.dataset.n === net ? 1 : 0; });
+  }
+  function collapse(net) {
+    rows.forEach((r) => r.classList.toggle('gone', !!net && r.dataset.n !== net));
+    rows.filter((r) => !r.classList.contains('gone')).forEach((r) => r.classList.add('pop'));
+  }
+  scene(9000, [
+    [900, () => tap('#netseg')],
+    [1150, openSheet],
+    [2100, () => { tap('#n-tg'); $('#n-tg').style.background = 'var(--selected)'; }],
+    [2350, () => { $('#t-all').classList.add('hidden'); $('#t-tg').classList.remove('hidden'); }],
+    [2700, () => { closeSheet(); filter('tg'); $('#netlabel').textContent = 'Telegram'; }],
+    [3050, () => { collapse('tg'); }],
+    [5300, () => tap('#netseg')],
+    [5550, () => { $('#n-tg').style.background = ''; openSheet(); }],
+    [6400, () => { tap('#n-all'); $('#n-all').style.background = 'var(--selected)'; }],
+    [6650, () => { $('#t-tg').classList.add('hidden'); $('#t-all').classList.remove('hidden'); }],
+    [7000, () => { closeSheet(); rows.forEach((r) => r.classList.remove('pop')); collapse(null); filter(null); $('#netlabel').textContent = 'All networks'; }],
+    [7400, () => { $('#n-all').style.background = ''; }],
+  ]);
+</script>

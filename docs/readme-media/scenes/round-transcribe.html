@@ -1,0 +1,176 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../kit/kit.css">
+<style>
+  .chathead .dots { font: 700 18px Roboto; letter-spacing: 1px; color: var(--text2); }
+  .chathead .who small { display: flex; align-items: center; gap: 5px; }
+  .chathead .who small .net { position: static; border: none; width: 14px; height: 14px; font-size: 7px; }
+  .chathead .av .net { display: none; }
+
+  /* Round video (Telegram-style circle, abstract animated scene) */
+  .round { position: relative; width: 200px; height: 200px; flex: none; transform-origin: 0% 100%;
+    transition: transform .45s var(--ease); }
+  .round.play { transform: scale(1.12); }
+  .round .clip { position: absolute; inset: 7px; border-radius: 50%; overflow: hidden;
+    background: linear-gradient(180deg, #2C3F72 0%, #7A5C9E 38%, #F08A5D 66%, #FFC97A 74%); }
+  .round .sun { position: absolute; left: 50%; top: 92px; width: 54px; height: 54px; margin-left: -27px; border-radius: 50%;
+    background: radial-gradient(circle, #FFF3C4 0 45%, #FFD27F 70%, rgba(255,210,127,0) 72%); }
+  .round .sea { position: absolute; left: 0; right: 0; top: 136px; bottom: 0;
+    background: linear-gradient(180deg, #33507F, #1C2F52); }
+  .round .wave { position: absolute; left: -40px; width: 120%; height: 2px; border-radius: 1px; background: rgba(255,214,150,.55); }
+  .round .bk { position: absolute; border-radius: 50%; background: rgba(255,255,255,.22); }
+  .round .hill { position: absolute; bottom: 44px; width: 120px; height: 46px; border-radius: 60px 60px 0 0; background: #2A2347; }
+  .round svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .round .ringbg { fill: none; stroke: rgba(255,255,255,.14); stroke-width: 3.5; }
+  .round .ring { fill: none; stroke: #fff; stroke-width: 3.5; stroke-linecap: round; }
+  .round .dur { position: absolute; left: 22px; bottom: 18px; padding: 2px 8px; border-radius: 10px; background: rgba(0,0,0,.45);
+    font: 500 12px/18px Roboto; color: #fff; display: flex; gap: 5px; align-items: center; }
+  .round .dur i { width: 6px; height: 6px; border-radius: 50%; background: #fff; opacity: .9; }
+  .round .playic { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%;
+    background: rgba(0,0,0,.42); display: grid; place-items: center; transition: opacity .25s, transform .3s var(--ease); }
+  .round .playic::after { content: ""; margin-left: 4px; border-left: 17px solid #fff; border-top: 11px solid transparent; border-bottom: 11px solid transparent; }
+  .round.play .playic { opacity: 0; transform: scale(.7); }
+
+  /* Voice card, like the Flutter render */
+  .voice { width: 268px; padding: 12px 12px 12px; border-radius: 18px; background: var(--bubble-in); }
+  .voice .top { display: flex; align-items: center; gap: 14px; }
+  .voice .pb { width: 46px; height: 46px; border-radius: 50%; background: #E8E7E5; display: grid; place-items: center; flex: none; }
+  .voice .pb::after { content: ""; margin-left: 3px; border-left: 13px solid #191919; border-top: 8px solid transparent; border-bottom: 8px solid transparent; }
+  .voice .sl { flex: 1; }
+  .voice .bar { position: relative; height: 4px; border-radius: 2px; background: #8A8A86; margin: 6px 4px 10px 0; }
+  .voice .bar::before { content: ""; position: absolute; left: -2px; top: -5px; width: 14px; height: 14px; border-radius: 50%; background: #E8E7E5; }
+  .voice .len { font: 400 13.5px Roboto; }
+  .voice .ctl { display: flex; gap: 26px; padding: 12px 0 10px 16px; font: 500 14px Roboto; color: var(--text3); align-items: center; }
+  .voice .ctl svg { width: 18px; height: 18px; }
+  .pill { display: inline-flex; align-items: center; height: 36px; border-radius: 18px; border: 1px solid #555; overflow: hidden; transition: background .2s, border-color .3s; }
+  .pill .a { display: flex; align-items: center; gap: 9px; padding: 0 12px 0 14px; font: 500 14px Roboto; height: 100%; position: relative; }
+  .pill .a .lines { width: 14px; height: 10px; border-top: 2px solid var(--text); border-bottom: 2px solid var(--text); position: relative; }
+  .pill .a .lines::after { content: ""; position: absolute; left: 0; right: 0; top: 2px; height: 2px; background: var(--text); }
+  .pill .b { display: flex; align-items: center; gap: 4px; padding: 0 12px; height: 22px; border-left: 1px solid #555; font: 400 14px Roboto; color: var(--text3); }
+  .pill.busy { border-color: var(--accent); }
+  .pill.busy .a { color: #CFE5FF; }
+  .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(207,229,255,.3); border-top-color: #CFE5FF; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tr { max-height: 0; overflow: hidden; transition: max-height .45s var(--ease); }
+  .tr.open { max-height: 140px; }
+  .tr .inner { margin-top: 12px; padding-top: 10px; border-top: 1px solid #383838; }
+  .tr .text { font: 400 15px/1.4 Roboto; color: var(--text); min-height: 42px; }
+  .shim { height: 12px; border-radius: 6px; margin: 4px 0 9px; background: linear-gradient(90deg, #333 0%, #444 40%, #333 80%); background-size: 200% 100%;
+    animation: shim 1s linear infinite; }
+  @keyframes shim { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+  .tr .cap { display: flex; align-items: center; gap: 6px; margin-top: 8px; font: 400 12px Roboto; color: var(--text3); transition: opacity .35s; }
+  .tr .cap svg { width: 12px; height: 12px; }
+</style>
+<div class="screen">
+  <div class="status"><span>9:41</span><span class="ind"><i></i><i></i></span></div>
+  <div class="chathead">
+    <span class="back">‹</span>
+    <div class="av md h5">L</div>
+    <div class="who"><b>Leo Martin</b><small><span class="net tg">T</span>Telegram</small></div>
+    <span class="dots">•••</span>
+  </div>
+  <div class="timeline" id="tl">
+    <div class="day">Today</div>
+    <div class="msg out"><div class="bub">Have fun on the trip!</div></div>
+    <div class="time out">16:48<span class="ticks">✓✓</span></div>
+    <div class="msg"><div class="av sm h5">L</div><div class="bub">Thanks! Almost there 🚗</div></div>
+    <div class="time">16:55</div>
+    <div class="msg"><div class="av sm h5">L</div><div class="bub">Made it to the coast 🌊</div></div>
+    <div class="time">17:02</div>
+    <div class="msg out"><div class="bub">Jealous! Show me the view</div></div>
+    <div class="time out">17:03<span class="ticks">✓✓</span></div>
+    <div class="msg gone" id="m-round"><div class="av sm h5">L</div>
+      <div class="round" id="round">
+        <div class="clip">
+          <div class="bk" style="width:30px;height:30px;left:30px;top:30px" data-dx="22" data-dy="10"></div>
+          <div class="bk" style="width:18px;height:18px;left:128px;top:22px" data-dx="-16" data-dy="14"></div>
+          <div class="bk" style="width:12px;height:12px;left:100px;top:64px" data-dx="12" data-dy="-8"></div>
+          <div class="sun" id="sun"></div>
+          <div class="hill" style="left:-30px"></div>
+          <div class="hill" style="right:-40px;width:110px;height:36px;background:#352B55"></div>
+          <div class="sea">
+            <div class="wave" style="top:8px"></div>
+            <div class="wave" style="top:20px;opacity:.6"></div>
+            <div class="wave" style="top:34px;opacity:.4"></div>
+            <div class="wave" style="top:48px;opacity:.25"></div>
+          </div>
+        </div>
+        <svg viewBox="0 0 200 200"><circle class="ringbg" cx="100" cy="100" r="96"/><circle class="ring" id="ring" cx="100" cy="100" r="96"/></svg>
+        <div class="playic"></div>
+        <div class="dur"><i></i><span id="dur">0:12</span></div>
+      </div>
+    </div>
+    <div class="time gone" id="t-round">17:04</div>
+    <div class="msg gone" id="m-voice"><div class="av sm h5">L</div>
+      <div class="voice">
+        <div class="top"><div class="pb"></div>
+          <div class="sl"><div class="bar"></div><div class="len">0:18</div></div></div>
+        <div class="ctl">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 3v5h5"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 3v5h-5"/></svg>
+          <span>1×</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="#E8E7E5" stroke-width="2.2"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+        </div>
+        <div class="pill" id="pill"><span class="a" id="pill-a"><span class="lines" id="pill-ic"></span><span id="pill-t">Transcribe</span></span><span class="b">Auto ⌄</span></div>
+        <div class="tr" id="tr"><div class="inner">
+          <div id="shim"><div class="shim"></div><div class="shim" style="width:70%"></div></div>
+          <div class="text gone" id="tx"></div>
+          <div class="cap hidden" id="cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Only you can see this transcript</div>
+        </div></div>
+      </div>
+    </div>
+    <div class="time gone" id="t-voice">17:05</div>
+  </div>
+  <div class="composer">
+    <span class="plus">+</span>
+    <div class="field">Message…</div>
+    <div class="send" style="background:none;color:var(--text)"><svg width="20" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+  </div>
+</div>
+<script src="../kit/kit.js"></script>
+<script>
+  const C = 2 * Math.PI * 96;
+  const ring = $('#ring');
+  ring.style.strokeDasharray = C;
+  ring.style.strokeDashoffset = C;
+  const show = (...ids) => ids.forEach((id) => { $(id).classList.remove('gone'); $(id).classList.add('pop'); });
+
+  // Abstract "video": sun sinks, bokeh drifts, waves shimmer. Only while playing.
+  const PLAY = 1700, LEN = 3300;
+  const bks = $$('.round .bk'), waves = $$('.round .wave');
+  during(PLAY, LEN, (p) => {
+    if (p >= 1) { ring.style.strokeDashoffset = C; $('#dur').textContent = '0:12'; return; }
+    ring.style.strokeDashoffset = C * (1 - p);
+    const s = Math.round(p * 12);
+    $('#dur').textContent = '0:' + String(s).padStart(2, '0');
+    $('#sun').style.transform = `translateY(${p * 22}px) scale(${1 + p * .1})`;
+    bks.forEach((b) => { b.style.transform = `translate(${b.dataset.dx * p}px, ${b.dataset.dy * p}px)`; b.style.opacity = .6 + .4 * Math.sin(p * 6 + +b.dataset.dx); });
+    waves.forEach((w, i) => { w.style.transform = `translateX(${Math.sin(p * 9 + i * 1.3) * 14}px)`; });
+  });
+
+  const TX = 'Running ten minutes late — save me a seat by the window!';
+  scene(9700, [
+    [500, () => show('#m-round', '#t-round')],
+    [1450, () => tap('#round')],
+    [PLAY, () => $('#round').classList.add('play')],
+    [PLAY + LEN, () => { $('#round').classList.remove('play'); $('#dur').textContent = '0:12'; }],
+    [PLAY + LEN + 250, () => show('#m-voice', '#t-voice')],
+    [5900, () => { tap('#pill-a'); $('#pill-a').style.background = 'var(--selected)'; }],
+    [6100, () => {
+      $('#pill-a').style.background = '';
+      $('#pill').classList.add('busy');
+      $('#pill-ic').className = 'spin';
+      $('#pill-t').textContent = 'Transcribing…';
+      $('#tr').classList.add('open');
+    }],
+    [7150, () => {
+      $('#shim').classList.add('gone');
+      $('#tx').classList.remove('gone');
+      $('#pill').classList.remove('busy');
+      $('#pill-ic').className = 'lines';
+      $('#pill-t').textContent = 'Transcript';
+    }],
+    [8500, () => $('#cap').classList.remove('hidden')],
+  ]);
+  type('#tx', TX, 7150, 42);
+</script>
