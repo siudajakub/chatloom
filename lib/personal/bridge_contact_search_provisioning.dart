@@ -546,6 +546,22 @@ class BeeperProvisioningTransport implements BridgeProvisioningTransport {
   String _queryString(BridgeProvisioningRequest request) =>
       Uri(queryParameters: {'user_id': userId, ...request.query}).query;
 
+  /// The `path` and `escaped_path` of an `HTTPProxyRequest` for [request].
+  ///
+  /// mautrix-go (`appservice/wshttp.go`) takes `path` as already decoded
+  /// unless `escaped_path` is set: an encoded `create_dm/%40sh-…%3A…` would
+  /// reach the router as the literal text `%40sh-…`, which no bridge can
+  /// parse. Path parameters are therefore sent decoded; only one that holds
+  /// a `/` is sent encoded with `escaped_path` (bridges built before that
+  /// flag existed cannot take such a parameter at all).
+  static Map<String, Object> proxyPath(BridgeProvisioningRequest request) {
+    final encoded = '/_matrix/provision${request.path}';
+    if (encoded.toUpperCase().contains('%2F')) {
+      return {'path': encoded, 'escaped_path': true};
+    }
+    return {'path': Uri.decodeComponent(encoded)};
+  }
+
   @override
   Future<Object?> send(
     BridgeEndpoint bridge,
@@ -579,7 +595,7 @@ class BeeperProvisioningTransport implements BridgeProvisioningTransport {
         ..headers['Accept'] = 'application/json'
         ..body = jsonEncode({
           'method': request.method,
-          'path': '/_matrix/provision${request.path}',
+          ...proxyPath(request),
           'query': _queryString(request),
           'headers': {
             'Authorization': [authorization],

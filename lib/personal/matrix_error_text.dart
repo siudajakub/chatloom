@@ -419,6 +419,17 @@ final List<(RegExp, String Function(String net))> _bridgeTexts = [
     (_) => 'The bridge couldn’t open the chat. Try again.',
   ),
   (
+    // `doResolveIdentifier` hides the connector's cause behind this text.
+    RegExp(r'^internal error resolving identifier'),
+    (net) =>
+        'The bridge couldn’t find or open this person on $net. Try again '
+        'later.',
+  ),
+  (
+    RegExp(r'^this bridge does not support resolving identifiers'),
+    (_) => 'This bridge can’t start new chats.',
+  ),
+  (
     RegExp(r'^user does not have login permissions'),
     (_) => 'Your account isn’t allowed to use this bridge.',
   ),
