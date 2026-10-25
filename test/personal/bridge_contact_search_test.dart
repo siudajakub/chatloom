@@ -735,6 +735,131 @@ void main() {
     });
   });
 
+  group('http_proxy path parameters (as mautrix-go wshttp.go reads them)', () {
+    const instagram = BridgeEndpoint(
+      botId: '@sh-instagrambot:beeper.local',
+      network: 'instagram',
+      label: 'Instagram',
+    );
+    const messenger = BridgeEndpoint(
+      botId: '@sh-metabot:beeper.local',
+      network: 'facebook',
+      label: 'Messenger',
+    );
+
+    /// The `{identifier}` a bridge's router sees for a proxied request:
+    /// `path` is taken as decoded text unless `escaped_path` is set
+    /// (`appservice/wshttp.go`), and Go's mux unescapes each raw segment.
+    String routedIdentifier(Map<Object?, Object?> proxied) {
+      final path = proxied['path'] as String;
+      final segments = path.split('/');
+      return proxied['escaped_path'] == true
+          ? Uri.decodeComponent(segments.last)
+          : segments.last;
+    }
+
+    /// A hungryserv + bridge that records what the bridge router saw.
+    (BeeperProvisioningTransport, List<String>, List<Map<Object?, Object?>>)
+    bridge() {
+      final seen = <String>[];
+      final proxied = <Map<Object?, Object?>>[];
+      final transport = BeeperProvisioningTransport(
+        httpClient: MockClient((request) async {
+          final body = jsonDecode(request.body) as Map<Object?, Object?>;
+          proxied.add(body);
+          seen.add(routedIdentifier(body));
+          return http.Response(
+            jsonEncode({
+              'status': 201,
+              'headers': {},
+              'body': {
+                'id': '1000001',
+                'mxid': '@sh-instagram_1000001:beeper.local',
+                'dm_room_mxid': '!created:example.invalid',
+              },
+            }),
+            200,
+          );
+        }),
+        homeserver: Uri.parse('https://matrix.example.invalid'),
+        userId: '@fictional:example.invalid',
+        accessToken: () => 'fictional-token',
+        overrideUrl: '',
+      );
+      return (transport, seen, proxied);
+    }
+
+    test('create_dm reaches the bridge with the ghost id, not %-escapes', () async {
+      final (transport, seen, proxied) = bridge();
+      final api = BridgeProvisioningApi(transport);
+      await api.createDm(
+        instagram,
+        '@sh-instagram_1000001:beeper.local',
+        loginId: 'login-1',
+      );
+      await api.createDm(messenger, '@sh-meta_1000002:beeper.local');
+      await api.createDm(_whatsapp, '+48600100200');
+      await api.createDm(_telegram, '1000003');
+      expect(seen, [
+        '@sh-instagram_1000001:beeper.local',
+        '@sh-meta_1000002:beeper.local',
+        '+48600100200',
+        '1000003',
+      ]);
+      expect(proxied.first['method'], 'POST');
+      expect(
+        proxied.first['path'],
+        '/_matrix/provision/v3/create_dm/@sh-instagram_1000001:beeper.local',
+      );
+      expect(proxied.first.containsKey('escaped_path'), isFalse);
+      expect(Uri.splitQueryString(proxied.first['query'] as String), {
+        'user_id': '@fictional:example.invalid',
+        'login_id': 'login-1',
+      });
+    });
+
+    test('resolve_identifier lookups are routed the same way', () async {
+      final (transport, seen, _) = bridge();
+      await BridgeProvisioningApi(
+        transport,
+      ).resolveIdentifier(_whatsapp, '+48 600 100 200');
+      expect(seen, ['+48 600 100 200']);
+    });
+
+    test('an identifier with a slash keeps its segment via escaped_path', () async {
+      final (transport, seen, proxied) = bridge();
+      await BridgeProvisioningApi(transport).createDm(_telegram, 'a/b');
+      expect(proxied.single['escaped_path'], isTrue);
+      expect(proxied.single['path'], '/_matrix/provision/v3/create_dm/a%2Fb');
+      expect(seen, ['a/b']);
+    });
+
+    test('a found Instagram person opens the bridged DM once it syncs', () async {
+      final (transport, seen, _) = bridge();
+      final directory = BridgeDirectory(BridgeProvisioningApi(transport));
+      final client = Client('fictional instagram', database: _NoDatabase());
+      final pending = startBridgedChat(
+        directory: directory,
+        bridge: instagram,
+        identifier: '@sh-instagram_1000001:beeper.local',
+        loginId: 'login-1',
+        client: client,
+        timeout: const Duration(seconds: 5),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      // Beeper delivers the portal as an invite first; it still opens.
+      final room = Room(
+        id: '!created:example.invalid',
+        client: client,
+        membership: Membership.invite,
+      );
+      client.rooms.add(room);
+      client.onSyncStatus.add(SyncStatusUpdate(SyncStatus.finished));
+      expect(await pending, same(room));
+      expect(seen, ['@sh-instagram_1000001:beeper.local']);
+    });
+  });
+
   group('starting a chat (fake bridge, synthetic client)', () {
     test('creates the DM once and returns the room when it arrives', () async {
       final transport = FakeProvisioning(bridgeAnswers());
@@ -832,6 +957,29 @@ void main() {
           'WhatsApp',
         ),
         'The bridge couldn’t open the chat. Try again.',
+      );
+      expect(
+        bridgedChatError(
+          const BridgeProvisioningException(
+            500,
+            errcode: 'M_UNKNOWN',
+            message: 'Internal error resolving identifier',
+          ),
+          'Instagram',
+        ),
+        'The bridge couldn’t find or open this person on Instagram. Try '
+        'again later.',
+      );
+      expect(
+        bridgedChatError(
+          const BridgeProvisioningException(
+            404,
+            errcode: 'M_UNRECOGNIZED',
+            message: 'This bridge does not support resolving identifiers',
+          ),
+          'Messenger',
+        ),
+        'This bridge can’t start new chats.',
       );
       expect(
         bridgedChatError(
