@@ -3,11 +3,13 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/connection_status.dart';
 import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/presence_status.dart';
 import 'package:chatloom/personal/ui/conversation_activity_widgets.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -16,6 +18,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const _owner = '@owner:example.invalid';
 const _peer = '@peer:example.invalid';
@@ -122,7 +125,11 @@ void main() {
     OwnSenderResolver.of(client).dispose();
   });
 
-  Widget host(Iterable<Room> rooms, {bool sources = false}) => MaterialApp(
+  Widget host(
+    Iterable<Room> rooms, {
+    bool sources = false,
+    bool header = false,
+  }) => MaterialApp(
     theme: NotionTheme.build(Brightness.dark),
     localizationsDelegates: L10n.localizationsDelegates,
     supportedLocales: L10n.supportedLocales,
@@ -131,6 +138,7 @@ void main() {
         client: client,
         rooms: rooms,
         now: () => now,
+        headerPresence: header,
         builder: (context, activity) => Column(
           children: [
             ConversationActivityAvatar(
@@ -171,15 +179,93 @@ void main() {
       find.byKey(const ValueKey('conversation-online-dot')),
       findsOneWidget,
     );
-    expect(find.text('Currently active'), findsOneWidget);
+    expect(find.text('online'), findsOneWidget);
     client.onSyncStatus.add(const SyncStatusUpdate(SyncStatus.error));
     currentStatus = const SyncStatusUpdate(SyncStatus.error);
     statuses.add(currentStatus);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('conversation-online-dot')), findsNothing);
-    expect(find.text('Currently active'), findsNothing);
+    expect(find.text('online'), findsNothing);
     expect(find.text('Waiting for network…'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  group('header presence', () {
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      await AppSettings.init(loadWebConfigFile: false);
+      PresenceDisplay.debugReset(true);
+    });
+    tearDown(PresenceDisplay.debugReset);
+
+    CachedPresence seen(DateTime at, {String presence = 'offline'}) =>
+        CachedPresence.fromJson({
+          'user_id': _peer,
+          'presence': presence,
+          'last_active_timestamp': at.millisecondsSinceEpoch,
+        });
+
+    testWidgets('bridged ghost last seen updates live and hides when off', (
+      tester,
+    ) async {
+      now = DateTime(2026, 10, 23, 14, 3);
+      final room = _room(client, 'tg', network: 'telegram');
+      await tester.pumpWidget(host([room], header: true));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('last seen'), findsNothing);
+
+      client.onPresenceChanged.add(
+        seen(now.subtract(const Duration(minutes: 5))),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('last seen 5 min ago'), findsOneWidget);
+
+      // Re-worded while visible, without any sync.
+      now = now.add(const Duration(minutes: 1));
+      await tester.pump(const Duration(minutes: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('last seen 6 min ago'), findsOneWidget);
+
+      await PresenceDisplay.set(false);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('last seen'), findsNothing);
+      await PresenceDisplay.set(true);
+      await tester.pumpAndSettle();
+      expect(find.text('last seen 6 min ago'), findsOneWidget);
+
+      client.onPresenceChanged.add(seen(now, presence: 'online'));
+      await tester.pumpAndSettle();
+      expect(find.text('online'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('conversation-online-dot')),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('other surfaces still ignore bridged ghosts', (tester) async {
+      now = DateTime(2026, 10, 23, 14, 3);
+      final room = _room(client, 'wa', network: 'whatsapp');
+      await tester.pumpWidget(host([room]));
+      await tester.pumpAndSettle();
+      client.onPresenceChanged.add(seen(now, presence: 'online'));
+      client.onPresenceChanged.add(
+        seen(now.subtract(const Duration(minutes: 5))),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('last seen'), findsNothing);
+      expect(find.text('online'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('no presence data keeps the resting line', (tester) async {
+      final room = _room(client, 'ig', network: 'instagram');
+      await tester.pumpWidget(host([room], header: true));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('last seen'), findsNothing);
+      expect(find.text('online'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
   });
 
   testWidgets('merged typing names both sources and expires without sync', (
@@ -313,8 +399,8 @@ void main() {
         CachedPresence(PresenceType.online, null, null, true, _peer),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Currently active'), findsOneWidget);
-      expect(find.bySemanticsLabel(RegExp('Currently active')), findsWidgets);
+      expect(find.text('online'), findsOneWidget);
+      expect(find.bySemanticsLabel(RegExp('online')), findsWidgets);
       await capture('native-header-online');
 
       final typing = BasicEvent(

@@ -130,6 +130,11 @@ enum AppSettings<T> {
   /// Inbox row swipes (Telegram): left archives (with Undo), right marks
   /// read or unread. Settings › Chats › "Swipe chats in the list" (UX-14).
   inboxSwipeActions<bool>('pl.personal.inbox.swipe_actions', true),
+
+  /// Chat header line "online" / "last seen …" from received Matrix
+  /// presence. Display only: it never changes what this device sends.
+  /// Settings › Privacy & security › "Show activity status".
+  personalShowPresence<bool>('pl.personal.chat.show_presence', true),
   benchmarksInLogs<bool>('chat.fluffy.benchmarks_in_logs', false);
 
   final String key;

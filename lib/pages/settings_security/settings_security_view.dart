@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/presence_status.dart';
 import 'package:chatloom/personal/ui/notion_privacy_preferences.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -38,6 +39,17 @@ class SettingsSecurityView extends StatelessWidget {
             onReceipts: (value) => controller.setPrivacy(
               value,
               setting: AppSettings.sendPublicReadReceipts,
+            ),
+          ),
+          ValueListenableBuilder<bool>(
+            valueListenable: PresenceDisplay.enabled,
+            builder: (context, show, _) => NotionSettingsToggle(
+              value: show,
+              title: 'Show activity status',
+              subtitle:
+                  '"online" or "last seen" under a chat name when the network '
+                  'shares it. Display only: it never shares your own status.',
+              onChanged: PresenceDisplay.set,
             ),
           ),
           NotionListRow(

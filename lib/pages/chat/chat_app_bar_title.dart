@@ -28,6 +28,7 @@ class ChatAppBarTitle extends StatelessWidget {
     return ConversationActivityBuilder(
       client: room.client,
       rooms: [room],
+      headerPresence: true,
       builder: (context, activity) => NotionCompactChatHeader(
         // The partner's member event may load after the page is built.
         avatar: StreamBuilder(

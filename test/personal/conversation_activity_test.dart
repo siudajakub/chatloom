@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/presence_status.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 
@@ -435,5 +436,134 @@ void main() {
       row.dispose();
     }
     activity.removeListener(listener);
+  });
+
+  group('bridge presence account data', () {
+    late ConversationActivity bridged;
+    setUp(() {
+      _state(room, 'm.bridge', {
+        'protocol': {'id': 'telegram'},
+      });
+      bridged = ConversationActivity(
+        client: client,
+        rooms: [room],
+        now: () => now,
+        presenceAllowed: (_) => true,
+      );
+    });
+    tearDown(() => bridged.dispose());
+
+    void write(Map<String, Object?> content) {
+      final event = BasicEvent(type: chatloomPresenceType, content: content);
+      room.roomAccountData[chatloomPresenceType] = event;
+      client.onSync.add(
+        SyncUpdate(
+          nextBatch: 'presence',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(accountData: [event]),
+            },
+          ),
+        ),
+      );
+    }
+
+    int ms(DateTime at) => at.millisecondsSinceEpoch;
+
+    testWidgets('online is live, then stale online reads as last seen', (
+      tester,
+    ) async {
+      bridged.addListener(listener);
+      expect(bridged.presences, isEmpty);
+      write({
+        'presence': 'online',
+        'last_active_ts': ms(now),
+        'precision': 'exact',
+        'source': 'telegram',
+      });
+      await tester.pump();
+      expect(notifications, 1);
+      expect(bridged.presences.single.online, isTrue);
+      final written = now;
+      now = now.add(const Duration(minutes: 5));
+      await tester.pump(const Duration(minutes: 5));
+      expect(notifications, 2);
+      final stale = bridged.presences.single;
+      expect(stale.online, isFalse);
+      expect(stale.lastActive, written);
+      bridged.removeListener(listener);
+    });
+
+    testWidgets('exact offline, coarse buckets, malformed and future', (
+      tester,
+    ) async {
+      final seen = now.subtract(const Duration(minutes: 7));
+      write({'presence': 'offline', 'last_active_ts': ms(seen)});
+      expect(bridged.presences.single.lastActive, seen);
+      expect(bridged.presences.single.precision, PresencePrecision.exact);
+
+      write({
+        'presence': 'offline',
+        'last_active_ts': ms(now),
+        'precision': 'week',
+      });
+      expect(bridged.presences.single.lastActive, isNull);
+      expect(bridged.presences.single.precision, PresencePrecision.week);
+
+      write({'presence': 'away', 'last_active_ts': ms(now)});
+      expect(bridged.presences, isEmpty);
+      write({'presence': 'offline', 'last_active_ts': '1'});
+      expect(bridged.presences, isEmpty);
+      write({
+        'presence': 'offline',
+        'last_active_ts': ms(now.add(const Duration(hours: 1))),
+      });
+      expect(bridged.presences, isEmpty);
+      // Small clock skew is clamped, not rejected.
+      write({
+        'presence': 'online',
+        'last_active_ts': ms(now.add(const Duration(seconds: 30))),
+      });
+      expect(bridged.presences.single.online, isTrue);
+    });
+
+    testWidgets('the fresher of Matrix presence and bridge data wins', (
+      tester,
+    ) async {
+      bridged.addListener(listener);
+      final matrix = CachedPresence(
+        PresenceType.offline,
+        null,
+        null,
+        false,
+        _peer,
+      )..lastActiveTimestamp = now.subtract(const Duration(minutes: 30));
+      client.onPresenceChanged.add(matrix);
+      await tester.pump();
+      write({
+        'presence': 'offline',
+        'last_active_ts': ms(now.subtract(const Duration(minutes: 3))),
+      });
+      expect(
+        bridged.presences.single.lastActive,
+        now.subtract(const Duration(minutes: 3)),
+      );
+      matrix.lastActiveTimestamp = now.subtract(const Duration(minutes: 1));
+      expect(bridged.presences.single.lastActive, matrix.lastActiveTimestamp);
+      // Live Matrix online beats an older bridge offline.
+      client.onPresenceChanged.add(
+        CachedPresence(PresenceType.online, null, null, true, _peer),
+      );
+      await tester.pump();
+      expect(bridged.presences.single.online, isTrue);
+      bridged.removeListener(listener);
+    });
+
+    testWidgets('default surfaces ignore bridge data of bridged rooms', (
+      tester,
+    ) async {
+      write({'presence': 'online', 'last_active_ts': ms(now)});
+      expect(activity.presences, isEmpty);
+    });
   });
 }
