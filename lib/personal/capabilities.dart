@@ -2,6 +2,8 @@
 
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/bridge_capabilities.dart';
+
+import 'round_video/messenger_round_gate.dart';
 import 'round_video/round_availability.dart';
 import 'round_video/telegram_room_binding.dart';
 
@@ -119,7 +121,26 @@ abstract final class RoomCapabilities {
     int? pollOptions,
     int? longestPollOption,
   }) {
-    if (feature == BridgeFeature.roundVideo) {
+    final messenger = feature == BridgeFeature.roundVideo
+        ? MessengerRoundGate.of(room, stateKey: stateKey)
+        : null;
+    if (messenger != null) {
+      // Messenger has no round type: the round is an ordinary MP4 video,
+      // checked against the stock bridge's `m.video` declaration below.
+      final gate = MessengerRoundGate.diagnose(room, stateKey: stateKey);
+      if (gate.terminal) {
+        return BridgeCapabilityEvidence(
+          CapabilityResult(
+            CapabilityStatus.unavailable,
+            roundGateMessage(gate.code),
+          ),
+          source: 'messenger.round',
+          reasonCode: 'round:${gate.code.name}',
+        );
+      }
+      feature = BridgeFeature.video;
+      stateKey ??= messenger.identity.stateKey;
+    } else if (feature == BridgeFeature.roundVideo) {
       final binding = TelegramRoomBinding.of(room, stateKey: stateKey);
       if (binding == null) {
         final gate = TelegramRoomBinding.diagnose(room, stateKey: stateKey);

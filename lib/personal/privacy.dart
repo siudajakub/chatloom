@@ -10,6 +10,8 @@ import 'capabilities.dart';
 import 'journal_trust.dart';
 import 'network_chat_actions.dart';
 import 'privacy_transport.dart';
+import 'round_video/messenger_round_gate.dart';
+import 'round_video/round_send_route.dart';
 import 'round_video/telegram_media_protocol.dart';
 import 'round_video/telegram_room_binding.dart';
 import 'round_video/telegram_round_service.dart';
@@ -134,6 +136,7 @@ abstract final class PersonalPrivacy {
     MediaPrefetcher.closeFor(client);
     unawaited(TelegramRoundService.closeFor(client));
     TelegramRoomBinding.forget(client);
+    MessengerRoundGate.forget(client);
     _observed.removeWhere((room, _) => identical(room.client, client));
     _readCutoffs.removeWhere((room, _) => identical(room.client, client));
     _typingRooms.removeWhere((room) => identical(room.client, client));
@@ -257,14 +260,18 @@ abstract final class PersonalPrivacy {
         throw const PrivacySuppressed();
       }
       if (round != null) {
-        final preflight = await TelegramRoomBinding.preflight(room);
+        // The route the round was prepared for: the Telegram fork marker,
+        // or the Messenger display marker (an ordinary video there).
+        final preflight = await RoundSendRoute.forContent(
+          content,
+        ).preflight(room);
         final profile = preflight?.profile;
         if (!surfaceUnlocked ||
             !room.encrypted ||
             !client.encryptionEnabled ||
             !client.fileEncryptionEnabled ||
             !frozenRoundTargetCurrent(room) ||
-            preflight?.result.allowed != true ||
+            preflight?.allowed != true ||
             profile == null ||
             !RoundMediaPolicy.fromContent(content).canPersist ||
             round.width == null ||
@@ -299,7 +306,7 @@ abstract final class PersonalPrivacy {
               (event != null &&
                   RoundVideoDescriptor.fromContent(event.content) != null))) {
         throw const PersonalCapabilityUnavailable(
-          'Telegram does not support editing sent round videos.',
+          "Round videos can't be edited after they are sent.",
         );
       }
       final fileInfo = content['info'];

@@ -8,12 +8,15 @@ import '../media/immediate_media_outbox.dart';
 import '../media/pending_media_store.dart';
 import '../storage/storage_failure.dart';
 import 'round_media_preparer.dart';
+import 'round_send_route.dart';
 import 'telegram_room_binding.dart';
 
 enum RoundAvailabilityKind { available, needsTrust, unavailable }
 
-/// What the composer may offer for round video in one room. Never authorizes
-/// a send: `TelegramRoundService.captureAndSend` repeats every check.
+/// What the composer may offer for round video in one room: Telegram chats
+/// (native round) and Messenger chats (sent as a square video), nowhere
+/// else. Never authorizes a send: `TelegramRoundService.captureAndSend`
+/// repeats every check.
 class RoundAvailability {
   final RoundGateCode code;
   const RoundAvailability._(this.code);
@@ -64,7 +67,7 @@ class RoundAvailability {
     final cached = _cache[room];
     if (cached != null && cached.$1 == key) return cached.$2;
     final value = RoundAvailability.fromReport(
-      TelegramRoomBinding.diagnose(room),
+      RoundSendRoute.diagnoseRoom(room),
     );
     _cache[room] = (key, value);
     return value;
@@ -85,29 +88,31 @@ String roundGateTitle(RoundGateCode code) => switch (code) {
     'Confirm your Telegram bridge before sending the first round video.',
   RoundGateCode.notJoined => 'Join this chat to send round videos.',
   RoundGateCode.noBridgeInfo =>
-    "This chat isn't connected through a Telegram bridge.",
-  RoundGateCode.notTelegram =>
-    'Round videos are only available in Telegram chats.',
+    "This chat isn't connected through a Telegram or Messenger bridge.",
+  RoundGateCode.notTelegram || RoundGateCode.unsupportedNetwork =>
+    'Round videos are only available in Telegram and Messenger chats.',
   RoundGateCode.missingLegacyBridgeInfo || RoundGateCode.missingRoomFeatures =>
-    "The Telegram bridge hasn't published its features for this chat yet.",
+    "The bridge hasn't published its features for this chat yet.",
   RoundGateCode.bridgeLacksRoundSupport =>
     "This Telegram bridge doesn't support round video messages yet.",
   RoundGateCode.extensionVersion =>
     'This Telegram bridge uses an unsupported round video version.',
   RoundGateCode.foreignOwner =>
-    "This chat's Telegram bridge belongs to a different account.",
+    "This chat's bridge belongs to a different account.",
   RoundGateCode.roomMismatch =>
     "The bridge's round video support doesn't match this chat.",
   RoundGateCode.senderMismatch =>
     "The bridge's round video support couldn't be verified.",
-  RoundGateCode.botNotJoined => "The Telegram bridge isn't in this chat.",
+  RoundGateCode.botNotJoined => "The bridge isn't in this chat.",
   RoundGateCode.receiverMismatch =>
-    'This chat is bridged through a different Telegram login.',
+    'This chat is bridged through a different login.',
   RoundGateCode.ambiguousBridges =>
     'Several bridges serve this chat, so round videos are turned off.',
   RoundGateCode.roundDenied => "Round videos aren't allowed in this chat.",
   RoundGateCode.roundNotDeclared =>
     "The bridge hasn't enabled round videos for this chat.",
+  RoundGateCode.videoNotAllowed =>
+    "This Messenger chat doesn't accept video messages.",
   RoundGateCode.uploadLimitUnknown =>
     "Couldn't confirm the server's upload limit.",
   RoundGateCode.profileIncomplete =>
