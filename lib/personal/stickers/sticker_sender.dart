@@ -13,8 +13,9 @@ import 'sticker_send_plan.dart';
 
 /// Sends stickers and GIFs from the panel, adapted to the room's network
 /// ([StickerSendPlan]). Telegram keeps the panel open after a send and so
-/// does ChatLoom; the item becomes the newest recent once the server has
-/// accepted it.
+/// does ChatLoom; the item becomes the newest recent at once (Telegram),
+/// not when the server answers: a send that waits in the queue, retries or
+/// fails must not keep the recents behind.
 abstract final class StickerSender {
   /// Sends [item] to [host]'s room (as a reply when one is being composed).
   /// Returns false when nothing was sent: not possible in this room (the
@@ -51,6 +52,11 @@ abstract final class StickerSender {
     }
     NotionHaptics.send();
     final library = StickerLibrary.of(room.client);
+    if (item.kind == StickerKind.gif) {
+      library.useGif(item);
+    } else {
+      library.useSticker(item);
+    }
     // The panel may be closed by the time the server answers: report on
     // the app's navigator.
     const reporter = ErrorReporter.action(null, action: ErrorAction.send);
@@ -61,14 +67,7 @@ abstract final class StickerSender {
           threadRootEventId: thread,
           threadLastEventId: host.threadLastEventId,
         )
-        .then<void>((eventId) {
-          if (eventId == null) return;
-          if (item.kind == StickerKind.gif) {
-            library.useGif(item);
-          } else {
-            library.useSticker(item);
-          }
-        }, onError: reporter.onErrorCallback);
+        .then<void>((_) {}, onError: reporter.onErrorCallback);
     return true;
   }
 }

@@ -545,47 +545,42 @@ class _GifGrid extends StatelessWidget {
       // Telegram shows GIFs larger than stickers: 3 per row on phones.
       final columns = math.max(3, (width / 140).floor()).clamp(3, 6);
       final tile = width / columns;
-      return TickerMode(
-        enabled: false,
-        child: CustomScrollView(
-          slivers: [
-            for (final (title, items) in sections) ...[
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    NotionSpace.sm,
-                    NotionSpace.xs,
-                    NotionSpace.sm,
-                    NotionSpace.xxs,
-                  ),
-                  child: Text(
-                    title,
-                    style: context.notion.typography.captionMuted,
-                  ),
+      return CustomScrollView(
+        slivers: [
+          for (final (title, items) in sections) ...[
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  NotionSpace.sm,
+                  NotionSpace.xs,
+                  NotionSpace.sm,
+                  NotionSpace.xxs,
+                ),
+                child: Text(
+                  title,
+                  style: context.notion.typography.captionMuted,
                 ),
               ),
-              SliverGrid.builder(
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: columns,
-                  mainAxisExtent: tile,
-                ),
-                itemCount: items.length,
-                itemBuilder: (context, i) => StickerTile(
-                  key: ValueKey('$title/${items[i].key}'),
-                  item: items[i],
-                  client: client,
-                  size: tile,
-                  fit: BoxFit.cover,
-                  onTap: () => onTap(items[i]),
-                  onLongPress: () => onLongPress(items[i]),
-                ),
+            ),
+            SliverGrid.builder(
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                mainAxisExtent: tile,
               ),
-            ],
-            const SliverPadding(
-              padding: EdgeInsets.only(bottom: NotionSpace.xs),
+              itemCount: items.length,
+              itemBuilder: (context, i) => StickerTile(
+                key: ValueKey('$title/${items[i].key}'),
+                item: items[i],
+                client: client,
+                size: tile,
+                fit: BoxFit.cover,
+                onTap: () => onTap(items[i]),
+                onLongPress: () => onLongPress(items[i]),
+              ),
             ),
           ],
-        ),
+          const SliverPadding(padding: EdgeInsets.only(bottom: NotionSpace.xs)),
+        ],
       );
     },
   );

@@ -13,6 +13,7 @@ import 'sticker_pack_sheet.dart';
 import 'sticker_send_plan.dart';
 import 'sticker_sender.dart';
 import 'sticker_tile.dart';
+import 'telegram_pack_import_page.dart';
 
 /// One labelled block of the sticker grid (favourites, recents, a pack).
 @immutable
@@ -122,8 +123,9 @@ class _StickerTabState extends State<StickerTab> {
   (int, String)? _sectionsKey;
   List<StickerSection> _sections = const [];
 
-  /// Section start offsets of the last layout.
+  /// Section start offsets of the last layout, and their section keys.
   List<double> _offsets = const [];
+  List<String> _offsetKeys = const [];
 
   static const _stripExtent = NotionSize.touchTarget;
 
@@ -206,6 +208,29 @@ class _StickerTabState extends State<StickerTab> {
     }
   }
 
+  /// A sent sticker joins the recents (or a favourite is added) above the
+  /// pack being browsed: the grid keeps that pack where it was instead of
+  /// jumping by the rows that appeared above it.
+  void _keepAnchor(List<String> keys, List<double> offsets) {
+    final previousKeys = _offsetKeys;
+    final previous = _offsets;
+    _offsetKeys = keys;
+    if (_searching || !_scroll.hasClients || previous.isEmpty) return;
+    final selected = _selected.value;
+    if (selected >= previousKeys.length || _scroll.offset <= 0) return;
+    final index = keys.indexOf(previousKeys[selected]);
+    if (index < 0) return;
+    final delta = offsets[index] - previous[selected];
+    if (delta.abs() < .5) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      final position = _scroll.position;
+      _scroll.jumpTo(
+        (position.pixels + delta).clamp(0.0, position.maxScrollExtent),
+      );
+    });
+  }
+
   void _jumpTo(int index) {
     if (_searching) _closeSearch();
     _selected.value = index;
@@ -280,7 +305,6 @@ class _StickerTabState extends State<StickerTab> {
   @override
   Widget build(BuildContext context) {
     final sections = _currentSections();
-    final room = widget.host.room;
     if (sections.isEmpty && !_searching) {
       return SingleChildScrollView(
         child: NotionEmptyState(
@@ -291,11 +315,7 @@ class _StickerTabState extends State<StickerTab> {
           action: NotionButton.primary(
             label: 'Import from Telegram',
             icon: Icons.download_outlined,
-            onPressed: () => showTelegramPackImport(
-              context,
-              client: room.client,
-              library: _library,
-            ),
+            onPressed: () => showTelegramPackImport(context),
           ),
         ),
       );
@@ -318,11 +338,8 @@ class _StickerTabState extends State<StickerTab> {
         ),
         Expanded(
           child: LayoutBuilder(
-            builder: (context, constraints) => _grid(
-              context,
-              constraints.maxWidth,
-              sections,
-            ),
+            builder: (context, constraints) =>
+                _grid(context, constraints.maxWidth, sections),
           ),
         ),
       ],
@@ -380,11 +397,7 @@ class _StickerTabState extends State<StickerTab> {
             return NotionIconButton(
               icon: Icons.add,
               label: 'Add sticker packs',
-              onPressed: () => showTelegramPackImport(
-                context,
-                client: client,
-                library: _library,
-              ),
+              onPressed: () => showTelegramPackImport(context),
             );
           }
           final index = i - 1;
@@ -460,9 +473,10 @@ class _StickerTabState extends State<StickerTab> {
     final client = widget.host.room.client;
     final columns = columnsFor(width);
     final tile = width / columns;
-    final header = MediaQuery.textScalerOf(context).scale(
-          NotionType.caption.fontSize! * 1.5,
-        ) +
+    final header =
+        MediaQuery.textScalerOf(
+          context,
+        ).scale(NotionType.caption.fontSize! * 1.5) +
         NotionSpace.sm;
     if (_searching) {
       final query = _query.text;
@@ -480,23 +494,20 @@ class _StickerTabState extends State<StickerTab> {
           ),
         );
       }
-      return TickerMode(
-        enabled: false,
-        child: GridView.builder(
-          padding: const EdgeInsets.only(bottom: NotionSpace.xs),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: columns,
-            mainAxisExtent: tile,
-          ),
-          itemCount: results.length,
-          itemBuilder: (context, i) => StickerTile(
-            key: ValueKey(results[i].key),
-            item: results[i],
-            client: client,
-            size: tile,
-            onTap: () => _send(results[i]),
-            onLongPress: () => _preview(results[i]),
-          ),
+      return GridView.builder(
+        padding: const EdgeInsets.only(bottom: NotionSpace.xs),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: columns,
+          mainAxisExtent: tile,
+        ),
+        itemCount: results.length,
+        itemBuilder: (context, i) => StickerTile(
+          key: ValueKey(results[i].key),
+          item: results[i],
+          client: client,
+          size: tile,
+          onTap: () => _send(results[i]),
+          onLongPress: () => _preview(results[i]),
         ),
       );
     }
@@ -507,58 +518,52 @@ class _StickerTabState extends State<StickerTab> {
       offsets.add(y);
       y += header + (section.items.length / columns).ceil() * tile;
     }
+    _keepAnchor([for (final s in sections) s.key], offsets);
     _offsets = offsets;
-    return TickerMode(
-      enabled: false,
-      child: CustomScrollView(
-        controller: _scroll,
-        slivers: [
-          for (final section in sections) ...[
-            SliverToBoxAdapter(
-              key: ValueKey('header-${section.key}'),
-              child: SizedBox(
-                height: header,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: NotionSpace.sm,
-                  ),
-                  child: Align(
-                    alignment: AlignmentDirectional.bottomStart,
-                    child: Text(
-                      section.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.notion.typography.captionMuted,
-                    ),
+    return CustomScrollView(
+      controller: _scroll,
+      slivers: [
+        for (final section in sections) ...[
+          SliverToBoxAdapter(
+            key: ValueKey('header-${section.key}'),
+            child: SizedBox(
+              height: header,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: NotionSpace.sm),
+                child: Align(
+                  alignment: AlignmentDirectional.bottomStart,
+                  child: Text(
+                    section.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.notion.typography.captionMuted,
                   ),
                 ),
               ),
             ),
-            SliverGrid.builder(
-              key: ValueKey('grid-${section.key}'),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: columns,
-                mainAxisExtent: tile,
-              ),
-              itemCount: section.items.length,
-              itemBuilder: (context, i) {
-                final item = section.items[i];
-                return StickerTile(
-                  key: ValueKey('${section.key}/${item.key}'),
-                  item: item,
-                  client: client,
-                  size: tile,
-                  onTap: () => _send(item),
-                  onLongPress: () => _preview(item, section: section),
-                );
-              },
+          ),
+          SliverGrid.builder(
+            key: ValueKey('grid-${section.key}'),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columns,
+              mainAxisExtent: tile,
             ),
-          ],
-          const SliverPadding(
-            padding: EdgeInsets.only(bottom: NotionSpace.xs),
+            itemCount: section.items.length,
+            itemBuilder: (context, i) {
+              final item = section.items[i];
+              return StickerTile(
+                key: ValueKey('${section.key}/${item.key}'),
+                item: item,
+                client: client,
+                size: tile,
+                onTap: () => _send(item),
+                onLongPress: () => _preview(item, section: section),
+              );
+            },
           ),
         ],
-      ),
+        const SliverPadding(padding: EdgeInsets.only(bottom: NotionSpace.xs)),
+      ],
     );
   }
 }

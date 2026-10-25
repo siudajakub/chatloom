@@ -201,27 +201,22 @@ class _StickerSuggestionStripState extends State<StickerSuggestionStrip> {
                   ),
                   child: SizedBox(
                     height: StickerSuggestionStrip.cellSize + NotionSpace.xs,
-                    // Static cells, as in the panel (battery): the preview
-                    // animates.
-                    child: TickerMode(
-                      enabled: false,
-                      child: ListView.builder(
-                        key: const ValueKey('sticker-suggestions'),
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.all(NotionSpace.xxs),
-                        itemCount: shown.length,
-                        itemBuilder: (context, index) {
-                          final item = shown[index];
-                          return StickerTile(
-                            key: ValueKey(item.key),
-                            item: item,
-                            client: _host.room.client,
-                            size: StickerSuggestionStrip.cellSize,
-                            onTap: () => unawaited(_send(item)),
-                            onLongPress: () => _preview(item),
-                          );
-                        },
-                      ),
+                    child: ListView.builder(
+                      key: const ValueKey('sticker-suggestions'),
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.all(NotionSpace.xxs),
+                      itemCount: shown.length,
+                      itemBuilder: (context, index) {
+                        final item = shown[index];
+                        return StickerTile(
+                          key: ValueKey(item.key),
+                          item: item,
+                          client: _host.room.client,
+                          size: StickerSuggestionStrip.cellSize,
+                          onTap: () => unawaited(_send(item)),
+                          onLongPress: () => _preview(item),
+                        );
+                      },
                     ),
                   ),
                 ),

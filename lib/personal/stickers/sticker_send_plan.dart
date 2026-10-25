@@ -110,12 +110,10 @@ class StickerSendPlan {
       media: media,
     );
     if (_ok(image)) {
-      return StickerSendPlan._(
-        StickerSendMode.image,
-        EventTypes.Message,
-        {..._base(item), 'msgtype': MessageTypes.Image},
-        null,
-      );
+      return StickerSendPlan._(StickerSendMode.image, EventTypes.Message, {
+        ..._base(item),
+        'msgtype': MessageTypes.Image,
+      }, null);
     }
     return _unsupported(room, 'GIF', image, null);
   }
@@ -132,12 +130,10 @@ class StickerSendPlan {
     );
     final gif = gifEvidence(room, media);
     if (_ok(gif) && _ok(video)) {
-      return StickerSendPlan._(
-        StickerSendMode.gifVideo,
-        EventTypes.Message,
-        {..._base(item), 'msgtype': MessageTypes.Video},
-        null,
-      );
+      return StickerSendPlan._(StickerSendMode.gifVideo, EventTypes.Message, {
+        ..._base(item),
+        'msgtype': MessageTypes.Video,
+      }, null);
     }
     if (_ok(video)) {
       final content = _base(item);
@@ -193,10 +189,9 @@ class StickerSendPlan {
       };
     }
 
-    return BridgeRoomCapabilities.fromStateEvents(
-      {for (final entry in states.entries) entry.key: rekey(entry.value.content)},
-      bridgeStateKeys: bridgeKeys,
-    ).evidence(BridgeFeature.video, media: media);
+    return BridgeRoomCapabilities.fromStateEvents({
+      for (final entry in states.entries) entry.key: rekey(entry.value.content),
+    }, bridgeStateKeys: bridgeKeys).evidence(BridgeFeature.video, media: media);
   }
 
   static BridgeMediaRequest? _media(StickerItem item) {
@@ -255,9 +250,10 @@ class StickerSendPlan {
     BridgeCapabilityEvidence? second,
   ) {
     // Matrix permissions explain themselves; format refusals get a sentence.
-    final permission = [first, ?second]
-        .where((e) => e.source == 'matrix.permission')
-        .firstOrNull;
+    final permission = [
+      first,
+      ?second,
+    ].where((e) => e.source == 'matrix.permission').firstOrNull;
     final network = canonicalNetwork(PersonalClient.networkOf(room));
     final label = network == null ? null : notionNetworkLabel(network);
     return StickerSendPlan._(

@@ -114,9 +114,7 @@ class StickerLibraryDoc {
     }
     return StickerLibraryDoc(
       packs: packs,
-      hidden: [
-        if (rawHidden is List) ...rawHidden.whereType<String>().toSet(),
-      ],
+      hidden: [if (rawHidden is List) ...rawHidden.whereType<String>().toSet()],
       lists: lists,
     );
   }
@@ -130,7 +128,10 @@ class StickerLibraryDoc {
   Map<String, Object?> stickersJson() => {
     'packs': [for (final ref in packs) ref.toJson()],
     if (hidden.isNotEmpty) 'hidden': hidden,
-    ..._syncedLists([StickerList.recentStickers, StickerList.favouriteStickers]),
+    ..._syncedLists([
+      StickerList.recentStickers,
+      StickerList.favouriteStickers,
+    ]),
   };
 
   /// The synced GIF event.
@@ -232,9 +233,7 @@ class UseItemOp extends StickerLibraryOp {
   @override
   StickerLibraryDoc apply(StickerLibraryDoc doc) {
     if (list == StickerList.recentStickers &&
-        doc
-            .list(StickerList.favouriteStickers)
-            .any((f) => f.key == item.key)) {
+        doc.list(StickerList.favouriteStickers).any((f) => f.key == item.key)) {
       return doc;
     }
     return doc.withList(list, [item, ...doc.list(list)]);
