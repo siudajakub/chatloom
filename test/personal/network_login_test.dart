@@ -4,10 +4,12 @@
 // wizard screen. A fake transport answers every request; no real bridge,
 // network or account is involved and all ids and codes are fictional.
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/network_login/beeper_account_bridges.dart';
 import 'package:chatloom/personal/network_login/network_login_api.dart';
 import 'package:chatloom/personal/network_login/network_login_catalog.dart';
 import 'package:chatloom/personal/network_login/network_login_session.dart';
@@ -16,6 +18,8 @@ import 'package:chatloom/personal/ui/add_network_page.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
@@ -870,6 +874,180 @@ void main() {
       expect(whatsapp.accounts, ['Fictional']);
       // The cloud bridge was never asked; the silent Telegram guess is gone.
       expect(transport.seen.map((r) => r.bot), isNot(contains(cloud.botId)));
+    });
+  });
+
+  group('beeper account bridges', () {
+    const fictionalToken = 'fictional-token';
+    final whoamiBody = jsonEncode({
+      'user': {
+        'bridges': {
+          'sh-whatsapp': {
+            'bridgeState': {'bridgeType': 'whatsapp', 'isSelfHosted': true},
+            'remoteState': {
+              'x': {'remote_name': 'Private Name'},
+            },
+          },
+          'sh-meta': {
+            'bridgeState': {'bridgeType': 'instagram'},
+          },
+          'sh-mystery': {'bridgeState': {}},
+          'telegram': {
+            'bridgeState': {'bridgeType': 'telegram'},
+          },
+        },
+        'hungryserv': {'bridgeState': {}},
+      },
+      'userInfo': {'email': 'private@example.invalid'},
+    });
+
+    test('the API origin follows the Beeper host only', () {
+      expect(
+        beeperAccountWhoamiUri(Uri.parse('https://matrix.beeper.com')),
+        Uri.parse('https://api.beeper.com/whoami'),
+      );
+      expect(
+        beeperAccountWhoamiUri(Uri.parse('https://matrix.beeper-staging.com')),
+        Uri.parse('https://api.beeper-staging.com/whoami'),
+      );
+      expect(
+        beeperAccountWhoamiUri(Uri.parse('https://matrix.example.invalid')),
+        isNull,
+      );
+      expect(
+        beeperAccountWhoamiUri(Uri.parse('https://notbeeper.com')),
+        isNull,
+      );
+    });
+
+    test('lists self-hosted bridges with their network', () async {
+      final requests = <http.Request>[];
+      final bridges = await fetchBeeperAccountBridges(
+        httpClient: MockClient((request) async {
+          requests.add(request);
+          return http.Response(whoamiBody, 200);
+        }),
+        homeserver: Uri.parse('https://matrix.beeper.com'),
+        accessToken: () => fictionalToken,
+      );
+      expect(requests.single.method, 'GET');
+      expect(requests.single.url, Uri.parse('https://api.beeper.com/whoami'));
+      expect(
+        requests.single.headers['Authorization'],
+        'Bearer $fictionalToken',
+      );
+      expect(bridges.map((b) => (b.botId, b.network, b.name)), [
+        ('@sh-metabot:beeper.local', 'instagram', 'sh-meta'),
+        ('@sh-mysterybot:beeper.local', 'mystery', 'sh-mystery'),
+        ('@sh-whatsappbot:beeper.local', 'whatsapp', 'sh-whatsapp'),
+      ]);
+    });
+
+    test('failures carry the status only', () async {
+      Future<Object?> failure(http.Response response) async {
+        try {
+          await fetchBeeperAccountBridges(
+            httpClient: MockClient((_) async => response),
+            homeserver: Uri.parse('https://matrix.beeper.com'),
+            accessToken: () => fictionalToken,
+          );
+        } catch (error) {
+          return error;
+        }
+        return null;
+      }
+
+      final denied = await failure(
+        http.Response('{"error":"private detail"}', 401),
+      );
+      expect(denied, isA<BeeperAccountException>());
+      expect((denied! as BeeperAccountException).status, 401);
+      expect(denied.toString(), isNot(contains('private')));
+      final garbage = await failure(http.Response('<html>', 200));
+      expect(garbage, isA<BeeperAccountException>());
+      final shape = await failure(http.Response('{"user":{}}', 200));
+      expect(shape, isA<BeeperAccountException>());
+      await expectLater(
+        fetchBeeperAccountBridges(
+          httpClient: MockClient((_) async => throw StateError('offline')),
+          homeserver: Uri.parse('https://matrix.beeper.com'),
+          accessToken: () => fictionalToken,
+        ),
+        throwsA(
+          isA<BeeperAccountException>().having((e) => e.status, 'status', 0),
+        ),
+      );
+      await expectLater(
+        fetchBeeperAccountBridges(
+          httpClient: MockClient((_) async => http.Response(whoamiBody, 200)),
+          homeserver: Uri.parse('https://matrix.example.invalid'),
+          accessToken: () => fictionalToken,
+        ),
+        throwsA(isA<BeeperAccountException>()),
+      );
+    });
+
+    Map<String, Object?> whoamiOf(String bot, String network) => {
+      'bridge_bot': bot,
+      'network': {'displayname': network, 'network_id': network},
+      'logins': [],
+    };
+
+    test('the account list replaces name guessing', () async {
+      const listedDown = BridgeEndpoint(
+        botId: '@sh-slackbot:beeper.local',
+        network: 'slack',
+        label: 'Slack',
+      );
+      final transport = _FakeTransport((bridge, r) {
+        if (bridge.botId == _bot) return whoamiOf(_bot, 'whatsapp');
+        _fail(502);
+      });
+      final backend = NetworkLoginBackend(
+        transport: transport,
+        loginTransport: transport,
+        userId: '@someone:beeper.com',
+        hungryserv: true,
+        accountBridges: () async => const [_bridge, listedDown],
+      );
+      final list = await loadAddableBridges(
+        backend: backend,
+        discovered: const [],
+        extraBots: '',
+      );
+      expect(list.map((e) => (e.bridge.botId, e.status)), [
+        (listedDown.botId, AddableBridgeStatus.unreachable),
+        (_bot, AddableBridgeStatus.ready),
+      ]);
+      // Only the listed bridges were asked: no guessed names.
+      expect(transport.seen.map((r) => r.bot).toSet(), {
+        _bot,
+        listedDown.botId,
+      });
+    });
+
+    test('without the account list the usual names are probed', () async {
+      final transport = _FakeTransport((bridge, r) {
+        if (bridge.botId == _bot) return whoamiOf(_bot, 'whatsapp');
+        _fail(404);
+      });
+      final backend = NetworkLoginBackend(
+        transport: transport,
+        loginTransport: transport,
+        userId: '@someone:beeper.com',
+        hungryserv: true,
+        accountBridges: () async => throw const BeeperAccountException(500),
+      );
+      final list = await loadAddableBridges(
+        backend: backend,
+        discovered: const [],
+        extraBots: '',
+      );
+      expect(list.single.bridge.botId, _bot);
+      expect(
+        transport.seen.map((r) => r.bot),
+        contains('@sh-telegrambot:beeper.local'),
+      );
     });
   });
 
