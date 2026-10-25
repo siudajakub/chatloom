@@ -86,13 +86,20 @@ class StickerItem {
     ImagePackImageContent image, {
     required String shortcode,
     String? packKey,
-  }) => StickerItem._(StickerKind.sticker, {
-    'url': image.url.toString(),
-    'body': (image.body?.trim().isNotEmpty ?? false) ? image.body! : shortcode,
-    'info': _trimInfo(image.info),
-    // Kept for search: the pack's shortcode ("<pack>_<keyword>").
-    'shortcode': shortcode,
-  }, 0, packKey);
+  }) => StickerItem._(
+    StickerKind.sticker,
+    {
+      'url': image.url.toString(),
+      'body': (image.body?.trim().isNotEmpty ?? false)
+          ? image.body!
+          : shortcode,
+      'info': _trimInfo(image.info),
+      // Kept for search: the pack's shortcode ("<pack>_<keyword>").
+      'shortcode': shortcode,
+    },
+    0,
+    packKey,
+  );
 
   /// The sticker or GIF a message shows, or null when it is neither (or its
   /// media is missing). Relations, captions and formatting are not kept.
@@ -131,15 +138,20 @@ class StickerItem {
       msgtype = MessageTypes.Video;
     }
     final body = content['body'];
-    return StickerItem._(kind, {
-      if (url is String) 'url': url,
-      if (url is! String && file is Map) 'file': _copy(file),
-      'body': body is String && body.isNotEmpty
-          ? body
-          : (kind == StickerKind.gif ? 'GIF' : 'Sticker'),
-      'info': _trimInfo(info),
-      'msgtype': ?msgtype,
-    }, 0, null);
+    return StickerItem._(
+      kind,
+      {
+        if (url is String) 'url': url,
+        if (url is! String && file is Map) 'file': _copy(file),
+        'body': body is String && body.isNotEmpty
+            ? body
+            : (kind == StickerKind.gif ? 'GIF' : 'Sticker'),
+        'info': _trimInfo(info),
+        'msgtype': ?msgtype,
+      },
+      0,
+      null,
+    );
   }
 
   static StickerItem? fromJson(Object? json, StickerKind kind) {
@@ -171,11 +183,7 @@ class StickerItem {
     );
   }
 
-  Map<String, Object?> toJson() => {
-    ...content,
-    'ts': ts,
-    'pack': ?packKey,
-  };
+  Map<String, Object?> toJson() => {...content, 'ts': ts, 'pack': ?packKey};
 
   StickerItem copyWith({int? ts, String? packKey}) =>
       StickerItem._(kind, content, ts ?? this.ts, packKey ?? this.packKey);
@@ -245,8 +253,7 @@ class StickerItem {
   int get hashCode => Object.hash(kind, key);
 
   static Map<String, Object?> _copy(Map value) => {
-    for (final entry in value.entries)
-      '${entry.key}': _copyValue(entry.value),
+    for (final entry in value.entries) '${entry.key}': _copyValue(entry.value),
   };
 
   static Object? _copyValue(Object? value) => switch (value) {
@@ -264,7 +271,8 @@ class StickerItem {
       if (entry.key == 'thumbnail_info' && value is Map) {
         out[entry.key] = {
           for (final e in value.entries)
-            if (_keptThumbnailInfoKeys.contains(e.key)) e.key as String: e.value,
+            if (_keptThumbnailInfoKeys.contains(e.key))
+              e.key as String: e.value,
         };
       } else {
         out[entry.key] = value is Map ? _copy(value) : value;
@@ -384,7 +392,10 @@ class StickerPack {
   Uri? get icon => avatar ?? stickers.firstOrNull?.uri;
 
   /// Builds a pack from MSC2545 content. Images limited to emoticons are
-  /// skipped (they are custom emoji, not stickers).
+  /// skipped (they are custom emoji, not stickers), except in a pack of
+  /// nothing but custom emoji that the user installed or a bridge made (a
+  /// Telegram emoji set): its emoji are then its stickers, so every
+  /// Telegram pack can be added and used.
   static StickerPack fromContent(
     ImagePackContent content, {
     required String key,
@@ -393,29 +404,33 @@ class StickerPack {
     StickerPackRef? ref,
   }) {
     final packUsage = content.pack.usage;
+    final meta = content.pack.toJson();
+    final bridged = meta['fi.mau.bridged_pack'];
     final stickers = <StickerItem>[];
+    final emoticons = <StickerItem>[];
     final seen = <String>{};
     for (final entry in content.images.entries) {
       final usage = entry.value.usage ?? packUsage;
-      if (usage != null &&
+      final emoticonOnly =
+          usage != null &&
           usage.isNotEmpty &&
-          !usage.contains(ImagePackUsage.sticker)) {
-        continue;
-      }
+          !usage.contains(ImagePackUsage.sticker);
       final item = StickerItem.fromPackImage(
         entry.value,
         shortcode: entry.key,
         packKey: key,
       );
-      if (seen.add(item.key)) stickers.add(item);
+      if (!seen.add(item.key)) continue;
+      (emoticonOnly ? emoticons : stickers).add(item);
     }
-    final meta = content.pack.toJson();
-    final bridged = meta['fi.mau.bridged_pack'];
+    if (stickers.isEmpty &&
+        (bridged is Map || source == StickerPackSource.installed)) {
+      stickers.addAll(emoticons);
+    }
     final avatar = content.pack.avatarUrl;
     return StickerPack(
       key: key,
-      title:
-          content.pack.displayName?.trim().isNotEmpty == true
+      title: content.pack.displayName?.trim().isNotEmpty == true
           ? content.pack.displayName!.trim()
           : (ref?.title ?? fallbackTitle ?? 'Stickers'),
       avatar: avatar != null && avatar.scheme == 'mxc' ? avatar : null,
@@ -451,5 +466,8 @@ bool isEmojiOnly(String text) {
 /// [emoji] without variation selectors and skin tones, so "❤️" finds "❤"
 /// and "👍🏻" finds "👍".
 String normalizeEmoji(String emoji) => emoji
-    .replaceAll(RegExp(r'[\u{FE0E}\u{FE0F}\u{1F3FB}-\u{1F3FF}]', unicode: true), '')
+    .replaceAll(
+      RegExp(r'[\u{FE0E}\u{FE0F}\u{1F3FB}-\u{1F3FF}]', unicode: true),
+      '',
+    )
     .trim();

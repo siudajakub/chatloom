@@ -33,7 +33,9 @@ List<ConversationMessageAction> stickerMessageActions(
     final saved = library.isSavedGif(item);
     return [
       ConversationMessageAction(
-        icon: saved ? Icons.bookmark_remove_outlined : Icons.bookmark_add_outlined,
+        icon: saved
+            ? Icons.bookmark_remove_outlined
+            : Icons.bookmark_add_outlined,
         label: saved ? 'Remove from saved GIFs' : 'Save GIF',
         onSelected: () {
           if (saved) {

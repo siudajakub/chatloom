@@ -170,6 +170,7 @@ void main() {
       'profile',
       'media',
       'files',
+      'messages',
       'links',
       'menu',
       'empty',
@@ -177,7 +178,14 @@ void main() {
       'sources',
       'loading',
     ]) {
-      if (!['profile', 'media', 'files', 'links', 'menu'].contains(state) &&
+      if (![
+            'profile',
+            'media',
+            'files',
+            'messages',
+            'links',
+            'menu',
+          ].contains(state) &&
           width != 390)
         continue;
       final only = Platform.environment['PROFILE_CAPTURE_ONLY'];
@@ -213,6 +221,29 @@ void main() {
               'msgtype': MessageTypes.Audio,
               'body': 'Voice message',
               'info': {'duration': 18000, 'size': 28104},
+            },
+          ),
+          room.message(
+            r'$note',
+            'Voice message',
+            outgoing: true,
+            content: {
+              'msgtype': MessageTypes.Audio,
+              'body': 'Voice message',
+              'org.matrix.msc3245.voice': <String, dynamic>{},
+              'info': {'duration': 7000},
+            },
+          ),
+          room.message(
+            r'$round',
+            'Video message',
+            content: {
+              'msgtype': MessageTypes.Video,
+              'body': 'Video message',
+              'info': {
+                'fi.mau.telegram.round_message': true,
+                'duration': 21000,
+              },
             },
           ),
           room.message(
@@ -300,10 +331,25 @@ void main() {
           await tester.pumpAndSettle();
         }
         if (state == 'files') {
+          // Large text scrolls the tab bar.
+          await tester.ensureVisible(find.text('Files'));
+          await tester.pumpAndSettle();
           await tester.tap(find.text('Files'));
           await tester.pumpAndSettle();
         }
+        if (state == 'messages') {
+          // Large text scrolls the tab bar.
+          await tester.ensureVisible(find.text('Messages'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Messages'));
+          await tester.pumpAndSettle();
+          expect(find.text('Voice message'), findsOneWidget);
+          expect(find.text('Video message'), findsOneWidget);
+        }
         if (state == 'links') {
+          // Large text scrolls the tab bar.
+          await tester.ensureVisible(find.text('Links'));
+          await tester.pumpAndSettle();
           await tester.tap(find.text('Links'));
           await tester.pumpAndSettle();
         }

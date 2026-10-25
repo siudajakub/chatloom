@@ -77,17 +77,25 @@ String? _durationOf(Event event) {
 /// [events] (newest first) grouped by local calendar month, newest month
 /// first, each month keeping the events' order.
 @visibleForTesting
-List<(String, List<Event>)> groupSharedMediaByMonth(Iterable<Event> events) {
-  final months = <int, (String, List<Event>)>{};
-  for (final event in events) {
-    final date = event.originServerTs.toLocal();
+List<(String, List<Event>)> groupSharedMediaByMonth(Iterable<Event> events) =>
+    groupSharedByMonth(events, (e) => e.originServerTs);
+
+/// [items] (newest first) grouped by the local calendar month of [date].
+@visibleForTesting
+List<(String, List<T>)> groupSharedByMonth<T>(
+  Iterable<T> items,
+  DateTime Function(T) date,
+) {
+  final months = <int, (String, List<T>)>{};
+  for (final item in items) {
+    final local = date(item).toLocal();
     months
         .putIfAbsent(
-          date.year * 12 + date.month,
-          () => (sharedMonthLabel(date), <Event>[]),
+          local.year * 12 + local.month,
+          () => (sharedMonthLabel(local), <T>[]),
         )
         .$2
-        .add(event);
+        .add(item);
   }
   return months.values.toList();
 }
@@ -339,6 +347,9 @@ void _openMessage(BuildContext context, Event event) {
   _openEvent(context, event);
 }
 
+/// The projections of the shared content page, in tab order.
+enum _SharedTab { media, messages, files, links }
+
 class NotionConversationContentPage extends StatefulWidget {
   final List<Room> rooms;
   final String name;
@@ -357,18 +368,29 @@ class NotionConversationContentPage extends StatefulWidget {
 class _NotionConversationContentPageState
     extends State<NotionConversationContentPage>
     with SingleTickerProviderStateMixin {
+  /// Local history is read until the open tab has this many items...
+  static const _fillTarget = 48;
+
+  /// ...or this many events per source were read (older ones on scroll).
+  static const _fillCap = 2560;
+
   final _query = TextEditingController();
   // The theme's sliding pill tabs (UI-22), as in chat search.
-  late final TabController _tabs = TabController(length: 3, vsync: this)
-    ..addListener(() {
-      if (_tab != _tabs.index && mounted) setState(() => _tab = _tabs.index);
-    });
+  late final TabController _tabs =
+      TabController(length: _SharedTab.values.length, vsync: this)
+        ..addListener(() {
+          if (_tab.index != _tabs.index && mounted) {
+            setState(() => _tab = _SharedTab.values[_tabs.index]);
+            _scheduleFill();
+          }
+        });
   late ConversationContentController _history;
   late String _scopeKey;
   late Client _account;
-  int _tab = 0;
+  _SharedTab _tab = _SharedTab.media;
+  SharedSender _sender = SharedSender.everyone;
   final _subscriptions = <StreamSubscription>[];
-  bool _remoteAllowed = false;
+  bool _remoteAllowed = false, _fillScheduled = false;
   String? _autoSignature;
   String _scope(List<Room> rooms) => rooms
       .map((r) => (identityHashCode(r.client), r.client.userID, r.id))
@@ -403,22 +425,50 @@ class _NotionConversationContentPageState
       }
     }
     _history.addListener(_updated);
-    final history = _history;
-    () async {
-      for (var page = 0; page < 3; page++) {
-        await history.load();
-        if (!mounted ||
-            !identical(history, _history) ||
-            history.localEnd ||
-            history.sources.any((s) => s.error != null)) {
-          return;
-        }
-      }
-    }();
+    _fill();
   }
 
   void _updated() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    _scheduleFill();
+  }
+
+  /// Once per microtask, never from inside a notification.
+  void _scheduleFill() {
+    if (_fillScheduled) return;
+    _fillScheduled = true;
+    scheduleMicrotask(() {
+      _fillScheduled = false;
+      if (mounted) _fill();
+    });
+  }
+
+  /// Reads the next local page while the open projection is short of a
+  /// screenful: a chat with few photos among many messages still opens on
+  /// a filled grid. Each finished page notifies, which calls this again.
+  void _fill() {
+    final history = _history;
+    if (history.busy ||
+        history.localEnd ||
+        history.sources.any((s) => s.error != null) ||
+        history.sources.every((s) => s.localEnd || s.localLimit >= _fillCap) ||
+        _visibleCount() >= _fillTarget) {
+      return;
+    }
+    history.load();
+  }
+
+  int _visibleCount() {
+    final terms = localSearchTerms(_query.text);
+    final events = _filtered(terms);
+    if (!widget.initialMedia) return events.length;
+    return switch (_tab) {
+      _SharedTab.media => events.where(sharedMedia).length,
+      _SharedTab.messages => events.where(sharedMessage).length,
+      _SharedTab.files => events.where(sharedFile).length,
+      _SharedTab.links => events.fold(0, (n, e) => n + sharedLinks(e).length),
+    };
   }
 
   @override
@@ -433,7 +483,8 @@ class _NotionConversationContentPageState
       _remoteAllowed = false;
       _autoSignature = null;
       _query.clear();
-      _tab = 0;
+      _tab = _SharedTab.media;
+      _sender = SharedSender.everyone;
       _tabs.index = 0;
       _account = Matrix.of(context).client;
       _createHistory();
@@ -506,32 +557,89 @@ class _NotionConversationContentPageState
   );
   String _date(Event event) =>
       '${widget.rooms.length > 1 ? '${event.room.getLocalizedDisplayname()} · ' : ''}${event.originServerTs.toLocal().toString().substring(0, 16)}';
+
+  /// The loaded events matching the query and the sender filter.
+  List<Event> _filtered(List<String> terms) => [
+    for (final e in _history.events)
+      if (sharedVisible(e) &&
+          (!widget.initialMedia || sharedSenderMatches(e, _sender)) &&
+          (terms.isEmpty ||
+              localTextMatches(
+                searchFold('${e.body} ${sharedLinks(e).join(' ')}'),
+                terms,
+              )))
+        e,
+  ];
+
+  /// Nothing to show yet, but the first pages are still being read: the
+  /// projection draws placeholders in its final layout instead of a blank.
+  bool _loading(bool empty) =>
+      empty &&
+      !_history.sources.any((s) => s.error != null) &&
+      (_history.busy ||
+          _history.sources.every((s) => s.localLimit == 0 && !s.localEnd));
+
+  /// "Anna" in a one-to-one chat (or a merged person), "Others" in groups.
+  String get _otherLabel {
+    if (!widget.rooms.every((r) => r.isDirectChat)) return 'Others';
+    final first = widget.name.trim().split(RegExp(r'\s+')).first;
+    return first.isEmpty ? 'Others' : first;
+  }
+
+  void _setSender(SharedSender sender) {
+    if (sender == _sender) return;
+    NotionHaptics.selection();
+    setState(() => _sender = sender);
+    _scheduleFill();
+  }
+
+  /// Who sent it: Telegram's shared media has none, Messenger's filter is
+  /// one tap away, so the three choices sit under the tabs as pills.
+  Widget _senderFilter() {
+    final options = [
+      (SharedSender.everyone, 'Everyone'),
+      (SharedSender.me, 'Me'),
+      (SharedSender.others, _otherLabel),
+    ];
+    return Semantics(
+      container: true,
+      label: 'Sent by',
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(
+          NotionSpace.inset,
+          NotionSpace.xs,
+          NotionSpace.inset,
+          NotionSpace.xxs,
+        ),
+        child: Row(
+          children: [
+            for (final (index, (value, label)) in options.indexed) ...[
+              if (index > 0) const SizedBox(width: NotionSpace.xs),
+              NotionGlassPill(
+                key: ValueKey('shared-sender-${value.name}'),
+                label: label,
+                selected: value == _sender,
+                onPressed: () => _setSender(value),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Folded like every other search: "lukasz" finds "Łukasz", each word
     // must occur.
     final terms = localSearchTerms(_query.text);
-    final events = _history.events
-        .where(sharedVisible)
-        .where(
-          (e) =>
-              terms.isEmpty ||
-              localTextMatches(
-                searchFold('${e.body} ${sharedLinks(e).join(' ')}'),
-                terms,
-              ),
-        )
-        .toList();
-    final links = [
-      for (final event in events)
-        for (final url in sharedLinks(event)) (event, url),
-    ];
+    final events = _filtered(terms);
+    final media = widget.initialMedia;
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: notionGlassAppBar(
-        title: Text(
-          widget.initialMedia ? 'Shared content' : 'Search this conversation',
-        ),
+        title: Text(media ? 'Shared content' : 'Search this conversation'),
       ),
       body: NotionBelowGlassHeader(
         child: Center(
@@ -539,7 +647,7 @@ class _NotionConversationContentPageState
             // The media grid may use a wide window; message results keep the
             // reading width of every other page.
             constraints: BoxConstraints(
-              maxWidth: widget.initialMedia ? 960 : NotionSize.contentMaxWidth,
+              maxWidth: media ? 960 : NotionSize.contentMaxWidth,
             ),
             child: Column(
               children: [
@@ -552,9 +660,12 @@ class _NotionConversationContentPageState
                       const SizedBox(height: 8),
                       TextField(
                         controller: _query,
-                        onChanged: (_) => setState(() {}),
+                        onChanged: (_) {
+                          setState(() {});
+                          _scheduleFill();
+                        },
                         decoration: InputDecoration(
-                          hintText: widget.initialMedia
+                          hintText: media
                               ? 'Search loaded content'
                               : 'Search local messages',
                           prefixIcon: const Icon(Icons.search_outlined),
@@ -573,62 +684,51 @@ class _NotionConversationContentPageState
                     ],
                   ),
                 ),
-                if (widget.initialMedia)
-                  Padding(
+                if (media) ...[
+                  Container(
+                    alignment: AlignmentDirectional.centerStart,
                     padding: const EdgeInsets.symmetric(
                       horizontal: NotionSpace.inset,
                     ),
                     child: TabBar(
                       controller: _tabs,
+                      // Sized to their labels: four fit a phone without
+                      // clipping "Messages", large text scrolls.
+                      isScrollable: true,
+                      tabAlignment: TabAlignment.start,
                       tabs: const [
                         Tab(text: 'Media'),
+                        Tab(text: 'Messages'),
                         Tab(text: 'Files'),
                         Tab(text: 'Links'),
                       ],
                     ),
                   ),
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: _senderFilter(),
+                  ),
+                ],
                 _ProgressLine(visible: _history.busy),
                 Expanded(
                   child: NotificationListener<ScrollNotification>(
                     onNotification: _scroll,
                     child: _FadeOnChange(
-                      value: widget.initialMedia ? _tab : 1,
+                      value: media ? (_tab, _sender) : 0,
                       child: NotionEntranceScope(
-                        child: IndexedStack(
-                          index: widget.initialMedia ? _tab : 1,
-                          children: [
-                            _mediaGrid(events),
-                            widget.initialMedia
-                                ? _list(events.where(sharedFile).toList())
-                                : _messages(events, terms),
-                            ListView.builder(
-                              key: const PageStorageKey('content-links'),
-                              padding: const EdgeInsets.all(20),
-                              itemCount: links.length + 1,
-                              itemBuilder: (context, index) {
-                                if (index == links.length) {
-                                  return _end(links.isEmpty);
-                                }
-                                final (event, url) = links[index];
-                                return _entering(
-                                  '${event.eventId}|$url',
-                                  NotionListRow(
-                                    leading: const Icon(Icons.link_outlined),
-                                    title: Uri.parse(url).host,
-                                    subtitle:
-                                        '$url\n${_linkContext(event)} · ${_date(event)}',
-                                    onTap: () {
-                                      if (PersonalPrivacy.surfaceUnlocked &&
-                                          !event.redacted) {
-                                        UrlLauncher(context, url).launchUrl();
-                                      }
-                                    },
+                        child: media
+                            ? IndexedStack(
+                                index: _tab.index,
+                                children: [
+                                  _mediaGrid(events),
+                                  _voiceAndRounds(
+                                    events.where(sharedMessage).toList(),
                                   ),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
+                                  _files(events.where(sharedFile).toList()),
+                                  _links(events),
+                                ],
+                              )
+                            : _messages(events, terms),
                       ),
                     ),
                   ),
@@ -667,17 +767,26 @@ class _NotionConversationContentPageState
     return false;
   }
 
-  Widget _end(bool empty) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      if (empty && !_history.busy)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 24),
-          child: Text('No matches in the loaded history.'),
-        ),
-      _footer(),
-    ],
-  );
+  Widget _end(bool empty, {IconData icon = Icons.search_off_outlined}) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          NotionSizeReveal(
+            visible: empty && !_history.busy && !_loading(empty),
+            child: NotionEmptyState(
+              icon: icon,
+              title: switch (_sender) {
+                _ when !widget.initialMedia => 'Nothing found',
+                SharedSender.everyone => 'Nothing here yet',
+                SharedSender.me => 'Nothing from you',
+                SharedSender.others => 'Nothing from $_otherLabel',
+              },
+              message: 'No matches in the loaded history.',
+            ),
+          ),
+          _footer(),
+        ],
+      );
 
   /// Message search hits: sender, date and the matching words in bold
   /// (Telegram's results); a tap shows the message in its chat.
@@ -705,74 +814,150 @@ class _NotionConversationContentPageState
     },
   );
 
-  Widget _list(List<Event> events) => ListView.builder(
-    key: const PageStorageKey('content-files'),
-    padding: const EdgeInsets.all(20),
-    itemCount: events.length + 1,
-    itemBuilder: (context, index) {
-      if (index == events.length) return _end(events.isEmpty);
-      final event = events[index];
-      // Search hits that are not files read as messages, not file rows.
-      if (!sharedFile(event)) {
-        return _entering(event.eventId, _messageRow(event, events));
-      }
+  /// A month-sectioned list (Telegram's shared files, voice and links): one
+  /// header per local calendar month, newest first, then [row]s. While the
+  /// first pages are read, placeholder rows hold the layout.
+  Widget _monthList<T>({
+    required String storageKey,
+    required List<T> items,
+    required DateTime Function(T) date,
+    required Object Function(T) key,
+    required Widget Function(T) row,
+    required IconData emptyIcon,
+  }) {
+    final loading = _loading(items.isEmpty);
+    return CustomScrollView(
+      key: PageStorageKey(storageKey),
+      slivers: [
+        if (loading)
+          SliverPadding(
+            padding: const EdgeInsets.all(NotionSpace.inset),
+            sliver: SliverToBoxAdapter(
+              child: NotionSkeleton(
+                child: Column(
+                  children: [
+                    for (var i = 0; i < 8; i++) const NotionSkeletonRow(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        for (final (label, monthItems) in groupSharedByMonth(items, date)) ...[
+          _monthHeader(label),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: NotionSpace.inset),
+            sliver: SliverList.builder(
+              itemCount: monthItems.length,
+              itemBuilder: (context, index) {
+                final item = monthItems[index];
+                return _entering(key(item), row(item));
+              },
+            ),
+          ),
+        ],
+        SliverPadding(
+          padding: const EdgeInsets.all(NotionSpace.inset),
+          sliver: SliverToBoxAdapter(
+            child: _end(items.isEmpty && !loading, icon: emptyIcon),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _monthHeader(String label) => SliverPadding(
+    padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+    sliver: SliverToBoxAdapter(
+      child: Semantics(
+        header: true,
+        child: Text(label, style: NotionType.bodyStrong),
+      ),
+    ),
+  );
+
+  /// Voice notes and rounds: who sent it, its length and when; a tap plays
+  /// it in its conversation (consent and capability controls live there).
+  Widget _voiceAndRounds(List<Event> events) => _monthList<Event>(
+    storageKey: 'content-voice',
+    items: events,
+    date: (e) => e.originServerTs,
+    key: (e) => e.eventId,
+    emptyIcon: Icons.mic_none_outlined,
+    row: (event) {
+      final round = sharedRound(event);
+      final duration = _durationOf(event);
+      final sender = sharedFromMe(event)
+          ? 'You'
+          : event.senderFromMemoryOrFallback.calcDisplayname();
+      return NotionListRow(
+        leading: _MessageGlyph(event, round: round),
+        title: round ? 'Video message' : 'Voice message',
+        subtitle: [sender, ?duration, _date(event)].join(' · '),
+        trailing: const Icon(Icons.play_arrow_rounded),
+        onTap: () => _openEvent(context, event),
+      );
+    },
+  );
+
+  Widget _files(List<Event> events) => _monthList<Event>(
+    storageKey: 'content-files',
+    items: events,
+    date: (e) => e.originServerTs,
+    key: (e) => e.eventId,
+    emptyIcon: Icons.description_outlined,
+    row: (event) {
       final info = event.content['info'];
       final duration = _durationOf(event);
       final size = info is Map && info['size'] is num
           ? ' · ${(info['size'] as num).sizeString}'
           : '';
-      return _entering(
-        event.eventId,
-        NotionListRow(
-          leading: Icon(
-            event.messageType == MessageTypes.Audio
-                ? Icons.audio_file_outlined
-                : Icons.description_outlined,
-          ),
-          title: event.content['filename'] is String
-              ? event.content['filename'] as String
-              : event.body.isEmpty
-              ? 'Shared file'
-              : event.body,
-          subtitle:
-              '${event.messageType == MessageTypes.Audio ? 'Audio · ' : ''}${info is Map && info['mimetype'] is String ? '${info['mimetype']} · ' : ''}${duration == null ? '' : '$duration · '}${_date(event)}$size',
-          onTap: () => _openEvent(context, event),
+      return NotionListRow(
+        leading: Icon(
+          event.messageType == MessageTypes.Audio
+              ? Icons.audio_file_outlined
+              : Icons.description_outlined,
         ),
+        title: event.content['filename'] is String
+            ? event.content['filename'] as String
+            : event.body.isEmpty
+            ? 'Shared file'
+            : event.body,
+        subtitle:
+            '${event.messageType == MessageTypes.Audio ? 'Audio · ' : ''}${info is Map && info['mimetype'] is String ? '${info['mimetype']} · ' : ''}${duration == null ? '' : '$duration · '}${_date(event)}$size',
+        onTap: () => _openEvent(context, event),
       );
     },
   );
 
-  /// A search hit that is a message (text, photo, video, sticker): who
-  /// sent it, a one-paragraph snippet and when. A photo or video opens the
-  /// viewer, anything else its conversation.
-  Widget _messageRow(Event event, List<Event> listed) {
-    final (icon, kind) = switch (event.messageType) {
-      MessageTypes.Image => (Icons.image_outlined, 'Photo'),
-      MessageTypes.Video => (Icons.videocam_outlined, 'Video'),
-      MessageTypes.Sticker => (Icons.emoji_emotions_outlined, 'Sticker'),
-      MessageTypes.Location => (Icons.place_outlined, 'Location'),
-      _ => (Icons.chat_bubble_outline, null),
-    };
-    // A photo's or video's body is its file name unless it has a caption.
-    final filename = event.content['filename'];
-    final media = {
-      MessageTypes.Image,
-      MessageTypes.Video,
-    }.contains(event.messageType);
-    final body = media && (filename is! String || filename == event.body)
-        ? ''
-        : event.body;
-    final text = body.replaceAll(RegExp(r'\s+'), ' ').trim();
-    final snippet = text.length > 160 ? '${text.substring(0, 160)}…' : text;
-    final line = [?kind, if (snippet.isNotEmpty) snippet].join(' · ');
-    return NotionListRow(
-      leading: Icon(icon),
-      title: event.senderFromMemoryOrFallback.calcDisplayname(),
-      subtitle: line.isEmpty ? _date(event) : '$line\n${_date(event)}',
-      onTap: () =>
-          _openEvent(context, event, media: listed.where(sharedMedia).toList()),
-    );
-  }
+  Widget _links(List<Event> events) => _monthList<(Event, String)>(
+    storageKey: 'content-links',
+    items: [
+      for (final event in events)
+        for (final url in sharedLinks(event)) (event, url),
+    ],
+    date: (l) => l.$1.originServerTs,
+    key: (l) => '${l.$1.eventId}|${l.$2}',
+    emptyIcon: Icons.link_off_outlined,
+    row: (link) {
+      final (event, url) = link;
+      return NotionListRow(
+        leading: const Icon(Icons.link_outlined),
+        title: Uri.parse(url).host,
+        subtitle: [
+          url,
+          [
+            if (_linkContext(event) case final text when text.isNotEmpty) text,
+            _date(event),
+          ].join(' · '),
+        ].join('\n'),
+        onTap: () {
+          if (PersonalPrivacy.surfaceUnlocked && !event.redacted) {
+            UrlLauncher(context, url).launchUrl();
+          }
+        },
+      );
+    },
+  );
 
   /// First-screenful entrance of a list row (the enclosing scope stops it
   /// for rows built later by scrolling or filtering).
@@ -792,27 +977,41 @@ class _NotionConversationContentPageState
               .clamp(2, 6);
       final media = events.where(sharedMedia).toList();
       final months = groupSharedMediaByMonth(media);
+      final loading = _loading(media.isEmpty);
+      SliverGridDelegate grid() => SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        crossAxisSpacing: 4,
+        mainAxisSpacing: 4,
+      );
       return CustomScrollView(
         key: const PageStorageKey('content-media'),
         slivers: [
-          for (final (label, monthEvents) in months) ...[
+          // Placeholder tiles in the grid's own geometry while the first
+          // pages are read; the real tiles grow in over them.
+          if (loading)
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-              sliver: SliverToBoxAdapter(
-                child: Semantics(
-                  header: true,
-                  child: Text(label, style: NotionType.bodyStrong),
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+              sliver: NotionSkeleton.sliver(
+                child: SliverGrid(
+                  gridDelegate: grid(),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, _) => DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: context.notion.colors.surface,
+                        borderRadius: NotionRadius.smAll,
+                      ),
+                    ),
+                    childCount: columns * 4,
+                  ),
                 ),
               ),
             ),
+          for (final (label, monthEvents) in months) ...[
+            _monthHeader(label),
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               sliver: SliverGrid(
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: columns,
-                  crossAxisSpacing: 4,
-                  mainAxisSpacing: 4,
-                ),
+                gridDelegate: grid(),
                 delegate: SliverChildBuilderDelegate((context, index) {
                   final event = monthEvents[index];
                   final video = event.messageType == MessageTypes.Video;
@@ -868,38 +1067,7 @@ class _NotionConversationContentPageState
                                     alignment: Alignment.bottomRight,
                                     child: Padding(
                                       padding: const EdgeInsets.all(6),
-                                      child: Container(
-                                        decoration: const BoxDecoration(
-                                          color: NotionMediaColors.scrim,
-                                          borderRadius: NotionRadius.pillAll,
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: NotionSpace.xs,
-                                          vertical: NotionSpace.xxs,
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(
-                                              Icons.play_circle_outline,
-                                              color: NotionMediaColors.onScrim,
-                                              size: 18,
-                                            ),
-                                            if (_durationOf(event)
-                                                case final duration?) ...[
-                                              const SizedBox(width: 4),
-                                              Text(
-                                                duration,
-                                                style: NotionType.caption
-                                                    .copyWith(
-                                                      color: NotionMediaColors
-                                                          .onScrim,
-                                                    ),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
-                                      ),
+                                      child: _DurationPill(event),
                                     ),
                                   ),
                               ],
@@ -915,12 +1083,85 @@ class _NotionConversationContentPageState
           ],
           SliverPadding(
             padding: const EdgeInsets.all(20),
-            sliver: SliverToBoxAdapter(child: _end(months.isEmpty)),
+            sliver: SliverToBoxAdapter(
+              child: _end(
+                months.isEmpty && !loading,
+                icon: Icons.photo_library_outlined,
+              ),
+            ),
           ),
         ],
       );
     },
   );
+}
+
+/// The play glyph and length over a video tile.
+class _DurationPill extends StatelessWidget {
+  final Event event;
+  const _DurationPill(this.event);
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: const BoxDecoration(
+      color: NotionMediaColors.scrim,
+      borderRadius: NotionRadius.pillAll,
+    ),
+    padding: const EdgeInsets.symmetric(
+      horizontal: NotionSpace.xs,
+      vertical: NotionSpace.xxs,
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(
+          Icons.play_circle_outline,
+          color: NotionMediaColors.onScrim,
+          size: 18,
+        ),
+        if (_durationOf(event) case final duration?) ...[
+          const SizedBox(width: 4),
+          Text(
+            duration,
+            style: NotionType.caption.copyWith(
+              color: NotionMediaColors.onScrim,
+            ),
+          ),
+        ],
+      ],
+    ),
+  );
+}
+
+/// The leading glyph of a voice or round row: the round's own frame in a
+/// circle when thumbnails may show (it is round in the chat too), else an
+/// icon like the file rows.
+class _MessageGlyph extends StatelessWidget {
+  final Event event;
+  final bool round;
+  const _MessageGlyph(this.event, {required this.round});
+  @override
+  Widget build(BuildContext context) {
+    final icon = Icon(
+      round ? Icons.video_camera_front_outlined : Icons.mic_none_outlined,
+    );
+    if (!round || !_thumbnailAllowed(event)) return icon;
+    return SizedBox.square(
+      dimension: NotionSize.iconLg,
+      child: ClipOval(
+        child: MxcImage(
+          event: event,
+          width: NotionSize.iconLg,
+          height: NotionSize.iconLg,
+          fit: BoxFit.cover,
+          isThumbnail: true,
+          animated: false,
+          cacheKey: _thumbnailCacheKey(event),
+          cacheName: event.room.id,
+          placeholder: (_) => icon,
+        ),
+      ),
+    );
+  }
 }
 
 /// A 1 px progress line that only shows up for waits long enough to notice

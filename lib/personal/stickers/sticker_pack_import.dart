@@ -12,7 +12,12 @@ import 'sticker_models.dart';
 /// WhatsApp `wa.me/stickerpack/<id>`.
 @immutable
 class StickerPackLink {
-  const StickerPackLink._(this.network, this.name, this.url, {this.emoji = false});
+  const StickerPackLink._(
+    this.network,
+    this.name,
+    this.url, {
+    this.emoji = false,
+  });
 
   /// `telegram` or `whatsapp`.
   final String network;
@@ -55,11 +60,7 @@ class StickerPackLink {
     final whatsapp = _whatsapp.firstMatch(text);
     if (whatsapp != null) {
       final id = whatsapp[1]!;
-      return StickerPackLink._(
-        'whatsapp',
-        id,
-        'https://wa.me/stickerpack/$id',
-      );
+      return StickerPackLink._('whatsapp', id, 'https://wa.me/stickerpack/$id');
     }
     return null;
   }
@@ -264,7 +265,9 @@ class StickerPackProvisioning {
   }
 
   /// The user's installed packs on Telegram (stickers first).
-  Future<List<RemoteStickerPack>> listPacks({String network = 'telegram'}) async {
+  Future<List<RemoteStickerPack>> listPacks({
+    String network = 'telegram',
+  }) async {
     final json = await _send(
       network,
       const BridgeProvisioningRequest('GET', '/v3/image_pack/list'),

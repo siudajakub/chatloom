@@ -18,8 +18,10 @@ architectures.
 Linux can run shared tests and trigger Actions; it cannot compile this target.
 
 System notifications, push, notification sounds and Dock badges are disabled.
-Voice and video calls are not supported. Artifacts are ad-hoc signed and
+Voice and video calls are not supported. CI artifacts are ad-hoc signed and
 not Apple notarized. Real-account and physical-device acceptance is separate.
+Local builds can use a stable self-signed certificate
+(`--sign-identity`) so Keychain approvals survive updates; see the guide.
 
 [Full macOS behavior, artifacts, storage and acceptance guide](../docs/macos-client.md).
 The old `scripts/build-personal-macos.py` command delegates to the same builder.

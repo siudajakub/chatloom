@@ -188,8 +188,7 @@ class _ComposerPanelSlotState extends State<ComposerPanelSlot>
   }
 
   void _close() {
-    final keyboardComing =
-        _soft && (widget.inputFocus.hasFocus || _keyboardUp);
+    final keyboardComing = _soft && (widget.inputFocus.hasFocus || _keyboardUp);
     if (keyboardComing && _reveal.value > 0) {
       // The keyboard takes the panel's place; drop the panel once it has.
       _phase = _Phase.yielding;

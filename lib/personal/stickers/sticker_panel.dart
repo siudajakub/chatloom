@@ -48,9 +48,8 @@ class StickerPanel extends StatefulWidget {
     if (remembered != null) return remembered;
     try {
       final stored = AppSettings.store.getString(_tabKey);
-      return _lastTab = StickerPanelTab.values
-              .where((t) => t.name == stored)
-              .firstOrNull ??
+      return _lastTab =
+          StickerPanelTab.values.where((t) => t.name == stored).firstOrNull ??
           StickerPanelTab.emoji;
     } catch (_) {
       return _lastTab = StickerPanelTab.emoji;
@@ -208,15 +207,15 @@ class _PanelTabPill extends StatelessWidget {
             ),
             margin: const EdgeInsets.symmetric(horizontal: NotionSpace.xxs),
             decoration: BoxDecoration(
-              color: selected
-                  ? notion.palette.accentTint
-                  : Colors.transparent,
+              color: selected ? notion.palette.accentTint : Colors.transparent,
               borderRadius: NotionRadius.pillAll,
             ),
             child: Text(
               tab.label,
               style: NotionType.callout.copyWith(
-                color: selected ? notion.colors.text : notion.colors.textSecondary,
+                color: selected
+                    ? notion.colors.text
+                    : notion.colors.textSecondary,
                 fontWeight: selected ? FontWeight.w600 : null,
               ),
             ),

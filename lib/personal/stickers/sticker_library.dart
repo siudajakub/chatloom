@@ -98,8 +98,7 @@ class StickerLibrary extends ChangeNotifier {
 
   /// What this device stored per type (with the synced version it
   /// replaced), shown until the sync echo or another newer version arrives.
-  final _written =
-      <String, (Map<String, Object?>?, Map<String, Object?>)>{};
+  final _written = <String, (Map<String, Object?>?, Map<String, Object?>)>{};
 
   Map<String, Object?>? _synced(String type) =>
       _written[type]?.$2 ?? backend.readSynced(type);
@@ -238,12 +237,11 @@ class StickerLibrary extends ChangeNotifier {
     return url == null ? null : packByUrl(url);
   }
 
-  StickerSearchIndex get searchIndex =>
-      _index ??= StickerSearchIndex([
-        ...favourites,
-        ...doc.list(StickerList.recentStickers),
-        for (final pack in packs) ...pack.stickers,
-      ], packs: packs);
+  StickerSearchIndex get searchIndex => _index ??= StickerSearchIndex([
+    ...favourites,
+    ...doc.list(StickerList.recentStickers),
+    for (final pack in packs) ...pack.stickers,
+  ], packs: packs);
 
   /// Telegram's sticker search: stickers for an emoji, for a word (through
   /// the emoji keywords of [locale]), by shortcode and by pack title.
@@ -261,9 +259,8 @@ class StickerLibrary extends ChangeNotifier {
   void useGif(StickerItem item) =>
       _apply(UseItemOp(StickerList.recentGifs, item.copyWith(ts: _now)));
 
-  void addFavourite(StickerItem item) => _apply(
-    AddItemOp(StickerList.favouriteStickers, item.copyWith(ts: _now)),
-  );
+  void addFavourite(StickerItem item) =>
+      _apply(AddItemOp(StickerList.favouriteStickers, item.copyWith(ts: _now)));
 
   void removeFavourite(StickerItem item) =>
       _apply(RemoveItemOp(StickerList.favouriteStickers, item.key));
@@ -304,9 +301,7 @@ class StickerLibrary extends ChangeNotifier {
       _packCache.put(ref.key, content, _now);
       unawaited(_writeCache());
     }
-    _apply(
-      AddPackOp(ref.addedTs == 0 ? _withAdded(ref) : ref),
-    );
+    _apply(AddPackOp(ref.addedTs == 0 ? _withAdded(ref) : ref));
   }
 
   StickerPackRef _withAdded(StickerPackRef ref) => StickerPackRef(
@@ -594,9 +589,7 @@ class MatrixStickerBackend implements StickerLibraryBackend {
   }
 
   @override
-  Stream<void> get changes => client.onSync.stream
-      .where(_relevant)
-      .map((_) {});
+  Stream<void> get changes => client.onSync.stream.where(_relevant).map((_) {});
 
   static bool _relevant(SyncUpdate update) {
     if (update.accountData?.any((e) => _accountTypes.contains(e.type)) ??

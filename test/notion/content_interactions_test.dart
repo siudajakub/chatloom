@@ -8,6 +8,7 @@ import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'conversation_test_support.dart';
@@ -56,9 +57,13 @@ void main() {
           .position
           .pixels;
       expect(before, greaterThan(0));
+      await tester.ensureVisible(find.text('Files'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Files'));
       await tester.pumpAndSettle();
       expect(find.text('No matches in the loaded history.'), findsOneWidget);
+      await tester.ensureVisible(find.text('Media'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Media'));
       await tester.pumpAndSettle();
       expect(
@@ -73,12 +78,16 @@ void main() {
         'Fictional shared media 29',
       );
       await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Links'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Links'));
       await tester.pumpAndSettle();
       expect(
         tester.widget<TextField>(find.byType(TextField)).controller!.text,
         'Fictional shared media 29',
       );
+      await tester.ensureVisible(find.text('Media'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Media'));
       await tester.pumpAndSettle();
       expect(
@@ -91,6 +100,93 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+  testWidgets('voice and rounds get their own tab; the sender pills filter', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final db = GalleryDatabase();
+    final client = GalleryClient(db);
+    final room = ConversationRoom(client, '!kinds:example.invalid');
+    Event event(String id, Map<String, dynamic> content, {bool own = false}) =>
+        Event(
+          room: room,
+          eventId: id,
+          type: EventTypes.Message,
+          senderId: own ? client.userID! : '@anna:example.invalid',
+          originServerTs: DateTime.utc(2026, 10, 16, 14, id.length),
+          content: content,
+        );
+    db.rows[room.id] = [
+      event(r'$voice', {
+        'msgtype': MessageTypes.Audio,
+        'body': 'Voice message',
+        'org.matrix.msc3245.voice': <String, dynamic>{},
+        'info': {'duration': 7000},
+      }, own: true),
+      event(r'$round', {
+        'msgtype': MessageTypes.Video,
+        'body': 'Video message',
+        'info': {'fi.mau.telegram.round_message': true, 'duration': 12000},
+      }),
+      event(r'$file', {
+        'msgtype': MessageTypes.File,
+        'body': 'Fictional report.pdf',
+      }),
+      event(r'$mention', {
+        'msgtype': MessageTypes.Text,
+        'body': 'Anna: hi',
+        'formatted_body':
+            '<a href="https://matrix.to/#/@anna:example.invalid">Anna</a>: hi',
+      }),
+    ];
+    final prefs = await SharedPreferences.getInstance();
+    await tester.pumpWidget(
+      Provider<MatrixState>.value(
+        value: ConversationMatrix(client, prefs),
+        child: MaterialApp(
+          localizationsDelegates: L10n.localizationsDelegates,
+          supportedLocales: L10n.supportedLocales,
+          home: NotionConversationContentPage(
+            rooms: [room],
+            name: 'Fictional Anna',
+            initialMedia: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // No round among the photos and videos.
+    expect(find.text('Nothing here yet'), findsOneWidget);
+    await tester.tap(find.text('Messages'));
+    await tester.pumpAndSettle();
+    expect(find.text('Voice message'), findsOneWidget);
+    expect(find.text('Video message'), findsOneWidget);
+    expect(find.textContaining('You · 0:07'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('shared-sender-others')));
+    await tester.pumpAndSettle();
+    expect(find.text('Voice message'), findsNothing);
+    expect(find.text('Video message'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('shared-sender-me')));
+    await tester.pumpAndSettle();
+    expect(find.text('Voice message'), findsOneWidget);
+    expect(find.text('Video message'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('shared-sender-everyone')));
+    await tester.tap(find.text('Files'));
+    await tester.pumpAndSettle();
+    expect(find.text('Fictional report.pdf'), findsOneWidget);
+    expect(find.text('Voice message'), findsNothing);
+    await tester.tap(find.text('Links'));
+    await tester.pumpAndSettle();
+    expect(find.text('matrix.to'), findsNothing);
+    expect(find.text('Nothing here yet'), findsOneWidget);
+    expect(find.text('Fictional'), findsOneWidget);
+    expect(client.requests, isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   testWidgets('cancelling Send later retains text selection and composition', (
     tester,
   ) async {

@@ -143,7 +143,10 @@ class StickerImage extends StatelessWidget {
         animationDuration: fade,
       );
     }
-    return SizedBox.square(dimension: size, child: Center(child: image));
+    return SizedBox.square(
+      dimension: size,
+      child: Center(child: image),
+    );
   }
 }
 
@@ -234,14 +237,20 @@ class StickerTile extends StatelessWidget {
         onLongPress: onLongPress,
         child: Padding(
           padding: EdgeInsets.all(inset),
-          child: StickerImage(
-            item: item,
-            client: client,
-            size: size - 2 * inset,
-            fit: fit,
-            borderRadius: fit == BoxFit.cover
-                ? NotionRadius.smAll
-                : NotionRadius.xsAll,
+          // Static cells (battery); the long-press preview animates. Only
+          // the image: a TickerMode around the grid would also stop the
+          // grid's fling and the press motion.
+          child: TickerMode(
+            enabled: false,
+            child: StickerImage(
+              item: item,
+              client: client,
+              size: size - 2 * inset,
+              fit: fit,
+              borderRadius: fit == BoxFit.cover
+                  ? NotionRadius.smAll
+                  : NotionRadius.xsAll,
+            ),
           ),
         ),
       ),
@@ -276,12 +285,8 @@ Future<void> showStickerPreview(
   String? note,
 }) => showNotionCustomDialog<void>(
   context: context,
-  builder: (context) => _StickerPreview(
-    item: item,
-    client: client,
-    actions: actions,
-    note: note,
-  ),
+  builder: (context) =>
+      _StickerPreview(item: item, client: client, actions: actions, note: note),
 );
 
 class _StickerPreview extends StatelessWidget {

@@ -13,6 +13,7 @@ import 'sticker_pack_import.dart';
 import 'sticker_pack_sheet.dart';
 import 'sticker_store.dart';
 import 'sticker_tile.dart';
+import 'telegram_pack_import_page.dart';
 
 /// Settings › Chats & media › Stickers (Telegram's `StickersActivity`):
 /// installed packs in the panel's order (drag to reorder, remove with
@@ -285,11 +286,7 @@ class _StickerSettingsPageState extends State<StickerSettingsPage> {
             leading: const Icon(Icons.download_outlined),
             title: 'Import from Telegram',
             subtitle: 'The sticker packs installed in your Telegram account',
-            onTap: () => showTelegramPackImport(
-              context,
-              client: widget.client,
-              library: _library,
-            ),
+            onTap: () => showTelegramPackImport(context),
           ),
           NotionListRow(
             leading: const Icon(Icons.link),

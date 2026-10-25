@@ -188,15 +188,12 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
     final stickers = _stickers();
     final link = _link;
     final media = MediaQuery.sizeOf(context);
-    final width = math.min(media.width, NotionSize.contentMaxWidth) -
-        2 * NotionSpace.lg;
+    final width =
+        math.min(media.width, NotionSize.contentMaxWidth) - 2 * NotionSpace.lg;
     const columns = 5;
     final tile = width / columns;
     final rows = (stickers.length / columns).ceil();
-    final gridHeight = math.min(
-      media.height * .5,
-      math.max(1, rows) * tile,
-    );
+    final gridHeight = math.min(media.height * .5, math.max(1, rows) * tile);
     final canAdd = installed == null && link != null && _preview != null;
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -214,7 +211,9 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
             child: Text(
               [
                 if (stickers.isNotEmpty)
-                  stickers.length == 1 ? '1 sticker' : '${stickers.length} stickers',
+                  stickers.length == 1
+                      ? '1 sticker'
+                      : '${stickers.length} stickers',
                 if (link != null) link.networkLabel,
                 if (installed != null) 'In your stickers',
               ].join(' · '),
@@ -230,48 +229,45 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
                     key: const ValueKey('loading'),
                     child: _SkeletonGrid(tile: tile, columns: columns),
                   )
-                : TickerMode(
+                : GridView.builder(
                     key: const ValueKey('grid'),
-                    enabled: false,
-                    child: GridView.builder(
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: columns,
-                        mainAxisExtent: tile,
-                      ),
-                      itemCount: stickers.length,
-                      itemBuilder: (context, i) {
-                        final item = stickers[i];
-                        return StickerTile(
-                          key: ValueKey(item.key),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      mainAxisExtent: tile,
+                    ),
+                    itemCount: stickers.length,
+                    itemBuilder: (context, i) {
+                      final item = stickers[i];
+                      return StickerTile(
+                        key: ValueKey(item.key),
+                        item: item,
+                        client: widget.client,
+                        size: tile,
+                        onTap: () {
+                          final send = widget.onSend;
+                          if (send == null) return;
+                          Navigator.of(context).pop();
+                          send(item);
+                        },
+                        onLongPress: () => showStickerPreview(
+                          context,
                           item: item,
                           client: widget.client,
-                          size: tile,
-                          onTap: () {
-                            final send = widget.onSend;
-                            if (send == null) return;
-                            Navigator.of(context).pop();
-                            send(item);
-                          },
-                          onLongPress: () => showStickerPreview(
-                            context,
-                            item: item,
-                            client: widget.client,
-                            actions: [
-                              if (widget.onSend != null)
-                                StickerPreviewAction(
-                                  icon: Icons.send_outlined,
-                                  label: 'Send',
-                                  onSelected: () {
-                                    Navigator.of(context).pop();
-                                    widget.onSend!(item);
-                                  },
-                                ),
-                              _favouriteAction(item),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+                          actions: [
+                            if (widget.onSend != null)
+                              StickerPreviewAction(
+                                icon: Icons.send_outlined,
+                                label: 'Send',
+                                onSelected: () {
+                                  Navigator.of(context).pop();
+                                  widget.onSend!(item);
+                                },
+                              ),
+                            _favouriteAction(item),
+                          ],
+                        ),
+                      );
+                    },
                   ),
           ),
         ),
@@ -316,10 +312,8 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
             label: 'Open in ${link.networkLabel}',
             icon: Icons.open_in_new,
             expand: true,
-            onPressed: () => launchUrlString(
-              link.url,
-              mode: LaunchMode.externalApplication,
-            ),
+            onPressed: () =>
+                launchUrlString(link.url, mode: LaunchMode.externalApplication),
           ),
         ],
       ],
@@ -362,169 +356,4 @@ class _SkeletonGrid extends StatelessWidget {
       ),
     ),
   );
-}
-
-/// The user's Telegram packs with "Add" (ST-08 import from the network's
-/// own list). Already installed packs show as added.
-Future<void> showTelegramPackImport(
-  BuildContext context, {
-  required Client client,
-  StickerPackProvisioning? provisioning,
-  StickerLibrary? library,
-}) => showNotionSheet<void>(
-  context: context,
-  title: 'Telegram sticker packs',
-  builder: (context) => TelegramPackImportList(
-    client: client,
-    provisioning: provisioning,
-    library: library,
-  ),
-);
-
-class TelegramPackImportList extends StatefulWidget {
-  const TelegramPackImportList({
-    super.key,
-    required this.client,
-    this.provisioning,
-    this.library,
-  });
-
-  final Client client;
-  final StickerPackProvisioning? provisioning;
-  final StickerLibrary? library;
-
-  @override
-  State<TelegramPackImportList> createState() => _TelegramPackImportListState();
-}
-
-class _TelegramPackImportListState extends State<TelegramPackImportList> {
-  late final StickerLibrary _library =
-      widget.library ?? StickerLibrary.of(widget.client);
-  late final StickerPackProvisioning _provisioning =
-      widget.provisioning ?? StickerPackProvisioning.of(widget.client);
-  List<RemoteStickerPack>? _packs;
-  String? _error;
-  final _adding = <String>{};
-  final _errors = <String, String>{};
-
-  @override
-  void initState() {
-    super.initState();
-    _library.addListener(_changed);
-    unawaited(_load());
-  }
-
-  void _changed() {
-    if (mounted) setState(() {});
-  }
-
-  @override
-  void dispose() {
-    _library.removeListener(_changed);
-    super.dispose();
-  }
-
-  Future<void> _load() async {
-    setState(() => _error = null);
-    try {
-      final packs = await _provisioning.listPacks();
-      if (mounted) setState(() => _packs = packs);
-    } on StickerImportException catch (e) {
-      if (mounted) setState(() => _error = e.message);
-    }
-  }
-
-  Future<void> _add(RemoteStickerPack pack) async {
-    final url = pack.link.url;
-    setState(() {
-      _adding.add(url);
-      _errors.remove(url);
-    });
-    try {
-      await _provisioning.install(
-        pack.link,
-        title: pack.title,
-        library: _library,
-      );
-    } on StickerImportException catch (e) {
-      if (mounted) setState(() => _errors[url] = e.message);
-    } finally {
-      if (mounted) setState(() => _adding.remove(url));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final notion = context.notion;
-    final error = _error;
-    final packs = _packs;
-    if (error != null) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: NotionSpace.md),
-        child: NotionCallout(
-          icon: Icons.error_outline,
-          tone: NotionCalloutTone.warning,
-          title: error,
-          actionLabel: 'Try again',
-          onAction: _load,
-        ),
-      );
-    }
-    if (packs == null) {
-      return NotionSkeleton(
-        enabled: true,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [for (var i = 0; i < 4; i++) const NotionSkeletonRow()],
-        ),
-      );
-    }
-    if (packs.isEmpty) {
-      return const NotionEmptyState(
-        icon: Icons.emoji_emotions_outlined,
-        title: 'No sticker packs on Telegram',
-        message: 'Packs you add in Telegram show up here.',
-      );
-    }
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * .6,
-      ),
-      child: ListView.builder(
-        shrinkWrap: true,
-        itemCount: packs.length,
-        itemBuilder: (context, i) {
-          final pack = packs[i];
-          final url = pack.link.url;
-          final installed = _library.isInstalled(url);
-          final busy = _adding.contains(url);
-          final failure = _errors[url];
-          return NotionListRow(
-            leading: Icon(
-              pack.emoji
-                  ? Icons.emoji_emotions_outlined
-                  : Icons.sticky_note_2_outlined,
-              color: notion.colors.textSecondary,
-            ),
-            title: pack.title,
-            subtitle: failure ?? (pack.emoji ? 'Custom emoji' : 'Stickers'),
-            onTap: () => showStickerPackSheet(
-              context,
-              client: widget.client,
-              link: pack.link,
-              provisioning: _provisioning,
-              library: _library,
-            ),
-            trailing: installed
-                ? Icon(Icons.check, color: notion.colors.textSecondary)
-                : NotionButton(
-                    label: 'Add',
-                    busy: busy,
-                    onPressed: () => _add(pack),
-                  ),
-          );
-        },
-      ),
-    );
-  }
 }
