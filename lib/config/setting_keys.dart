@@ -146,6 +146,10 @@ enum AppSettings<T> {
   /// `InboxSwipeChoice.name` (archive, read, pin, none).
   inboxSwipeLeft<String>('pl.personal.inbox.swipe_left', 'archive'),
   inboxSwipeRight<String>('pl.personal.inbox.swipe_right', 'read'),
+  /// Chat header line "online" / "last seen …" from received Matrix
+  /// presence. Display only: it never changes what this device sends.
+  /// Settings › Privacy & security › "Show activity status".
+  personalShowPresence<bool>('pl.personal.chat.show_presence', true),
   benchmarksInLogs<bool>('chat.fluffy.benchmarks_in_logs', false);
 
   final String key;

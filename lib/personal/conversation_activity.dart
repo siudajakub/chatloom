@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/presence_status.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 
@@ -123,12 +124,16 @@ class ConversationPresence {
   final PresenceType presence;
   final bool online;
   final DateTime? lastActive;
+
+  /// Coarse buckets ("recently", "within a week") carry no [lastActive].
+  final PresencePrecision precision;
   const ConversationPresence({
     required this.room,
     required this.user,
     required this.presence,
     required this.online,
     required this.lastActive,
+    this.precision = PresencePrecision.exact,
   });
 }
 
@@ -136,8 +141,10 @@ class ConversationPresence {
 /// or sends typing/presence, and owns only one-shot expiry timers.
 ///
 /// Persisted/cache-only online values have no receipt timestamp in the SDK,
-/// so only live observations may claim online. Bridged ghosts need explicit
-/// remote provenance: generic Matrix puppet presence is insufficient.
+/// so only live observations may claim online. By default bridged ghosts are
+/// excluded: their Matrix presence is only meaningful when the bridge
+/// forwards the remote network's status, so surfaces opt in through
+/// [presenceAllowed] (the chat header does, behind a user preference).
 class ConversationActivity extends ChangeNotifier {
   ConversationActivity({
     required this.client,
@@ -153,6 +160,9 @@ class ConversationActivity extends ChangeNotifier {
 
   final Client client;
   final DateTime Function() _now;
+
+  /// The clock presence freshness is measured with (a test seam).
+  DateTime get now => _now();
   final Duration onlineFreshness;
   final bool Function(Room)? _presenceAllowed;
   List<Room> _rooms = const [];
@@ -318,46 +328,102 @@ class ConversationActivity extends ChangeNotifier {
         ConversationTypingUser(room, user),
   ];
 
+  /// Bridge clocks may run slightly ahead of this device.
+  static const _clockSkew = Duration(minutes: 2);
+
   List<ConversationPresence> get presences {
     final at = _now();
-    return [
-      for (final room in _rooms)
-        ...() {
-          if (!(_presenceAllowed?.call(room) ?? !isBridgedRoom(room))) {
-            return <ConversationPresence>[];
-          }
-          final id = counterpartId(room);
-          if (id == null) return <ConversationPresence>[];
-          final live = _receipts.observed[id];
-          // Reading this in-memory cache cannot perform a network request.
-          // ignore: deprecated_member_use
-          final value = live?.$1 ?? client.presences[id];
-          if (value == null) return <ConversationPresence>[];
-          final last = value.lastActiveTimestamp;
-          final validLast =
-              last != null &&
-                  last.millisecondsSinceEpoch > 0 &&
-                  !last.isAfter(at)
-              ? last
-              : null;
-          final online =
-              !_failed &&
-              live != null &&
-              !live.$2.isAfter(at) &&
-              at.difference(live.$2) < onlineFreshness &&
-              value.presence == PresenceType.online;
-          if (!online && validLast == null) return <ConversationPresence>[];
-          return [
-            ConversationPresence(
-              room: room,
-              user: room.unsafeGetUserFromMemoryOrFallback(id),
-              presence: value.presence,
-              online: online,
-              lastActive: validLast,
-            ),
-          ];
-        }(),
-    ];
+    final result = <ConversationPresence>[];
+    for (final room in _rooms) {
+      if (!(_presenceAllowed?.call(room) ?? !isBridgedRoom(room))) continue;
+      final id = counterpartId(room);
+      if (id == null) continue;
+      final matrix = _matrixPresence(room, id, at);
+      final bridge = _bridgePresence(room, id, at);
+      final best = switch ((matrix, bridge)) {
+        (null, null) => null,
+        (final m?, null) => m.$1,
+        (null, final b?) => b.$1,
+        (final m?, final b?) =>
+          m.$1.online
+              ? m.$1
+              : b.$1.online
+              ? b.$1
+              // The fresher observation wins (bridge on a tie: it knows
+              // the remote network, a ghost's Matrix presence may not).
+              : m.$2.isAfter(b.$2)
+              ? m.$1
+              : b.$1,
+      };
+      if (best != null) result.add(best);
+    }
+    return result;
+  }
+
+  /// Received Matrix presence and how fresh it is.
+  (ConversationPresence, DateTime)? _matrixPresence(
+    Room room,
+    String id,
+    DateTime at,
+  ) {
+    final live = _receipts.observed[id];
+    // Reading this in-memory cache cannot perform a network request.
+    // ignore: deprecated_member_use
+    final value = live?.$1 ?? client.presences[id];
+    if (value == null) return null;
+    final last = value.lastActiveTimestamp;
+    final validLast =
+        last != null && last.millisecondsSinceEpoch > 0 && !last.isAfter(at)
+        ? last
+        : null;
+    final online =
+        !_failed &&
+        live != null &&
+        !live.$2.isAfter(at) &&
+        at.difference(live.$2) < onlineFreshness &&
+        value.presence == PresenceType.online;
+    if (!online && validLast == null) return null;
+    return (
+      ConversationPresence(
+        room: room,
+        user: room.unsafeGetUserFromMemoryOrFallback(id),
+        presence: value.presence,
+        online: online,
+        lastActive: validLast,
+      ),
+      online ? live.$2 : validLast!,
+    );
+  }
+
+  /// `com.chatloom.presence` room account data from a bridge fork, and the
+  /// time it describes. "online" is only trusted for [onlineFreshness] after
+  /// the bridge wrote it; after that it reads as last seen at that time.
+  (ConversationPresence, DateTime)? _bridgePresence(
+    Room room,
+    String id,
+    DateTime at,
+  ) {
+    final value = BridgePresence.tryParse(
+      room.roomAccountData[chatloomPresenceType]?.content,
+    );
+    if (value == null) return null;
+    var ts = value.lastActive;
+    if (ts.isAfter(at.add(_clockSkew))) return null;
+    if (ts.isAfter(at)) ts = at;
+    final online =
+        value.online && !_failed && at.difference(ts) < onlineFreshness;
+    final exact = value.precision == PresencePrecision.exact;
+    return (
+      ConversationPresence(
+        room: room,
+        user: room.unsafeGetUserFromMemoryOrFallback(id),
+        presence: online ? PresenceType.online : PresenceType.offline,
+        online: online,
+        lastActive: exact ? ts : null,
+        precision: value.precision,
+      ),
+      ts,
+    );
   }
 
   @override
@@ -407,6 +473,12 @@ class ConversationActivity extends ChangeNotifier {
           changed = true;
         }
         for (final room in _rooms) {
+          if (sync.rooms?.join?[room.id]?.accountData?.any(
+                (e) => e.type == chatloomPresenceType,
+              ) ==
+              true) {
+            changed = true;
+          }
           if (sync.rooms?.join?[room.id]?.ephemeral?.any(
                 (e) => e.type == 'm.typing',
               ) ==
@@ -472,6 +544,12 @@ class ConversationActivity extends ChangeNotifier {
       for (final id in _counterparts.values)
         if (_receipts.observed[id] case final observation?)
           observation.$2.add(onlineFreshness),
+      for (final room in _rooms)
+        if (BridgePresence.tryParse(
+              room.roomAccountData[chatloomPresenceType]?.content,
+            )
+            case final bridge? when bridge.online)
+          bridge.lastActive.add(onlineFreshness),
     ].where((value) => value.isAfter(now)).toList()..sort();
     if (hasListeners && deadlines.isNotEmpty) {
       _expiry = Timer(deadlines.first.difference(now), _changed);

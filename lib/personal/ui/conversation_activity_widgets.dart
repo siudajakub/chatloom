@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/connection_status.dart';
 import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/presence_status.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
@@ -20,11 +23,17 @@ class ConversationActivityBuilder extends StatefulWidget {
     required this.rooms,
     required this.builder,
     this.now,
+    this.headerPresence = false,
   });
 
   final Client client;
   final Iterable<Room> rooms;
   final Widget Function(BuildContext, ConversationActivity) builder;
+
+  /// Chat headers: show received presence, bridged ghosts included, while
+  /// [PresenceDisplay.enabled] is on, and none at all while it is off. Other
+  /// surfaces keep the default (native Matrix members only).
+  final bool headerPresence;
 
   /// Test clock for deterministic expiry; production uses the current time.
   final DateTime Function()? now;
@@ -48,12 +57,16 @@ class _ConversationActivityBuilderState
     client: widget.client,
     rooms: widget.rooms,
     now: widget.now,
+    presenceAllowed: widget.headerPresence
+        ? (_) => PresenceDisplay.enabled.value
+        : null,
   );
 
   @override
   void didUpdateWidget(ConversationActivityBuilder oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.client, widget.client)) {
+    if (!identical(oldWidget.client, widget.client) ||
+        oldWidget.headerPresence != widget.headerPresence) {
       _activity.dispose();
       _create();
     } else {
@@ -69,7 +82,9 @@ class _ConversationActivityBuilderState
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: _activity,
+    listenable: widget.headerPresence
+        ? Listenable.merge([_activity, PresenceDisplay.enabled])
+        : _activity,
     builder: (context, _) => widget.builder(context, _activity),
   );
 }
@@ -123,9 +138,12 @@ List<User> conversationTypingUsers(ConversationActivity activity) => {
 }.values.toList();
 
 /// Problems win over typing and actual, attributable presence. Silence never
-/// becomes "offline", and a bridged puppet's Matrix presence is not remote
-/// network presence (the model gates provenance).
-class ConversationActivityStatus extends StatelessWidget {
+/// becomes "offline"; which rooms may show presence is decided by the
+/// activity model ([ConversationActivityBuilder.headerPresence]).
+///
+/// Presence reads Telegram style ("online", "last seen 5 min ago", "last seen
+/// today at 14:03") and re-words itself while visible, without a sync.
+class ConversationActivityStatus extends StatefulWidget {
   const ConversationActivityStatus({
     super.key,
     required this.client,
@@ -144,51 +162,80 @@ class ConversationActivityStatus extends StatelessWidget {
   final String? fallback;
 
   @override
+  State<ConversationActivityStatus> createState() =>
+      _ConversationActivityStatusState();
+}
+
+class _ConversationActivityStatusState
+    extends State<ConversationActivityStatus> {
+  Timer? _refresh;
+
+  @override
+  void dispose() {
+    _refresh?.cancel();
+    super.dispose();
+  }
+
+  void _schedule(DateTime? at) {
+    _refresh?.cancel();
+    _refresh = null;
+    if (at == null) return;
+    final delay = at.difference(widget.activity.now);
+    _refresh = Timer(delay.isNegative ? Duration.zero : delay, () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  String? _presence(BuildContext context) {
+    final presences = widget.activity.presences
+      ..sort((a, b) {
+        if (a.online != b.online) return a.online ? -1 : 1;
+        return (b.lastActive ?? DateTime(0)).compareTo(
+          a.lastActive ?? DateTime(0),
+        );
+      });
+    final presence = presences.firstOrNull;
+    if (presence == null) return null;
+    final label = presenceLabel(
+      online: presence.online,
+      lastActive: presence.lastActive,
+      precision: presence.precision,
+      now: widget.activity.now,
+      use24h: DateTime.now().use24HourFormat(context),
+    );
+    _schedule(label?.refreshAt);
+    if (label == null) return null;
+    if (!widget.sourceLabels) return label.text;
+    final network = ConversationClassifier([
+      presence.room,
+    ]).classify(presence.room).network;
+    return '${label.text} · ${notionNetworkLabel(network)}';
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final connection = ConnectionStatusMonitor.of(client);
-    final bridges = BridgeHealthMonitor.of(client);
+    final connection = ConnectionStatusMonitor.of(widget.client);
+    final bridges = BridgeHealthMonitor.of(widget.client);
     return ListenableBuilder(
       listenable: Listenable.merge([connection, bridges]),
       builder: (context, _) {
         var label = connection.value.label;
-        label ??= rooms.map(bridges.problemFor).nonNulls.firstOrNull?.title;
+        label ??= widget.rooms
+            .map(bridges.problemFor)
+            .nonNulls
+            .firstOrNull
+            ?.title;
         if (label == null && !connection.raw.offline) {
           final typing = conversationTypingText(
             context,
-            activity,
-            sourceLabels: sourceLabels,
+            widget.activity,
+            sourceLabels: widget.sourceLabels,
           );
-          if (typing.isNotEmpty) {
-            label = typing;
-          } else {
-            final presences = activity.presences
-              ..sort((a, b) {
-                if (a.online != b.online) return a.online ? -1 : 1;
-                return (b.lastActive ?? DateTime(0)).compareTo(
-                  a.lastActive ?? DateTime(0),
-                );
-              });
-            final presence = presences.firstOrNull;
-            if (presence != null) {
-              label = presence.online
-                  ? L10n.of(context).currentlyActive
-                  : presence.lastActive == null
-                  ? null
-                  : L10n.of(context).lastActiveAgo(
-                      presence.lastActive!.localizedTime(context),
-                    );
-              if (label != null && sourceLabels) {
-                final network = ConversationClassifier([
-                  presence.room,
-                ]).classify(presence.room).network;
-                label = '$label · ${notionNetworkLabel(network)}';
-              }
-            }
-          }
+          label = typing.isNotEmpty ? typing : _presence(context);
         }
         return Semantics(
           liveRegion: true,
-          child: NotionStatusLine(status: label ?? fallback),
+          child: NotionStatusLine(status: label ?? widget.fallback),
         );
       },
     );

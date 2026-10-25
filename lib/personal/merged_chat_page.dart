@@ -2998,6 +2998,7 @@ class _MergedChatPageState extends State<_MergedChatView>
               : ConversationActivityBuilder(
                   client: personal.client,
                   rooms: typingRooms,
+                  headerPresence: true,
                   builder: (context, activity) => NotionCompactChatHeader(
                     avatar: ConversationActivityAvatar(
                       activity: activity,
