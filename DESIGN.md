@@ -677,3 +677,30 @@ message visibility, long-message preview limits (including unlimited), emoji
 suggestion language and the desktop details-panel default. Existing privacy,
 notifications, recording/download, stickers and per-chat appearance remain
 in their respective settings pages.
+
+Wave 8 adds, in the same JSON value: pure black (`trueBlack`, swaps
+`NotionColors.dark`/`NotionGlass.dark` for `NotionColors.black`/
+`NotionGlass.black` in `NotionTheme.build`; light is unaffected), interface
+text size (`uiTextScale` 85–130 %, applied by `NotionDisplayScope` in
+`MaterialApp.builder`, composed with the platform scaler and, inside
+bubbles, with the message text size), clock format (`clockFormat`,
+`NotionDisplayScope` overrides `alwaysUse24HourFormat` and
+`DateTimeExtension.use24HourFormat` checks it first), message times
+(`messageTimestamps`: last in group, every message, hidden; ticks stay on
+the group's last message), delivery ticks, sender names, emoji-only size
+(`jumboEmoji`), two-line inbox previews (`inboxPreviewLines`), haptics
+(`NotionHaptics.enabled`, set by `ThemeController`) and built-in chat
+backgrounds (`wallpaperPreset` + `wallpaperStrength`, drawn by
+`NotionPresetWallpaper`: a static diagonal gradient in its own
+`RepaintBoundary`, never blurred or animated; the account picture wallpaper
+wins when set, and metadata chips switch to wallpaper mode for both).
+
+Colour: `NotionAppearance.custom` (stored as `#RRGGBB` in
+`appearanceCustomAccent`) replaces the preset's hue; the palette tunes it
+for contrast exactly like a preset, and its Vivid gradient ends 40° further
+round the wheel. Presets now include indigo, amber and cyan.
+
+Chats adds link preview cards on/off, the quick reaction bar (a JSON list in
+`quickReactions`, filtered per network like the defaults) and the actions of
+the two inbox swipe directions (`inboxSwipeLeft`/`Right`: archive,
+read/unread, pin/unpin, nothing).

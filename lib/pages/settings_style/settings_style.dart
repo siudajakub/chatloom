@@ -41,13 +41,31 @@ class SettingsStyleController extends State<SettingsStyle> {
   Future<void> resetDisplayPreferences() =>
       setDisplayPreferences(NotionDisplayPreferences.standard);
 
+  /// Accent, custom colour and intensity back to a new install's.
+  Future<void> resetAppearance() async {
+    await ThemeController.of(context).setAppearance(NotionAppearance.standard);
+    if (mounted) setState(() {});
+  }
+
   void setIntensity(NotionIntensity intensity) => ThemeController.of(
     context,
   ).setAppearance(appearance.copyWith(intensity: intensity));
 
   void setAccent(NotionAccent accent) => ThemeController.of(
     context,
-  ).setAppearance(appearance.copyWith(accent: accent));
+  ).setAppearance(appearance.copyWith(accent: accent, clearCustom: true));
+
+  /// Opens the colour picker; a picked colour replaces the preset's hue.
+  Future<void> pickCustomAccent() async {
+    final picked = await showCustomAccentSheet(
+      context,
+      initial: appearance.seed ?? NotionAccent.blue.seed!,
+    );
+    if (picked == null || !mounted) return;
+    await ThemeController.of(
+      context,
+    ).setAppearance(appearance.copyWith(custom: picked));
+  }
 
   ThemeMode get currentTheme => ThemeController.of(context).themeMode;
 

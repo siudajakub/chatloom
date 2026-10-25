@@ -78,6 +78,7 @@ class SettingsStyleView extends StatelessWidget {
               _AccentSwatches(
                 appearance: appearance,
                 onSelected: controller.setAccent,
+                onCustom: controller.pickCustomAccent,
               ),
               const NotionSectionHeader(title: 'Theme'),
               SegmentedButton<ThemeMode>(
@@ -100,9 +101,18 @@ class SettingsStyleView extends StatelessWidget {
                   ),
                 ],
               ),
-              _DisplaySettings(controller: controller),
-              const NotionSectionHeader(title: 'Chat wallpaper'),
-              _WallpaperSection(controller: controller),
+              _DisplayToggle(
+                label: 'Pure black',
+                subtitle: 'A black dark theme for OLED screens',
+                selected: controller.displayPreferences.trueBlack,
+                onChanged: (v) => controller.setDisplayPreferences(
+                  controller.displayPreferences.copyWith(trueBlack: v),
+                ),
+              ),
+              _DisplaySettings(
+                controller: controller,
+                wallpaper: _WallpaperSection(controller: controller),
+              ),
             ],
           ),
         ),
@@ -131,6 +141,7 @@ class _AppearancePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.notion;
+    final display = NotionDisplayPreferences.of(context);
     Widget text(String value) => Text(value, style: NotionType.body);
     final wallpaper = this.wallpaper;
     return ExcludeSemantics(
@@ -154,6 +165,11 @@ class _AppearancePreview extends StatelessWidget {
                         opacity: opacity,
                         blur: blur,
                       ),
+                    )
+                  else
+                    NotionPresetWallpaper(
+                      preset: display.wallpaperPreset,
+                      strength: display.wallpaperStrength,
                     ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(
@@ -357,7 +373,12 @@ const double _swatchRing = 10;
 class _AccentSwatches extends StatelessWidget {
   final NotionAppearance appearance;
   final ValueChanged<NotionAccent> onSelected;
-  const _AccentSwatches({required this.appearance, required this.onSelected});
+  final VoidCallback onCustom;
+  const _AccentSwatches({
+    required this.appearance,
+    required this.onSelected,
+    required this.onCustom,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -369,27 +390,39 @@ class _AccentSwatches extends StatelessWidget {
       children: [
         for (final accent in NotionAccent.values)
           _AccentSwatch(
-            accent: accent,
-            selected: accent == appearance.accent,
+            label: accent.label,
+            selected: appearance.custom == null && accent == appearance.accent,
             palette: NotionPalette.resolve(
-              appearance.copyWith(accent: accent),
+              appearance.copyWith(accent: accent, clearCustom: true),
               tokens.colors,
               brightness,
             ),
             onTap: () => onSelected(accent),
           ),
+        // Any colour: the picker's hue goes through the same contrast
+        // tuning as the presets.
+        _AccentSwatch(
+          label: 'Custom',
+          selected: appearance.custom != null,
+          palette: appearance.custom == null
+              ? null
+              : NotionPalette.resolve(appearance, tokens.colors, brightness),
+          onTap: onCustom,
+        ),
       ],
     );
   }
 }
 
 class _AccentSwatch extends StatelessWidget {
-  final NotionAccent accent;
+  final String label;
   final bool selected;
-  final NotionPalette palette;
+
+  /// Null draws the empty "Custom" swatch (a colour-picker icon).
+  final NotionPalette? palette;
   final VoidCallback onTap;
   const _AccentSwatch({
-    required this.accent,
+    required this.label,
     required this.selected,
     required this.palette,
     required this.onTap,
@@ -400,14 +433,15 @@ class _AccentSwatch extends StatelessWidget {
     final tokens = context.notion;
     // Vivid shows the bubble gradient; the other intensities the fill that
     // badges, toggles and the send button take.
-    final gradient = palette.bubbleGradient;
+    final palette = this.palette;
+    final gradient = palette?.bubbleGradient;
     return Semantics(
       button: true,
       selected: selected,
-      label: '${accent.label} accent',
+      label: '$label accent',
       excludeSemantics: true,
       child: Tooltip(
-        message: accent.label,
+        message: label,
         child: NotionPressable(
           scale: NotionMotion.pressIcon,
           child: InkWell(
@@ -434,7 +468,14 @@ class _AccentSwatch extends StatelessWidget {
                     height: _swatch - _swatchRing,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: gradient == null ? palette.accentFill : null,
+                      color: palette == null
+                          ? tokens.colors.surface
+                          : gradient == null
+                          ? palette.accentFill
+                          : null,
+                      border: palette == null
+                          ? Border.all(color: tokens.colors.border)
+                          : null,
                       gradient: gradient == null
                           ? null
                           : LinearGradient(
@@ -443,14 +484,20 @@ class _AccentSwatch extends StatelessWidget {
                               colors: gradient,
                             ),
                     ),
-                    child: NotionPop(
-                      visible: selected,
-                      child: Icon(
-                        Icons.check,
-                        size: NotionSize.iconSm,
-                        color: palette.onAccentFill,
-                      ),
-                    ),
+                    child: palette == null
+                        ? Icon(
+                            Icons.colorize_outlined,
+                            size: NotionSize.iconSm,
+                            color: tokens.colors.textSecondary,
+                          )
+                        : NotionPop(
+                            visible: selected,
+                            child: Icon(
+                              Icons.check,
+                              size: NotionSize.iconSm,
+                              color: palette.onAccentFill,
+                            ),
+                          ),
                   ),
                 ),
               ),
@@ -567,11 +614,40 @@ class _SliderRow extends StatelessWidget {
   );
 }
 
+/// A setting row with a switch; the whole row toggles.
+class _DisplayToggle extends StatelessWidget {
+  const _DisplayToggle({
+    required this.label,
+    required this.subtitle,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String subtitle;
+  final bool selected;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => NotionListRow(
+    title: label,
+    subtitle: subtitle,
+    onTap: () => onChanged(!selected),
+    trailing: Semantics(
+      label: label,
+      child: Switch(value: selected, onChanged: onChanged),
+    ),
+  );
+}
+
 /// Presentation controls use the same preferences and production presenters
 /// as the live preview. Defaults restore only these local visual choices.
 class _DisplaySettings extends StatelessWidget {
-  const _DisplaySettings({required this.controller});
+  const _DisplaySettings({required this.controller, required this.wallpaper});
   final SettingsStyleController controller;
+
+  /// The account wallpaper rows, shown under the built-in backgrounds.
+  final Widget wallpaper;
 
   @override
   Widget build(BuildContext context) {
@@ -583,14 +659,11 @@ class _DisplaySettings extends StatelessWidget {
       String subtitle,
       bool selected,
       ValueChanged<bool> onChanged,
-    ) => NotionListRow(
-      title: label,
+    ) => _DisplayToggle(
+      label: label,
       subtitle: subtitle,
-      onTap: () => onChanged(!selected),
-      trailing: Semantics(
-        label: label,
-        child: Switch(value: selected, onChanged: onChanged),
-      ),
+      selected: selected,
+      onChanged: onChanged,
     );
     Widget slider(
       String label,
@@ -612,9 +685,54 @@ class _DisplaySettings extends StatelessWidget {
       onChanged: onChanged,
       onChangeEnd: (_) {},
     );
+    Widget picker<T>(
+      String label,
+      String? subtitle,
+      T selected,
+      List<NotionChoice<T>> options,
+      ValueChanged<T> onChanged,
+    ) => NotionPickerRow<T>(
+      key: ValueKey('appearance_$label'),
+      label: label,
+      subtitle: subtitle,
+      value: selected,
+      options: options,
+      onChanged: onChanged,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const NotionSectionHeader(title: 'Text'),
+        slider(
+          'Interface text size',
+          value.uiTextScale,
+          .85,
+          1.3,
+          9,
+          (v) => update(value.copyWith(uiTextScale: v)),
+        ),
+        slider(
+          'Message text size',
+          value.messageTextScale,
+          .85,
+          1.4,
+          11,
+          (v) => update(value.copyWith(messageTextScale: v)),
+        ),
+        picker<NotionJumboEmoji>(
+          'Emoji-only messages',
+          'Size of a message that is a single emoji',
+          value.jumboEmoji,
+          [for (final o in NotionJumboEmoji.values) NotionChoice(o, o.label)],
+          (v) => update(value.copyWith(jumboEmoji: v)),
+        ),
+        picker<NotionClockFormat>(
+          'Clock',
+          'Times in chats, the chat list and reminders',
+          value.clockFormat,
+          [for (final o in NotionClockFormat.values) NotionChoice(o, o.label)],
+          (v) => update(value.copyWith(clockFormat: v)),
+        ),
         const NotionSectionHeader(title: 'Chat list'),
         slider(
           'Row size',
@@ -637,6 +755,12 @@ class _DisplaySettings extends StatelessWidget {
           (v) => update(value.copyWith(inboxPreviews: v)),
         ),
         toggle(
+          'Two-line previews',
+          'Show more of the latest message',
+          value.inboxPreviewLines > 1,
+          (v) => update(value.copyWith(inboxPreviewLines: v ? 2 : 1)),
+        ),
+        toggle(
           'Network badges',
           'Show which network each chat uses',
           value.inboxNetworkBadges,
@@ -655,14 +779,6 @@ class _DisplaySettings extends StatelessWidget {
           (v) => update(value.copyWith(inboxUnreadHighlight: v)),
         ),
         const NotionSectionHeader(title: 'Conversations'),
-        slider(
-          'Message text size',
-          value.messageTextScale,
-          .85,
-          1.4,
-          11,
-          (v) => update(value.copyWith(messageTextScale: v)),
-        ),
         slider(
           'Message spacing',
           value.messageSpacing,
@@ -688,12 +804,53 @@ class _DisplaySettings extends StatelessWidget {
           (v) => update(value.copyWith(bubbleRadius: v)),
           percentage: false,
         ),
+        picker<NotionTimestampMode>(
+          'Message times',
+          'Which messages show their time',
+          value.messageTimestamps,
+          [
+            for (final o in NotionTimestampMode.values)
+              NotionChoice(o, o.label),
+          ],
+          (v) => update(value.copyWith(messageTimestamps: v)),
+        ),
         toggle(
           'Sender avatars',
           'Show pictures beside incoming messages and typing',
           value.messageAvatars,
           (v) => update(value.copyWith(messageAvatars: v)),
         ),
+        toggle(
+          'Sender names',
+          'Show who wrote each message in groups',
+          value.senderNames,
+          (v) => update(value.copyWith(senderNames: v)),
+        ),
+        toggle(
+          'Delivery ticks',
+          'Show sent, delivered and read under your messages',
+          value.deliveryTicks,
+          (v) => update(value.copyWith(deliveryTicks: v)),
+        ),
+        const NotionSectionHeader(title: 'Chat background'),
+        _WallpaperPresets(
+          selected: value.wallpaperPreset,
+          onSelected: (v) => update(value.copyWith(wallpaperPreset: v)),
+        ),
+        NotionSizeReveal(
+          visible:
+              value.wallpaperPreset != NotionWallpaperPreset.none &&
+              controller.wallpaperUrl == null,
+          child: slider(
+            'Background strength',
+            value.wallpaperStrength,
+            .15,
+            1,
+            17,
+            (v) => update(value.copyWith(wallpaperStrength: v)),
+          ),
+        ),
+        wallpaper,
         const NotionSectionHeader(title: 'Effects'),
         toggle(
           'Reduce motion',
@@ -707,16 +864,204 @@ class _DisplaySettings extends StatelessWidget {
           value.glassEnabled,
           (v) => update(value.copyWith(glassEnabled: v)),
         ),
+        toggle(
+          'Haptic feedback',
+          'Vibrate lightly on sends, long presses and swipes',
+          value.haptics,
+          (v) => update(value.copyWith(haptics: v)),
+        ),
         NotionListRow(
           leading: const Icon(Icons.restore),
           title: 'Reset layout and effects',
-          subtitle: 'Restore compact chats and default conversation styling',
+          subtitle:
+              'Restore text, chat list, conversation and background '
+              'defaults; colours stay',
           trailing: const Icon(Icons.chevron_right),
           onTap: value == NotionDisplayPreferences.standard
               ? null
               : controller.resetDisplayPreferences,
         ),
+        NotionListRow(
+          key: const Key('appearance_reset_colours'),
+          leading: const Icon(Icons.format_color_reset_outlined),
+          title: 'Reset colours',
+          subtitle: 'Back to the blue accent at balanced intensity',
+          trailing: const Icon(Icons.chevron_right),
+          onTap: controller.appearance == NotionAppearance.standard
+              ? null
+              : controller.resetAppearance,
+        ),
       ],
     );
   }
+}
+
+/// Built-in chat backgrounds as round swatches, like the accent colours.
+class _WallpaperPresets extends StatelessWidget {
+  const _WallpaperPresets({required this.selected, required this.onSelected});
+
+  final NotionWallpaperPreset selected;
+  final ValueChanged<NotionWallpaperPreset> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.notion;
+    return Wrap(
+      spacing: NotionSpace.xxs,
+      runSpacing: NotionSpace.xxs,
+      children: [
+        for (final preset in NotionWallpaperPreset.values)
+          Semantics(
+            button: true,
+            selected: preset == selected,
+            label: '${preset.label} background',
+            excludeSemantics: true,
+            child: Tooltip(
+              message: preset.label,
+              child: InkWell(
+                onTap: () => onSelected(preset),
+                customBorder: const CircleBorder(),
+                child: SizedBox.square(
+                  dimension: NotionSize.touchTarget,
+                  child: Center(
+                    child: Container(
+                      width: _swatch,
+                      height: _swatch,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: preset == selected
+                              ? tokens.colors.text
+                              : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                      child: _PresetDisc(preset: preset),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _PresetDisc extends StatelessWidget {
+  const _PresetDisc({required this.preset});
+
+  final NotionWallpaperPreset preset;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.notion;
+    final colors = preset.colorsOf(context);
+    return Container(
+      width: _swatch - _swatchRing,
+      height: _swatch - _swatchRing,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: colors.isEmpty ? tokens.colors.background : null,
+        border: Border.all(color: tokens.colors.border),
+        gradient: colors.isEmpty
+            ? null
+            : LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: colors.length == 1
+                    ? [colors.first, colors.first]
+                    : colors,
+              ),
+      ),
+      child: colors.isEmpty
+          ? Icon(
+              Icons.block,
+              size: NotionSize.iconSm,
+              color: tokens.colors.textTertiary,
+            )
+          : null,
+    );
+  }
+}
+
+/// The custom accent picker: hue and saturation sliders over a live
+/// swatch and a sample own bubble in the resulting palette. Returns the
+/// colour, or null when dismissed.
+Future<Color?> showCustomAccentSheet(
+  BuildContext context, {
+  required Color initial,
+}) {
+  final start = HSLColor.fromColor(initial);
+  var hue = start.hue;
+  var saturation = start.saturation.clamp(.35, 1.0);
+  return showNotionSheet<Color>(
+    context: context,
+    title: 'Custom accent',
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) {
+        final tokens = context.notion;
+        final color = HSLColor.fromAHSL(1, hue, saturation, .5).toColor();
+        final palette = NotionPalette.resolve(
+          tokens.palette.appearance.copyWith(custom: color),
+          tokens.colors,
+          Theme.of(context).brightness,
+        );
+        final gradient = palette.bubbleGradient;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: NotionSpace.md,
+                  vertical: NotionSpace.xs,
+                ),
+                decoration: BoxDecoration(
+                  color: gradient == null ? palette.bubble : null,
+                  gradient: gradient == null
+                      ? null
+                      : LinearGradient(colors: gradient),
+                  borderRadius: NotionRadius.pillAll,
+                ),
+                child: Text(
+                  'Your messages look like this',
+                  style: NotionType.body.copyWith(color: palette.onBubble),
+                ),
+              ),
+            ),
+            _SliderRow(
+              label: 'Hue',
+              value: hue,
+              min: 0,
+              max: 359,
+              divisions: 359,
+              valueLabel: '${hue.round()}°',
+              onChanged: (v) => setState(() => hue = v),
+              onChangeEnd: (_) {},
+            ),
+            _SliderRow(
+              label: 'Saturation',
+              value: saturation,
+              min: .35,
+              max: 1,
+              divisions: 13,
+              valueLabel: '${(saturation * 100).round()}%',
+              onChanged: (v) => setState(() => saturation = v),
+              onChangeEnd: (_) {},
+            ),
+            const SizedBox(height: NotionSpace.sm),
+            NotionButton.primary(
+              key: const Key('custom_accent_apply'),
+              expand: true,
+              label: 'Use this colour',
+              onPressed: () => Navigator.of(context).pop(color),
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }
