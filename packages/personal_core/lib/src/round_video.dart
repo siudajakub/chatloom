@@ -2,6 +2,16 @@
 import 'contracts.dart';
 
 const roundMessageMarker = 'fi.mau.telegram.round_message';
+
+/// Network-neutral display marker for a round sent where the network has no
+/// native round type (Messenger): an ordinary `m.video` that ChatLoom shows
+/// as a round. Bridges ignore unknown `info` keys; Telegram sends never
+/// carry it (they keep [roundMessageMarker], understood by the fork).
+const roundVideoDisplayMarker = 'pl.personal.chat.round_video';
+
+/// Networks a round can be sent to: `telegram` (native video note through
+/// the ChatLoom fork) and `facebook` (Messenger: a square video).
+const roundSendNetworks = {'telegram', 'facebook'};
 const roundVideoCapabilityKey = 'pl.personal.chat.telegram.round_video';
 const telegramMediaCapabilitiesEventType =
     'pl.personal.chat.telegram.media_capabilities';
@@ -67,7 +77,7 @@ class RoundSendTarget {
       accountId.isNotEmpty &&
       deviceId.isNotEmpty &&
       roomId.isNotEmpty &&
-      network == 'telegram';
+      (network == 'telegram' || (network == 'facebook' && !silent));
   @override
   String toString() => 'RoundSendTarget(redacted)';
 }
@@ -119,8 +129,8 @@ class RoundVideoDescriptor {
     if (redacted ||
         content['msgtype'] != 'm.video' ||
         info is! Map ||
-        info[roundMessageMarker] is! bool ||
-        info[roundMessageMarker] != true) {
+        (info[roundMessageMarker] != true &&
+            info[roundVideoDisplayMarker] != true)) {
       return null;
     }
     int? positive(Object? v) => v is int && v >= 0 ? v : null;
@@ -187,6 +197,27 @@ class RoundVideoDescriptor {
     'duration': durationMs,
     roundMessageMarker: true,
   };
+
+  /// [matrixInfo] for a send to [network]: Telegram keeps its fork marker
+  /// unchanged; every other network gets only [roundVideoDisplayMarker].
+  Map<String, dynamic> matrixInfoFor(String network) => network == 'telegram'
+      ? matrixInfo
+      : {
+          'mimetype': mimeType,
+          'size': sizeBytes,
+          'w': width,
+          'h': height,
+          'duration': durationMs,
+          roundVideoDisplayMarker: true,
+        };
+
+  /// Whether [content] is marked as a native Telegram round (the fork's
+  /// marker), as opposed to a round shown as one by ChatLoom only.
+  static bool isTelegramRound(Map<String, dynamic> content) {
+    final info = content['info'];
+    return info is Map && info[roundMessageMarker] == true;
+  }
+
   @override
   String toString() => 'RoundVideoDescriptor(redacted)';
 }

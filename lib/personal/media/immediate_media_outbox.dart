@@ -477,7 +477,7 @@ class ImmediateMediaOutbox {
         Error.throwWithStackTrace(cipherFailure.$1, cipherFailure.$2);
       }
       if (record.metadata['finalContent'] == null) {
-        final info = descriptor.matrixInfo;
+        final info = descriptor.matrixInfoFor(target.network);
         if (record.metadata['thumbnailUrl'] != null) {
           info['thumbnail_file'] = {
             ...Map<String, dynamic>.from(

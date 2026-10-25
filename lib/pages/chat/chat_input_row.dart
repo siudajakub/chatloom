@@ -331,11 +331,15 @@ class _ChatInputRowState extends State<ChatInputRow> {
     ),
   ];
 
-  /// Round video in this chat, or null outside supported Telegram chats.
-  /// Display only: `TelegramRoundService.captureAndSend` re-checks it.
+  /// Round video in this chat, or null outside Telegram and Messenger
+  /// chats (Messenger receives it as a square video). Display only:
+  /// `TelegramRoundService.captureAndSend` re-checks it.
   RoundAvailability? get _round =>
       PlatformInfos.supportsRoundCapture &&
-          PersonalClient.networkOf(controller.room) == 'telegram'
+          const {
+            'telegram',
+            'facebook',
+          }.contains(PersonalClient.networkOf(controller.room))
       ? controller.roundAvailability
       : null;
 
@@ -424,7 +428,10 @@ class _ChatInputRowState extends State<ChatInputRow> {
         // The composer stays: a calm notice replaces the old blocking text.
         ComposerRecipientNotice(room: controller.room),
         if (PlatformInfos.supportsRoundCapture &&
-            PersonalClient.networkOf(controller.room) == 'telegram')
+            const {
+              'telegram',
+              'facebook',
+            }.contains(PersonalClient.networkOf(controller.room)))
           RoundOutboxSync(room: controller.room),
         // Telegram: a single emoji suggests matching stickers.
         StickerSuggestionStrip(host: controller),

@@ -392,6 +392,17 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  test('Messenger names what the round recipient sees', () {
+    expect(
+      bridgeFeatureLabel(BridgeFeature.roundVideo, network: 'facebook'),
+      'Round videos (sent as a square video on Messenger)',
+    );
+    expect(
+      bridgeFeatureLabel(BridgeFeature.roundVideo, network: 'telegram'),
+      'Round videos',
+    );
+  });
+
   test('every bridge feature has a readable name', () {
     for (final feature in BridgeFeature.values) {
       final label = bridgeFeatureLabel(feature);

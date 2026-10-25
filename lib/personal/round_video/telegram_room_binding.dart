@@ -395,7 +395,8 @@ class TelegramRoomBinding {
   }
 }
 
-/// Ordered like [TelegramRoomBinding.diagnose]. Only [available], [needsTrust]
+/// Ordered like [TelegramRoomBinding.diagnose]; the Messenger gate
+/// (`MessengerRoundGate.diagnose`) reuses the shared codes. Only [available], [needsTrust]
 /// and [uploadLimitUnknown] can still lead to a recording.
 enum RoundGateCode {
   available,
@@ -403,6 +404,9 @@ enum RoundGateCode {
   notJoined,
   noBridgeInfo,
   notTelegram,
+
+  /// Neither a Telegram nor a Messenger chat (Messenger gate).
+  unsupportedNetwork,
   missingLegacyBridgeInfo,
   missingRoomFeatures,
   bridgeLacksRoundSupport,
@@ -415,6 +419,9 @@ enum RoundGateCode {
   ambiguousBridges,
   roundDenied,
   roundNotDeclared,
+
+  /// The Messenger bridge does not accept MP4 videos here (Messenger gate).
+  videoNotAllowed,
   uploadLimitUnknown,
   profileIncomplete,
   notEncrypted,

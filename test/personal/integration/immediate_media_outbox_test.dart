@@ -260,6 +260,22 @@ Future<void> main() async {
           (content['info'] as Map)['thumbnail_file'] is Map,
       'Canonical encrypted marker/descriptors lost',
     );
+    // The Telegram send stays byte-for-byte what the fork expects.
+    final telegramInfo = Map<String, dynamic>.from(content['info'] as Map)
+      ..remove('thumbnail_file')
+      ..remove('thumbnail_info');
+    check(
+      jsonEncode(telegramInfo) ==
+              '{"mimetype":"video/mp4","size":1024,"w":384,"h":384,'
+                  '"duration":60000,"fi.mau.telegram.round_message":true}' &&
+          content.keys.join(',') ==
+              'msgtype,body,filename,info,$telegramSendOptionsKey,file,'
+                  'm.relates_to' &&
+          (content['info'] as Map).keys.join(',') ==
+              'mimetype,size,w,h,duration,fi.mau.telegram.round_message,'
+                  'thumbnail_file,thumbnail_info',
+      'Telegram round content changed',
+    );
     check(
       ((content['m.relates_to'] as Map)['m.in_reply_to'] as Map)['event_id'] ==
               r'$reply' &&
@@ -694,6 +710,75 @@ Future<void> main() async {
     check(
       await database.get(syncStage.actionId) == null,
       'A released tombstone was kept',
+    );
+    // Messenger: the same outbox sends an ordinary video marked for
+    // ChatLoom only; no Telegram marker, no Telegram send options.
+    const messengerTarget = RoundSendTarget(
+      accountId: 'a',
+      deviceId: 'd',
+      roomId: 'messenger-room',
+      network: 'facebook',
+    );
+    final messengerBytes = Uint8List.fromList(
+      List<int>.generate(512, (i) => (i * 7) % 256),
+    );
+    final messengerStaged = await o.stage(
+      target: messengerTarget,
+      descriptor: RoundVideoDescriptor(
+        sizeBytes: messengerBytes.length,
+        width: 384,
+        height: 384,
+        durationMs: 4000,
+        videoCodec: 'h264',
+        audioCodec: 'aac',
+        cornersSanitized: true,
+      ),
+      profile: profile,
+      bytes: messengerBytes,
+      thumbnailBytes: thumb,
+    );
+    check(
+      messengerStaged.state == ImmediateMediaState.staged,
+      'Messenger round was not staged',
+    );
+    final messengerSent = await o.dispatch(messengerStaged.actionId);
+    check(
+      messengerSent.state == ImmediateMediaState.matrixAccepted,
+      'Messenger round was not sent',
+    );
+    final messengerContent = sentContents.last;
+    final messengerInfo =
+        Map<String, dynamic>.from(messengerContent['info'] as Map)
+          ..remove('thumbnail_file')
+          ..remove('thumbnail_info');
+    check(
+      jsonEncode(messengerInfo) ==
+              '{"mimetype":"video/mp4","size":512,"w":384,"h":384,'
+                  '"duration":4000,"pl.personal.chat.round_video":true}' &&
+          messengerContent['msgtype'] == 'm.video' &&
+          !messengerContent.containsKey(telegramSendOptionsKey) &&
+          !messengerContent.containsKey('m.relates_to') &&
+          messengerContent['file'] is Map &&
+          RoundVideoDescriptor.fromContent(messengerContent) != null &&
+          !RoundVideoDescriptor.isTelegramRound(messengerContent),
+      'Messenger round content is not a marked ordinary video',
+    );
+    final silentMessenger = await o.stage(
+      target: const RoundSendTarget(
+        accountId: 'a',
+        deviceId: 'd',
+        roomId: 'messenger-room',
+        network: 'facebook',
+        silent: true,
+      ),
+      descriptor: descriptor,
+      profile: profile,
+      bytes: bytes,
+      thumbnailBytes: thumb,
+    );
+    check(
+      silentMessenger.state == ImmediateMediaState.failed,
+      'A silent Messenger round was staged',
     );
     stdout.writeln(
       'PASS SQLCipher media outbox offline stage, double tap, canonical encrypted '

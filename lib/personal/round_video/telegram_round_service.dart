@@ -35,8 +35,13 @@ import 'round_capture_controller.dart';
 import 'round_media_preparer.dart';
 import 'round_playback_coordinator.dart';
 import 'round_playback_receipts.dart';
+import 'round_send_route.dart';
 import 'telegram_room_binding.dart';
 
+/// Round videos of one client: the shared capture, staging, encrypted
+/// outbox, upload and bubbles for every round network ([RoundSendRoute]:
+/// Telegram, Messenger), plus the Telegram-only parts (bridge trust prompt,
+/// silent sends, playback receipts, reverse media state, native forwards).
 class TelegramRoundService extends ChangeNotifier
     implements RoundPlaybackReceipts {
   static final _instances = <Client, TelegramRoundService>{};
@@ -104,7 +109,6 @@ class TelegramRoundService extends ChangeNotifier
   /// instead of another `/media/config` round trip on the send path. Room
   /// state, trust and capability are still evaluated at every guard.
   static const preflightReuse = Duration(seconds: 30);
-
 
   /// The action of an own round bubble (`round-<id>`), or null.
   static String? actionOf(Event event) {
@@ -313,10 +317,11 @@ class TelegramRoundService extends ChangeNotifier
     RoundVideoDescriptor? descriptor,
   ]) {
     final room = client.getRoomById(target.roomId);
-    final binding = room == null ? null : TelegramRoomBinding.of(room);
-    if (room == null || binding == null) return false;
-    final caps = binding.capabilities(room),
-        profile = binding.capabilities(room).profile;
+    final route = RoundSendRoute.forNetwork(target.network);
+    final identity = room == null ? null : route?.bound(room);
+    final caps = identity == null ? null : route!.capabilities(room!);
+    if (room == null || identity == null || caps == null) return false;
+    final profile = caps.profile;
     return !_closed &&
         _dispatchEligible &&
         PersonalPrivacy.surfaceUnlocked &&
@@ -325,8 +330,8 @@ class TelegramRoundService extends ChangeNotifier
         client.encryptionEnabled &&
         client.fileEncryptionEnabled &&
         room.canSendDefaultMessages &&
-        caps.result.allowed &&
-        (!target.silent || caps.extension.operation('silent_send').allowed) &&
+        caps.allowed &&
+        (!target.silent || caps.silentAllowed) &&
         profile != null &&
         (descriptor == null ||
             (descriptor.sizeBytes != null &&
@@ -338,9 +343,9 @@ class TelegramRoundService extends ChangeNotifier
                 descriptor.width == descriptor.height)) &&
         target.accountId == client.userID &&
         target.deviceId == client.deviceID &&
-        target.bridgeAccountId == binding.identity.accountId &&
-        target.bridgeStateKey == binding.identity.stateKey &&
-        target.bridgeSenderId == binding.identity.senderId;
+        target.bridgeAccountId == identity.accountId &&
+        target.bridgeStateKey == identity.stateKey &&
+        target.bridgeSenderId == identity.senderId;
   }
 
   Future<void> _guard(
@@ -348,11 +353,13 @@ class TelegramRoundService extends ChangeNotifier
     RoundVideoDescriptor descriptor,
   ) async {
     final room = _sourceRoom(target);
-    final binding = TelegramRoomBinding.of(room);
-    if (binding == null ||
-        target.bridgeAccountId != binding.identity.accountId ||
-        target.bridgeStateKey != binding.identity.stateKey ||
-        target.bridgeSenderId != binding.identity.senderId) {
+    final route = RoundSendRoute.forNetwork(target.network);
+    final identity = route?.bound(room);
+    if (route == null ||
+        identity == null ||
+        target.bridgeAccountId != identity.accountId ||
+        target.bridgeStateKey != identity.stateKey ||
+        target.bridgeSenderId != identity.senderId) {
       throw const ImmediateMediaRejected('frozenBridgeIdentityChanged');
     }
     if (!PersonalPrivacy.surfaceUnlocked ||
@@ -362,17 +369,15 @@ class TelegramRoundService extends ChangeNotifier
         !client.fileEncryptionEnabled) {
       throw const ImmediateMediaRejected('encryptionOrSurfaceUnavailable');
     }
-    final caps = await _preflight(room);
-    if (caps?.result.allowed != true ||
+    final caps = await _preflight(route, room);
+    if (caps?.allowed != true ||
         caps?.profile == null ||
-        (target.silent &&
-            caps?.extension.operation('silent_send').allowed != true) ||
+        (target.silent && caps?.silentAllowed != true) ||
         descriptor.outgoingError(caps!.profile!) != null) {
       // No upload limit because the server could not be asked: a
       // connection problem, not a bridge that refuses rounds.
       throw ImmediateMediaRejected(
-        caps?.profile == null &&
-                TelegramRoomBinding.uploadLimitUnreachable(client)
+        caps?.profile == null && route.uploadLimitUnreachable(client)
             ? 'uploadLimitUnavailable'
             : 'roundCapabilityUnavailable',
       );
@@ -392,18 +397,21 @@ class TelegramRoundService extends ChangeNotifier
     }
   }
 
-  /// [TelegramRoomBinding.preflight], reusing a passing upload-limit
+  /// [RoundSendRoute.preflight], reusing a passing upload-limit
   /// measurement younger than [preflightReuse]: capabilities are always
   /// re-evaluated from current room state, only the network fetch is skipped.
-  Future<RoundBridgeCapabilities?> _preflight(Room room) async {
+  Future<RoundRouteCapabilities?> _preflight(
+    RoundSendRoute route,
+    Room room,
+  ) async {
     final measured = _preflightAt[room.id];
     if (measured != null &&
         DateTime.now().difference(measured) < preflightReuse) {
-      final caps = TelegramRoomBinding.of(room)?.capabilities(room);
-      if (caps?.result.allowed == true && caps?.profile != null) return caps;
+      final caps = route.capabilities(room);
+      if (caps?.allowed == true && caps?.profile != null) return caps;
     }
-    final caps = await TelegramRoomBinding.preflight(room);
-    if (caps?.result.allowed == true && caps?.profile != null) {
+    final caps = await route.preflight(room);
+    if (caps?.allowed == true && caps?.profile != null) {
       _preflightAt[room.id] = DateTime.now();
     } else {
       _preflightAt.remove(room.id);
@@ -414,14 +422,21 @@ class TelegramRoundService extends ChangeNotifier
   /// Precise, content-free reason (`round:<RoundGateCode>`) for a refused gate.
   static ImmediateMediaRejected _gateRejection(
     Room room, {
+    RoundSendRoute? route,
     required bool silent,
     bool requireUploadLimit = false,
   }) {
-    final gate = TelegramRoomBinding.diagnose(
-      room,
-      silent: silent,
-      requireUploadLimit: requireUploadLimit,
-    );
+    final gate = route == null
+        ? RoundSendRoute.diagnoseRoom(
+            room,
+            silent: silent,
+            requireUploadLimit: requireUploadLimit,
+          )
+        : route.diagnose(
+            room,
+            silent: silent,
+            requireUploadLimit: requireUploadLimit,
+          );
     return ImmediateMediaRejected(
       gate.terminal || gate.code == RoundGateCode.uploadLimitUnknown
           ? 'round:${gate.code.name}'
@@ -441,22 +456,25 @@ class TelegramRoundService extends ChangeNotifier
     void Function(String eventId)? onAccepted,
   }) async {
     // Freeze before storage, permission dialogs, trust prompts or capture.
-    final initialBinding = TelegramRoomBinding.unverifiedCandidate(room);
+    final route = RoundSendRoute.forRoom(room);
+    final initialIdentity = route?.candidate(room);
     final frozen = RoundSendTarget(
       accountId: client.userID ?? '',
       deviceId: client.deviceID ?? '',
       roomId: room.id,
-      network: 'telegram',
-      bridgeAccountId: initialBinding?.identity.accountId,
-      bridgeStateKey: initialBinding?.identity.stateKey,
-      bridgeSenderId: initialBinding?.identity.senderId,
+      network: route?.network ?? 'telegram',
+      bridgeAccountId: initialIdentity?.accountId,
+      bridgeStateKey: initialIdentity?.stateKey,
+      bridgeSenderId: initialIdentity?.senderId,
       silent: silent,
       replyEventId: reply?.eventId,
       threadEventId: threadId,
       readUpToEventId:
           readUpToEventId ?? PersonalPrivacy.frozenReadCutoff(room),
     );
-    if (initialBinding == null) throw _gateRejection(room, silent: silent);
+    if (route == null || initialIdentity == null) {
+      throw _gateRejection(room, route: route, silent: silent);
+    }
     if (capturing) return null;
     if (hasUnstaged(room.id))
       throw const ImmediateMediaRejected('saveExistingDraftFirst');
@@ -467,21 +485,28 @@ class TelegramRoundService extends ChangeNotifier
     try {
       await initialize();
       if (!context.mounted || !stillCurrent()) return null;
-      if (!await _ensureTrustedBridge(context, room)) return null;
+      // Telegram only: Messenger has no fork identity to confirm.
+      if (route.needsTrust && !await _ensureTrustedBridge(context, room)) {
+        return null;
+      }
       if (!context.mounted || !stillCurrent()) return null;
       // A passing upload-limit measurement younger than [preflightReuse] is
       // reused (capabilities are still read from current room state), so a
       // second round in a row opens the camera without a network round trip.
-      final caps = await _preflight(room);
+      final caps = await _preflight(route, room);
       final profile = caps?.profile;
-      if (caps?.result.allowed != true ||
-          (silent &&
-              caps?.extension.operation('silent_send').allowed != true) ||
+      if (caps?.allowed != true ||
+          (silent && caps?.silentAllowed != true) ||
           profile == null ||
           !room.encrypted ||
           !client.encryptionEnabled ||
           !client.fileEncryptionEnabled) {
-        throw _gateRejection(room, silent: silent, requireUploadLimit: true);
+        throw _gateRejection(
+          room,
+          route: route,
+          silent: silent,
+          requireUploadLimit: true,
+        );
       }
       if (!context.mounted || !stillCurrent()) return null;
       if (gesture != null &&
@@ -515,7 +540,7 @@ class TelegramRoundService extends ChangeNotifier
         gesture: gesture,
         mediaAccess: access,
         targetLabel:
-            'Telegram · ${room.getLocalizedDisplayname()}${silent ? ' · silent' : ''}',
+            '${route.label} · ${room.getLocalizedDisplayname()}${silent ? ' · silent' : ''}',
         profile: RoundCaptureProfile.fromBridge(
           maxBytes: maxBytes,
           maxSide: profile.maxSide,
@@ -612,7 +637,7 @@ class TelegramRoundService extends ChangeNotifier
     'msgtype': 'm.video',
     'body': 'video_message.mp4',
     'filename': 'video_message.mp4',
-    'info': descriptor.matrixInfo,
+    'info': descriptor.matrixInfoFor(target.network),
     if (target.threadEventId != null)
       'm.relates_to': {
         'rel_type': 'm.thread',
@@ -926,21 +951,25 @@ class TelegramRoundService extends ChangeNotifier
           'round video. $same';
     }
     final code = metadata['errorCode'];
+    final target = metadata['target'];
+    final network = target is Map && target['network'] is String
+        ? RoundSendRoute.forNetwork(target['network'] as String)?.label
+        : null;
+    final bridge = 'The ${network ?? 'Telegram'} bridge';
     if (code is String && code.startsWith('round:')) {
-      return 'The Telegram bridge does not accept round videos right now. '
-          '$same';
+      return '$bridge does not accept round videos right now. $same';
     }
     return switch (code) {
       'encryptionOrSurfaceUnavailable' =>
         'ChatLoom was locked or in the background, so the round video was '
             'not sent. Retry sends it now.',
       'roundCapabilityUnavailable' || 'encryptionUnavailable' =>
-        'The Telegram bridge does not accept round videos right now. $same',
+        '$bridge does not accept round videos right now. $same',
       'frozenRelationUnavailable' =>
         'The message you replied to is no longer available.',
       'frozenBridgeIdentityChanged' =>
-        'The Telegram bridge of this chat changed. Delete the round video '
-            'and record it again.',
+        '$bridge of this chat changed. Delete the round video and record '
+            'it again.',
       'sendRejected' => 'The server did not accept this round video.',
       'uploadLimitUnavailable' =>
         'ChatLoom could not reach the server to check the upload limit. '
@@ -1360,7 +1389,9 @@ class TelegramRoundService extends ChangeNotifier
     if (!canNativeForward(event)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('This round video cannot be forwarded in Telegram.'),
+          content: Text(
+            'This round video can only be forwarded between Telegram chats.',
+          ),
         ),
       );
       return;

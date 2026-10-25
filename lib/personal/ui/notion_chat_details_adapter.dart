@@ -233,7 +233,9 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     final hint = availability.hint;
     return NotionListRow(
       leading: const Icon(Icons.radio_button_checked_outlined),
-      title: 'Round video',
+      title: PersonalClient.networkOf(room) == 'facebook'
+          ? messengerRoundVideoLabel
+          : 'Round video',
       subtitle: [reason ?? 'Available', ?hint].join(' · '),
     );
   }
@@ -732,10 +734,14 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               context,
               reasonOf: (BridgeFeature feature) =>
                   RoomCapabilities.forFeature(feature, room).reason,
+              network: PersonalClient.networkOf(room),
             ),
           ),
         if (PlatformInfos.isAndroid &&
-            PersonalClient.networkOf(room) == 'telegram')
+            const {
+              'telegram',
+              'facebook',
+            }.contains(PersonalClient.networkOf(room)))
           _roundVideoRow(room),
         NotionListRow(
           leading: const Icon(Icons.lock_outline),
