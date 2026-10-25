@@ -79,7 +79,7 @@ void main() {
       final read = background();
       expect(
         tester.getSize(find.byType(NotionInboxRow)).height,
-        greaterThanOrEqualTo(88),
+        greaterThanOrEqualTo(66),
       );
       await row(unread: true);
       expect(background(), isNot(read));

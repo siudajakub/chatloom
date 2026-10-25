@@ -179,16 +179,14 @@ class ConversationBubble extends StatelessWidget {
       groupPosition == ConversationGroupPosition.single ||
       groupPosition == ConversationGroupPosition.last;
 
-  BorderRadiusDirectional get _radius =>
-      radiusFor(outgoing: outgoing, position: groupPosition);
-
   /// Grouped corners: the sender-side corners shrink where the bubble joins
   /// a neighbour. Media inside the fill uses the same shape.
   static BorderRadiusDirectional radiusFor({
     required bool outgoing,
     required ConversationGroupPosition position,
+    double outerRadius = NotionBubble.outer,
   }) {
-    const outer = Radius.circular(NotionBubble.outer);
+    final outer = Radius.circular(outerRadius);
     const joined = Radius.circular(NotionBubble.joined);
     final starts =
         position == ConversationGroupPosition.single ||
@@ -211,18 +209,40 @@ class ConversationBubble extends StatelessWidget {
     final crossAxis = outgoing
         ? CrossAxisAlignment.end
         : CrossAxisAlignment.start;
-    final radius = _radius.resolve(direction);
+    final display = NotionDisplayPreferences.of(context);
+    final radius = radiusFor(
+      outgoing: outgoing,
+      position: groupPosition,
+      outerRadius: display.bubbleRadius,
+    ).resolve(direction);
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.hasBoundedWidth
             ? constraints.maxWidth
             : MediaQuery.sizeOf(context).width;
         // Large text and media get more room, retaining a visible direction gap.
-        final largeText = MediaQuery.textScalerOf(context).scale(17) > 22;
-        final fraction = largeText || media
-            ? math.max(maxWidthFraction, .88)
+        final largeText =
+            MediaQuery.textScalerOf(context).scale(17) *
+                display.messageTextScale >
+            22;
+        final preferredWidth = maxWidthFraction == NotionBubble.maxWidthFraction
+            ? display.bubbleWidth
             : maxWidthFraction;
-        const avatarSlot = NotionBubble.avatarSlot;
+        final fraction = largeText || media
+            ? math.max(preferredWidth, .88)
+            : preferredWidth;
+        final avatarSlot = display.messageAvatars
+            ? NotionBubble.avatarSlot
+            : 0.0;
+        final scaledBody = MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: NotionMessageTextScaler(
+              MediaQuery.textScalerOf(context),
+              display.messageTextScale,
+            ),
+          ),
+          child: body,
+        );
         // Own bubbles take the accent fill (a gradient in Vivid) and its
         // text colour; a private chat palette overrides both.
         final ownFill = outgoing && backgroundColor == null;
@@ -253,7 +273,7 @@ class ConversationBubble extends StatelessWidget {
                 ),
                 child: DefaultTextStyle.merge(
                   style: TextStyle(color: colors.text),
-                  child: body,
+                  child: scaledBody,
                 ),
               )
             : ClipRRect(
@@ -310,7 +330,7 @@ class ConversationBubble extends StatelessWidget {
                     child: DefaultTextStyle.merge(
                       style: TextStyle(color: ink),
                       textWidthBasis: TextWidthBasis.longestLine,
-                      child: body,
+                      child: scaledBody,
                     ),
                   ),
                 ),
@@ -355,9 +375,13 @@ class ConversationBubble extends StatelessWidget {
         );
         return Padding(
           padding: EdgeInsets.only(
-            top: _startsGroup
-                ? NotionBubble.seriesGap
-                : (chromeless ? NotionBubble.roundGap : NotionBubble.groupGap),
+            top:
+                (_startsGroup
+                    ? NotionBubble.seriesGap
+                    : (chromeless
+                          ? NotionBubble.roundGap
+                          : NotionBubble.groupGap)) *
+                display.messageSpacing,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -369,7 +393,7 @@ class ConversationBubble extends StatelessWidget {
                     : MainAxisAlignment.start,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (!outgoing)
+                  if (!outgoing && display.messageAvatars)
                     SizedBox(
                       width: avatarSlot,
                       child: Align(

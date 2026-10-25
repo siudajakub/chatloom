@@ -92,6 +92,8 @@ class NotionInboxRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final display = NotionDisplayPreferences.of(context);
+    final scale = display.inboxScale;
     final large = MediaQuery.textScalerOf(context).scale(16) > 22;
     final secondary = Theme.of(context).colorScheme.onSurfaceVariant;
     final colors = context.notion.colors;
@@ -101,7 +103,7 @@ class NotionInboxRow extends StatelessWidget {
     final palette = context.notion.palette;
     final rowColor = selected
         ? colors.selected
-        : hasUnread && !muted
+        : hasUnread && !muted && display.inboxUnreadHighlight
         ? palette.accentTint
         : colors.background;
     final unreadInk = NotionContrast.readable(rowColor, colors.accent);
@@ -146,7 +148,8 @@ class NotionInboxRow extends StatelessWidget {
           child: _SelectedBackground(
             selected: selected,
             color: colors.selected,
-            restColor: hasUnread && !muted && !selected
+            restColor:
+                hasUnread && !muted && !selected && display.inboxUnreadHighlight
                 ? palette.accentTint
                 : null,
             child: Material(
@@ -158,299 +161,329 @@ class NotionInboxRow extends StatelessWidget {
                 onSecondaryTap: onLongPress,
                 borderRadius: NotionRadius.rowAll,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
+                  padding: EdgeInsets.symmetric(
                     horizontal: NotionSpace.xs,
-                    vertical: NotionSpace.md,
+                    vertical: NotionSpace.md * scale,
                   ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ExcludeSemantics(
-                        child: SizedBox.square(
-                          dimension: NotionSize.avatarLg,
-                          // One shape with or without the badge, so the
-                          // avatar keeps its element when the network
-                          // filter changes (no image reload).
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              Positioned.fill(child: avatar),
-                              if (networks.isNotEmpty)
-                                PositionedDirectional(
-                                  end: -NotionSpace.xxs,
-                                  bottom: -NotionSpace.xxs,
-                                  child: NotionInboxNetworkBadge(
-                                    networks: networks,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ExcludeSemantics(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight:
+                          NotionSize.touchTarget - 2 * NotionSpace.md * scale,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (display.inboxAvatars)
+                          ExcludeSemantics(
+                            child: SizedBox.square(
+                              dimension: NotionSize.avatarLg * scale,
+                              // One shape with or without the badge, so the
+                              // avatar keeps its element when the network
+                              // filter changes (no image reload).
+                              child: Stack(
+                                clipBehavior: Clip.none,
                                 children: [
-                                  Expanded(
-                                    child: Text(
-                                      name,
-                                      maxLines: large ? 2 : 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: NotionType.headline.copyWith(
-                                        height: 1.25,
-                                        color: hasUnread && !muted
-                                            ? unreadInk
-                                            : colors.text,
-                                        fontWeight: hasUnread
-                                            ? FontWeight.w700
-                                            : FontWeight.w500,
+                                  Positioned.fill(child: avatar),
+                                  if (networks.isNotEmpty &&
+                                      display.inboxNetworkBadges)
+                                    PositionedDirectional(
+                                      end: -NotionSpace.xxs,
+                                      bottom: -NotionSpace.xxs,
+                                      child: NotionInboxNetworkBadge(
+                                        networks: networks,
                                       ),
                                     ),
-                                  ),
-                                  // Muting pops the bell in and out; the first
-                                  // build shows it as is.
-                                  NotionLazySwitcher(
-                                    style: NotionLazySwitch.morph,
-                                    alignment: AlignmentDirectional.centerStart,
-                                    child: muted
-                                        ? Padding(
-                                            key: const ValueKey('muted'),
-                                            padding:
-                                                const EdgeInsetsDirectional.only(
-                                                  start: NotionSpace.xxs,
-                                                ),
-                                            child: Icon(
-                                              Icons.notifications_off_outlined,
-                                              size:
-                                                  NotionType.footnote.fontSize,
-                                              color: secondary,
-                                            ),
-                                          )
-                                        : const SizedBox.shrink(
-                                            key: ValueKey('not-muted'),
-                                          ),
-                                  ),
                                 ],
                               ),
-                              const SizedBox(height: NotionSpace.xxs),
-                              Row(
-                                children: [
-                                  if (tag != null) ...[
-                                    _InboxTag(label: tag!),
-                                    const SizedBox(width: NotionSpace.xxs),
-                                  ],
-                                  if (failed) ...[
-                                    Icon(
-                                      Icons.error_outline,
-                                      key: const ValueKey(
-                                        'notion_inbox_failed',
-                                      ),
-                                      size: NotionType.footnote.fontSize,
-                                      color: colors.danger,
-                                    ),
-                                    const SizedBox(width: NotionSpace.xxs),
-                                  ] else if (previewLeading != null) ...[
-                                    previewLeading!,
-                                    const SizedBox(width: 4),
-                                  ],
-                                  // Typing dots grow in before the text and
-                                  // shrink away when the message arrives.
-                                  NotionSizeReveal(
-                                    visible: typing,
-                                    axis: Axis.horizontal,
-                                    alignment: AlignmentDirectional.centerStart,
-                                    duration: NotionMotion.short,
-                                    child: Padding(
-                                      padding: const EdgeInsetsDirectional.only(
-                                        end: NotionSpace.xxs,
-                                      ),
-                                      child: NotionTypingDots(
-                                        size: _typingDot,
-                                        color: colors.accent,
-                                      ),
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: NotionLazySwitcher(
+                            ),
+                          ),
+                        if (display.inboxAvatars)
+                          SizedBox(width: NotionSpace.sm * scale),
+                        Expanded(
+                          child: ExcludeSemantics(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
                                       child: Text(
-                                        preview,
-                                        key: ValueKey((preview, typing)),
+                                        name,
                                         maxLines: large ? 2 : 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: NotionType.callout.copyWith(
-                                          height: 1.3,
-                                          color: previewColor,
-                                          fontStyle: draft
-                                              ? FontStyle.italic
-                                              : null,
-                                          decoration: redacted
-                                              ? TextDecoration.lineThrough
-                                              : null,
+                                        style: NotionType.headline
+                                            .apply(
+                                              fontSizeFactor: (1 + scale) / 2,
+                                            )
+                                            .copyWith(
+                                              height: 1.25,
+                                              color: hasUnread && !muted
+                                                  ? unreadInk
+                                                  : colors.text,
+                                              fontWeight: hasUnread
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                            ),
+                                      ),
+                                    ),
+                                    // Muting pops the bell in and out; the first
+                                    // build shows it as is.
+                                    NotionLazySwitcher(
+                                      style: NotionLazySwitch.morph,
+                                      alignment:
+                                          AlignmentDirectional.centerStart,
+                                      child: muted
+                                          ? Padding(
+                                              key: const ValueKey('muted'),
+                                              padding:
+                                                  const EdgeInsetsDirectional.only(
+                                                    start: NotionSpace.xxs,
+                                                  ),
+                                              child: Icon(
+                                                Icons
+                                                    .notifications_off_outlined,
+                                                size: NotionType
+                                                    .footnote
+                                                    .fontSize,
+                                                color: secondary,
+                                              ),
+                                            )
+                                          : const SizedBox.shrink(
+                                              key: ValueKey('not-muted'),
+                                            ),
+                                    ),
+                                  ],
+                                ),
+                                if (display.inboxPreviews || typing) ...[
+                                  SizedBox(height: NotionSpace.xxs * scale),
+                                  Row(
+                                    children: [
+                                      if (tag != null) ...[
+                                        _InboxTag(label: tag!),
+                                        const SizedBox(width: NotionSpace.xxs),
+                                      ],
+                                      if (failed) ...[
+                                        Icon(
+                                          Icons.error_outline,
+                                          key: const ValueKey(
+                                            'notion_inbox_failed',
+                                          ),
+                                          size: NotionType.footnote.fontSize,
+                                          color: colors.danger,
+                                        ),
+                                        const SizedBox(width: NotionSpace.xxs),
+                                      ] else if (previewLeading != null) ...[
+                                        previewLeading!,
+                                        const SizedBox(width: 4),
+                                      ],
+                                      // Typing dots grow in before the text and
+                                      // shrink away when the message arrives.
+                                      NotionSizeReveal(
+                                        visible: typing,
+                                        axis: Axis.horizontal,
+                                        alignment:
+                                            AlignmentDirectional.centerStart,
+                                        duration: NotionMotion.short,
+                                        child: Padding(
+                                          padding:
+                                              const EdgeInsetsDirectional.only(
+                                                end: NotionSpace.xxs,
+                                              ),
+                                          child: NotionTypingDots(
+                                            size: _typingDot,
+                                            color: colors.accent,
+                                          ),
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: NotionLazySwitcher(
+                                          child: Text(
+                                            preview,
+                                            key: ValueKey((preview, typing)),
+                                            maxLines: large ? 2 : 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: NotionType.callout
+                                                .apply(
+                                                  fontSizeFactor:
+                                                      (1 + scale) / 2,
+                                                )
+                                                .copyWith(
+                                                  height: 1.3,
+                                                  color: previewColor,
+                                                  fontStyle: draft
+                                                      ? FontStyle.italic
+                                                      : null,
+                                                  decoration: redacted
+                                                      ? TextDecoration
+                                                            .lineThrough
+                                                      : null,
+                                                ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        ExcludeSemantics(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              if (time != null && display.inboxTimestamps)
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (delivery case final state?) ...[
+                                      NotionDeliveryTick(
+                                        key: const ValueKey(
+                                          'notion_inbox_delivery',
+                                        ),
+                                        state: state,
+                                        color: secondary,
+                                        size:
+                                            NotionDeliveryTick.defaultSize + 2,
+                                      ),
+                                      const SizedBox(width: 2),
+                                    ],
+                                    NotionLazySwitcher(
+                                      alignment: AlignmentDirectional.topEnd,
+                                      child: Text(
+                                        time!,
+                                        key: ValueKey(time),
+                                        style: NotionType.footnote.copyWith(
+                                          color: hasUnread && !muted
+                                              ? unreadInk
+                                              : secondary,
+                                          fontWeight: hasUnread
+                                              ? FontWeight.w600
+                                              : FontWeight.w400,
                                         ),
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
+                              // The badge pops in when the first unread arrives,
+                              // pulses and rolls its number on every new one, and
+                              // shrinks away once read. Rows built by scrolling
+                              // show it as is (a switcher never animates its first
+                              // child).
+                              NotionLazySwitcher(
+                                style: NotionLazySwitch.morph,
+                                bounce: true,
+                                alignment: AlignmentDirectional.topEnd,
+                                child: unreadCount > 0
+                                    ? Padding(
+                                        key: ValueKey(('count', mentioned)),
+                                        padding: const EdgeInsets.only(
+                                          top: NotionSpace.xxs,
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (mentioned) ...[
+                                              _MentionBadge(
+                                                color: palette.accentFill,
+                                                text: palette.onAccentFill,
+                                              ),
+                                              const SizedBox(
+                                                width: NotionSpace.xxs,
+                                              ),
+                                            ],
+                                            NotionPop(
+                                              trigger: unreadCount,
+                                              playOnMount: false,
+                                              child: Container(
+                                                constraints:
+                                                    const BoxConstraints(
+                                                      minWidth: 20,
+                                                      minHeight: 20,
+                                                    ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 1,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: badgeColor,
+                                                  borderRadius:
+                                                      NotionRadius.pillAll,
+                                                ),
+                                                alignment: Alignment.center,
+                                                child: NotionAnimatedCount(
+                                                  count: unreadCount,
+                                                  style: NotionType.caption
+                                                      .copyWith(
+                                                        color: badgeText,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : mentioned
+                                    ? Padding(
+                                        key: const ValueKey('mention'),
+                                        padding: const EdgeInsets.only(
+                                          top: NotionSpace.xxs,
+                                        ),
+                                        child: _MentionBadge(
+                                          color: palette.accentFill,
+                                          text: palette.onAccentFill,
+                                        ),
+                                      )
+                                    : unread
+                                    // Marked unread by hand: a plain dot, no count.
+                                    ? Padding(
+                                        key: const ValueKey('dot'),
+                                        padding: const EdgeInsets.only(
+                                          top: NotionSpace.xs,
+                                        ),
+                                        child: Container(
+                                          key: const ValueKey(
+                                            'notion_inbox_unread_dot',
+                                          ),
+                                          width: _unreadDot,
+                                          height: _unreadDot,
+                                          decoration: BoxDecoration(
+                                            color: badgeColor,
+                                            shape: BoxShape.circle,
+                                          ),
+                                        ),
+                                      )
+                                    : pinned
+                                    // Pinned and read: the pin takes the slot
+                                    // (Telegram); it pops in on pinning.
+                                    ? Padding(
+                                        key: const ValueKey('pinned'),
+                                        padding: const EdgeInsets.only(
+                                          top: NotionSpace.xxs,
+                                        ),
+                                        child: Icon(
+                                          Icons.push_pin_outlined,
+                                          key: const ValueKey(
+                                            'notion_inbox_pin',
+                                          ),
+                                          size: NotionType.body.fontSize,
+                                          color: secondary,
+                                        ),
+                                      )
+                                    : const SizedBox.shrink(
+                                        key: ValueKey('read'),
+                                      ),
                               ),
                             ],
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      ExcludeSemantics(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            if (time != null)
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (delivery case final state?) ...[
-                                    NotionDeliveryTick(
-                                      key: const ValueKey(
-                                        'notion_inbox_delivery',
-                                      ),
-                                      state: state,
-                                      color: secondary,
-                                      size: NotionDeliveryTick.defaultSize + 2,
-                                    ),
-                                    const SizedBox(width: 2),
-                                  ],
-                                  NotionLazySwitcher(
-                                    alignment: AlignmentDirectional.topEnd,
-                                    child: Text(
-                                      time!,
-                                      key: ValueKey(time),
-                                      style: NotionType.footnote.copyWith(
-                                        color: hasUnread && !muted
-                                            ? unreadInk
-                                            : secondary,
-                                        fontWeight: hasUnread
-                                            ? FontWeight.w600
-                                            : FontWeight.w400,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            // The badge pops in when the first unread arrives,
-                            // pulses and rolls its number on every new one, and
-                            // shrinks away once read. Rows built by scrolling
-                            // show it as is (a switcher never animates its first
-                            // child).
-                            NotionLazySwitcher(
-                              style: NotionLazySwitch.morph,
-                              bounce: true,
-                              alignment: AlignmentDirectional.topEnd,
-                              child: unreadCount > 0
-                                  ? Padding(
-                                      key: ValueKey(('count', mentioned)),
-                                      padding: const EdgeInsets.only(
-                                        top: NotionSpace.xxs,
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          if (mentioned) ...[
-                                            _MentionBadge(
-                                              color: palette.accentFill,
-                                              text: palette.onAccentFill,
-                                            ),
-                                            const SizedBox(
-                                              width: NotionSpace.xxs,
-                                            ),
-                                          ],
-                                          NotionPop(
-                                            trigger: unreadCount,
-                                            playOnMount: false,
-                                            child: Container(
-                                              constraints: const BoxConstraints(
-                                                minWidth: 20,
-                                                minHeight: 20,
-                                              ),
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 6,
-                                                    vertical: 1,
-                                                  ),
-                                              decoration: BoxDecoration(
-                                                color: badgeColor,
-                                                borderRadius:
-                                                    NotionRadius.pillAll,
-                                              ),
-                                              alignment: Alignment.center,
-                                              child: NotionAnimatedCount(
-                                                count: unreadCount,
-                                                style: NotionType.caption
-                                                    .copyWith(
-                                                      color: badgeText,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    )
-                                  : mentioned
-                                  ? Padding(
-                                      key: const ValueKey('mention'),
-                                      padding: const EdgeInsets.only(
-                                        top: NotionSpace.xxs,
-                                      ),
-                                      child: _MentionBadge(
-                                        color: palette.accentFill,
-                                        text: palette.onAccentFill,
-                                      ),
-                                    )
-                                  : unread
-                                  // Marked unread by hand: a plain dot, no count.
-                                  ? Padding(
-                                      key: const ValueKey('dot'),
-                                      padding: const EdgeInsets.only(
-                                        top: NotionSpace.xs,
-                                      ),
-                                      child: Container(
-                                        key: const ValueKey(
-                                          'notion_inbox_unread_dot',
-                                        ),
-                                        width: _unreadDot,
-                                        height: _unreadDot,
-                                        decoration: BoxDecoration(
-                                          color: badgeColor,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                    )
-                                  : pinned
-                                  // Pinned and read: the pin takes the slot
-                                  // (Telegram); it pops in on pinning.
-                                  ? Padding(
-                                      key: const ValueKey('pinned'),
-                                      padding: const EdgeInsets.only(
-                                        top: NotionSpace.xxs,
-                                      ),
-                                      child: Icon(
-                                        Icons.push_pin_outlined,
-                                        key: const ValueKey('notion_inbox_pin'),
-                                        size: NotionType.body.fontSize,
-                                        color: secondary,
-                                      ),
-                                    )
-                                  : const SizedBox.shrink(
-                                      key: ValueKey('read'),
-                                    ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      ?action,
-                    ],
+                        ?action,
+                      ],
+                    ),
                   ),
                 ),
               ),

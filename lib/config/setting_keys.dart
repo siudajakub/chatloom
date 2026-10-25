@@ -46,6 +46,9 @@ enum AppSettings<T> {
   /// Colour intensity (`NotionIntensity.name`): muted, balanced or vivid.
   appearanceIntensity<String>('pl.personal.appearance.intensity', 'balanced'),
 
+  /// Local inbox, conversation layout and motion preferences (JSON).
+  appearanceDisplay<String>('pl.personal.appearance.display', '{}'),
+
   /// Prefetch voice notes and round videos (ciphertext into the encrypted
   /// media cache) as soon as a chat is open, so playback starts instantly.
   personalAutoDownloadVoiceRounds<bool>(

@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
 
+import 'notion_display_preferences.dart';
 import 'notion_glass_reveal.dart';
 import 'notion_motion.dart';
 import 'notion_pressable.dart';
@@ -46,6 +47,7 @@ const bool notionGlassBuildEnabled = bool.fromEnvironment(
 /// where backdrop blur is cheap and shader filters are supported) and no
 /// high-contrast / reduced-motion preference.
 bool notionGlassEnabled(BuildContext context) {
+  if (!NotionDisplayPreferences.of(context).glassEnabled) return false;
   switch (NotionGlassScope.modeOf(context)) {
     case NotionGlassMode.on:
       return true;

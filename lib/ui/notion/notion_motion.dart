@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+
 import 'dart:async';
 
 import 'package:flutter/physics.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'notion_activity.dart';
+import 'notion_display_preferences.dart';
 
 /// One motion vocabulary for the Notion UI: page navigation, durations,
 /// curves, springs, press scales and modal styles.
@@ -243,6 +245,7 @@ abstract final class NotionMotion {
   /// single reduced-motion check for the whole app; depends only on the
   /// `disableAnimations` aspect of [MediaQuery] and on [NotionActivity].
   static bool reduced(BuildContext context) =>
+      NotionDisplayPreferences.of(context).reduceMotion ||
       (MediaQuery.maybeDisableAnimationsOf(context) ?? false) ||
       WidgetsBinding
           .instance

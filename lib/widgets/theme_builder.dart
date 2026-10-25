@@ -5,6 +5,7 @@
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/ui/notion/notion_appearance.dart';
+import 'package:chatloom/ui/notion/notion_display_preferences.dart';
 import 'package:collection/collection.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
@@ -52,6 +53,13 @@ class ThemeBuilder extends StatefulWidget {
     );
   }
 
+  static NotionDisplayPreferences readDisplayPreferences(
+    SharedPreferences preferences,
+  ) {
+    final stored = preferences.get(AppSettings.appearanceDisplay.key);
+    return NotionDisplayPreferences.decode(stored is String ? stored : null);
+  }
+
   @override
   State<ThemeBuilder> createState() => ThemeController();
 }
@@ -60,6 +68,10 @@ class ThemeController extends State<ThemeBuilder> {
   SharedPreferences? _sharedPreferences;
   ThemeMode? _themeMode;
   NotionAppearance _appearance = NotionAppearance.standard;
+
+  NotionDisplayPreferences _displayPreferences =
+      NotionDisplayPreferences.standard;
+  NotionDisplayPreferences get displayPreferences => _displayPreferences;
 
   ThemeMode get themeMode => _themeMode ?? ThemeMode.dark;
 
@@ -82,6 +94,7 @@ class ThemeController extends State<ThemeBuilder> {
       (value) => value.name == rawThemeMode,
     );
     _appearance = ThemeBuilder.readAppearance(preferences);
+    _displayPreferences = ThemeBuilder.readDisplayPreferences(preferences);
   }
 
   Future<void> setThemeMode(ThemeMode newThemeMode) async {
@@ -115,6 +128,24 @@ class ThemeController extends State<ThemeBuilder> {
     );
   }
 
+  Future<void> setDisplayPreferences(NotionDisplayPreferences value) async {
+    if (value == _displayPreferences) return;
+    if (mounted) {
+      setState(() => _displayPreferences = value);
+    } else {
+      _displayPreferences = value;
+    }
+    final preferences = _sharedPreferences ??=
+        await SharedPreferences.getInstance();
+    await preferences.setString(
+      AppSettings.appearanceDisplay.key,
+      value.encode(),
+    );
+  }
+
+  Future<void> resetDisplayPreferences() =>
+      setDisplayPreferences(NotionDisplayPreferences.standard);
+
   @override
   void initState() {
     super.initState();
@@ -130,7 +161,9 @@ class ThemeController extends State<ThemeBuilder> {
   Widget build(BuildContext context) {
     return Provider(
       create: (_) => this,
-      child: widget.builder(context, themeMode, appearance),
+      child: Builder(
+        builder: (context) => widget.builder(context, themeMode, appearance),
+      ),
     );
   }
 }

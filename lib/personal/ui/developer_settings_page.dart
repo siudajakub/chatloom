@@ -15,7 +15,6 @@ import 'package:chatloom/utils/beautify_string_extension.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -34,7 +33,7 @@ String shareKeysWithLabel(ShareKeysWith value, L10n l10n) => switch (value) {
 /// out of the everyday settings (wave 5, CS-02): logs and the configuration
 /// editor, manual push gateway setup with its secrets, registration
 /// details, the account's server notification rules, the key sharing policy
-/// and identity keys, and technical message display options. Reachable only
+/// and identity keys. Reachable only
 /// while [DeveloperOptions] is on.
 class DeveloperSettingsPage extends StatefulWidget {
   const DeveloperSettingsPage({super.key});
@@ -46,9 +45,7 @@ class DeveloperSettingsPage extends StatefulWidget {
 class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
   void _snack(String text) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(text)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _guard(Future<void> Function() action) async {
@@ -251,17 +248,6 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
             subtitle: 'Every stored app setting',
             onTap: () => context.push('/configs'),
           ),
-          const NotionSettingsSection('Messages'),
-          SettingsSwitchListTile.adaptive(
-            title: 'Formatted messages',
-            subtitle: 'Show bold, italics, lists and links',
-            setting: AppSettings.renderHtml,
-          ),
-          SettingsSwitchListTile.adaptive(
-            title: 'Hide unknown message types',
-            subtitle: 'Technical events the app can’t display',
-            setting: AppSettings.hideUnknownEvents,
-          ),
           if (PlatformInfos.supportsSystemNotifications) ...[
             const NotionSettingsSection('Notifications'),
             NotionListRow(
@@ -336,7 +322,8 @@ class DeveloperOptionsSection extends StatelessWidget {
           NotionSettingsToggle(
             key: const ValueKey('developer-options'),
             title: 'Developer options',
-            subtitle: 'Show logs, app configuration, manual push setup and '
+            subtitle:
+                'Show logs, app configuration, manual push setup and '
                 'message source',
             value: enabled,
             onChanged: (value) async {
@@ -360,7 +347,9 @@ class DeveloperOptionsSection extends StatelessWidget {
               leading: const Icon(Icons.developer_mode_outlined),
               title: 'Developer tools',
               subtitle: 'Logs, configuration, push gateway and keys',
-              onTap: enabled ? () => context.push(DeveloperOptions.route) : null,
+              onTap: enabled
+                  ? () => context.push(DeveloperOptions.route)
+                  : null,
             ),
           ),
         ],

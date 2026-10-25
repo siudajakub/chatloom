@@ -208,6 +208,7 @@ class Message extends StatelessWidget {
     final radius = ConversationBubble.radiusFor(
       outgoing: own,
       position: position,
+      outerRadius: NotionDisplayPreferences.of(context).bubbleRadius,
     ).resolve(Directionality.of(context));
     // Time, captions and names sit on the chat background, which a private
     // palette may make light in the dark theme (or the reverse).

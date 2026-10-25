@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/ui/notion/notion_appearance.dart';
+import 'package:chatloom/ui/notion/notion_display_preferences.dart';
 import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:material_ui/material_ui.dart';
@@ -21,7 +22,6 @@ abstract class ChatLoomThemes {
   static bool isThreeColumnMode(BuildContext context) =>
       MediaQuery.sizeOf(context).width > ChatLoomThemes.columnWidth * 3.5;
 
-
   /// Legacy timing used by FluffyChat widgets; now the Notion motion tokens
   /// (`NotionMotion.short`, `NotionMotion.standard`). New code uses
   /// `NotionMotion` directly.
@@ -34,7 +34,9 @@ abstract class ChatLoomThemes {
     BuildContext context,
     Brightness brightness, [
     NotionAppearance appearance = NotionAppearance.standard,
+    NotionDisplayPreferences display = NotionDisplayPreferences.standard,
   ]) {
-    return NotionTheme.build(brightness, appearance);
+    final theme = NotionTheme.build(brightness, appearance);
+    return theme.copyWith(extensions: [...theme.extensions.values, display]);
   }
 }

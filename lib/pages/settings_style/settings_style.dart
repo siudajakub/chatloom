@@ -5,6 +5,7 @@
 
 import 'package:chatloom/personal/ui/notion_settings_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_display_preferences.dart';
 import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/widgets/theme_builder.dart';
@@ -28,6 +29,17 @@ class SettingsStyle extends StatefulWidget {
 
 class SettingsStyleController extends State<SettingsStyle> {
   NotionAppearance get appearance => ThemeController.of(context).appearance;
+
+  NotionDisplayPreferences get displayPreferences =>
+      ThemeController.of(context).displayPreferences;
+
+  Future<void> setDisplayPreferences(NotionDisplayPreferences value) async {
+    await ThemeController.of(context).setDisplayPreferences(value);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> resetDisplayPreferences() =>
+      setDisplayPreferences(NotionDisplayPreferences.standard);
 
   void setIntensity(NotionIntensity intensity) => ThemeController.of(
     context,

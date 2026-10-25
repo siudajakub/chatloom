@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/conversation_grouping.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_display_preferences.dart';
 import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
@@ -99,6 +100,7 @@ class SettingsStyleView extends StatelessWidget {
                   ),
                 ],
               ),
+              _DisplaySettings(controller: controller),
               const NotionSectionHeader(title: 'Chat wallpaper'),
               _WallpaperSection(controller: controller),
             ],
@@ -173,13 +175,10 @@ class _AppearancePreview extends StatelessWidget {
                           onTap: _noop,
                         ),
                         Divider(color: tokens.colors.border),
-                        const ConversationBubble(
+                        ConversationBubble(
                           outgoing: false,
                           groupPosition: ConversationGroupPosition.first,
-                          body: Text(
-                            'Lorem ipsum dolor sit amet',
-                            style: NotionType.body,
-                          ),
+                          body: text('Lorem ipsum dolor sit amet'),
                         ),
                         ConversationBubble(
                           outgoing: false,
@@ -527,6 +526,7 @@ class _SliderRow extends StatelessWidget {
   final int divisions;
   final ValueChanged<double> onChanged;
   final ValueChanged<double> onChangeEnd;
+  final String? valueLabel;
   const _SliderRow({
     required this.label,
     required this.value,
@@ -535,6 +535,7 @@ class _SliderRow extends StatelessWidget {
     required this.divisions,
     required this.onChanged,
     required this.onChangeEnd,
+    this.valueLabel,
   });
 
   @override
@@ -543,17 +544,179 @@ class _SliderRow extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: context.notion.typography.calloutMuted),
-        Slider(
-          min: min,
-          max: max,
-          divisions: divisions,
-          value: value,
-          semanticFormatterCallback: (d) => d.toStringAsFixed(1),
-          onChanged: onChanged,
-          onChangeEnd: onChangeEnd,
+        Text(
+          valueLabel == null ? label : '$label · $valueLabel',
+          style: context.notion.typography.calloutMuted,
+        ),
+        Semantics(
+          label: label,
+          child: Slider(
+            min: min,
+            max: max,
+            divisions: divisions,
+            value: value,
+            label: valueLabel,
+            semanticFormatterCallback: (d) =>
+                valueLabel ?? d.toStringAsFixed(1),
+            onChanged: onChanged,
+            onChangeEnd: onChangeEnd,
+          ),
         ),
       ],
     ),
   );
+}
+
+/// Presentation controls use the same preferences and production presenters
+/// as the live preview. Defaults restore only these local visual choices.
+class _DisplaySettings extends StatelessWidget {
+  const _DisplaySettings({required this.controller});
+  final SettingsStyleController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = controller.displayPreferences;
+    void update(NotionDisplayPreferences next) =>
+        controller.setDisplayPreferences(next);
+    Widget toggle(
+      String label,
+      String subtitle,
+      bool selected,
+      ValueChanged<bool> onChanged,
+    ) => NotionListRow(
+      title: label,
+      subtitle: subtitle,
+      onTap: () => onChanged(!selected),
+      trailing: Semantics(
+        label: label,
+        child: Switch(value: selected, onChanged: onChanged),
+      ),
+    );
+    Widget slider(
+      String label,
+      double selected,
+      double min,
+      double max,
+      int divisions,
+      ValueChanged<double> onChanged, {
+      bool percentage = true,
+    }) => _SliderRow(
+      label: label,
+      value: selected,
+      min: min,
+      max: max,
+      divisions: divisions,
+      valueLabel: percentage
+          ? '${(selected * 100).round()}%'
+          : selected.round().toString(),
+      onChanged: onChanged,
+      onChangeEnd: (_) {},
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const NotionSectionHeader(title: 'Chat list'),
+        slider(
+          'Row size',
+          value.inboxScale,
+          .65,
+          1,
+          7,
+          (v) => update(value.copyWith(inboxScale: v)),
+        ),
+        toggle(
+          'Avatars',
+          'Show contact pictures in the chat list',
+          value.inboxAvatars,
+          (v) => update(value.copyWith(inboxAvatars: v)),
+        ),
+        toggle(
+          'Message previews',
+          'Show the latest message below each name',
+          value.inboxPreviews,
+          (v) => update(value.copyWith(inboxPreviews: v)),
+        ),
+        toggle(
+          'Network badges',
+          'Show which network each chat uses',
+          value.inboxNetworkBadges,
+          (v) => update(value.copyWith(inboxNetworkBadges: v)),
+        ),
+        toggle(
+          'Timestamps',
+          'Show the time of the latest message',
+          value.inboxTimestamps,
+          (v) => update(value.copyWith(inboxTimestamps: v)),
+        ),
+        toggle(
+          'Unread highlights',
+          'Tint unread chats; counts remain visible',
+          value.inboxUnreadHighlight,
+          (v) => update(value.copyWith(inboxUnreadHighlight: v)),
+        ),
+        const NotionSectionHeader(title: 'Conversations'),
+        slider(
+          'Message text size',
+          value.messageTextScale,
+          .85,
+          1.4,
+          11,
+          (v) => update(value.copyWith(messageTextScale: v)),
+        ),
+        slider(
+          'Message spacing',
+          value.messageSpacing,
+          .75,
+          1.5,
+          15,
+          (v) => update(value.copyWith(messageSpacing: v)),
+        ),
+        slider(
+          'Bubble width',
+          value.bubbleWidth,
+          .6,
+          .95,
+          35,
+          (v) => update(value.copyWith(bubbleWidth: v)),
+        ),
+        slider(
+          'Bubble corners',
+          value.bubbleRadius,
+          6,
+          28,
+          22,
+          (v) => update(value.copyWith(bubbleRadius: v)),
+          percentage: false,
+        ),
+        toggle(
+          'Sender avatars',
+          'Show pictures beside incoming messages and typing',
+          value.messageAvatars,
+          (v) => update(value.copyWith(messageAvatars: v)),
+        ),
+        const NotionSectionHeader(title: 'Effects'),
+        toggle(
+          'Reduce motion',
+          'Use still transitions and typing dots',
+          value.reduceMotion,
+          (v) => update(value.copyWith(reduceMotion: v)),
+        ),
+        toggle(
+          'Glass effects',
+          'Use translucent headers, menus and the dock',
+          value.glassEnabled,
+          (v) => update(value.copyWith(glassEnabled: v)),
+        ),
+        NotionListRow(
+          leading: const Icon(Icons.restore),
+          title: 'Reset layout and effects',
+          subtitle: 'Restore compact chats and default conversation styling',
+          trailing: const Icon(Icons.chevron_right),
+          onTap: value == NotionDisplayPreferences.standard
+              ? null
+              : controller.resetDisplayPreferences,
+        ),
+      ],
+    );
+  }
 }

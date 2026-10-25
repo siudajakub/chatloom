@@ -84,11 +84,17 @@ class ChatLoomApp extends StatelessWidget {
       builder: (context, themeMode, appearance) => MaterialApp.router(
         title: AppSettings.applicationName.value,
         themeMode: themeMode,
-        theme: ChatLoomThemes.buildTheme(context, Brightness.light, appearance),
+        theme: ChatLoomThemes.buildTheme(
+          context,
+          Brightness.light,
+          appearance,
+          ThemeController.of(context).displayPreferences,
+        ),
         darkTheme: ChatLoomThemes.buildTheme(
           context,
           Brightness.dark,
           appearance,
+          ThemeController.of(context).displayPreferences,
         ),
         scrollBehavior: CustomScrollBehavior(),
         localizationsDelegates: [

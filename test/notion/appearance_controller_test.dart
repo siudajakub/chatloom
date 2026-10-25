@@ -6,6 +6,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/settings_style/settings_style.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_display_preferences.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/theme_builder.dart';
@@ -99,7 +100,15 @@ void main() {
               locale: const Locale('en'),
               supportedLocales: const [Locale('en')],
               localizationsDelegates: L10n.localizationsDelegates,
-              theme: NotionTheme.build(Brightness.dark, appearance),
+              theme: NotionTheme.build(Brightness.dark, appearance).copyWith(
+                extensions: [
+                  ...NotionTheme.build(
+                    Brightness.dark,
+                    appearance,
+                  ).extensions.values,
+                  ThemeController.of(context).displayPreferences,
+                ],
+              ),
               builder: (context, child) => MediaQuery(
                 data: MediaQuery.of(
                   context,
@@ -174,6 +183,37 @@ void main() {
       await tester.tap(find.bySemanticsLabel(RegExp('^Muted colours')));
       await tester.pumpAndSettle();
       expect(ownDecoration(tester).gradient, isNull);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('layout controls persist and reset without resetting colours', (
+      tester,
+    ) async {
+      final preferences = await mount(tester);
+      await tester.ensureVisible(find.text('Network badges'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Network badges'));
+      await tester.pumpAndSettle();
+      expect(
+        ThemeBuilder.readDisplayPreferences(preferences).inboxNetworkBadges,
+        isFalse,
+      );
+      await tester.ensureVisible(find.text('Reduce motion'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Reduce motion'));
+      await tester.pumpAndSettle();
+      expect(
+        ThemeBuilder.readDisplayPreferences(preferences).reduceMotion,
+        isTrue,
+      );
+      await tester.ensureVisible(find.text('Reset layout and effects'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Reset layout and effects'));
+      await tester.pumpAndSettle();
+      expect(
+        ThemeBuilder.readDisplayPreferences(preferences),
+        NotionDisplayPreferences.standard,
+      );
       expect(tester.takeException(), isNull);
     });
 

@@ -22,11 +22,17 @@ class _StartupApp extends StatelessWidget {
     preferences: store,
     builder: (context, themeMode, appearance) => MaterialApp(
       themeMode: themeMode,
-      theme: ChatLoomThemes.buildTheme(context, Brightness.light, appearance),
+      theme: ChatLoomThemes.buildTheme(
+        context,
+        Brightness.light,
+        appearance,
+        ThemeController.of(context).displayPreferences,
+      ),
       darkTheme: ChatLoomThemes.buildTheme(
         context,
         Brightness.dark,
         appearance,
+        ThemeController.of(context).displayPreferences,
       ),
       home: home,
     ),

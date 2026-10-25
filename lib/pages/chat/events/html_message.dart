@@ -169,7 +169,7 @@ class _HtmlMessageState extends State<HtmlMessage> {
   );
 
   InlineSpan _cachedSpan(BuildContext context) {
-    final key = _keyOf(widget);
+    final key = (_keyOf(widget), MediaQuery.textScalerOf(context));
     final cached = _span;
     if (cached != null && key == _key) return cached;
     final element = parser.parse(widget.html).body ?? dom.Element.html('');
@@ -450,7 +450,9 @@ class _HtmlMessageState extends State<HtmlMessage> {
         // Custom emoji (Telegram, Slack) flow at text size like an emoji;
         // the bridges' 32 px attributes would stretch the line.
         if (node.attributes.containsKey('data-mx-emoticon')) {
-          final size = HtmlMessage.emoticonSize(fontSize);
+          final size = HtmlMessage.emoticonSize(
+            MediaQuery.textScalerOf(context).scale(fontSize),
+          );
           return WidgetSpan(
             alignment: PlaceholderAlignment.middle,
             child: SizedBox.square(

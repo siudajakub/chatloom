@@ -208,9 +208,13 @@ Message bubbles keep their own geometry (`NotionBubble`).
 `iconSm 16 / icon 20 / iconMd 22 / iconLg 24`, avatars `24 / 40 / 56`,
 `dialogMaxWidth 420`, `contentMaxWidth 720`.
 
-Inbox conversation rows use `avatarLg` (56), `md` vertical and `xs`
-horizontal padding (minimum height 88), `headline` names and `callout`
-previews. Unread conversations use `palette.accentTint` with contrast-checked
+Inbox conversation rows default to 75% density: 42 dp avatars and 12 dp
+vertical padding (66 dp at standard text scaling, previously 88). Names and
+previews retain 87.5% of their original type size for readability. Settings →
+Appearance → Chat list offers a 65–100% row scale, avatars, previews, network
+badges, timestamps and unread highlighting. Rows retain a 48 dp minimum tap
+target, grow with accessible text sizes, and preserve unread counts and spoken
+labels when secondary visuals are hidden. Unread conversations use `palette.accentTint` with contrast-checked
 accent names/timestamps, bold names and a count or manual-unread dot.
 Selected conversations retain the selected surface; muted conversations keep
 neutral surfaces and badges but retain bold unread names. Read state therefore
@@ -649,3 +653,27 @@ Don't:
   antialiasing differs by about 1–4 % of pixels. Regenerate on the host that
   runs the gate. A changed golden is a visual change: review the PNG diff
   before you commit it.
+
+## Display preferences
+
+`NotionDisplayPreferences` is a theme extension supplied to both app themes
+and startup from `ThemeController`. Its local JSON preference is read before
+the first frame, validated/clamped on load, and applied without restarting.
+It changes presentation only; it does not change account/privacy policies or
+message contents. Reset layout and effects restores these choices only.
+
+Appearance also controls message text size (85–140%, composed with the
+platform's nonlinear accessibility scaler), message spacing (75–150%),
+sender avatars, text-bubble width (60–95%), outer corners (6–28 dp), reduced
+motion and glass. `ConversationBubble` applies these to ordinary and merged
+timelines and the appearance preview. Large text and media keep their existing
+minimum width for readability. Typing uses the same bubble, avatar slot,
+private incoming palette and text-line height as an incoming message.
+`NotionMotion.reduced` and `notionGlassEnabled` honor the local choices while
+retaining platform accessibility and power-saving restrictions.
+
+Chats contains formatted messages, animated image playback, unknown/deleted
+message visibility, long-message preview limits (including unlimited), emoji
+suggestion language and the desktop details-panel default. Existing privacy,
+notifications, recording/download, stickers and per-chat appearance remain
+in their respective settings pages.

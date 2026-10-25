@@ -10,6 +10,7 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/stickers/notion_emoji_picker.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:go_router/go_router.dart';
@@ -20,6 +21,24 @@ import 'settings_chat.dart';
 class SettingsChatView extends StatelessWidget {
   final SettingsChatController controller;
   const SettingsChatView(this.controller, {super.key});
+
+  Future<void> _saveSetting(
+    BuildContext context,
+    Future<void> Function() save,
+  ) async {
+    try {
+      await save();
+      if (context.mounted) controller.updateState();
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not save this setting. Try again.'),
+          ),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +62,39 @@ class SettingsChatView extends StatelessWidget {
             subtitle: 'Left to archive, right to mark as read or unread',
             setting: AppSettings.inboxSwipeActions,
           ),
+          NotionPickerRow<String>(
+            key: const Key('settings_emoji_suggestion_language'),
+            label: 'Emoji suggestion language',
+            subtitle: 'Language of emoji names while you type',
+            value: AppSettings.emojiSuggestionLocale.value,
+            placeholder: AppSettings.emojiSuggestionLocale.value,
+            options: const [
+              // Supported by emoji_picker_flutter 4.5.4's
+              // getDefaultEmojiLocale. Other codes fall back to English.
+              NotionChoice('', 'Follow app language'),
+              NotionChoice('de', 'Deutsch'),
+              NotionChoice('en', 'English'),
+              NotionChoice('es', 'Español'),
+              NotionChoice('fr', 'Français'),
+              NotionChoice('hi', 'हिन्दी'),
+              NotionChoice('it', 'Italiano'),
+              NotionChoice('ja', '日本語'),
+              NotionChoice('nl', 'Nederlands'),
+              NotionChoice('pt', 'Português'),
+              NotionChoice('ru', 'Русский'),
+              NotionChoice('zh', '中文'),
+            ],
+            onChanged: (value) => _saveSetting(
+              context,
+              () => AppSettings.emojiSuggestionLocale.setItem(value),
+            ),
+          ),
+          if (PlatformInfos.isDesktop || PlatformInfos.isWeb)
+            SettingsSwitchListTile.adaptive(
+              title: 'Open chats with the details panel',
+              subtitle: 'Applies when opening a chat in a wide window',
+              setting: AppSettings.displayChatDetailsColumn,
+            ),
           SettingsSwitchListTile.adaptive(
             title: L10n.of(context).doubleTapToReact,
             subtitle: L10n.of(context).doubleTapToReactDescription,
@@ -78,12 +130,43 @@ class SettingsChatView extends StatelessWidget {
             setting: AppSettings.showThumbnailsInTimeline,
           ),
           SettingsSwitchListTile.adaptive(
+            title: 'Play GIFs and animated stickers',
+            subtitle: 'Animations pause when reduced motion is on',
+            setting: AppSettings.autoplayImages,
+          ),
+          SettingsSwitchListTile.adaptive(
+            title: 'Formatted messages',
+            subtitle: 'Show bold, italics, lists and links',
+            setting: AppSettings.renderHtml,
+          ),
+          NotionPickerRow<int>(
+            key: const Key('settings_message_preview_lines'),
+            label: 'Long message preview',
+            subtitle: 'Collapse longer messages until you expand them',
+            value: AppSettings.messagePreviewMaxLines.value,
+            placeholder: '${AppSettings.messagePreviewMaxLines.value} lines',
+            options: const [
+              NotionChoice(0, 'Unlimited'),
+              NotionChoice(10, '10 lines'),
+              NotionChoice(25, '25 lines'),
+              NotionChoice(50, '50 lines'),
+              NotionChoice(100, '100 lines'),
+            ],
+            onChanged: (value) => _saveSetting(
+              context,
+              () => AppSettings.messagePreviewMaxLines.setItem(value),
+            ),
+          ),
+          SettingsSwitchListTile.adaptive(
             title: 'Hide deleted messages',
             subtitle: 'Leave no placeholder where a message was deleted',
             setting: AppSettings.hideRedactedEvents,
           ),
-          // Formatted messages and unknown message types are in
-          // Settings › Advanced › Developer (CS-22).
+          SettingsSwitchListTile.adaptive(
+            title: 'Hide unknown message types',
+            subtitle: 'Technical events the app can’t display',
+            setting: AppSettings.hideUnknownEvents,
+          ),
           const NotionSettingsSection('Media & people'),
           NotionListRow(
             key: const Key('settings_voice_video_row'),
