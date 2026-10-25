@@ -37,6 +37,7 @@ import 'instagram_share_preview.dart';
 import 'link_preview.dart';
 import 'map_bubble.dart';
 import 'message_download_content.dart';
+import 'sticker_event.dart';
 
 class MessageContent extends StatelessWidget {
   final Event event;
@@ -89,6 +90,7 @@ class MessageContent extends StatelessWidget {
   static bool rendersSticker(Event event) =>
       !event.redacted &&
       (event.messageType == MessageTypes.Sticker ||
+          StickerEvents.isImageSticker(event) ||
           InlineLoopVideo.isVideoSticker(event));
 
   @override
@@ -146,7 +148,11 @@ class MessageContent extends StatelessWidget {
           case MessageTypes.Image:
           case MessageTypes.Sticker:
             if (event.redacted) continue textmessage;
-            final sticker = event.messageType == MessageTypes.Sticker;
+            // Stickers sent or bridged as images are stickers too (a
+            // Messenger room gets ChatLoom's stickers as `m.image`).
+            final sticker =
+                event.messageType == MessageTypes.Sticker ||
+                StickerEvents.isImageSticker(event);
             // A video sticker (`m.sticker` with a video file) loops inline.
             if (InlineLoopVideo.isVideoSticker(event)) {
               final box = InlineLoopVideo.stickerBox(
@@ -193,6 +199,7 @@ class MessageContent extends StatelessWidget {
               width: box.width,
               height: box.height,
               fit: fit,
+              sticker: sticker,
               borderRadius: borderRadius,
               timeline: timeline,
               textColor: textColor,

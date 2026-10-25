@@ -5,6 +5,7 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/events/inline_loop_video.dart';
 import 'package:chatloom/pages/chat/events/outgoing_upload_progress.dart';
+import 'package:chatloom/pages/chat/events/sticker_event.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
@@ -49,6 +50,8 @@ abstract final class MediaAlbums {
       return false;
     }
     if (event.status.isError) return false;
+    // A sticker sent as an image floats alone at sticker size.
+    if (StickerEvents.isImageSticker(event)) return false;
     if (event.inReplyToEventId(includingFallback: false) != null) return false;
     final relation = event.content.tryGetMap<String, Object?>('m.relates_to');
     if (relation?['rel_type'] == RelationshipTypes.thread) return false;

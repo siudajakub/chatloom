@@ -18,6 +18,7 @@ import 'package:matrix/matrix.dart';
 
 import '../../../widgets/blur_hash.dart';
 import 'outgoing_upload_progress.dart';
+import 'sticker_event.dart';
 
 class ImageBubble extends StatelessWidget {
   final Event event;
@@ -34,6 +35,10 @@ class ImageBubble extends StatelessWidget {
   final BorderRadius? borderRadius;
   final Timeline? timeline;
 
+  /// Drawn as a sticker: no frame line, no blurhash while loading. Null:
+  /// from the event (`m.sticker` or a sticker sent as an image).
+  final bool? sticker;
+
   const ImageBubble(
     this.event, {
     this.tapToView = true,
@@ -48,12 +53,17 @@ class ImageBubble extends StatelessWidget {
     this.timeline,
     this.textColor,
     this.linkColor,
+    this.sticker,
     super.key,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final sticker =
+        this.sticker ??
+        (event.messageType == MessageTypes.Sticker ||
+            StickerEvents.isImageSticker(event));
 
     var borderRadius =
         this.borderRadius ?? BorderRadius.circular(NotionTokens.radius);
@@ -94,9 +104,7 @@ class ImageBubble extends StatelessWidget {
               shape: RoundedRectangleBorder(
                 borderRadius: borderRadius,
                 side: BorderSide(
-                  color: event.messageType == MessageTypes.Sticker
-                      ? Colors.transparent
-                      : theme.dividerColor,
+                  color: sticker ? Colors.transparent : theme.dividerColor,
                 ),
               ),
               child: InkWell(
@@ -119,8 +127,7 @@ class ImageBubble extends StatelessWidget {
                               fit: fit,
                               animated: animated,
                               isThumbnail: thumbnailOnly,
-                              placeholder:
-                                  event.messageType == MessageTypes.Sticker
+                              placeholder: sticker
                                   ? null
                                   : (_) => _ImageBubblePlaceholder(
                                       event: event,

@@ -2,6 +2,7 @@
 // Per-network send adaptation (ST-09). The room_features fixtures follow
 // the bridges' declared file capabilities (mautrix-telegram fork,
 // mautrix-whatsapp with ffmpeg, mautrix-meta, mautrix-slack). Offline.
+import 'package:chatloom/pages/chat/events/sticker_event.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/stickers/sticker_models.dart';
 import 'package:chatloom/personal/stickers/sticker_send_plan.dart';
@@ -94,25 +95,23 @@ ConversationRoom _room(String network) {
   return room;
 }
 
-StickerItem _sticker(String mime, {bool tagged = true}) => StickerItem.fromJson(
-  {
-    'url': 'mxc://example.invalid/s',
-    'body': '😀',
-    'info': {
-      'mimetype': mime,
-      'w': 256,
-      'h': 256,
-      if (tagged)
-        'fi.mau.bridged_sticker': {
-          'network': 'telegram',
-          'id': '42',
-          'emoji': '😀',
-          'pack_url': 'https://t.me/addstickers/FictionalPack',
-        },
-    },
-  },
-  StickerKind.sticker,
-)!;
+StickerItem _sticker(String mime, {bool tagged = true}) =>
+    StickerItem.fromJson({
+      'url': 'mxc://example.invalid/s',
+      'body': '😀',
+      'info': {
+        'mimetype': mime,
+        'w': 256,
+        'h': 256,
+        if (tagged)
+          'fi.mau.bridged_sticker': {
+            'network': 'telegram',
+            'id': '42',
+            'emoji': '😀',
+            'pack_url': 'https://t.me/addstickers/FictionalPack',
+          },
+      },
+    }, StickerKind.sticker)!;
 
 void main() {
   group('stickers', () {
@@ -140,6 +139,8 @@ void main() {
         (plan.content!['info'] as Map).containsKey('fi.mau.bridged_sticker'),
         isFalse,
       );
+      // ChatLoom draws it at sticker size, not as a photo.
+      expect((plan.content!['info'] as Map)[StickerEvents.marker], isTrue);
     });
 
     test('Telegram: a raw TGS sticker cannot be sent', () {
@@ -222,6 +223,10 @@ void main() {
         final plan = StickerSendPlan.forRoom(_room(network), videoGif('g'));
         expect(plan.mode, StickerSendMode.gifVideo, reason: network);
         expect((plan.content!['info'] as Map)['fi.mau.gif'], isTrue);
+        expect(
+          (plan.content!['info'] as Map).containsKey(StickerEvents.marker),
+          isFalse,
+        );
         expect(plan.content!['msgtype'], MessageTypes.Video);
       }
     });
@@ -233,7 +238,29 @@ void main() {
         final info = plan.content!['info'] as Map;
         expect(info.containsKey('fi.mau.gif'), isFalse, reason: network);
         expect(info.containsKey('fi.mau.loop'), isFalse, reason: network);
+        // A GIF is not a sticker: it keeps the media width.
+        expect(info.containsKey(StickerEvents.marker), isFalse);
       }
+    });
+
+    test('a video sticker sent as a video stays sticker-sized here', () {
+      final item = StickerItem.fromJson({
+        'url': 'mxc://example.invalid/v',
+        'body': '😀',
+        'msgtype': MessageTypes.Video,
+        'info': {'mimetype': 'video/mp4', 'w': 512, 'h': 512},
+      }, StickerKind.sticker)!;
+      for (final (network, mode) in [
+        ('telegram', StickerSendMode.gifVideo),
+        ('facebookgo', StickerSendMode.video),
+      ]) {
+        final plan = StickerSendPlan.forRoom(_room(network), item);
+        expect(plan.mode, mode, reason: network);
+        final info = plan.content!['info'] as Map;
+        expect(info[StickerEvents.marker], isTrue, reason: network);
+      }
+      // The library's own entry is untouched.
+      expect(item.info.containsKey(StickerEvents.marker), isFalse);
     });
 
     test('image GIFs go as images everywhere they are accepted', () {

@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 void main() {
-  test('phones: half the short side, between 128 and 200', () {
+  test('phones: half the short side, at most 200', () {
     // Pixel 8 (412 dp): Telegram's ~205 dp, capped at 200.
     expect(
       ConversationMedia.stickerSideFor(const Size(412, 915), desktop: false),
@@ -21,10 +21,14 @@ void main() {
       ConversationMedia.stickerSideFor(const Size(780, 360), desktop: false),
       180,
     );
-    // Tiny windows never go below the old fixed size.
+    // Tiny windows: never more than half of either dimension.
     expect(
       ConversationMedia.stickerSideFor(const Size(200, 300), desktop: false),
-      128,
+      100,
+    );
+    expect(
+      ConversationMedia.stickerSideFor(const Size(800, 220), desktop: false),
+      110,
     );
   });
 
@@ -66,6 +70,24 @@ void main() {
     expect(
       ConversationMedia.stickerFrame(200, width: 0, height: 10),
       const Size(200, 200),
+    );
+  });
+
+  test('small stickers are not blown up past their size', () {
+    // A 64 px sticker shows at the minimum side, not 200.
+    expect(
+      ConversationMedia.stickerFrame(200, width: 64, height: 64),
+      const Size.square(ConversationMedia.stickerMinSide),
+    );
+    // Its own size between the minimum and the side is kept.
+    expect(
+      ConversationMedia.stickerFrame(200, width: 150, height: 120),
+      const Size(150, 120),
+    );
+    // A tiny side wins over the minimum.
+    expect(
+      ConversationMedia.stickerFrame(60, width: 64, height: 64),
+      const Size.square(60),
     );
   });
 }

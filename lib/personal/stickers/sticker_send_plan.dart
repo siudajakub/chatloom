@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/pages/chat/events/sticker_event.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -110,12 +111,10 @@ class StickerSendPlan {
       media: media,
     );
     if (_ok(image)) {
-      return StickerSendPlan._(
-        StickerSendMode.image,
-        EventTypes.Message,
-        {..._base(item), 'msgtype': MessageTypes.Image},
-        null,
-      );
+      return StickerSendPlan._(StickerSendMode.image, EventTypes.Message, {
+        ..._base(item),
+        'msgtype': MessageTypes.Image,
+      }, null);
     }
     return _unsupported(room, 'GIF', image, null);
   }
@@ -132,12 +131,15 @@ class StickerSendPlan {
     );
     final gif = gifEvidence(room, media);
     if (_ok(gif) && _ok(video)) {
-      return StickerSendPlan._(
-        StickerSendMode.gifVideo,
-        EventTypes.Message,
-        {..._base(item), 'msgtype': MessageTypes.Video},
-        null,
-      );
+      final content = _base(item);
+      // A video sticker sent as a GIF loop still draws at sticker size here.
+      if (item.kind == StickerKind.sticker) {
+        (content['info'] as Map<String, Object?>)[StickerEvents.marker] = true;
+      }
+      return StickerSendPlan._(StickerSendMode.gifVideo, EventTypes.Message, {
+        ...content,
+        'msgtype': MessageTypes.Video,
+      }, null);
     }
     if (_ok(video)) {
       final content = _base(item);
@@ -145,6 +147,8 @@ class StickerSendPlan {
         ..removeWhere((key, _) => _gifFlags.contains(key))
         ..remove('fi.mau.telegram.animated_sticker')
         ..remove('fi.mau.bridged_sticker');
+      // ChatLoom still draws it at sticker size (bridges ignore the flag).
+      if (item.kind == StickerKind.sticker) info[StickerEvents.marker] = true;
       return StickerSendPlan._(StickerSendMode.video, EventTypes.Message, {
         ...content,
         'msgtype': MessageTypes.Video,
@@ -193,10 +197,9 @@ class StickerSendPlan {
       };
     }
 
-    return BridgeRoomCapabilities.fromStateEvents(
-      {for (final entry in states.entries) entry.key: rekey(entry.value.content)},
-      bridgeStateKeys: bridgeKeys,
-    ).evidence(BridgeFeature.video, media: media);
+    return BridgeRoomCapabilities.fromStateEvents({
+      for (final entry in states.entries) entry.key: rekey(entry.value.content),
+    }, bridgeStateKeys: bridgeKeys).evidence(BridgeFeature.video, media: media);
   }
 
   static BridgeMediaRequest? _media(StickerItem item) {
@@ -230,10 +233,12 @@ class StickerSendPlan {
   }
 
   /// A sticker as an image: no caption (bridgev2 reads a body that differs
-  /// from the file name as one), no sticker tag.
+  /// from the file name as one), no bridge sticker tag; ChatLoom's own
+  /// flag keeps it sticker-sized here (bridges ignore it).
   static Map<String, Object?> _imageContent(StickerItem item) {
     final info = Map<String, Object?>.of(item.info)
-      ..remove('fi.mau.bridged_sticker');
+      ..remove('fi.mau.bridged_sticker')
+      ..[StickerEvents.marker] = true;
     final extension = switch (item.mimetype) {
       'image/png' => 'png',
       'image/gif' => 'gif',
@@ -255,9 +260,10 @@ class StickerSendPlan {
     BridgeCapabilityEvidence? second,
   ) {
     // Matrix permissions explain themselves; format refusals get a sentence.
-    final permission = [first, ?second]
-        .where((e) => e.source == 'matrix.permission')
-        .firstOrNull;
+    final permission = [
+      first,
+      ?second,
+    ].where((e) => e.source == 'matrix.permission').firstOrNull;
     final network = canonicalNetwork(PersonalClient.networkOf(room));
     final label = network == null ? null : notionNetworkLabel(network);
     return StickerSendPlan._(
