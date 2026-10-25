@@ -2,27 +2,88 @@
 import 'package:flutter/foundation.dart';
 import 'package:html/parser.dart' show parseFragment;
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart' show RoundVideoDescriptor;
 
 bool sharedVisible(Event event) =>
     !event.redacted && event.type == EventTypes.Message;
+
+/// A recorded voice note (MSC3245), not an attached audio file.
+bool sharedVoice(Event event) =>
+    sharedVisible(event) &&
+    event.messageType == MessageTypes.Audio &&
+    event.content['org.matrix.msc3245.voice'] is Map;
+
+/// A round video message (Telegram's video note).
+bool sharedRound(Event event) =>
+    sharedVisible(event) &&
+    event.messageType == MessageTypes.Video &&
+    RoundVideoDescriptor.fromContent(event.content) != null;
+
+/// Photos and videos of the grid; rounds are messages, not media.
 bool sharedMedia(Event event) =>
     sharedVisible(event) &&
-    {MessageTypes.Image, MessageTypes.Video}.contains(event.messageType);
+    (event.messageType == MessageTypes.Image ||
+        (event.messageType == MessageTypes.Video && !sharedRound(event)));
+
+/// Voice notes and rounds: the "Messages" projection.
+bool sharedMessage(Event event) => sharedVoice(event) || sharedRound(event);
+
+/// Attached files and audio files; voice notes are messages.
 bool sharedFile(Event event) =>
     sharedVisible(event) &&
-    {MessageTypes.File, MessageTypes.Audio}.contains(event.messageType);
+    (event.messageType == MessageTypes.File ||
+        (event.messageType == MessageTypes.Audio && !sharedVoice(event)));
+
+/// Whose messages a projection shows.
+enum SharedSender { everyone, me, others }
+
+bool sharedFromMe(Event event) => event.senderId == event.room.client.userID;
+
+bool sharedSenderMatches(Event event, SharedSender sender) => switch (sender) {
+  SharedSender.everyone => true,
+  SharedSender.me => sharedFromMe(event),
+  SharedSender.others => !sharedFromMe(event),
+};
+
+/// Per event object: link extraction parses HTML and runs regexes, and the
+/// projections are rebuilt on every page notification.
+final _links = Expando<List<String>>('sharedLinks');
+
+/// Matrix-internal targets: mentions, room and event permalinks of reply
+/// fallbacks. They are not links anyone shared.
+bool _internalLink(Uri uri) {
+  final host = uri.host.toLowerCase();
+  return host == 'matrix.to' || host.endsWith('.matrix.to');
+}
+
+/// The plain body without the "> <@user> quoted text" reply fallback.
+String _withoutReplyFallback(Event event) {
+  final body = event.body;
+  if (!body.startsWith('> ')) return body;
+  final lines = body.split('\n');
+  final start = lines.indexWhere((line) => !line.startsWith('>'));
+  return start < 0 ? '' : lines.skip(start).join('\n');
+}
 
 /// Links stay local until explicitly opened; no preview/favicons are fetched.
 List<String> sharedLinks(Event event) {
   if (!sharedVisible(event)) return const [];
+  return _links[event] ??= _extractLinks(event);
+}
+
+List<String> _extractLinks(Event event) {
   Iterable<String> plain(String text) => RegExp(
     r'''https?://[^\s<>"']+''',
     caseSensitive: false,
   ).allMatches(text).map((m) => m.group(0)!);
   final formatted = event.content['formatted_body'];
   final fragment = formatted is String ? parseFragment(formatted) : null;
+  // The quoted original of a reply is someone else's message.
+  for (final reply in fragment?.querySelectorAll('mx-reply') ?? const []) {
+    reply.remove();
+  }
   final candidates = [
-    ...plain(event.body),
+    ...plain(_withoutReplyFallback(event)),
     if (fragment != null)
       ...fragment.querySelectorAll('a[href]').map((a) => a.attributes['href']!),
     if (fragment != null) ...plain(fragment.text ?? ''),
@@ -42,10 +103,11 @@ List<String> sharedLinks(Event event) {
         final uri = Uri.tryParse(s);
         return uri != null &&
             {'http', 'https'}.contains(uri.scheme.toLowerCase()) &&
-            uri.host.isNotEmpty;
+            uri.host.isNotEmpty &&
+            !_internalLink(uri);
       })
       .toSet()
-      .toList();
+      .toList(growable: false);
 }
 
 class ContentBatch {
@@ -162,6 +224,11 @@ class ConversationContentController extends ChangeNotifier {
   final _redactions = <(Object, String), Event>{};
   bool _disposed = false;
   int _generation = 0;
+
+  /// Bumped by every recorded event; projections cache against it.
+  int get revision => _revision;
+  int _revision = 0;
+  List<Event>? _sorted;
   ConversationContentController(
     List<ContentSource> sources, {
     required this.unlocked,
@@ -174,6 +241,10 @@ class ConversationContentController extends ChangeNotifier {
   bool get remoteEnd => sources.every((s) => s.remoteEnd);
   List<Event> get events {
     if (!_current(_generation)) return const [];
+    return _sorted ??= _sort();
+  }
+
+  List<Event> _sort() {
     final result = _events.entries.toList()
       ..sort((a, b) {
         final date = b.value.originServerTs.compareTo(a.value.originServerTs);
@@ -184,7 +255,7 @@ class ConversationContentController extends ChangeNotifier {
             .indexWhere((s) => s.identity == a.key.$1)
             .compareTo(sources.indexWhere((s) => s.identity == b.key.$1));
       });
-    return result.map((e) => e.value).toList();
+    return result.map((e) => e.value).toList(growable: false);
   }
 
   int get encrypted =>
@@ -233,9 +304,13 @@ class ConversationContentController extends ChangeNotifier {
           if (batch.next != null) state.cursors.add(batch.next!);
           state.remoteEnd = batch.next == null;
         } else {
+          // Each page re-reads the prefix, so the step grows: sparse media
+          // fills a screen in a few reads instead of dozens.
           final limit = refresh
               ? (state.localLimit == 0 ? 80 : state.localLimit)
-              : state.localLimit + 80;
+              : state.localLimit == 0
+              ? 80
+              : state.localLimit + state.localLimit.clamp(80, 640);
           final batch = await state.source.local(limit);
           page = batch.events;
           if (!_current(generation)) return;
@@ -291,6 +366,8 @@ class ConversationContentController extends ChangeNotifier {
   }
 
   void _record(ContentSource source, Event event) {
+    _revision++;
+    _sorted = null;
     if (event.type == EventTypes.Redaction) {
       final id = event.redacts;
       if (id == null) return;
@@ -316,6 +393,7 @@ class ConversationContentController extends ChangeNotifier {
     _generation++;
     _events.clear();
     _redactions.clear();
+    _sorted = null;
     super.dispose();
   }
 }

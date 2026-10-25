@@ -458,5 +458,85 @@ void main() {
     );
     expect(sharedFile(audio), isTrue);
     expect(sharedMedia(audio), isFalse);
+    expect(sharedMessage(audio), isFalse);
+  });
+  test('voice notes and rounds are messages, not files or media', () {
+    final room = ConversationRoom(ConversationClient(), '!one:example.invalid');
+    final voice = room.message(
+      r'$voice',
+      'Voice message',
+      content: {
+        'msgtype': MessageTypes.Audio,
+        'body': 'Voice message',
+        'org.matrix.msc3245.voice': <String, dynamic>{},
+      },
+    );
+    final round = room.message(
+      r'$round',
+      'Video message',
+      outgoing: true,
+      content: {
+        'msgtype': MessageTypes.Video,
+        'body': 'Video message',
+        'info': {'fi.mau.telegram.round_message': true, 'duration': 7000},
+      },
+    );
+    final video = room.message(
+      r'$video',
+      'clip.mp4',
+      content: {'msgtype': MessageTypes.Video, 'body': 'clip.mp4'},
+    );
+    expect(
+      [sharedVoice(voice), sharedFile(voice), sharedMedia(voice)],
+      [true, false, false],
+    );
+    expect(
+      [sharedRound(round), sharedMedia(round), sharedFile(round)],
+      [true, false, false],
+    );
+    expect([sharedMessage(voice), sharedMessage(round)], [true, true]);
+    expect([sharedMedia(video), sharedMessage(video)], [true, false]);
+    expect(sharedSenderMatches(round, SharedSender.me), isTrue);
+    expect(sharedSenderMatches(round, SharedSender.others), isFalse);
+    expect(sharedSenderMatches(voice, SharedSender.others), isTrue);
+    expect(sharedSenderMatches(voice, SharedSender.everyone), isTrue);
+  });
+  test('mentions, permalinks and reply fallbacks are not shared links', () {
+    final room = ConversationRoom(ConversationClient(), '!one:example.invalid');
+    final reply = room.message(
+      r'$reply',
+      'x',
+      content: {
+        'msgtype': MessageTypes.Text,
+        'body':
+            '> <@anna:example.invalid> see https://quoted.example.org/q\n\nHi Anna, https://example.org/new',
+        'formatted_body':
+            '<mx-reply><blockquote><a href="https://matrix.to/#/!one:example.invalid/\$orig">In reply to</a> '
+            '<a href="https://matrix.to/#/@anna:example.invalid">@anna</a> https://quoted.example.org/q</blockquote></mx-reply>'
+            'Hi <a href="https://matrix.to/#/@anna:example.invalid">Anna</a>, https://example.org/new',
+      },
+    );
+    expect(sharedLinks(reply), ['https://example.org/new']);
+    // Cached per event object: the same list on every projection rebuild.
+    expect(identical(sharedLinks(reply), sharedLinks(reply)), isTrue);
+  });
+  test('local pages grow so sparse media needs few reads', () async {
+    final room = ConversationRoom(ConversationClient(), '!one:example.invalid');
+    final source = Source(room);
+    for (var i = 0; i < 3000; i++) {
+      source.rows.add(room.message('\$g$i', 'text'));
+    }
+    final c = ConversationContentController([source], unlocked: () => true);
+    final limits = <int>[];
+    for (var i = 0; i < 5; i++) {
+      await c.load();
+      limits.add(c.sources.single.localLimit);
+    }
+    expect(limits, [80, 160, 320, 640, 1280]);
+    final first = c.events;
+    expect(identical(first, c.events), isTrue);
+    c.accept(source, room.message(r'$late', 'late', minute: 59));
+    expect(identical(first, c.events), isFalse);
+    c.dispose();
   });
 }
