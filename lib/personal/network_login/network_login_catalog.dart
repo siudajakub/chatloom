@@ -5,6 +5,7 @@ import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/network_login/beeper_account_bridges.dart';
 import 'package:chatloom/personal/network_login/network_login_api.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:flutter/foundation.dart';
@@ -12,20 +13,23 @@ import 'package:matrix/matrix.dart';
 
 // Which bridges "Add network" offers.
 //
-// bridgev2 has no endpoint that lists bridges: provisioning `whoami` answers
-// for one bridge, and Beeper's account API (`api.beeper.com/whoami`, which
-// does list bbctl bridges) is a second Beeper origin J has not approved
-// (wave 5 BR-03). So the list is built from three sources and every entry is
-// confirmed with a read-only `GET /v3/whoami` before it is offered:
+// bridgev2 has no endpoint that lists bridges (provisioning `whoami` answers
+// for one bridge). The list is built from these sources, and every entry is
+// confirmed with a read-only `GET /v3/whoami` before it can sign in:
 //
-// 1. bridges the account's rooms declare (`m.bridge` & co., as search does);
-// 2. the usual bridge names: bbctl registers self-hosted bridges as
-//    `sh-<name>` with the bot `@sh-<name>bot:beeper.local`; a standard
-//    appservice bridge on an own homeserver uses `@<name>bot:<server>`;
-// 3. `--dart-define=CHATLOOM_BRIDGE_BOTS=@a:x,@b:y` for other names.
+// 1. on Beeper, the account's bridges from Beeper's account API
+//    (`api.beeper.com/whoami`, BR-03 approved by J on 2026-10-25;
+//    `beeper_account_bridges.dart`);
+// 2. bridges the account's rooms declare (`m.bridge` & co., as search does);
+// 3. `--dart-define=CHATLOOM_BRIDGE_BOTS=@a:x,@b:y` for other names;
+// 4. only when (1) is unavailable (it failed, or not a Beeper account): the
+//    usual bridge names. bbctl registers self-hosted bridges as `sh-<name>`
+//    with the bot `@sh-<name>bot:beeper.local`; a standard appservice bridge
+//    on an own homeserver uses `@<name>bot:<server>`.
 //
-// A probed name that does not answer is not shown. Discovered bridges the
-// app cannot reach stay listed with the bridge chat as the way to sign in.
+// A guessed name that does not answer is not shown. Bridges the account
+// lists or its rooms declare stay listed when the app can't reach them, with
+// the bridge chat as the way to sign in.
 
 /// Bridge names tried when no room names them yet (bbctl / mautrix types).
 const addNetworkBridgeNames = [
@@ -56,6 +60,7 @@ class NetworkLoginBackend {
     this.reaches,
     this.hungryserv = false,
     this.disabledReason,
+    this.accountBridges,
   });
 
   const NetworkLoginBackend.disabled(String reason, {this.userId = ''})
@@ -63,7 +68,8 @@ class NetworkLoginBackend {
       loginTransport = null,
       reaches = null,
       hungryserv = false,
-      disabledReason = reason;
+      disabledReason = reason,
+      accountBridges = null;
 
   /// Short requests (whoami, flows, cancel, logout).
   final BridgeProvisioningTransport? transport;
@@ -78,6 +84,10 @@ class NetworkLoginBackend {
   /// Beeper's hungryserv route (bbctl bridge names).
   final bool hungryserv;
   final String? disabledReason;
+
+  /// The account's bridges from its provider (Beeper's account API), or
+  /// null when there is no such list.
+  final Future<List<BridgeEndpoint>> Function()? accountBridges;
 
   bool get enabled => transport != null;
 
@@ -99,6 +109,11 @@ class NetworkLoginBackend {
     final directory = BridgeDirectory.of(client);
     final base = directory.api?.transport;
     final userId = client.userID ?? '';
+    final beeper =
+        base is BeeperProvisioningTransport && base.overrideUrl.isEmpty
+        ? base
+        : null;
+    final hungryserv = beeper != null;
     if (base == null) {
       return NetworkLoginBackend.disabled(
         directory.disabledReason ?? 'Bridges can’t be reached from the app.',
@@ -119,18 +134,27 @@ class NetworkLoginBackend {
           : base,
       userId: userId,
       reaches: directory.reaches,
-      hungryserv:
-          base is BeeperProvisioningTransport && base.overrideUrl.isEmpty,
+      hungryserv: hungryserv,
+      accountBridges:
+          beeper != null && beeperAccountWhoamiUri(beeper.homeserver) != null
+          ? () => fetchBeeperAccountBridges(
+              httpClient: beeper.httpClient,
+              homeserver: beeper.homeserver,
+              accessToken: beeper.accessToken,
+            )
+          : null,
     );
   }
 }
 
-/// Bridges worth asking for [userId]: discovered ones first, then the usual
-/// names on the route's domain, then [extraBots]. One per bot.
+/// Bridges worth asking for [userId]: the account's [listed] bridges and the
+/// [discovered] ones, then [extraBots]; the usual names on the route's
+/// domain only when there is no account list. One per bot.
 List<BridgeEndpoint> addNetworkCandidates({
   required List<BridgeEndpoint> discovered,
   required String userId,
   required bool hungryserv,
+  List<BridgeEndpoint>? listed,
   String extraBots = const String.fromEnvironment('CHATLOOM_BRIDGE_BOTS'),
 }) {
   final colon = userId.indexOf(':');
@@ -142,6 +166,9 @@ List<BridgeEndpoint> addNetworkCandidates({
   final found = <String, BridgeEndpoint>{
     for (final bridge in discovered) bridge.botId: bridge,
   };
+  for (final bridge in listed ?? const <BridgeEndpoint>[]) {
+    found.putIfAbsent(bridge.botId, () => bridge);
+  }
   BridgeEndpoint guess(String bot, String name) {
     final network = canonicalNetwork(name) ?? name;
     return BridgeEndpoint(
@@ -151,7 +178,7 @@ List<BridgeEndpoint> addNetworkCandidates({
     );
   }
 
-  if (domain.isNotEmpty) {
+  if (listed == null && domain.isNotEmpty) {
     for (final name in addNetworkBridgeNames) {
       final bot = hungryserv ? '@sh-${name}bot:$domain' : '@${name}bot:$domain';
       found.putIfAbsent(bot, () => guess(bot, name));
@@ -217,21 +244,40 @@ class AddableBridge {
 }
 
 /// Asks each candidate's whoami (in parallel, read-only) and returns the
-/// bridges to offer, sorted by label. Static guesses that don't answer are
-/// dropped; discovered bridges stay as [AddableBridgeStatus.unreachable].
+/// bridges to offer, sorted by label. Guesses that don't answer are
+/// dropped; listed and discovered bridges stay as
+/// [AddableBridgeStatus.unreachable].
 Future<List<AddableBridge>> loadAddableBridges({
   required NetworkLoginBackend backend,
   required List<BridgeEndpoint> discovered,
   List<BridgeEndpoint>? candidates,
+  String extraBots = const String.fromEnvironment('CHATLOOM_BRIDGE_BOTS'),
 }) async {
+  List<BridgeEndpoint>? listed;
+  final account = backend.accountBridges;
+  if (candidates == null && account != null) {
+    try {
+      listed = await account();
+    } on BeeperAccountException catch (error) {
+      // Status only: the answer carries account data.
+      Logs().w('background_failed beeper_account_bridges HTTP ${error.status}');
+    } catch (error) {
+      Logs().w('background_failed beeper_account_bridges ${error.runtimeType}');
+    }
+  }
   final all =
       candidates ??
       addNetworkCandidates(
         discovered: discovered,
         userId: backend.userId,
         hungryserv: backend.hungryserv,
+        listed: listed,
+        extraBots: extraBots,
       );
-  final known = {for (final bridge in discovered) bridge.botId};
+  final known = {
+    for (final bridge in discovered) bridge.botId,
+    for (final bridge in listed ?? const <BridgeEndpoint>[]) bridge.botId,
+  };
   final transport = backend.transport;
   Future<AddableBridge?> probe(BridgeEndpoint bridge) async {
     final listed = known.contains(bridge.botId);
