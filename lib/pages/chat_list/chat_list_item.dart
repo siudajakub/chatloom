@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
@@ -10,6 +12,7 @@ import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/preview_repair.dart';
 import 'package:chatloom/personal/private_avatar.dart';
 import 'package:chatloom/personal/push_rule_mirror.dart';
 import 'package:chatloom/personal/ui/notion_inbox_network_badge.dart';
@@ -177,19 +180,50 @@ class ChatListItem extends StatefulWidget {
 class _ChatListItemState extends State<ChatListItem> {
   String? _senderRequested;
   final _previewRepairs = <String, String>{};
+  Timer? _previewRetry;
 
+  /// Refreshes a preview that is not a message: a bridge report, or the
+  /// SDK's "Loading… Please wait." placeholder. The placeholder is stored,
+  /// so one left by a failed refresh or a killed app is repaired here when
+  /// the row is shown (a refresh the sync loop already started is shared).
+  /// A failure retries with back-off while the row stays mounted.
   void _repairPreview(Room room) {
     final event = room.lastEvent;
-    if (event == null ||
-        room.client.roomPreviewLastEvents.contains(event.type) ||
-        event.type == EventTypes.refreshingLastEvent ||
-        _previewRepairs[room.id] == event.eventId) {
+    if (!needsPreviewRepair(event, room.client.roomPreviewLastEvents) ||
+        _previewRepairs[room.id] == event!.eventId) {
+      return;
+    }
+    final backoff = PreviewRepairBackoff.instance;
+    final wait = backoff.wait(room.id);
+    if (wait > Duration.zero) {
+      _scheduleRepair(wait);
       return;
     }
     _previewRepairs[room.id] = event.eventId;
-    room.refreshLastEvent().then((_) {
+    room.refreshLastEvent().then(
+      (_) {
+        backoff.succeeded(room.id);
+        if (mounted) setState(() {});
+      },
+      onError: (_) {
+        _previewRepairs.remove(room.id);
+        _scheduleRepair(backoff.failed(room.id));
+      },
+    );
+  }
+
+  void _scheduleRepair(Duration wait) {
+    if (!mounted) return;
+    _previewRetry ??= Timer(wait, () {
+      _previewRetry = null;
       if (mounted) setState(() {});
-    }, onError: (_) {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _previewRetry?.cancel();
+    super.dispose();
   }
 
   /// Newest incoming event seen by this row; when a newer one arrives the

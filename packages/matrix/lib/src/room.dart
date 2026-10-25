@@ -664,8 +664,14 @@ class Room {
       from = result.end;
       if (event != null || result.chunk.isEmpty) break;
     } while (from != null && visited.add(from));
-    // A live send/sync may have advanced the preview during the request.
-    if (!identical(lastEvent, previous)) return lastEvent;
+    // A live send/sync may have advanced the preview during the request. A
+    // sync that only swapped in a fresh placeholder joined this request, so
+    // its result still applies.
+    final current = lastEvent;
+    if (!identical(current, previous) &&
+        current?.type != EventTypes.refreshingLastEvent) {
+      return current;
+    }
     if (event == null) {
       if (lastEvent?.type == EventTypes.refreshingLastEvent ||
           (lastEvent != null &&

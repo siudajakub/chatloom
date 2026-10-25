@@ -110,6 +110,35 @@ void main() {
     expect(client.cursors, [null]);
   });
 
+  test('a sync that swaps in a fresh placeholder keeps the result', () async {
+    Event placeholder(String id) => Event(
+      type: EventTypes.refreshingLastEvent,
+      content: {'body': 'Refreshing last event...'},
+      room: room,
+      eventId: id,
+      senderId: client.userID,
+      originServerTs: DateTime.utc(2026),
+    );
+    client.gate = Completer<void>();
+    client.pages.add(
+      GetRoomEventsResponse(
+        start: 'start',
+        chunk: [_event('message', EventTypes.Message)],
+      ),
+    );
+    room.lastEvent = placeholder('first');
+    final first = room.refreshLastEvent();
+    // The next sync of the room (a receipt, typing) replaces the placeholder
+    // and joins the request that is already running.
+    room.lastEvent = placeholder('second');
+    final second = room.refreshLastEvent();
+    client.gate!.complete();
+    expect((await first)?.eventId, 'message');
+    expect((await second)?.eventId, 'message');
+    expect(room.lastEvent?.eventId, 'message');
+    expect(client.cursors, [null]);
+  });
+
   test(
     'undecryptable messages remain previews until their key arrives',
     () async {
