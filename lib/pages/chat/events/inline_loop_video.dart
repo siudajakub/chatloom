@@ -21,6 +21,7 @@ import 'package:video_player/video_player.dart';
 
 import 'inline_loop_slots.dart';
 import 'outgoing_upload_progress.dart';
+import 'sticker_event.dart';
 
 /// Bridged GIFs and Telegram video stickers as Telegram shows them: a muted
 /// loop that plays inline while it is on screen, not a tap-to-play tile.
@@ -83,6 +84,7 @@ class InlineLoopVideo extends StatefulWidget {
         event.messageType == MessageTypes.Video) {
       return true;
     }
+    if (StickerEvents.isVideoStickerHint(event)) return true;
     return event.messageType == MessageTypes.Sticker &&
         event.attachmentMimetype.startsWith('video/');
   }

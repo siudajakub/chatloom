@@ -759,8 +759,10 @@ abstract final class ConversationMedia {
     return Size(frameWidth, math.max(0.0, frameHeight));
   }
 
-  /// Smallest long side of a sticker (small phones, the old fixed size).
-  static const double stickerMinSide = 128;
+  /// Smallest long side a sticker is drawn at when its own size is smaller
+  /// (a 64 px emoji-like sticker is not blown up past this), unless half
+  /// the window is smaller still.
+  static const double stickerMinSide = 96;
 
   /// Largest long side on a phone (Telegram: about 205 dp on a Pixel 8).
   static const double stickerMaxSide = 200;
@@ -769,8 +771,9 @@ abstract final class ConversationMedia {
   /// the short side would be huge next to the text.
   static const double stickerWideSide = 180;
 
-  /// Share of the screen's short side a sticker takes (Telegram
-  /// `ChatMessageCell`: `min(width, height) * 0.5` on phones).
+  /// Share of the screen's short side a sticker takes at most (Telegram
+  /// `ChatMessageCell`: `min(width, height) * 0.5` on phones). Neither
+  /// edge of a sticker exceeds this share of either screen dimension.
   static const double stickerScreenShare = .5;
 
   /// The short side (logical px) from which a window counts as wide.
@@ -780,28 +783,36 @@ abstract final class ConversationMedia {
   static const double stickerMinEdge = 32;
 
   /// The long side of a sticker (image, Lottie or video) on [screen]:
-  /// half the short side, between [stickerMinSide] and [stickerMaxSide]
-  /// (phones) or [stickerWideSide] ([desktop] or a wide window).
+  /// half the short side, at most [stickerMaxSide] (phones) or
+  /// [stickerWideSide] ([desktop] or a wide window). Never more than half
+  /// of either screen dimension.
   static double stickerSideFor(Size screen, {required bool desktop}) {
     final wide = desktop || screen.shortestSide >= stickerWideBreakpoint;
-    final share = screen.shortestSide * stickerScreenShare;
-    return share.clamp(stickerMinSide, wide ? stickerWideSide : stickerMaxSide);
+    final share = math.max(0.0, screen.shortestSide * stickerScreenShare);
+    return math.min(share, wide ? stickerWideSide : stickerMaxSide);
   }
 
   /// [stickerSideFor] the current screen.
   static double stickerSide(BuildContext context, {required bool desktop}) =>
       stickerSideFor(MediaQuery.sizeOf(context), desktop: desktop);
 
-  /// A sticker's box: [side] on the long edge, aspect kept, the short edge
-  /// at least [stickerMinEdge]; square without dimensions.
+  /// A sticker's box: at most [side] on the long edge, aspect kept, the
+  /// short edge at least [stickerMinEdge] (never above [side]); square
+  /// without dimensions. A sticker whose own long side ([width]/[height],
+  /// the intended display size in Matrix) is smaller than [side] is not
+  /// blown up past [stickerMinSide].
   static Size stickerFrame(double side, {num? width, num? height}) {
+    if (!side.isFinite || side <= 0) return Size.zero;
     if (width == null || height == null || width <= 0 || height <= 0) {
       return Size.square(side);
     }
+    final native = math.max(width, height).toDouble();
+    final long = math.min(side, math.max(native, stickerMinSide));
+    final minEdge = math.min(stickerMinEdge, long);
     if (width > height) {
-      return Size(side, (side * height / width).clamp(stickerMinEdge, side));
+      return Size(long, (long * height / width).clamp(minEdge, long));
     }
-    return Size((side * width / height).clamp(stickerMinEdge, side), side);
+    return Size((long * width / height).clamp(minEdge, long), long);
   }
 
   /// Height limit of a frame: a share of the viewport, and the incoming
