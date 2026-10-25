@@ -862,10 +862,7 @@ Future<String?> showConversationReactionPicker(
     height: math.min(420.0, MediaQuery.sizeOf(context).height * .55),
     child: EmojiPicker(
       onEmojiSelected: (_, emoji) => Navigator.of(context).pop(emoji.emoji),
-      config: notionEmojiPickerConfig(
-        context,
-        initCategory: Category.SMILEYS,
-      ),
+      config: notionEmojiPickerConfig(context),
     ),
   ),
 );

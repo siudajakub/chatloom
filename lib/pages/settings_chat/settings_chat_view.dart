@@ -212,10 +212,7 @@ Future<String?> showDoubleTapReactionPicker(BuildContext context) =>
               child: EmojiPicker(
                 onEmojiSelected: (_, emoji) =>
                     Navigator.of(context).pop(emoji.emoji),
-                config: notionEmojiPickerConfig(
-                  context,
-                  initCategory: Category.SMILEYS,
-                ),
+                config: notionEmojiPickerConfig(context),
               ),
             ),
           ),
