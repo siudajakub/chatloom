@@ -115,7 +115,7 @@ void main() {
           room: room,
           eventId: id,
           type: EventTypes.Message,
-          senderId: own ? client.userID! : '@anna:example.invalid',
+          senderId: own ? client.userID : '@anna:example.invalid',
           originServerTs: DateTime.utc(2026, 10, 16, 14, id.length),
           content: content,
         );
