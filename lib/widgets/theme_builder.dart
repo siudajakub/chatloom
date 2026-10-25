@@ -6,6 +6,7 @@
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/ui/notion/notion_appearance.dart';
 import 'package:chatloom/ui/notion/notion_display_preferences.dart';
+import 'package:chatloom/ui/notion/notion_motion.dart';
 import 'package:collection/collection.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
@@ -50,8 +51,23 @@ class ThemeBuilder extends StatefulWidget {
       intensity: NotionIntensity.parse(
         preferences.getString(AppSettings.appearanceIntensity.key),
       ),
+      custom: parseCustomAccent(
+        preferences.getString(AppSettings.appearanceCustomAccent.key),
+      ),
     );
   }
+
+  /// `#RRGGBB` → an opaque colour; anything else → null (the preset).
+  static Color? parseCustomAccent(String? value) {
+    if (value == null) return null;
+    final match = RegExp(r'^#?([0-9a-fA-F]{6})$').firstMatch(value.trim());
+    if (match == null) return null;
+    return Color(int.parse(match.group(1)!, radix: 16)).withAlpha(255);
+  }
+
+  static String formatCustomAccent(Color? color) => color == null
+      ? ''
+      : '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
 
   static NotionDisplayPreferences readDisplayPreferences(
     SharedPreferences preferences,
@@ -95,6 +111,7 @@ class ThemeController extends State<ThemeBuilder> {
     );
     _appearance = ThemeBuilder.readAppearance(preferences);
     _displayPreferences = ThemeBuilder.readDisplayPreferences(preferences);
+    NotionHaptics.enabled = _displayPreferences.haptics;
   }
 
   Future<void> setThemeMode(ThemeMode newThemeMode) async {
@@ -126,10 +143,15 @@ class ThemeController extends State<ThemeBuilder> {
       AppSettings.appearanceIntensity.key,
       newAppearance.intensity.name,
     );
+    await preferences.setString(
+      AppSettings.appearanceCustomAccent.key,
+      ThemeBuilder.formatCustomAccent(newAppearance.custom),
+    );
   }
 
   Future<void> setDisplayPreferences(NotionDisplayPreferences value) async {
     if (value == _displayPreferences) return;
+    NotionHaptics.enabled = value.haptics;
     if (mounted) {
       setState(() => _displayPreferences = value);
     } else {

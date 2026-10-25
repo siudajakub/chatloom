@@ -34,6 +34,8 @@ class _StartupApp extends StatelessWidget {
         appearance,
         ThemeController.of(context).displayPreferences,
       ),
+      builder: (context, child) =>
+          NotionDisplayScope(child: child ?? const SizedBox.shrink()),
       home: home,
     ),
   );

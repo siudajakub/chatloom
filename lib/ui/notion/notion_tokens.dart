@@ -352,6 +352,26 @@ class NotionColors {
     scrim: Color(0x99000000),
   );
 
+  /// Pure black dark theme (OLED screens): the page is black, raised
+  /// surfaces step up from it; text and status roles stay as in [dark].
+  static const black = NotionColors(
+    background: Color(0xFF000000),
+    surface: Color(0xFF141414),
+    selected: Color(0xFF1F1F1F),
+    border: Color(0xFF2C2C2C),
+    text: Color(0xFFE8E7E5),
+    textSecondary: Color(0xFFAAAAA5),
+    textTertiary: Color(0xFF7F7F7B),
+    cover: Color(0xFF26241F),
+    accent: Color(0xFFE8E7E5),
+    onAccent: Color(0xFF000000),
+    danger: Color(0xFFDF5452),
+    success: Color(0xFF529E72),
+    warning: Color(0xFFCA9849),
+    info: Color(0xFF379AD3),
+    scrim: Color(0xB3000000),
+  );
+
   static const light = NotionColors(
     background: Color(0xFFFAF9F6),
     surface: Color(0xFFF0EFEB),
@@ -545,6 +565,14 @@ class NotionGlass {
     dockTint: Color(0x94252525),
     border: Color(0x1AFFFFFF),
     overlayTint: Color(0xD6252525),
+  );
+
+  /// Glass over the pure black theme ([NotionColors.black]).
+  static const black = NotionGlass(
+    tint: Color(0x99000000),
+    dockTint: Color(0x94141414),
+    border: Color(0x1AFFFFFF),
+    overlayTint: Color(0xD6141414),
   );
 
   /// Light paper needs a denser fill (~72%) to keep text contrast.

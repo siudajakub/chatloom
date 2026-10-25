@@ -393,8 +393,13 @@ class NotionSpringCurve extends Curve {
 
 /// Haptic feedback vocabulary. Only for send and long-press; screens decide.
 abstract final class NotionHaptics {
+  /// Settings → Appearance → Haptic feedback; set by `ThemeController`.
+  static bool enabled = true;
+
   /// A light tick: message sent, long-press menu opened.
-  static void light() => unawaited(HapticFeedback.lightImpact());
+  static void light() {
+    if (enabled) unawaited(HapticFeedback.lightImpact());
+  }
 
   /// Message sent.
   static void send() => light();
@@ -404,12 +409,16 @@ abstract final class NotionHaptics {
 
   /// A voice/round recording started (Telegram's firmer tick: the hold
   /// became a recording).
-  static void recordStart() => unawaited(HapticFeedback.mediumImpact());
+  static void recordStart() {
+    if (enabled) unawaited(HapticFeedback.mediumImpact());
+  }
 
   /// A selection tick: the finger moved onto another choice while scrubbing
   /// (reaction bar, swipe-to-reply arming). Fires once per change, never per
   /// frame.
-  static void selection() => unawaited(HapticFeedback.selectionClick());
+  static void selection() {
+    if (enabled) unawaited(HapticFeedback.selectionClick());
+  }
 }
 
 /// Builds [child] only once the hosting route finished animating in, showing
