@@ -263,7 +263,8 @@ class Message extends StatelessWidget {
     final ticks = own && delivery.kind == MessageDeliveryKind.none
         ? messageDeliveryProgress(event, timeline)
         : DeliveryProgress.none;
-    final showsTicks = ticks.tick != null;
+    final displayPrefs = NotionDisplayPreferences.of(context);
+    final showsTicks = ticks.tick != null && displayPrefs.deliveryTicks;
     // Over the circle: always the time, colours inherited from the pill.
     final roundStatus = round
         ? Row(
@@ -307,7 +308,11 @@ class Message extends StatelessWidget {
     // after the loader grace, so a fast send never flashes it; a failure
     // gets its own tappable line below (Retry / Delete).
     final sending = delivery.kind == MessageDeliveryKind.sending;
-    final timeVisible = last || edited;
+    // Settings → Appearance → "Message times": the group's last message
+    // (default), every message, or none. Ticks stay on the group's last.
+    final timeShown = displayPrefs.showsTime(last: last);
+    final ticksShown = last && showsTicks;
+    final timeVisible = timeShown || edited || ticksShown;
     final hasStatus = timeVisible || sending;
     // Photos, videos, voice and files fill a ring with their upload.
     final upload = sending && isOutgoingUpload(event);
@@ -315,7 +320,7 @@ class Message extends StatelessWidget {
       spacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        if (last)
+        if (timeShown)
           Text(
             event.originServerTs.localizedTimeOfDay(context),
             style: TextStyle(fontSize: 11, color: statusColor),
@@ -325,7 +330,7 @@ class Message extends StatelessWidget {
             L10n.of(context).edited,
             style: TextStyle(fontSize: 11, color: statusColor),
           ),
-        if (last && showsTicks)
+        if (ticksShown)
           MessageDeliveryTicks(
             event: event,
             timeline: timeline,
@@ -462,7 +467,10 @@ class Message extends StatelessWidget {
                         ),
                       )
                     // A reply caption already names the sender.
-                    : !own && !isReply && !event.room.isDirectChatForDisplay
+                    : !own &&
+                          !isReply &&
+                          !event.room.isDirectChatForDisplay &&
+                          displayPrefs.senderNames
                     ? ConversationMetaChip(
                         backdrop: metaBackdrop,
                         child: Text(

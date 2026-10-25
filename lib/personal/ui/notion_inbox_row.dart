@@ -300,7 +300,9 @@ class NotionInboxRow extends StatelessWidget {
                                           child: Text(
                                             preview,
                                             key: ValueKey((preview, typing)),
-                                            maxLines: large ? 2 : 1,
+                                            maxLines: large
+                                                ? 2
+                                                : display.inboxPreviewLines,
                                             overflow: TextOverflow.ellipsis,
                                             style: NotionType.callout
                                                 .apply(

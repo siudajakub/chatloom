@@ -387,7 +387,12 @@ class MessageContent extends StatelessWidget {
                 html: html,
                 textColor: textColor,
                 room: event.room,
-                fontSize: AppConfig.messageFontSize * (bigEmotes ? 5 : 1),
+                // Settings → Appearance → "Emoji-only messages".
+                fontSize:
+                    AppConfig.messageFontSize *
+                    (bigEmotes
+                        ? NotionDisplayPreferences.of(context).jumboEmoji.factor
+                        : 1),
                 linkStyle: TextStyle(
                   color: linkColor,
                   fontSize: AppConfig.messageFontSize,
@@ -414,7 +419,9 @@ class MessageContent extends StatelessWidget {
                 ],
               );
             }
-            if (previews.isEmpty) return text;
+            if (previews.isEmpty || !AppSettings.showLinkPreviews.value) {
+              return text;
+            }
             // The bridge's preview of the first link, under the text.
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,

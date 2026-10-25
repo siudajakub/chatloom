@@ -421,7 +421,9 @@ class _ChatEventListState extends State<ChatEventList>
     _paletteSignature = Message.paletteSignature(roomPalette);
 
     final hasWallpaper =
-        controller.room.client.applicationAccountConfig.wallpaperUrl != null;
+        controller.room.client.applicationAccountConfig.wallpaperUrl != null ||
+        NotionDisplayPreferences.of(context).wallpaperPreset !=
+            NotionWallpaperPreset.none;
 
     // The unread divider sits above the oldest unread row: just newer than
     // the row that shows the read marker (or the nearest older row when the
