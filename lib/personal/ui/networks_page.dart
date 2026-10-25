@@ -6,6 +6,7 @@ import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
+import 'package:chatloom/personal/network_login/network_login_catalog.dart';
 import 'package:chatloom/personal/network_sign_out.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -258,6 +259,7 @@ class NetworksPage extends StatefulWidget {
     required this.personal,
     this.monitor,
     this.onOpen,
+    this.onAdd,
   });
 
   final PersonalClient personal;
@@ -267,6 +269,9 @@ class NetworksPage extends StatefulWidget {
 
   /// Opens one network; defaults to `/rooms/settings/networks/<network>`.
   final ValueChanged<String>? onOpen;
+
+  /// Opens "Add network"; defaults to `/rooms/settings/networks/add`.
+  final VoidCallback? onAdd;
 
   @override
   State<NetworksPage> createState() => _NetworksPageState();
@@ -292,6 +297,12 @@ class _NetworksPageState extends State<NetworksPage>
     context.push('/rooms/settings/networks/${Uri.encodeComponent(network)}');
   }
 
+  void _add() {
+    final add = widget.onAdd;
+    if (add != null) return add();
+    context.push('/rooms/settings/networks/add');
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([personal, _monitor]),
@@ -303,18 +314,32 @@ class _NetworksPageState extends State<NetworksPage>
         onBack: ChatLoomThemes.isColumnMode(context)
             ? null
             : () => Navigator.maybePop(context),
+        actions: [
+          NotionIconButton(
+            key: const ValueKey('networks-add'),
+            icon: Icons.add,
+            label: 'Add network',
+            onPressed: _add,
+          ),
+        ],
         children: [
           NotionStaggeredColumn(
             children: [
               ?notice,
               if (networks.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(top: NotionSpace.xxl),
+                Padding(
+                  padding: const EdgeInsets.only(top: NotionSpace.xxl),
                   child: NotionEmptyState(
                     icon: Icons.hub_outlined,
                     title: 'No networks yet',
                     message:
-                        'Networks appear here once your chats have synced.',
+                        'Connect WhatsApp, Telegram and other networks, or '
+                        'wait for your chats to sync.',
+                    action: NotionButton.primary(
+                      label: 'Add network',
+                      icon: Icons.add,
+                      onPressed: _add,
+                    ),
                   ),
                 )
               else ...[
@@ -324,6 +349,13 @@ class _NetworksPageState extends State<NetworksPage>
                     summary: summary,
                     onTap: () => _open(summary.network),
                   ),
+                NotionListRow(
+                  key: const ValueKey('networks-add-row'),
+                  leading: const Icon(Icons.add_circle_outline),
+                  title: 'Add network',
+                  subtitle: 'Sign in to another network or account',
+                  onTap: _add,
+                ),
                 Padding(
                   padding: const EdgeInsets.only(top: NotionSpace.md),
                   child: Text(
@@ -521,6 +553,7 @@ class NetworkDetailPage extends StatefulWidget {
     this.clock,
     this.signOut,
     this.startBridgeChat,
+    this.signInInApp,
   });
 
   final PersonalClient personal;
@@ -539,6 +572,11 @@ class NetworkDetailPage extends StatefulWidget {
   /// (BR-11); returns its room id. Default: `Client.startDirectChat`
   /// without encryption (bridgev2 management rooms are unencrypted).
   final Future<String> Function(String bot)? startBridgeChat;
+
+  /// Opens "Add network" for this network when the app can sign in to it
+  /// (default: [canSignInFromApp], then `/rooms/settings/networks/add`);
+  /// null keeps the bridge chat as the only way.
+  final VoidCallback? Function(String network)? signInInApp;
 
   @override
   State<NetworkDetailPage> createState() => _NetworkDetailPageState();
@@ -666,6 +704,18 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
   }
 
   bool _openingBot = false;
+
+  /// The in-app sign-in for this network, or null when only the bridge chat
+  /// can sign in.
+  VoidCallback? _signInInApp() {
+    if (!_active || _network == 'matrix') return null;
+    final seam = widget.signInInApp;
+    if (seam != null) return seam(_network);
+    if (!canSignInFromApp(personal.client, _network)) return null;
+    return () => context.push(
+      '/rooms/settings/networks/add?network=${Uri.encodeQueryComponent(_network)}',
+    );
+  }
 
   /// Starts (or finds) the DM with the bridge bot and opens it (BR-11).
   Future<void> _openBotChat(String bot) async {
@@ -843,7 +893,8 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
       final bot = bridgeChat == null && signIn
           ? knownBridgeBot(personal.client, _network)
           : null;
-      final canSignIn = bridgeChat != null || bot != null;
+      final inApp = signIn ? _signInInApp() : null;
+      final canSignIn = inApp != null || bridgeChat != null || bot != null;
       return Padding(
         padding: const EdgeInsets.only(bottom: NotionSpace.md),
         child: NotionCallout(
@@ -858,7 +909,9 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
               : NotionCalloutTone.danger,
           title: health.title,
           // bridgev2 signs in through its bot: say what to send there.
-          message: signIn && canSignIn
+          message: inApp != null
+              ? '$reason Tap Sign in to connect again.'
+              : signIn && canSignIn
               ? '$reason Tap Sign in, then send “login” in the bridge chat.'
               : reason,
           actionLabel: !canSignIn
@@ -867,11 +920,13 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
               ? 'Sign in'
               : 'Open bridge chat',
           actionBusy: _openingBot,
-          onAction: bridgeChat != null
-              ? () => _openChat(bridgeChat)
-              : bot != null
-              ? () => _openBotChat(bot)
-              : null,
+          onAction:
+              inApp ??
+              (bridgeChat != null
+                  ? () => _openChat(bridgeChat)
+                  : bot != null
+                  ? () => _openBotChat(bot)
+                  : null),
         ),
       );
     }
@@ -1164,6 +1219,17 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
             title: 'Open bridge chat',
             subtitle: 'Sign in, sign out and other bridge commands',
             onTap: () => _openChat(bridgeChat),
+          )
+        else if ((_network == 'matrix'
+                ? null
+                : knownBridgeBot(personal.client, _network))
+            case final bot?)
+          NotionListRow(
+            key: const ValueKey('network-bridge-bot'),
+            leading: const Icon(Icons.terminal_outlined),
+            title: 'Open bridge chat',
+            subtitle: 'Sign in by sending “login” to the bridge bot',
+            onTap: _openingBot ? null : () => _openBotChat(bot),
           ),
         Padding(
           padding: const EdgeInsets.only(top: NotionSpace.sm),

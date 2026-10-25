@@ -6,6 +6,7 @@ import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/network_login/network_login_api.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 
@@ -27,6 +28,10 @@ import 'package:matrix/matrix.dart';
 // which the app already uses for bridge contact search. Logins seen in the
 // bridge's own state notices are the fallback; the room those notices
 // arrive in is the management room, so no prefix is needed there.
+//
+// Wave 8: when the bridge's provisioning API is reachable, sign-out uses
+// `POST /v3/logout/{login}` instead (no message in the bridge chat). A
+// bridge or route without that endpoint falls back to the command.
 
 /// Sends one bridge command as a plain text message (test seam).
 typedef BridgeCommandSender = Future<void> Function(Room room, String body);
@@ -34,6 +39,15 @@ typedef BridgeCommandSender = Future<void> Function(Room room, String body);
 /// The bridge's provisioning `whoami` for a network, or null when the
 /// account cannot reach it (test seam).
 typedef BridgeWhoamiReader = Future<BridgeWhoami?> Function(String network);
+
+/// Signs out of [loginIds] of [network] through the provisioning API.
+/// Returns false, having changed nothing, when the API can't be used for
+/// this network (the command is sent instead); throws when a request failed
+/// after the bridge accepted the route (test seam).
+typedef BridgeApiLogout = Future<bool> Function(
+  String network,
+  List<String> loginIds,
+);
 
 /// The bridgev2 sign-out command for one login.
 String bridgeLogoutCommand(String loginId, {String prefix = ''}) =>
@@ -53,13 +67,16 @@ class NetworkSignOut {
     required this.monitor,
     BridgeWhoamiReader? whoami,
     BridgeCommandSender? send,
+    BridgeApiLogout? apiLogout,
   }) : _whoami = whoami ?? _provisioningWhoami(client),
-       _send = send ?? _sendText;
+       _send = send ?? _sendText,
+       _apiLogout = apiLogout ?? _provisioningLogout(client);
 
   final Client client;
   final BridgeHealthMonitor monitor;
   final BridgeWhoamiReader _whoami;
   final BridgeCommandSender _send;
+  final BridgeApiLogout _apiLogout;
 
   static const _notFound = PersonalCapabilityUnavailable(
     'ChatLoom couldn’t find your account on this network. '
@@ -70,20 +87,34 @@ class NetworkSignOut {
   /// Throws a human-readable failure; nothing is sent when the login or the
   /// bridge chat is unknown.
   Future<void> signOut(String network) async {
-    final plan = await this.plan(network);
+    final whoami = await _readWhoami(network);
+    if (whoami != null) {
+      final logins = _ids(
+        whoami.logins.where((login) => login.usable).map((login) => login.id),
+      );
+      if (logins.isNotEmpty && await _apiLogout(network, logins)) return;
+    }
+    final plan = await _plan(network, whoami);
     for (final command in plan.commands) {
       await _send(plan.room, command);
     }
   }
 
-  Future<NetworkSignOutPlan> plan(String network) async {
-    BridgeWhoami? whoami;
+  Future<BridgeWhoami?> _readWhoami(String network) async {
     try {
-      whoami = await _whoami(network);
+      return await _whoami(network);
     } catch (error, stack) {
-      // The notices below may still know the login.
+      // The notices may still know the login.
       logBackgroundError('network_sign_out_whoami', error, stack);
+      return null;
     }
+  }
+
+  /// Where and what [signOut] sends when the provisioning API can't sign out.
+  Future<NetworkSignOutPlan> plan(String network) async =>
+      _plan(network, await _readWhoami(network));
+
+  Future<NetworkSignOutPlan> _plan(String network, BridgeWhoami? whoami) async {
     if (whoami != null) {
       final logins = _ids(
         whoami.logins.where((login) => login.usable).map((login) => login.id),
@@ -129,17 +160,47 @@ class NetworkSignOut {
       if (id.isNotEmpty && id.length <= 256 && !id.contains(RegExp(r'\s'))) id,
   }.toList(growable: false);
 
+  static BridgeEndpoint? _reachableBridge(Client client, String network) {
+    final directory = BridgeDirectory.of(client);
+    if (directory.api == null) return null;
+    final bridge = discoverBridges(client.rooms)
+        .where((bridge) => bridge.network == network)
+        .firstOrNull;
+    if (bridge == null) return null;
+    if (!(directory.reaches?.call(bridge) ?? true)) return null;
+    return bridge;
+  }
+
   static BridgeWhoamiReader _provisioningWhoami(Client client) =>
       (network) async {
-        final directory = BridgeDirectory.of(client);
-        if (directory.api == null) return null;
-        final bridge = discoverBridges(
-          client.rooms,
-        ).where((bridge) => bridge.network == network).firstOrNull;
+        final bridge = _reachableBridge(client, network);
         if (bridge == null) return null;
-        if (!(directory.reaches?.call(bridge) ?? true)) return null;
         // Through the directory, so search sees the same logins.
-        return directory.refreshLogins(bridge);
+        return BridgeDirectory.of(client).refreshLogins(bridge);
+      };
+
+  static BridgeApiLogout _provisioningLogout(Client client) =>
+      (network, loginIds) async {
+        final bridge = _reachableBridge(client, network);
+        final api = BridgeDirectory.of(client).api;
+        if (bridge == null || api == null) return false;
+        final logins = NetworkLoginApi(api.transport);
+        for (final (index, id) in loginIds.indexed) {
+          try {
+            await logins.logout(bridge, id);
+          } on NetworkLoginException catch (error) {
+            // Nothing signed out yet and no such endpoint or route: the
+            // command still works.
+            if (index == 0 &&
+                (error.kind == NetworkLoginErrorKind.unsupported ||
+                    error.kind == NetworkLoginErrorKind.unreachable)) {
+              logBackgroundError('network_sign_out_api', error.cause ?? error);
+              return false;
+            }
+            rethrow;
+          }
+        }
+        return true;
       };
 
   static Future<void> _sendText(Room room, String body) async {
