@@ -1,0 +1,107 @@
+name: Personal Android release (unsigned)
+# Builds the arm64 release APK on a hosted runner so the small devbox does not
+# have to. The release key never leaves J's machines: the runner signs with a
+# throwaway key, encrypts the APK to the devbox's public key and uploads it for
+# one day; scripts/android/sign-ci-apk.py downloads it, re-signs it with the
+# real key and checks the certificate.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: personal-android-release
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PERSONAL_ANDROID_NDK: '28.2.13676358'
+      GRADLE_OPTS: '-Dorg.gradle.daemon=false'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space on the hosted runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Only disposable hosted-runner components unused by this job.
+          for component in /usr/share/dotnet /usr/local/.ghcup /usr/local/share/powershell /usr/share/swift; do
+            [[ -d "$component" ]] && sudo rm -rf -- "$component"
+          done
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [[ -d "$sdk_root/ndk" ]]; then
+            for ndk in "$sdk_root"/ndk/*; do
+              [[ -d "$ndk" && "${ndk##*/}" != "$PERSONAL_ANDROID_NDK" ]] && sudo rm -rf -- "$ndk"
+            done
+          fi
+          df -h "$GITHUB_WORKSPACE"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.4'
+          cache: true
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.pub-cache
+          key: android-release-${{ hashFiles('pubspec.lock', 'android/**/*.gradle.kts', 'android/gradle.properties') }}
+          restore-keys: android-release-
+      - name: Private build inputs
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.CHATLOOM_GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ -z "$GOOGLE_SERVICES_JSON_B64" ]]; then
+            echo 'Secret CHATLOOM_GOOGLE_SERVICES_JSON_B64 is missing' >&2
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
+          # Throwaway key: the devbox replaces this signature with the real one.
+          keytool -genkeypair -noprompt -keystore "$RUNNER_TEMP/throwaway.p12" \
+            -storetype PKCS12 -storepass throwaway -keypass throwaway \
+            -alias throwaway -keyalg RSA -keysize 2048 -validity 2 \
+            -dname 'CN=ChatLoom CI throwaway'
+          cat > android/key.properties <<EOF
+          storeFile=$RUNNER_TEMP/throwaway.p12
+          storePassword=throwaway
+          keyPassword=throwaway
+          keyAlias=throwaway
+          EOF
+      # Keep pub enabled: native plugin registration must be regenerated.
+      - name: Build release APK
+        env:
+          PUSH_GATEWAY: ${{ secrets.CHATLOOM_PUSH_GATEWAY }}
+        run: >-
+          flutter build apk --release --target-platform android-arm64
+          --dart-define=CHATLOOM_PUSH_GATEWAY="$PUSH_GATEWAY"
+      - name: Encrypt the APK to the devbox key
+        shell: bash
+        env:
+          DEVBOX_PUBLIC_KEY: ${{ secrets.CHATLOOM_DEVBOX_GPG_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s\n' "$DEVBOX_PUBLIC_KEY" | gpg --batch --import
+          recipient="$(gpg --batch --with-colons --list-keys | awk -F: '/^fpr:/ {print $10; exit}')"
+          mkdir -p "$RUNNER_TEMP/out"
+          gpg --batch --trust-model always --encrypt --recipient "$recipient" \
+            --output "$RUNNER_TEMP/out/chatloom-arm64-release-unsigned.apk.gpg" \
+            build/app/outputs/flutter-apk/app-release.apk
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/out/COMMIT"
+      - name: Remove private inputs
+        if: always()
+        run: rm -f android/app/google-services.json android/key.properties "$RUNNER_TEMP/throwaway.p12"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chatloom-android-${{ github.sha }}
+          path: ${{ runner.temp }}/out/
+          retention-days: 1
+          if-no-files-found: error
