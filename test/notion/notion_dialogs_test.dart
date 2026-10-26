@@ -398,6 +398,10 @@ void main() {
       'Round videos (sent as a square video on Messenger)',
     );
     expect(
+      bridgeFeatureLabel(BridgeFeature.roundVideo, network: 'facebookgo'),
+      'Round videos (sent as a square video on Messenger)',
+    );
+    expect(
       bridgeFeatureLabel(BridgeFeature.roundVideo, network: 'telegram'),
       'Round videos',
     );

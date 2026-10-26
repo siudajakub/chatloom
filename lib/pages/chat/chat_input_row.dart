@@ -12,6 +12,8 @@ import 'package:chatloom/pages/chat/recording_view_model.dart';
 import 'package:chatloom/pages/chat/voice_record_button.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/round_video/messenger_round_gate.dart'
+    show roundChatNetworks;
 import 'package:chatloom/personal/round_video/round_availability.dart'
     show RoundAvailability;
 import 'package:chatloom/personal/round_video/round_outbox_sync.dart';
@@ -336,10 +338,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
   /// `TelegramRoundService.captureAndSend` re-checks it.
   RoundAvailability? get _round =>
       PlatformInfos.supportsRoundCapture &&
-          const {
-            'telegram',
-            'facebook',
-          }.contains(PersonalClient.networkOf(controller.room))
+          roundChatNetworks.contains(PersonalClient.networkOf(controller.room))
       ? controller.roundAvailability
       : null;
 
@@ -428,10 +427,9 @@ class _ChatInputRowState extends State<ChatInputRow> {
         // The composer stays: a calm notice replaces the old blocking text.
         ComposerRecipientNotice(room: controller.room),
         if (PlatformInfos.supportsRoundCapture &&
-            const {
-              'telegram',
-              'facebook',
-            }.contains(PersonalClient.networkOf(controller.room)))
+            roundChatNetworks.contains(
+              PersonalClient.networkOf(controller.room),
+            ))
           RoundOutboxSync(room: controller.room),
         // Telegram: a single emoji suggests matching stickers.
         StickerSuggestionStrip(host: controller),

@@ -14,6 +14,7 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/organization_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/round_video/messenger_round_gate.dart';
 import 'package:chatloom/personal/round_video/round_availability.dart';
 import 'package:chatloom/personal/ui/capabilities_dialog.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
@@ -233,7 +234,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     final hint = availability.hint;
     return NotionListRow(
       leading: const Icon(Icons.radio_button_checked_outlined),
-      title: PersonalClient.networkOf(room) == 'facebook'
+      title: messengerProtocolIds.contains(PersonalClient.networkOf(room))
           ? messengerRoundVideoLabel
           : 'Round video',
       subtitle: [reason ?? 'Available', ?hint].join(' · '),
@@ -738,10 +739,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             ),
           ),
         if (PlatformInfos.isAndroid &&
-            const {
-              'telegram',
-              'facebook',
-            }.contains(PersonalClient.networkOf(room)))
+            roundChatNetworks.contains(PersonalClient.networkOf(room)))
           _roundVideoRow(room),
         NotionListRow(
           leading: const Icon(Icons.lock_outline),

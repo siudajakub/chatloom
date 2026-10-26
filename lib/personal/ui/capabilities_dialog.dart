@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/personal/round_video/messenger_round_gate.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/bridge_capabilities.dart';
@@ -13,7 +14,8 @@ const messengerRoundVideoLabel =
 /// [network] is the chat's `m.bridge` protocol id, when known.
 String bridgeFeatureLabel(BridgeFeature feature, {String? network}) =>
     switch (feature.name) {
-      'roundVideo' when network == 'facebook' => messengerRoundVideoLabel,
+      'roundVideo' when messengerProtocolIds.contains(network) =>
+        messengerRoundVideoLabel,
       'reply' => 'Replies',
       'reaction' => 'Reactions',
       'edit' => 'Editing messages',

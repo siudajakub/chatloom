@@ -172,6 +172,19 @@ void main() {
     expect(MessengerRoundGate.isMessengerRoom(room), isTrue);
   });
 
+  test('bridgev2 publishes the Beeper bridge type facebookgo', () {
+    final room = _room(protocol: 'facebookgo');
+    expect(code(room), RoundGateCode.available);
+    expect(RoundSendRoute.diagnoseRoom(room).code, RoundGateCode.available);
+    expect(RoundSendRoute.forRoom(room), RoundSendRoute.messenger);
+    expect(RoundAvailability.of(room).canRecord, isTrue);
+    expect(roundChatNetworks, contains('facebookgo'));
+    expect(
+      code(_room(protocol: 'instagramgo')),
+      RoundGateCode.unsupportedNetwork,
+    );
+  });
+
   test('gate matrix: network, bridges, ownership and encryption', () {
     expect(
       code(_room(protocol: 'instagram')),

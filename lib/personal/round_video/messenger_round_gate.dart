@@ -6,9 +6,14 @@ import 'package:personal_core/personal_core.dart';
 
 import 'telegram_room_binding.dart';
 
-/// `m.bridge` protocol id of the Messenger mode of mautrix-meta. Instagram
-/// (`instagram`, same codebase) is deliberately not accepted.
-const messengerProtocolId = 'facebook';
+/// `m.bridge` protocol ids of the Messenger mode of mautrix-meta: bridgev2
+/// publishes its Beeper bridge type (`facebookgo`) there, older bridges the
+/// network id (`facebook`). Instagram (`instagram`/`instagramgo`, same
+/// codebase) is deliberately not accepted.
+const messengerProtocolIds = {'facebook', 'facebookgo'};
+
+/// Networks ([PersonalClient.networkOf]) whose chats may offer round video.
+const roundChatNetworks = {'telegram', ...messengerProtocolIds};
 
 /// Messenger has no native round type: a round is sent as an ordinary
 /// square `m.video` through the stock bridge, marked for ChatLoom only
@@ -94,7 +99,8 @@ class MessengerRoundGate {
       (room.states['m.bridge'] ?? const <String, StrippedStateEvent>{}).values
           .any((info) {
             final protocol = info.content['protocol'];
-            return protocol is Map && protocol['id'] == messengerProtocolId;
+            return protocol is Map &&
+                messengerProtocolIds.contains(protocol['id']);
           });
 
   /// The bound Messenger bridge of [room], when every identity and
@@ -181,7 +187,7 @@ class MessengerRoundGate {
         RoundGateReport(code, checks: checks, bridgeSources: keys.length);
     bool isMessenger(StrippedStateEvent info) {
       final protocol = info.content['protocol'];
-      return protocol is Map && protocol['id'] == messengerProtocolId;
+      return protocol is Map && messengerProtocolIds.contains(protocol['id']);
     }
 
     checks['messenger'] = keys.any((key) => isMessenger(bridges[key]!));
@@ -213,7 +219,7 @@ class MessengerRoundGate {
         info.content['creator'] == bot &&
         legacy.content['bridgebot'] == bot &&
         legacyProtocol is Map &&
-        legacyProtocol['id'] == messengerProtocolId &&
+        legacyProtocol['id'] == (info.content['protocol'] as Map)['id'] &&
         ![
           info,
           legacy,
