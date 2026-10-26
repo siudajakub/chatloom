@@ -1081,6 +1081,94 @@ void main() {
       expect(personal.transcriptionPolicy.defaultLanguage, 'hy');
     });
 
+    testWidgets('networks group bridge IDs and preserve their saved switches', (
+      tester,
+    ) async {
+      final personal = await fakeZonePersonal();
+      const messengerId = '11111111-1111-4111-8111-111111111111';
+      const otherId = '22222222-2222-4222-8222-222222222222';
+      const savedOtherId = '33333333-3333-4333-8333-333333333333';
+      final messenger = ConversationRoom(
+        client,
+        '!messenger:example.invalid',
+        network: messengerId,
+      );
+      messenger.state('m.bridge', {
+        'protocol': {'id': messengerId, 'displayname': 'Messenger'},
+      }, key: 'fixture');
+      ConversationRoom(
+        client,
+        '!facebook:example.invalid',
+        network: 'facebook',
+      );
+      ConversationRoom(client, '!slack:example.invalid', network: 'slackgo');
+      ConversationRoom(client, '!other:example.invalid', network: otherId);
+      await personal.setTranscriptionPolicy(
+        TranscriptionPolicy.defaults.copyWith(
+          networks: {messengerId: false, savedOtherId: false, 'slack': true},
+        ),
+      );
+      final runs = <Future<void>>[];
+      await mount(
+        tester,
+        ListenableBuilder(
+          listenable: personal,
+          builder: (context, _) => TranscriptionSettingsSection(
+            personal: personal,
+            run: (action) {
+              final future = action();
+              runs.add(future);
+              return future;
+            },
+          ),
+        ),
+      );
+      expect(find.text('Messenger'), findsOneWidget);
+      expect(find.text('Slack'), findsOneWidget);
+      expect(find.text('Other'), findsOneWidget);
+      expect(find.text('slackgo'), findsNothing);
+      expect(find.text(messengerId), findsNothing);
+      final messengerToggle = find.byKey(
+        const ValueKey('transcription-network-messenger'),
+      );
+      expect(
+        tester.widget<NotionSettingsToggle>(messengerToggle).value,
+        isFalse,
+      );
+      expect(personal.transcriptionPolicy.networks[messengerId], isFalse);
+
+      // One explicit action updates every underlying bridge ID, so both the
+      // worker and older clients continue to read the choice by their raw ID.
+      await tester.tap(messengerToggle);
+      await tester.pumpAndSettle();
+      await Future.wait(runs);
+      await tester.pump();
+      for (final id in [messengerId, 'facebook', 'messenger']) {
+        expect(personal.transcriptionPolicy.networks[id], isTrue);
+      }
+      expect(personal.transcriptionPolicy.networks[savedOtherId], isFalse);
+      expect(personal.transcriptionPolicy.networks['slack'], isTrue);
+      await tester.tap(messengerToggle);
+      await tester.pumpAndSettle();
+      await Future.wait(runs);
+      await tester.pump();
+      for (final id in [messengerId, 'facebook', 'messenger']) {
+        expect(personal.transcriptionPolicy.networks[id], isFalse);
+      }
+      final otherToggle = find.byKey(
+        const ValueKey('transcription-network-other'),
+      );
+      expect(tester.widget<NotionSettingsToggle>(otherToggle).value, isFalse);
+      await tester.tap(otherToggle);
+      await tester.pumpAndSettle();
+      await Future.wait(runs);
+      await tester.pump();
+      for (final id in [otherId, savedOtherId, 'other']) {
+        expect(personal.transcriptionPolicy.networks[id], isTrue);
+      }
+      expect(find.text('Other'), findsOneWidget);
+    });
+
     testWidgets('Instagram reels are on demand and say so', (tester) async {
       final personal = await fakeZonePersonal();
       personal.workerReadiness = heartbeat('scan', media: 2);

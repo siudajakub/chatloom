@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/sync_changes.dart';
@@ -125,12 +126,26 @@ class TranscriptionSettingsSection extends StatelessWidget {
     ),
   );
 
-  Set<String> _networks(TranscriptionPolicy policy) => {
-    for (final room in personal.client.rooms)
-      if (!room.isSpace && !PersonalPrivacy.isJournal(room))
-        PersonalClient.networkOf(room),
-    ...policy.networks.keys,
-  }..remove('unknown');
+  /// Group bridge IDs for presentation without replacing persisted source IDs:
+  /// those IDs are still used by the worker and existing transcription jobs.
+  Map<String, Set<String>> _networks(TranscriptionPolicy policy) {
+    final rooms = personal.client.rooms;
+    final classifier = ConversationClassifier(rooms);
+    final resolved = <String, String>{};
+    for (final room in rooms) {
+      if (room.isSpace || PersonalPrivacy.isJournal(room)) continue;
+      final raw = PersonalClient.networkOf(room);
+      if (raw == 'unknown') continue;
+      resolved[raw] = classifier.classify(room).network;
+    }
+    final groups = <String, Set<String>>{};
+    for (final raw in {...resolved.keys, ...policy.networks.keys}) {
+      if (raw == 'unknown' || raw.isEmpty) continue;
+      final network = resolved[raw] ?? canonicalNetwork(raw) ?? 'other';
+      (groups[network] ??= <String>{}).add(raw);
+    }
+    return groups;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -148,7 +163,8 @@ class TranscriptionSettingsSection extends StatelessWidget {
         .where((job) => job.errorCode?.startsWith('auto_skipped_') ?? false)
         .length;
     final unknown = jobs.where((job) => job.state == JobState.unknown).length;
-    final networks = _networks(policy).toList()
+    final networkGroups = _networks(policy);
+    final networks = networkGroups.keys.toList()
       ..sort((a, b) => notionNetworkLabel(a).compareTo(notionNetworkLabel(b)));
     final changes = SyncChanges.of(personal);
     final pending = changes.pending
@@ -275,10 +291,23 @@ class TranscriptionSettingsSection extends StatelessWidget {
             NotionSettingsToggle(
               key: ValueKey('transcription-network-$network'),
               title: notionNetworkLabel(network),
+              subtitle:
+                  networkGroups[network]!.any(policy.networkEnabled) &&
+                      !networkGroups[network]!.every(policy.networkEnabled)
+                  ? 'Some connections are off'
+                  : null,
               // Shows the saved choice; editable only with automatic on.
-              value: policy.networkEnabled(network),
+              value: networkGroups[network]!.every(policy.networkEnabled),
               onChanged: editable && policy.auto
-                  ? (value) => _save(policy.withNetwork(network, value))
+                  ? (value) => _save(
+                      policy.copyWith(
+                        networks: {
+                          ...policy.networks,
+                          network: value,
+                          for (final id in networkGroups[network]!) id: value,
+                        },
+                      ),
+                    )
                   : null,
             ),
         ],
