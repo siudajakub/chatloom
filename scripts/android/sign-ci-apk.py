@@ -106,14 +106,24 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def origin_repo():
+    url = run(["git", "-C", str(ROOT), "remote", "get-url", "origin"]).strip()
+    match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", url)
+    if not match:
+        fail("origin is not a GitHub repository")
+    return match.group(1)
+
+
 def download(run_id, work):
+    # The checkout also has an upstream remote; gh must not guess between them.
+    repo = ["--repo", origin_repo()]
     if run_id is None:
-        listed = run(["gh", "run", "list", "--workflow", WORKFLOW, "--status", "success",
+        listed = run(["gh", "run", "list", *repo, "--workflow", WORKFLOW, "--status", "success",
                       "--limit", "1", "--json", "databaseId", "--jq", ".[0].databaseId"])
         run_id = listed.strip()
         if not run_id:
             fail(f"no successful run of {WORKFLOW}")
-    run(["gh", "run", "download", str(run_id), "--dir", str(work)])
+    run(["gh", "run", "download", str(run_id), *repo, "--dir", str(work)])
     encrypted = list(work.rglob("*.apk.gpg"))
     commits = list(work.rglob("COMMIT"))
     if len(encrypted) != 1 or len(commits) != 1:
