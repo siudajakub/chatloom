@@ -4,7 +4,14 @@ import 'package:personal_core/bridge_capabilities.dart';
 const opusVoiceMime = 'audio/ogg; codecs=opus';
 
 /// Only label a recording as Opus when its Ogg identification packet says so.
+/// An MP4 recording is audio-only AAC: Android writes the generic `mp42`/`isom`
+/// brands, which header sniffing reports as `video/mp4`, a type bridges
+/// reject for voice.
 String voiceRecordingMime(List<int> bytes, String fallback) {
+  if (bytes.length >= 12 &&
+      String.fromCharCodes(bytes.sublist(4, 8)) == 'ftyp') {
+    return 'audio/mp4';
+  }
   if (bytes.length >= 36 && String.fromCharCodes(bytes.take(4)) == 'OggS') {
     final segments = bytes[26];
     final offset = 27 + segments;

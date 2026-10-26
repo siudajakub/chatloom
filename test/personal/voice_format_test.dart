@@ -33,4 +33,10 @@ void main() {
     expect(voiceRecordingMime(bytes, 'audio/ogg'), 'audio/ogg');
     expect(voiceRecordingMime([1, 2], 'audio/mp4'), 'audio/mp4');
   });
+  test('Android AAC recordings are audio/mp4, not sniffed video/mp4', () {
+    for (final brand in ['mp42', 'isom', 'M4A ']) {
+      final bytes = [0, 0, 0, 0x18, ...'ftyp$brand'.codeUnits, 0, 0, 0, 0];
+      expect(voiceRecordingMime(bytes, 'video/mp4'), 'audio/mp4');
+    }
+  });
 }
