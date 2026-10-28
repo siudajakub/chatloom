@@ -79,9 +79,9 @@ class TranscriptionPolicy {
 
   /// Explicit per-kind switches (`voice`, `round`, `video`, `audio`,
   /// `reel`); an absent kind takes its default ([kindEnabled]): on, except
-  /// Instagram reels, which are transcribed only on demand. Older apps drop
-  /// this field (or the `reel` key) when they save the policy, which returns
-  /// every kind to that default, never to automatic reels.
+  /// shared reels (Instagram, Facebook), transcribed only on demand. Older
+  /// apps drop this field (or the `reel` key) when they save the policy,
+  /// which returns every kind to that default, never to automatic reels.
   final Map<String, bool> kinds;
   final int maxSeconds;
   final double dailyBudgetUsd;
@@ -223,7 +223,7 @@ class TranscriptionPolicy {
 
   /// Kinds without an explicit switch follow their default
   /// ([AutoTranscriptionKind.automaticByDefault]): J asked (2026-10-19) for
-  /// voice, rounds and videos alike, and (2026-10-20) for Instagram reels
+  /// voice, rounds and videos alike, and (2026-10-20) for shared reels
   /// only on demand. An absent `kinds` field (never saved, or saved by an
   /// older app) therefore means every kind except reels.
   /// The worker re-checks this at job start and again before upload.
@@ -270,8 +270,9 @@ class TranscriptionPolicy {
 /// * `round`: a Telegram round video (`fi.mau.telegram.round_message`).
 /// * `video`: any other video, also an `m.file` with a `video/*` type.
 /// * `audio`: any other audio, also an `m.file` with an `audio/*` type.
-/// * `reel`: a video shared from Instagram (a reel, post or story share, see
-///   [isInstagramShare]); transcribed only on demand unless switched on.
+/// * `reel`: a video shared from Instagram or Facebook (a reel, post, story
+///   or watch share, see [isMetaShare]); transcribed only on demand unless
+///   switched on.
 ///
 /// Workers and apps that predate a kind ignore its switch and classify such
 /// media by the older rules (a reel is then an ordinary `video`).
@@ -283,7 +284,8 @@ enum AutoTranscriptionKind {
   reel;
 
   /// Whether a policy without an explicit switch transcribes this kind
-  /// automatically. J (2026-10-20): Instagram reels only when asked.
+  /// automatically. J (2026-10-20): Instagram reels only when asked;
+  /// (2026-10-26) Facebook reels and shared posts likewise.
   bool get automaticByDefault => this != AutoTranscriptionKind.reel;
 }
 
@@ -315,6 +317,52 @@ bool isInstagramShare(Map<String, dynamic> content) {
       _instagramHost(parsed.host);
 }
 
+/// Hosts of other Meta apps whose posts, reels and videos the Messenger and
+/// Instagram bridges deliver as shares (Facebook, its short links, Threads).
+bool _metaShareHost(String host) {
+  final value = host.toLowerCase();
+  bool within(String domain) => value == domain || value.endsWith('.$domain');
+  return _instagramHost(value) ||
+      within('facebook.com') ||
+      within('fb.com') ||
+      within('fb.watch') ||
+      within('fb.me') ||
+      within('messenger.com') ||
+      within('threads.net') ||
+      within('threads.com');
+}
+
+/// Content keys mautrix-meta writes only on a shared post (an XMA
+/// attachment): `msgconv/from-meta.go` `xmaAttachmentToMatrix` and
+/// `igconv/xma.go` set them from the post's title and caption.
+const _metaShareKeys = {
+  'com.beeper.meta.full_post_title',
+  'com.beeper.meta.caption_body_text',
+};
+
+/// True for media the Messenger or Instagram bridge delivered as a share of
+/// someone's reel, post, story or video (Instagram, Facebook, Threads), not
+/// as a recording the sender made and sent in the chat.
+///
+/// mautrix-meta converts a share (an XMA attachment) into the post's own
+/// media. On Messenger (`xmaAttachmentToMatrix`) it sets the top-level
+/// `external_url` from the share's action URL (`facebook.com/reel/…`,
+/// `fb.watch/…`, `instagram.com/reel/…`) and adds
+/// `com.beeper.meta.full_post_title`/`caption_body_text` when the share has
+/// a title or caption; on Instagram (`fetchXMA`) the target URL. A video
+/// recorded and sent directly is a plain attachment with neither. Other
+/// bridges' `external_url` (Telegram's `t.me` link of a public chat) is not
+/// a share and keeps its kind.
+bool isMetaShare(Map<String, dynamic> content) {
+  if (_metaShareKeys.any(content.containsKey)) return true;
+  final url = content['external_url'];
+  if (url is! String || url.length > 2048) return false;
+  final parsed = Uri.tryParse(url.trim());
+  return parsed != null &&
+      (parsed.scheme == 'https' || parsed.scheme == 'http') &&
+      _metaShareHost(parsed.host);
+}
+
 /// Containers and audio formats the worker's FFmpeg input whitelist reads.
 /// Used only where a file has no usable MIME type.
 const _videoExtensions = {
@@ -329,7 +377,8 @@ const _audioExtensions = {
 /// whose protective metadata forbids transcription (view-once, protected,
 /// disappearing). Shared by the app and the worker so both classify alike.
 /// Room-level disappearing settings are checked separately by the callers.
-/// A video shared from Instagram is a `reel`, not a `video`.
+/// A video shared from Instagram or Facebook ([isMetaShare]) is a `reel`,
+/// not a `video`.
 AutoTranscriptionKind? transcribableMediaKind(Map<String, dynamic> content) {
   final msgtype = content['msgtype'];
   if (msgtype is! String) return null;
@@ -372,12 +421,12 @@ AutoTranscriptionKind? transcribableMediaKind(Map<String, dynamic> content) {
   }
   if (msgtype == 'm.video') {
     if (mime.startsWith('image/')) return null;
-    return isInstagramShare(content)
+    return isMetaShare(content)
         ? AutoTranscriptionKind.reel
         : AutoTranscriptionKind.video;
   }
   if (mime.startsWith('video/')) {
-    return isInstagramShare(content)
+    return isMetaShare(content)
         ? AutoTranscriptionKind.reel
         : AutoTranscriptionKind.video;
   }

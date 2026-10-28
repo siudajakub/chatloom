@@ -581,7 +581,7 @@ void main() {
       expect(odd.kinds, {'round': false});
     });
 
-    group('Instagram reels', () {
+    group('Shared reels', () {
       const reelUrl = 'https://www.instagram.com/reel/Cfixture/?igsh=x';
       Map<String, dynamic> share(
         String msgtype, {
@@ -622,22 +622,30 @@ void main() {
       });
 
       test('other videos, links and loops are not reels', () {
-        // Recorded and sent directly in the chat: no external_url.
+        // Recorded and sent directly in the chat: no external_url and no
+        // share title/caption keys.
+        const mp4 = {'mimetype': 'video/mp4'};
         expect(
-          transcribableMediaKind(share('m.video', url: null)),
+          transcribableMediaKind(media('m.video', info: mp4)),
           AutoTranscriptionKind.video,
         );
         for (final url in [
-          'https://www.facebook.com/reel/1234567890',
+          // Telegram links every message of a public chat.
+          'https://t.me/fixture/123',
           'https://notinstagram.com/reel/x',
+          'https://notfacebook.com/reel/1',
           'https://instagram.com.example.org/reel/x',
+          'https://facebook.com.example.org/reel/1',
           'javascript:alert(1)',
           'instagram.com/reel/x',
+          'facebook.com/reel/1',
           '',
           42,
         ]) {
           expect(
-            transcribableMediaKind(share('m.video', url: url)),
+            transcribableMediaKind(
+              media('m.video', info: mp4, extra: {'external_url': url}),
+            ),
             AutoTranscriptionKind.video,
             reason: '$url',
           );
@@ -660,6 +668,116 @@ void main() {
           ),
           AutoTranscriptionKind.audio,
         );
+      });
+
+      test('Facebook reels and posts shared on Messenger are reels', () {
+        // The shape mautrix-meta's Messenger converter produces for a shared
+        // reel (`xmaAttachmentToMatrix`): the post's media, the share URL
+        // as `external_url` and as the body, the title/caption keys. Such a
+        // reel was classified as an ordinary video and transcribed
+        // automatically (2026-10-26).
+        Map<String, dynamic> messengerShare({
+          Object? url = 'https://www.facebook.com/reel/1234567890',
+          bool title = true,
+        }) => {
+          'msgtype': 'm.video',
+          'body': url is String ? url : 'video.mp4',
+          'filename': 'video.mp4',
+          'info': {'mimetype': 'video/mp4', 'w': 720, 'h': 1280, 'size': 4096},
+          'external_url': ?url,
+          if (title) ...{
+            'com.beeper.meta.full_post_title': 'fixture',
+            'com.beeper.meta.caption_body_text': '',
+          },
+        };
+        for (final url in [
+          'https://www.facebook.com/reel/1234567890',
+          'https://m.facebook.com/watch/?v=1',
+          'https://web.facebook.com/fixture/videos/1/',
+          'https://fb.watch/fixture/',
+          'https://www.instagram.com/reel/Cfixture/',
+          'https://www.threads.net/@fixture/post/x',
+          'https://www.messenger.com/fixture',
+        ]) {
+          for (final title in [true, false]) {
+            final content = messengerShare(url: url, title: title);
+            expect(isMetaShare(content), isTrue, reason: url);
+            expect(
+              transcribableMediaKind(content),
+              AutoTranscriptionKind.reel,
+              reason: '$url title: $title',
+            );
+          }
+        }
+        // A share without an action URL still carries the title keys.
+        expect(
+          transcribableMediaKind(messengerShare(url: null)),
+          AutoTranscriptionKind.reel,
+        );
+        // A video file shared the same way.
+        expect(
+          transcribableMediaKind({...messengerShare(), 'msgtype': 'm.file'}),
+          AutoTranscriptionKind.reel,
+        );
+        // Never automatic under the default policy.
+        const policy = TranscriptionPolicy.defaults;
+        expect(
+          autoTranscriptionBlock(
+            policy,
+            candidate(kind: transcribableMediaKind(messengerShare())),
+            now: now,
+          ),
+          'kind_disabled',
+        );
+        // A video recorded and sent on Messenger is not a share.
+        expect(
+          transcribableMediaKind(messengerShare(url: null, title: false)),
+          AutoTranscriptionKind.video,
+        );
+      });
+
+      test('rounds and voice notes stay automatic next to shares', () {
+        const policy = TranscriptionPolicy.defaults;
+        final telegramRound = media(
+          'm.video',
+          info: {
+            'mimetype': 'video/mp4',
+            'w': 384,
+            'h': 384,
+            roundMessageMarker: true,
+          },
+          // A round in a public Telegram chat carries its t.me link.
+          extra: {'external_url': 'https://t.me/fixture/123'},
+        );
+        final messengerRound = media(
+          'm.video',
+          info: {
+            'mimetype': 'video/mp4',
+            'w': 384,
+            'h': 384,
+            roundVideoDisplayMarker: true,
+          },
+        );
+        final voice = media(
+          'm.audio',
+          info: {'mimetype': 'audio/ogg'},
+          extra: {'org.matrix.msc3245.voice': {}},
+        );
+        for (final (content, kind) in [
+          (telegramRound, AutoTranscriptionKind.round),
+          (messengerRound, AutoTranscriptionKind.round),
+          (voice, AutoTranscriptionKind.voice),
+        ]) {
+          expect(transcribableMediaKind(content), kind);
+          expect(
+            autoTranscriptionBlock(
+              policy,
+              candidate(kind: transcribableMediaKind(content)),
+              now: now,
+            ),
+            isNull,
+          );
+        }
       });
 
       test('reels are on demand unless switched on, also for old policies', () {

@@ -124,6 +124,15 @@ class RoundBridgeCapabilities {
 
 const bridgeFeaturesEventType = 'com.beeper.room_features';
 
+/// A reaction key without emoji variation selectors (U+FE0F, U+FE0E), so
+/// two spellings of one emoji compare equal. bridgev2 writes keys with
+/// `variationselector.Add` (U+FE0F after every emoji that has a text form:
+/// `👍️`, `⚡️`, `❤️`), emoji pickers use the fully-qualified form (`👍`,
+/// `⚡`, `❤️`), and bridges look a key up without selectors (Telegram's
+/// `PreHandleMatrixReaction`). Skin tones and ZWJ sequences stay distinct.
+String normalizeReactionKey(String key) =>
+    key.replaceAll('\u{FE0F}', '').replaceAll('\u{FE0E}', '');
+
 enum BridgeFeature {
   reply,
   reaction,
@@ -208,6 +217,30 @@ class BridgeRoomCapabilities {
   int? get maxTextLength {
     final value = _state?['max_text_length'];
     return value is int && value > 0 ? value : null;
+  }
+
+  /// The reactions the network takes here (`allowed_reactions`), in its
+  /// order and spelling, or null when it declares none (any emoji) or the
+  /// list is malformed. Telegram declares one on every chat: the chat's own
+  /// set, or the reactions the account may use (`+reactions_any`).
+  List<String>? get allowedReactions {
+    final allowed = _state?['allowed_reactions'];
+    if (allowed is! List || allowed.any((e) => e is! String)) return null;
+    return List.unmodifiable(allowed.cast<String>());
+  }
+
+  /// [reaction] in the network's spelling: the `allowed_reactions` entry it
+  /// matches without variation selectors, null when the network declares a
+  /// list without it, [reaction] itself when there is no list.
+  String? reactionSpelling(String reaction) {
+    final allowed = allowedReactions;
+    if (allowed == null) return reaction;
+    if (allowed.contains(reaction)) return reaction;
+    final key = normalizeReactionKey(reaction);
+    for (final entry in allowed) {
+      if (normalizeReactionKey(entry) == key) return entry;
+    }
+    return null;
   }
 
   /// The declared level at [key] of the room-level features (for example
@@ -384,7 +417,12 @@ class BridgeRoomCapabilities {
           (allowed is! List || allowed.any((e) => e is! String))) {
         return _unknown('malformedReactions');
       }
-      if (reaction != null && allowed is List && !allowed.contains(reaction)) {
+      // Compared without variation selectors: the bridge spells its list
+      // with `variationselector.Add` (`👍️`), pickers send `👍`, and the
+      // bridge itself looks keys up without selectors (both work).
+      if (reaction != null &&
+          allowed is List &&
+          reactionSpelling(reaction) == null) {
         return _blocked('reactionNotAllowed', limits: limits);
       }
       // `reaction_count` is not a refusal: bridgev2 keeps the newest
@@ -555,7 +593,9 @@ class BridgeRoomCapabilities {
   static String? _featureUnsupported(BridgeFeature feature) =>
       switch (feature) {
         BridgeFeature.reply => "Replies aren't supported on this network.",
-        BridgeFeature.reaction => "Reactions aren't supported on this network.",
+        // Telegram also says 0/-2 for a chat whose admins turned
+        // reactions off, so the text names the chat, not the network.
+        BridgeFeature.reaction => "Reactions aren't available in this chat.",
         BridgeFeature.edit => "Editing isn't supported on this network.",
         BridgeFeature.delete => "Deleting isn't supported on this network.",
         BridgeFeature.poll => "Polls aren't supported on this network.",
