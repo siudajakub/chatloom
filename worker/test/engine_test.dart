@@ -982,6 +982,70 @@ void main() {
       expect(store.metadata('people:test')!['revision'], 2);
     },
   );
+  test('metadata.resync publishes stored persons again, tombstones too', () {
+    engine.accept(
+      op('a', 'metadata.put', 'person:a', {
+        'value': {'name': 'A'},
+      }),
+    );
+    engine.accept(
+      op('b', 'metadata.put', 'person:b', {
+        'value': {'name': 'B'},
+      }),
+    );
+    engine.accept(op('b-del', 'metadata.delete', 'person:b', {}, revision: 1));
+    engine.accept(
+      op('n', 'metadata.put', 'nickname:x', {
+        'value': {'name': 'N'},
+      }),
+    );
+    final before = store.outbox.length;
+    engine.accept(
+      op('sync', 'metadata.resync', 'resync', {
+        'prefixes': ['person:'],
+      }),
+    );
+    final published = store.outbox.skip(before).toList();
+    expect(published.map((e) => e['kind']), [
+      'metadata.result',
+      'metadata.result',
+      'metadata.resync.result',
+    ]);
+    final a = published[0], b = published[1];
+    expect(a['entityId'], 'person:a');
+    expect(a['payload']['value'], {'name': 'A'});
+    expect(a['payload']['revision'], 1);
+    expect(a['payload'].containsKey('acceptedOpId'), isFalse);
+    expect(b['entityId'], 'person:b');
+    expect(b['payload']['deleted'], isTrue);
+    expect(b['payload']['revision'], 2);
+    expect(published[2]['payload']['acceptedOpId'], 'sync');
+    expect(published[2]['payload']['count'], 2);
+    // A second resync gets fresh result ids (devices dedupe by result id).
+    engine.accept(
+      op('sync2', 'metadata.resync', 'resync', {
+        'prefixes': ['person:'],
+      }),
+    );
+    expect(store.outbox.map((e) => e['opId']).toSet(), hasLength(before + 6));
+  });
+  test('metadata.resync rejects malformed prefixes', () {
+    for (final payload in [
+      <String, dynamic>{},
+      {'prefixes': <String>[]},
+      {
+        'prefixes': ['person'],
+      },
+      {
+        'prefixes': [':'],
+      },
+    ]) {
+      expect(
+        () => engine.accept(op('bad', 'metadata.resync', 'resync', payload)),
+        throwsA(isA<WorkerFailure>()),
+      );
+    }
+  });
   test('long transcript does not block schedule timer', () async {
     transcriber.hold = Completer<void>();
     engine.accept(

@@ -364,6 +364,25 @@ class WorkerJournal {
   /// Held undecrypted journal events (diagnostics and tests).
   int get heldEvents => _held.length;
 
+  /// Own devices whose commands were refused as untrusted since the trust
+  /// last changed (not pinned, not verified or blocked), found by the
+  /// envelope's sender key. Diagnostics only: a device that finds its id in
+  /// the heartbeat tells the user that the worker ignores its changes.
+  List<String> get untrustedDeviceIds {
+    final keys = <String>{
+      for (final event in _untrusted.values)
+        if (event.originalSource?.content['sender_key'] case final String key)
+          key,
+    };
+    if (keys.isEmpty) return const [];
+    return [
+      for (final device
+          in client.userDeviceKeys[client.userID]?.deviceKeys.values ??
+              const <DeviceKeys>[])
+        if (keys.contains(device.curve25519Key)) ?device.deviceId,
+    ]..sort();
+  }
+
   /// Publishes the queued results in order. An entry the homeserver or the
   /// SDK refuses for good (too large, malformed) is parked and the others
   /// continue; before, it blocked every later result, heartbeat and

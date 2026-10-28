@@ -129,6 +129,52 @@ void main() {
     );
   });
 
+  test(
+    'a Facebook reel shared on Messenger is a reel, a round stays a round',
+    () async {
+      // 2026-10-26: shared Facebook reels were reported as ordinary videos and
+      // transcribed automatically. Shape from mautrix-meta's Messenger
+      // converter (`xmaAttachmentToMatrix`).
+      const url = 'https://www.facebook.com/reel/1234567890';
+      feed.observe(
+        message(r'$fbreel', {
+          ...video(info: {'w': 720, 'h': 1280}),
+          'body': url,
+          'filename': 'video.mp4',
+          'external_url': url,
+          'com.beeper.meta.full_post_title': 'fixture',
+          'com.beeper.meta.caption_body_text': '',
+        }),
+      );
+      feed.observe(
+        message(r'$fbpost', {
+          ...video(),
+          'com.beeper.meta.full_post_title': 'fixture',
+        }),
+      );
+      feed.observe(
+        message(r'$round', {
+          ...video(info: {'w': 384, 'h': 384, roundMessageMarker: true}),
+          // A round in a public Telegram chat carries its t.me link.
+          'external_url': 'https://t.me/fixture/123',
+        }),
+      );
+      feed.observe(
+        message(r'$tgclip', {
+          ...video(),
+          'external_url': 'https://t.me/fixture/124',
+        }),
+      );
+      final items = await feed.drain();
+      expect(items.map((i) => (i.eventId, i.kind)), [
+        (r'$fbreel', AutoTranscriptionKind.reel),
+        (r'$fbpost', AutoTranscriptionKind.reel),
+        (r'$round', AutoTranscriptionKind.round),
+        (r'$tgclip', AutoTranscriptionKind.video),
+      ]);
+    },
+  );
+
   test('silent loops, text, edits, journal, local and disappearing chats '
       'are ignored', () async {
     feed.observe(message(r'$gif', video(info: {'fi.mau.gif': true})));

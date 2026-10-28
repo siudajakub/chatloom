@@ -43,8 +43,9 @@ ROUND_SQUARE_TOLERANCE = 2
 # Media kinds. `video` and `audio` are only listed by /recent when the
 # worker asks for them (`kinds`), so a worker that predates them never
 # receives an item kind it would refuse as an invalid page. `reel` (a video
-# shared from Instagram) is listed only when asked for, too: J wants reels
-# transcribed on demand (2026-10-20), so a worker that does not ask (every
+# shared from Instagram or Facebook) is listed only when asked for, too: J
+# wants reels transcribed on demand (2026-10-20, Facebook 2026-10-26), so a
+# worker that does not ask (every
 # worker before the reel switch, or one with the switch off) never starts
 # automatic work for them. Selected-source metadata keeps `kind: video` for
 # a reel and adds `reel: true`, which older workers ignore.
@@ -53,10 +54,21 @@ LEGACY_KINDS = ('voice', 'round')
 # A shared Instagram post, reel or story. mautrix-meta adds the post's link as
 # the event's `external_url` and as the last line of the caption; the local
 # index keeps the caption as the message text.
-INSTAGRAM_HOST = re.compile(r'(?:[a-z0-9-]+\.)*(?:instagram\.com|instagr\.am)\Z', re.I)
 INSTAGRAM_POST = re.compile(
     r'https?://(?:[a-z0-9-]+\.)*(?:instagram\.com|instagr\.am)/'
     r'(?:[A-Za-z0-9_.]+/)?(?:reels?|p|tv|stories)/', re.I)
+# A shared Facebook reel, video, post or story, or a Threads post. On
+# Messenger mautrix-meta (`xmaAttachmentToMatrix`) sets `external_url` from
+# the share's action URL and appends it to the caption, like Instagram.
+META_SHARE_HOST = re.compile(
+    r'(?:[a-z0-9-]+\.)*(?:instagram\.com|instagr\.am|facebook\.com|fb\.com|fb\.watch|fb\.me'
+    r'|messenger\.com|threads\.net|threads\.com)\Z', re.I)
+FACEBOOK_POST = re.compile(
+    r'https?://(?:(?:[a-z0-9-]+\.)*fb\.watch/'
+    r'|(?:[a-z0-9-]+\.)*(?:facebook\.com|fb\.com)/'
+    r'(?:[A-Za-z0-9_.]+/)?(?:reels?|watch|videos|stories|posts|share/[rvp])(?=[/?#\s]|\Z))', re.I)
+# Keys mautrix-meta writes only on a shared post (its title and caption).
+META_SHARE_KEYS = ('com.beeper.meta.full_post_title', 'com.beeper.meta.caption_body_text')
 EXTERNAL_URL_FIELDS = ('external_url', 'externalURL', 'externalUrl')
 # Containers the worker's FFmpeg whitelist reads (mov/mp4/3gp, matroska/webm, avi).
 VIDEO_MIMES = frozenset({'video/mp4', 'video/webm', 'video/quicktime', 'video/3gpp', 'video/3gpp2',
@@ -237,21 +249,23 @@ def ordinary_video(message):
     return attachment
 
 
-def _instagram_url(value):
+def _meta_share_url(value):
     if not isinstance(value, str) or len(value) > 2048:
         return False
     parsed = urlparse(value.strip())
-    return parsed.scheme in ('http', 'https') and bool(INSTAGRAM_HOST.match(parsed.hostname or ''))
+    return parsed.scheme in ('http', 'https') and bool(META_SHARE_HOST.match(parsed.hostname or ''))
 
 
 def instagram_share(message):
-    """True for a video shared from Instagram (a reel, post or story share),
-    not one recorded and sent in the chat.
+    """True for a video shared from Instagram or Facebook (a reel, post,
+    story or video share), not one recorded and sent in the chat.
 
     Either an `external_url` field (the bridge's marker, kept by some index
-    models at the top level, in `extra` or on the attachment) points to
-    Instagram, or an Instagram message's text carries a post/reel/story link
-    (the caption mautrix-meta writes for a share)."""
+    models at the top level, in `extra` or on the attachment) points to a
+    Meta host, or the bridge's share title/caption keys are present, or an
+    Instagram or Messenger message's text carries a post/reel/story link
+    (the caption mautrix-meta writes for a share). Other networks' links
+    (Telegram's `t.me` message link) are not shares."""
     if not isinstance(message, dict):
         return False
     attachments = message.get('attachments') or []
@@ -261,11 +275,18 @@ def instagram_share(message):
             if isinstance(attachment, dict):
                 places += [attachment, attachment.get('extra')]
     for place in places:
-        if isinstance(place, dict) and any(_instagram_url(place.get(k)) for k in EXTERNAL_URL_FIELDS):
+        if isinstance(place, dict) and (any(_meta_share_url(place.get(k)) for k in EXTERNAL_URL_FIELDS)
+                                        or any(k in place for k in META_SHARE_KEYS)):
             return True
     text = message.get('text')
-    return (network_of(message) == 'instagram' and isinstance(text, str)
-            and len(text) <= 65536 and INSTAGRAM_POST.search(text) is not None)
+    if not isinstance(text, str) or len(text) > 65536:
+        return False
+    network = network_of(message)
+    if network == 'instagram':
+        return INSTAGRAM_POST.search(text) is not None
+    if network == 'facebook':
+        return INSTAGRAM_POST.search(text) is not None or FACEBOOK_POST.search(text) is not None
+    return False
 
 
 def ordinary_audio(message):

@@ -33,6 +33,12 @@ const _metadataMaxBytes = 65536;
 const _recentMaxBytes = 262144;
 const _recentMaxLimit = 200;
 
+/// The adapter hung up without answering (see [LocalSourceTransport]); the
+/// request was not processed. Escapes as `local_source_unavailable`.
+class _AdapterRefused extends WorkerFailure {
+  const _AdapterRefused() : super('local_source_unavailable');
+}
+
 /// Explicit local-source adapter. Journal/crypto, identity and all conversation
 /// writes remain with Matrix; this socket never receives a provider/API key.
 ///
@@ -40,6 +46,15 @@ const _recentMaxLimit = 200;
 /// Requests from this process are therefore serialized here: a background
 /// source scan or deletion audit must never make a paid job's media export
 /// fail with `local_source_unavailable`.
+///
+/// Serializing is not enough on its own: the adapter frees its slot only
+/// after it closed the previous connection, a moment after this side has
+/// read the whole answer. A request sent in that moment (the next step of
+/// the same job, or the next job of a burst waiting here) is accepted and
+/// dropped without any HTTP answer. Such a refusal is retried after a short
+/// pause ([refusalRetryDelays]); any other I/O failure is reported as
+/// `local_source_unavailable`, which the engine retries with backoff,
+/// instead of escaping as a raw exception that failed the job for good.
 class LocalSourceTransport
     implements
         FeatureTransport,
@@ -48,10 +63,23 @@ class LocalSourceTransport
         BoundedAudioLoader {
   final FeatureTransport matrix;
   final String socketPath;
+
+  /// Pauses before resending a request the adapter dropped unanswered; one
+  /// retry per entry. The adapter's slot is normally free again within
+  /// milliseconds.
+  final List<Duration> refusalRetryDelays;
   final _clients = <HttpClient>{};
   bool _closed = false;
   Future<void>? _active;
-  LocalSourceTransport(this.matrix, this.socketPath);
+  LocalSourceTransport(
+    this.matrix,
+    this.socketPath, {
+    this.refusalRetryDelays = const [
+      Duration(milliseconds: 50),
+      Duration(milliseconds: 250),
+      Duration(seconds: 1),
+    ],
+  });
 
   void close() {
     _closed = true;
@@ -113,6 +141,7 @@ class LocalSourceTransport
       0,
     );
     cancel.listen(() => client.close(force: true));
+    var answered = false;
     try {
       final req = await client
           .postUrl(Uri.parse('http://localhost$path'))
@@ -122,6 +151,7 @@ class LocalSourceTransport
       req.contentLength = body.length;
       req.add(body);
       final response = await req.close().timeout(const Duration(minutes: 3));
+      answered = true;
       if (response.statusCode != 200) {
         throw const WorkerFailure('local_source_unavailable');
       }
@@ -138,9 +168,36 @@ class LocalSourceTransport
       }
       cancel.check();
       return bytes.takeBytes();
+    } on WorkerFailure {
+      rethrow;
+    } on Exception catch (e) {
+      cancel.check();
+      if (_closed) throw const WorkerFailure('cancelled');
+      // Refused or closed before any answer: nothing was processed.
+      if (!answered && e is IOException) throw const _AdapterRefused();
+      throw const WorkerFailure('local_source_unavailable');
     } finally {
       _clients.remove(client);
       client.close(force: true);
+    }
+  }
+
+  /// [_post], resending a request the adapter dropped unanswered.
+  Future<Uint8List> _send(
+    String path,
+    Map<String, Object?> payload,
+    int limit,
+    Cancellation cancel,
+  ) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await _post(path, payload, limit, cancel);
+      } on _AdapterRefused {
+        if (attempt >= refusalRetryDelays.length) rethrow;
+        await Future<void>.delayed(refusalRetryDelays[attempt]);
+        cancel.check();
+        if (_closed) throw const WorkerFailure('cancelled');
+      }
     }
   }
 
@@ -157,7 +214,7 @@ class LocalSourceTransport
       throw const WorkerFailure('invalid_local_source_account');
     }
     return _exclusive(
-      () => _post(
+      () => _send(
         '/source',
         {'source': source.toJson(), 'mode': mode},
         limit ?? (mode == 'metadata' ? _metadataMaxBytes : localAudioMaxBytes),
@@ -351,7 +408,7 @@ class LocalSourceTransport
     if (_active != null) return null;
     final askReels = reels && !_reelKindRefused;
     Future<Uint8List> page(bool withReels) => _exclusive(
-      () => _post(
+      () => _send(
         '/recent',
         {
           'accountId': accountId,
@@ -370,7 +427,12 @@ class LocalSourceTransport
       try {
         bytes = await page(askReels);
       } on WorkerFailure catch (e) {
-        if (!askReels || e.code == 'local_source_busy') rethrow;
+        // A dropped connection says nothing about the kinds it knows.
+        if (!askReels ||
+            e.code == 'local_source_busy' ||
+            e is _AdapterRefused) {
+          rethrow;
+        }
         // An adapter that predates reels refuses the unknown kind. Scan
         // without it: reels then stay on demand rather than every
         // automatic transcription stopping.

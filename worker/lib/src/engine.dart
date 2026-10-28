@@ -37,6 +37,13 @@ class WorkerEngine {
     // while unknown, tried again later (CB-02).
     'source_policy_unknown',
   };
+
+  /// An unexpected error (not a [WorkerFailure], e.g. a dropped connection
+  /// the transport did not classify) before anything reached the provider
+  /// is retried this often (15 s, 1 min) before the job fails with
+  /// `transcription_failed`. Nothing was paid, so a retry is free; the
+  /// tighter bound keeps a permanent fault from hiding behind a spinner.
+  static const unexpectedRetryLimit = 2;
   final WorkerStore store;
   final FeatureTransport transport;
   final Transcriber transcriber;
@@ -203,6 +210,7 @@ class WorkerEngine {
       'schedule.sendNow',
       'metadata.put',
       'metadata.delete',
+      'metadata.resync',
       'reminder.create',
       'reminder.cancel',
       'worker.pairing',
@@ -227,6 +235,10 @@ class WorkerEngine {
           'verified': true,
           'revision': 0,
         });
+        return;
+      }
+      if (op.kind == 'metadata.resync') {
+        _resync(op);
         return;
       }
       if (op.kind.startsWith('metadata.')) {
@@ -468,6 +480,66 @@ class WorkerEngine {
       'value': value,
       'deleted': deleted,
       'revision': revision + 1,
+      'acceptedOpId': op.opId,
+    });
+  }
+
+  /// Most rows one `metadata.resync` publishes again.
+  static const maxResyncRows = 2000;
+
+  /// Publishes the stored state of the metadata under the requested
+  /// prefixes again, one `metadata.result` per id (tombstones included),
+  /// then acknowledges the command. A device only learns another device's
+  /// change from the worker's result; one it could not decrypt or trust
+  /// (added later, keys only from backup) never came back before (merged
+  /// persons differed between devices). The results name no accepted
+  /// command, so every device applies them as foreign state at their
+  /// revision, which never overrides newer state or an unsent local edit.
+  void _resync(PersonalOperation op) {
+    final requested = op.payload['prefixes'];
+    if (op.entityId != 'resync' ||
+        requested is! List ||
+        requested.isEmpty ||
+        requested.length > 8 ||
+        requested.any(
+          (prefix) =>
+              prefix is! String ||
+              prefix.length < 2 ||
+              prefix.length > 64 ||
+              !prefix.endsWith(':'),
+        )) {
+      throw const WorkerFailure('invalid_resync');
+    }
+    var count = 0;
+    for (final prefix in requested.cast<String>().toSet()) {
+      final rows = store.metadataRowsWithPrefix(
+        prefix,
+        limit: maxResyncRows - count,
+      );
+      for (final row in rows) {
+        final result = PersonalOperation(
+          opId: stableId('result', '${op.opId}:${row.id}'),
+          kind: 'metadata.result',
+          entityId: row.id,
+          baseRevision: row.revision,
+          createdAt: clock(),
+          payload: {
+            'state': 'done',
+            'value': row.deleted ? null : row.value,
+            'deleted': row.deleted,
+            'revision': row.revision,
+            'resync': true,
+          },
+        );
+        store.enqueue(result.opId, result.toJson());
+      }
+      count += rows.length;
+      if (count >= maxResyncRows) break;
+    }
+    _publish(op, 'metadata.resync.result', {
+      'state': 'done',
+      'count': count,
+      'revision': 0,
       'acceptedOpId': op.opId,
     });
   }
@@ -1094,6 +1166,9 @@ class WorkerEngine {
 
     final cancel = Cancellation();
     void Function()? releaseLarge;
+    // Set once this attempt passed the pre-upload gate: from then on the
+    // provider may be paid, so an unexpected error is never retried.
+    var providerReached = false;
     try {
       // The user (policy) or the operator (switch, after a restart) may have
       // turned automatic transcription off while this job waited. Nothing
@@ -1224,12 +1299,14 @@ class WorkerEngine {
                 current['providerAttemptAt'] = clock()
                     .toUtc()
                     .toIso8601String();
+                providerReached = true;
                 store.saveJob(current);
                 return;
               }
               current['durationSeconds'] = duration;
               current['estimatedCostUsd'] = cost;
               current['providerAttemptAt'] = clock().toUtc().toIso8601String();
+              providerReached = true;
               _setState(current, 'processing', null);
             },
           );
@@ -1280,11 +1357,7 @@ class WorkerEngine {
         current['waitingKeysSince'] = since.toUtc().toIso8601String();
         if (now.difference(since) < keysWaitLimit) {
           // Nothing was charged: wait, then try again without busy-looping.
-          current['retries'] = retries;
-          current['retryAt'] = now
-              .add(_backoff(retries))
-              .toUtc()
-              .toIso8601String();
+          _retryLater(current, retries);
           finish(current, 'waitingKeys', code);
           return;
         }
@@ -1294,12 +1367,9 @@ class WorkerEngine {
         current.remove('waitingKeysSince');
       } else if (transientRetryCodes.contains(code) &&
           retries <= transientRetryLimit) {
-        // Nothing was charged: wait, then try again without busy-looping.
-        current['retries'] = retries;
-        current['retryAt'] = clock()
-            .add(_backoff(retries))
-            .toUtc()
-            .toIso8601String();
+        // Nothing was charged (these codes prove it): wait, then try again
+        // without busy-looping. Clients keep showing the job as pending.
+        _retryLater(current, retries);
         finish(current, 'queued', code);
         return;
       }
@@ -1321,14 +1391,37 @@ class WorkerEngine {
       );
     } catch (_) {
       final current = currentAttempt();
-      if (current != null) {
-        current.remove('providerAttemptAt');
-        _setState(current, 'failed', 'transcription_failed');
+      if (current == null) return;
+      // An error the transport did not classify (a dropped connection, a
+      // timeout) used to fail the job at once, though nothing was paid and
+      // the user's Retry then simply worked. Before the provider gate it is
+      // retried like a transient failure, with a tighter bound.
+      final retries = (current['retries'] as int? ?? 0) + 1;
+      if (!providerReached && retries <= unexpectedRetryLimit) {
+        _retryLater(current, retries);
+        finish(current, 'queued', 'transcription_failed');
+        return;
       }
+      current
+        ..remove('retryAt')
+        ..remove('providerAttemptAt');
+      _setState(current, 'failed', 'transcription_failed');
     } finally {
       releaseLarge?.call();
       if (identical(_cancellations[id], cancel)) _cancellations.remove(id);
     }
+  }
+
+  /// Schedules attempt [retries] + 1 of an unpaid job after [_backoff]. A
+  /// marker of an earlier attempt that reached the pre-upload gate is
+  /// dropped: the failure proves nothing was charged, so a crash during the
+  /// next attempt must not turn the job into a paid `unknown` before it
+  /// reaches the provider again (see [recover]).
+  void _retryLater(Map<String, dynamic> job, int retries) {
+    job
+      ..remove('providerAttemptAt')
+      ..['retries'] = retries
+      ..['retryAt'] = clock().add(_backoff(retries)).toUtc().toIso8601String();
   }
 
   static AutoTranscriptionKind? _jobKind(Map<String, dynamic> job) {

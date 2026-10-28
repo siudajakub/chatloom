@@ -294,10 +294,16 @@ Future<void> main(List<String> arguments) async {
                 'autoTranscription': engine.autoScanActive ? 'scan' : 'off',
                 // Worker capabilities for app-side gating: media kinds 2 =
                 // voice, round, any video and audio (also as files); 3 = also
-                // Instagram reels as their own kind (on demand by default);
+                // shared reels as their own kind (on demand by default);
                 // live = cloud rooms are picked up from the worker's own sync.
                 'transcriptionMedia': 3,
                 'autoTranscriptionLive': engine.liveScanActive,
+                // Answers `metadata.resync` (state of merged persons again).
+                'metadataResync': 1,
+                // Own devices whose commands this worker ignores (untrusted).
+                if (journal.untrustedDeviceIds case final ids
+                    when ids.isNotEmpty)
+                  'untrustedDevices': ids,
                 'reminderPush': reminderDelivery.configured
                     ? 'configured'
                     : 'not_configured',

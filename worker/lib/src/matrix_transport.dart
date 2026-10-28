@@ -23,9 +23,19 @@ Future<Uint8List> boundedMediaDownload(
   if (accessToken != null) {
     request.headers['authorization'] = 'Bearer $accessToken';
   }
-  final response = await httpClient
-      .send(request)
-      .timeout(const Duration(minutes: 2));
+  final http.StreamedResponse response;
+  try {
+    response = await httpClient
+        .send(request)
+        .timeout(const Duration(minutes: 2));
+  } on WorkerFailure {
+    rethrow;
+  } on Exception {
+    // A reset or stale connection, a timeout: transient, retried with
+    // backoff by the engine instead of failing the job for good.
+    cancel.check();
+    throw const WorkerFailure('source_unavailable');
+  }
   final done = Completer<Uint8List>();
   final builder = BytesBuilder(copy: false);
   late final StreamSubscription<List<int>> subscription;
@@ -312,7 +322,15 @@ class MatrixFeatureTransport
   }) async {
     final selected = await room(source.conversation);
     cancel.check();
-    final stored = await selected.getEventById(source.eventId);
+    final Event? stored;
+    try {
+      stored = await selected.getEventById(source.eventId);
+    } on Exception {
+      // Not in the store and the server could not be asked (network,
+      // rate limit): transient. A missing event is null, not an error.
+      cancel.check();
+      throw const WorkerFailure('source_unavailable');
+    }
     if (stored == null) throw const WorkerFailure('source_unavailable');
     if (stored.redacted) throw const WorkerFailure('source_redacted');
     // Keys that arrived after the event (backup, forward) decrypt it now;
@@ -337,15 +355,25 @@ class MatrixFeatureTransport
     cancel.check();
     // The SDK would buffer any size; the bounded callback aborts the
     // transfer at maxBytes (the decrypted copy is the same size).
-    final file = await event.downloadAndDecryptAttachment(
-      downloadCallback: (uri) => boundedMediaDownload(
-        client.httpClient,
-        uri,
-        accessToken: client.accessToken,
-        maxBytes: maxBytes,
-        cancel: cancel,
-      ),
-    );
+    final MatrixFile file;
+    try {
+      file = await event.downloadAndDecryptAttachment(
+        downloadCallback: (uri) => boundedMediaDownload(
+          client.httpClient,
+          uri,
+          accessToken: client.accessToken,
+          maxBytes: maxBytes,
+          cancel: cancel,
+        ),
+      );
+    } on WorkerFailure {
+      rethrow;
+    } on Exception {
+      // Network errors around the download (media endpoint discovery,
+      // the media store): transient like the download itself.
+      cancel.check();
+      throw const WorkerFailure('source_unavailable');
+    }
     cancel.check();
     // Redaction/protection may change while a download is in flight. Do not
     // send bytes to the decoder/provider after the source becomes unavailable.

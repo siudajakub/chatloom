@@ -655,7 +655,8 @@ class LocalReelPolicyTests(unittest.TestCase):
         # A link typed into another network's caption is not a share.
         self.assertEqual(sources.exportable_media(video_message(
             text='https://www.instagram.com/reel/Cfixture/'))[1], 'video')
-        for url in ('https://www.facebook.com/reel/1', 'https://notinstagram.com/reel/x',
+        for url in ('https://t.me/fixture/123', 'https://notinstagram.com/reel/x',
+                    'https://notfacebook.com/reel/1', 'https://facebook.com.example.org/reel/1',
                     'https://instagram.com.example.org/p/x', 'ftp://instagram.com/p/x', 42):
             with self.subTest(url=url):
                 message = video_message()
@@ -665,6 +666,41 @@ class LocalReelPolicyTests(unittest.TestCase):
         self.assertEqual(sources.exportable_media(reel_message(
             attachments=[{**reel_message()['attachments'][0], 'isGif': True}])), (None, None))
         self.assertEqual(sources.exportable_media(reel_message(extra={'view_once': True})), (None, None))
+
+    def test_facebook_shares_are_reels(self):
+        """2026-10-26: a Facebook reel shared on Messenger was
+        listed as an ordinary video and transcribed automatically."""
+        for url in ('https://www.facebook.com/reel/1234567890', 'https://fb.watch/fixture/',
+                    'https://m.facebook.com/watch/?v=1', 'https://www.facebook.com/fixture/videos/1/',
+                    'https://www.threads.net/@fixture/post/x'):
+            with self.subTest(url=url):
+                message = video_message()
+                message['external_url'] = url
+                self.assertEqual(sources.exportable_media(message)[1], 'reel')
+        # The bridge's share title/caption keys mark a share without a URL.
+        message = video_message()
+        message['extra'] = {'com.beeper.meta.full_post_title': ''}
+        self.assertEqual(sources.exportable_media(message)[1], 'reel')
+        # The caption mautrix-meta writes in a Messenger chat.
+        for text in ('Funny\n\nhttps://www.facebook.com/reel/1234567890',
+                     'https://fb.watch/fixture/', 'https://www.facebook.com/share/r/x/',
+                     'https://www.instagram.com/reel/Cfixture/'):
+            with self.subTest(text=text):
+                message = video_message()
+                message.update(accountID='local-facebookgo_ba_fixture', text=text)
+                self.assertEqual(sources.exportable_media(message)[1], 'reel')
+        # Never listed for a worker that asks only for ordinary videos.
+        message = video_message()
+        message['external_url'] = 'https://www.facebook.com/reel/1234567890'
+        self.assertEqual(sources.exportable_media(message, kinds=('voice', 'round', 'video', 'audio')),
+                         (None, None))
+        # A video recorded and sent on Messenger stays an ordinary video, and
+        # a round stays a round.
+        plain = video_message()
+        plain.update(accountID='local-facebookgo_ba_fixture',
+                     text='look at this https://www.facebook.com/fixture')
+        self.assertEqual(sources.exportable_media(plain)[1], 'video')
+        self.assertEqual(sources.exportable_media(round_message())[1], 'round')
 
     def test_reels_are_exported_only_for_workers_that_ask(self):
         everything_but_reels = ('voice', 'round', 'video', 'audio')

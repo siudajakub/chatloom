@@ -277,6 +277,23 @@ class WorkerStore {
       row['id'] as String: jsonDecode(row['body'] as String),
   };
 
+  /// Every metadata row whose id starts with [prefix], tombstones included,
+  /// at most [limit] (oldest ids first): the state `metadata.resync`
+  /// publishes again.
+  List<({String id, int revision, bool deleted, Object? value})>
+  metadataRowsWithPrefix(String prefix, {int limit = 2000}) => [
+    for (final row in db.select(
+      'SELECT * FROM metadata WHERE substr(id,1,?)=? ORDER BY id LIMIT ?',
+      [prefix.length, prefix, limit],
+    ))
+      (
+        id: row['id'] as String,
+        revision: row['revision'] as int,
+        deleted: row['deleted'] == 1,
+        value: jsonDecode(row['body'] as String),
+      ),
+  ];
+
   void saveMetadata(
     String id,
     int revision,
