@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/semantics.dart';
+import 'package:flutter/rendering.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'notion_motion.dart';
@@ -15,9 +16,17 @@ class NotionSwipeActionSide {
     required this.icon,
     required this.label,
     required this.onCommit,
+    this.dismisses = false,
   });
 
   final IconData icon;
+
+  /// The action removes the row from its list (archive in the inbox):
+  /// a committed swipe carries the row off the screen and collapses its slot
+  /// before [onCommit] runs, so the rows below glide up instead of jumping
+  /// (Telegram). Should the row still be there a moment later (the action
+  /// was refused), it grows and slides back.
+  final bool dismisses;
 
   /// Shown next to the icon behind the row and announced as a custom
   /// semantics action.
@@ -40,8 +49,12 @@ class NotionSwipeActionSide {
 ///   predictive back stays the system's), and a mostly vertical drag is left
 ///   to the list. Off while a screen reader runs: the actions are then
 ///   custom semantics actions (and the row's long-press menu).
+/// * A side that [NotionSwipeActionSide.dismisses] flies off and collapses
+///   its slot before it commits (instantly under reduced motion).
 /// * No controller until the first swipe; the row is translated, never
-///   rebuilt, while the finger moves.
+///   rebuilt, while the finger moves, and its element tree has the same
+///   shape at rest and in motion, so starting or ending a swipe never
+///   remounts the row (images, presses and highlights keep their state).
 class NotionSwipeAction extends StatefulWidget {
   const NotionSwipeAction({
     super.key,
@@ -63,12 +76,26 @@ class NotionSwipeAction extends StatefulWidget {
 }
 
 class _NotionSwipeActionState extends State<NotionSwipeAction>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   /// Signed offset in logical pixels (positive = towards the right).
   final ValueNotifier<double> _offset = ValueNotifier(0);
   AnimationController? _spring;
+
+  /// Height factor of the slot: 1 at rest, 0 once a dismissing swipe has
+  /// collapsed it.
+  final ValueNotifier<double> _extent = ValueNotifier(1);
+  AnimationController? _collapse;
+  AnimationController? _hold;
   double _width = 0;
   bool _armed = false;
+
+  /// A dismissing swipe is running (fly off, collapse, wait, maybe return):
+  /// new drags are ignored until it is over.
+  bool _dismissing = false;
+
+  /// How long a collapsed row waits for its list to drop it before it comes
+  /// back (the action was refused or did not remove it).
+  static const Duration _dismissHold = Duration(milliseconds: 700);
 
   /// The side the current drag reveals, fixed once the drag has a direction.
   NotionSwipeActionSide? _side;
@@ -86,14 +113,26 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
       _spring ??= AnimationController.unbounded(vsync: this)
         ..addListener(() => _offset.value = _spring!.value);
 
+  AnimationController get _collapseController => _collapse ??=
+      AnimationController(vsync: this, duration: NotionMotion.short, value: 1)
+        ..addListener(
+          () => _extent.value = NotionMotion.standard.transform(
+            _collapse!.value.clamp(0.0, 1.0),
+          ),
+        );
+
   @override
   void dispose() {
     _spring?.dispose();
+    _collapse?.dispose();
+    _hold?.dispose();
     _offset.dispose();
+    _extent.dispose();
     super.dispose();
   }
 
   bool _pointerAllowed(PointerDownEvent event) {
+    if (_dismissing) return false;
     if (widget.startToEnd == null && widget.endToStart == null) return false;
     final media = context.getInheritedWidgetOfExactType<MediaQuery>()?.data;
     if (media == null) return true;
@@ -140,12 +179,81 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
 
   void _end(DragEndDetails details) {
     final commit = _armed ? _side : null;
-    _settle(details.primaryVelocity ?? 0);
+    final velocity = details.primaryVelocity ?? 0;
     _armed = false;
+    if (commit != null &&
+        commit.dismisses &&
+        _width > 0 &&
+        !NotionMotion.reduced(context)) {
+      unawaited(_dismiss(commit, velocity));
+      return;
+    }
+    _settle(velocity);
     if (commit != null) commit.onCommit();
   }
 
+  /// Fly off in the swipe's direction, collapse the slot, then commit; if the
+  /// row is still mounted after [_dismissHold], grow and slide it back.
+  /// Controller timelines only (no timers); a disposed controller never
+  /// completes its future, so nothing runs after the row left the tree.
+  Future<void> _dismiss(NotionSwipeActionSide side, double velocity) async {
+    _dismissing = true;
+    // Far enough that no part of the row stays in the list's side padding.
+    final travel = math.max(_width, MediaQuery.sizeOf(context).width);
+    final target = _offset.value.sign * travel;
+    final spring = _springController..value = _offset.value;
+    // The slot starts closing as soon as the row has left it; the spring's
+    // invisible tail off screen is not waited for.
+    final gone = Completer<void>();
+    void watch() {
+      if (_offset.value.abs() >= _width && !gone.isCompleted) gone.complete();
+    }
+
+    _offset.addListener(watch);
+    unawaited(
+      spring
+          .animateWith(
+            NotionMotion.springTo(
+              NotionMotion.snappy,
+              _offset.value,
+              target,
+              velocity: velocity.clamp(-3000.0, 3000.0),
+            ),
+          )
+          .then((_) {
+            if (!gone.isCompleted) gone.complete();
+          }),
+    );
+    await gone.future;
+    if (!mounted) return;
+    _offset.removeListener(watch);
+    final collapse = _collapseController;
+    await collapse.animateBack(0, curve: Curves.linear);
+    if (!mounted) return;
+    side.onCommit();
+    // The list normally drops the row within a frame or two. The wait is a
+    // controller timeline (it draws nothing), never a timer.
+    final hold = _hold ??= AnimationController(
+      vsync: this,
+      duration: _dismissHold,
+    );
+    await hold.forward(from: 0);
+    if (!mounted) return;
+    if (NotionMotion.reduced(context)) {
+      _spring?.stop();
+      _offset.value = 0;
+      collapse.value = 1;
+      _dismissing = false;
+      return;
+    }
+    await collapse.forward();
+    if (!mounted) return;
+    _settle(0);
+    _dismissing = false;
+  }
+
   void _cancel() {
+    if (_dismissing) return;
     _armed = false;
     _settle(0);
   }
@@ -195,36 +303,121 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
                       ..onCancel = _cancel,
                   ),
             },
+            // One tree shape at rest and in motion: returning the bare row
+            // at offset 0 and a Stack otherwise remounted the whole row on
+            // every swipe start and end.
             child: ValueListenableBuilder<double>(
-              valueListenable: _offset,
-              child: widget.child,
-              builder: (context, offset, child) {
-                if (offset == 0) return child!;
-                final side = _sideFor(offset);
-                return Stack(
-                  children: [
-                    if (side != null)
+              valueListenable: _extent,
+              child: ValueListenableBuilder<double>(
+                valueListenable: _offset,
+                child: widget.child,
+                builder: (context, offset, child) {
+                  final side = offset == 0 ? null : _sideFor(offset);
+                  return Stack(
+                    fit: StackFit.passthrough,
+                    children: [
                       Positioned.fill(
-                        child: _SwipeBackground(
-                          side: side,
-                          offset: offset,
-                          width: _width,
-                          armFraction: widget.armFraction,
-                          borderRadius: widget.borderRadius,
-                        ),
+                        child: side == null
+                            ? const SizedBox.shrink()
+                            : _SwipeBackground(
+                                side: side,
+                                offset: offset,
+                                width: _width,
+                                armFraction: widget.armFraction,
+                                borderRadius: widget.borderRadius,
+                              ),
                       ),
-                    Transform.translate(
-                      offset: Offset(offset, 0),
-                      child: child,
-                    ),
-                  ],
-                );
-              },
+                      Transform.translate(
+                        offset: Offset(offset, 0),
+                        child: child,
+                      ),
+                    ],
+                  );
+                },
+              ),
+              builder: (context, extent, child) =>
+                  _CollapseBox(factor: extent, child: child),
             ),
           );
         },
       ),
     );
+  }
+}
+
+/// Lays its child out with the incoming constraints (a tight list width
+/// stays tight) and takes [factor] of its height, clipped while below 1:
+/// the slot of a dismissed row closes and the rows below glide up.
+class _CollapseBox extends SingleChildRenderObjectWidget {
+  const _CollapseBox({required this.factor, super.child});
+
+  final double factor;
+
+  @override
+  _RenderCollapseBox createRenderObject(BuildContext context) =>
+      _RenderCollapseBox(factor);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderCollapseBox renderObject,
+  ) => renderObject.factor = factor;
+}
+
+class _RenderCollapseBox extends RenderProxyBox {
+  _RenderCollapseBox(this._factor);
+
+  double _factor;
+  set factor(double value) {
+    final next = value.clamp(0.0, 1.0);
+    if (next == _factor) return;
+    _factor = next;
+    markNeedsLayout();
+  }
+
+  final LayerHandle<ClipRectLayer> _clip = LayerHandle<ClipRectLayer>();
+
+  @override
+  void performLayout() {
+    final child = this.child;
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+    child.layout(constraints, parentUsesSize: true);
+    size = constraints.constrain(
+      Size(child.size.width, child.size.height * _factor),
+    );
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      _factor >= 1 && super.hitTestChildren(result, position: position);
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null || _factor <= 0) {
+      _clip.layer = null;
+      return;
+    }
+    if (_factor >= 1) {
+      _clip.layer = null;
+      super.paint(context, offset);
+      return;
+    }
+    _clip.layer = context.pushClipRect(
+      needsCompositing,
+      offset,
+      Offset.zero & size,
+      super.paint,
+      oldLayer: _clip.layer,
+    );
+  }
+
+  @override
+  void dispose() {
+    _clip.layer = null;
+    super.dispose();
   }
 }
 

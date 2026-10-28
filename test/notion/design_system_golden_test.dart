@@ -471,6 +471,25 @@ Widget _motion() => _page([
   ),
 ]);
 
+/// Slot swaps and the row swipe at rest: [NotionReappear] and
+/// [NotionSwipeAction] add nothing visible until they move.
+Widget _motionSwaps() => _page([
+  const NotionSectionHeader(title: 'Swaps'),
+  const NotionReappear(
+    trigger: 0,
+    child: NotionListRow(title: 'Reappeared slot'),
+  ),
+  NotionSwipeAction(
+    endToStart: NotionSwipeActionSide(
+      icon: Icons.archive_outlined,
+      label: 'Archive',
+      dismisses: true,
+      onCommit: _noop,
+    ),
+    child: const NotionListRow(title: 'Swipe row at rest', onTap: _noop),
+  ),
+]);
+
 /// Plain Material widgets must already look Notion via component themes.
 Widget _material() => DefaultTabController(
   length: 3,
@@ -912,6 +931,16 @@ void main() {
   testWidgets(
     'motion primitives at rest',
     (tester) => _golden(tester, 'motion-dark', _motion(), reducedMotion: true),
+  );
+  testWidgets(
+    'slot swaps and row swipe at rest',
+    (tester) => _golden(
+      tester,
+      'motion-swaps-dark',
+      _motionSwaps(),
+      size: const Size(390, 200),
+      reducedMotion: true,
+    ),
   );
   testWidgets(
     'material component themes',

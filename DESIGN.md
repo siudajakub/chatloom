@@ -114,7 +114,17 @@ reactions get a soft tint and hairline. Long-press any message opens
 a scrim, a lifted copy of the bubble at its own place, the
 `NotionReactionBar` above (quick reactions of the network, "+" for the full
 picker, slide-to-react while still holding) and a `NotionGlassPanel` card of
-`NotionGlassMenuRow` actions below. Double tap reacts with the network's
+`NotionGlassMenuRow` actions below. "+" grows the bar in place into the
+reaction picker (Telegram): the panel's clip morphs from the pill on
+`emphasized` (`medium`), the bar and card recede, the content fades in,
+glass blurs once it rests, and its search keeps the panel above the
+keyboard. The picker offers exactly what the network takes: a declared
+`allowed_reactions` (every Telegram chat) is the whole set, in its order
+and spelling, with no skin tones; otherwise every emoji, the chat's quick
+reactions on top. A chat whose whole set fits the bar gets no "+", a chat
+or message that takes no reaction gets no bar and no double tap. Reaction
+keys compare without variation selectors (`normalizeReactionKey`; bridges
+spell `👍️`, pickers `👍`) and always go out in the network's spelling. Double tap reacts with the network's
 first quick reaction and plays `NotionReactionBurst` at the finger. There is
 no multi-selection.
 
@@ -249,6 +259,7 @@ in new code; read `context.notion` instead.
 | `showNotionDatePicker(context:, initialDate:, firstDate:, lastDate:)`, `NotionDatePicker` | a month calendar in a Notion sheet; picking a day closes it and returns the day (jump to date in a conversation) |
 | `NotionCompactChatHeader`, `NotionInitialAvatar` | chat header, letter avatar |
 | `NotionReactionChip`, `NotionReactionOverlap`, `NotionReactionBar`, `NotionReactionBurst` | reaction pills under a bubble, the long-press reaction pill, the double-tap burst (`notion_reactions.dart`, tokens `NotionReactions.*`) |
+| `NotionEmojiPicker(sections:, onSelected:, search:, usage:, selected:, tones:, onTone:, categoryBar:)` + `NotionEmojiSection`, `NotionEmoji`, `NotionEmojiSearch`, `NotionEmojiTones` | every emoji picker (composer tab, reaction picker, settings): a search pill that never moves, a category bar of 48 pt cells that follows the scroll and jumps (far jumps land a screen short and glide), sticky opaque section headers, a fixed-extent grid of 30 pt glyphs (`NotionEmojiSizes`, ≥ 5 columns, glyphs ignore text scale) that press like buttons, own reactions on the bar's accent circle, skin tones on long-press (tap or slide onto a tone; remembered per emoji by the caller). Search is on-device and instant: every word must match, exact > prefix > substring, ties by the user's use, then popularity, then catalogue order; case, Latin diacritics and `:shortcodes:` fold; a pasted emoji finds itself in any spelling or tone; Enter picks the first result; categories and results fade through. No glass inside (it scrolls); data and callbacks only (`notion_emoji_picker.dart`, `notion_emoji_search.dart`). The app's catalogue, shared recents and remembered tones: `ChatLoomEmojiPicker`, `showEmojiPickerSheet` (`lib/personal/emoji/`) |
 | `NotionGlassSurface`, `NotionGlassBar`, `NotionGlassScope` | glass chrome and overlays (see Glass) |
 | `NotionGlassPanel`, `NotionGlassMenuRow`, `NotionGlassDivider`, `NotionGlassPill` | the dock's language: glass menus, dialogs, sheets, pill buttons (see Glass) |
 | `showNotionMenu(context, entries:, anchor:, position:, alignEnd:)` + `NotionMenuEntry(value:, label:, icon:/leading:, subtitle:, enabled:, destructive:, selected:)` / `.divider()`; `NotionMenuButton(icon:, label:, entries:, onSelected:)` | every menu: header ⋯, overflow, row and composer menus. A glass panel of `NotionGlassMenuRow`s that grows from its anchor (the button, or a desktop click `position`), below it near the top of the screen and above it near the bottom; the same panel on phone and desktop; Escape/back/outside tap dismiss. A second step (Mute… → durations, Transcribe again → language) opens a new menu at the same anchor instead of a cascading submenu. Never `PopupMenuButton`/`showMenu`/`MenuAnchor` in new code (`notion_menu.dart`) |
@@ -439,6 +450,8 @@ decide; nothing buzzes by default.
 | `NotionAnimatedCount(count:, style:, format:)` | numbers that change: rolls up/down | `NotionAnimatedCount(count: unread, style: NotionType.micro)` |
 | `NotionAnimatedSize(child:, duration:)` | a block whose size changes in place (dialog content, a validation error): `AnimatedSize` that snaps in one frame under reduced motion, because a zero duration trips a layout assertion on the next relayout | `NotionAnimatedSize(child: NotionFadeThrough(child: body))` |
 | `NotionSizeReveal(visible:, child:, axis:)` | single element appearing/disappearing with size + fade (callout, reply preview, typing row) | `NotionSizeReveal(visible: error != null, child: NotionCallout(...))` |
+| `NotionReappear(trigger:, child:, rise:)` | one slot that swaps between kept-alive states where a switcher would mount a second live copy (composer ↔ search bar, recorder ↔ composer): the incoming state rises and fades in on each `trigger` change, never on mount, same element throughout | `NotionReappear(trigger: searching, child: searching ? bar : composer)` |
+| `NotionSwipeAction(startToEnd:, endToStart:)`, `NotionSwipeActionSide(dismisses:)` | Telegram row swipe: the row follows the finger, arms with a selection haptic and springs back; a side that `dismisses` (archive in a view the chat leaves) flies off and closes its slot before it commits, and comes back if the row is still there after a short hold. One tree shape at rest and in motion, so a swipe never remounts the row | `NotionSwipeAction(endToStart: NotionSwipeActionSide(icon: Icons.archive_outlined, label: 'Archive', dismisses: true, onCommit: archive), child: row)` |
 | `NotionPop(child:, trigger:, visible:, bounce:)` | badges, reaction chips, dots: spring in, pulse on `trigger`, pop out | `NotionPop(trigger: count, child: badge)` |
 | `NotionReactionBar(entrance:)`, `NotionReactionBurst(animation:)` | reward motion of reactions, driven by a route or controller animation: the bar springs out of the bubble corner (`barFrom` → 1, bouncy) and its emoji pop in staggered; the burst pops at the finger and floats away | `NotionReactionBar(reactions: r, entrance: route.animation, onSelected: react)` |
 | `NotionShake(trigger:, child:)` | rejected input (wrong PIN) | `NotionShake(trigger: errors, child: field)` |
@@ -491,6 +504,8 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
 | `AnimatedSwitcher` with the default fade for icons | `NotionMorphSwitcher` |
 | a hard cut between filter/tab states | `NotionFadeThrough` |
 | `if (x) widget` popping in | `NotionSizeReveal(visible: x)` or `NotionPop(visible: x)` |
+| `x ? a : b` cutting between states that must stay mounted (focus, recorder) | `NotionReappear(trigger: x, child: x ? a : b)` |
+| a list row that vanishes after its swipe action | `NotionSwipeActionSide(dismisses: true)` |
 | `showDialog`, `showGeneralDialog(transitionDuration: Duration.zero)` | `showNotionCustomDialog`, `showNotionPopover` |
 | `showModalBottomSheet` defaults | `showNotionSheet`, or `sheetAnimationStyle: NotionMotion.sheetStyleOf(context)` |
 | `duration: Duration(milliseconds: 250)`, `Curves.easeInOut` | `NotionMotion.short`, `NotionMotion.standard` |
@@ -704,3 +719,21 @@ Chats adds link preview cards on/off, the quick reaction bar (a JSON list in
 `quickReactions`, filtered per network like the defaults) and the actions of
 the two inbox swipe directions (`inboxSwipeLeft`/`Right`: archive,
 read/unread, pin/unpin, nothing).
+
+## Composer panel: stickers and GIFs
+
+The Emoji · GIFs · Stickers panel (`lib/personal/stickers/`) is opaque (the
+composer glass's fallback tone) and keeps its tabs mounted; a tab switch
+fades through without a remount. The sticker tab is one `CustomScrollView`:
+the pack strip above it follows the scroll and a tap glides to a pack (a
+long way jumps to one screen before it), the search field floats back on any
+upward scroll and stays pinned while searching, and section titles stick
+(`SliverMainAxisGroup` + `PinnedHeaderSliver`). Headers and rows have fixed
+extents, so offsets are exact; the place survives search, tab switches and
+reopening, and rows added above the browsed pack never move it
+(`correctPixels`, same frame). Animated stickers play only while the grid
+rests; cells built during a fast fling wait to load. Search is local and
+instant (`StickerSearchIndex`: emoji, words, shortcodes, alt text, pack
+titles, ranked); back closes a search before the panel. Empty, no-result
+and error states are `NotionEmptyState`; the GIF results load under a
+`NotionSkeleton`.

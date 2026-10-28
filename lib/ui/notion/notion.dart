@@ -19,6 +19,7 @@ export 'notion_date_picker.dart';
 export 'notion_delivery_tick.dart';
 export 'notion_dialog_frame.dart';
 export 'notion_display_preferences.dart';
+export 'notion_emoji_picker.dart';
 export 'notion_entrance.dart';
 export 'notion_glass.dart';
 export 'notion_glass_header.dart';

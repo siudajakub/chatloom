@@ -774,3 +774,102 @@ class _NotionDelayedSpinnerState extends State<NotionDelayedSpinner>
     semanticsLabel: widget.semanticsLabel,
   );
 }
+
+/// Brings [child] back in with a short fade and rise whenever [trigger]
+/// changes, keeping its element: one slot that swaps between kept-alive
+/// states (the composer and the search bar, the recorder and the composer),
+/// where a switcher would mount a second live copy (a focus node, a running
+/// recorder). The outgoing state is gone at once (Telegram); the incoming
+/// one rises [rise] px over [duration] on `emphasized` and settles to
+/// identity (opacity 1, offset 0).
+///
+/// Never plays on mount, creates no controller until the first change, and
+/// does nothing under reduced motion. The tree has one shape throughout, so
+/// [child] never remounts.
+///
+/// ```dart
+/// NotionReappear(trigger: searching, child: searching ? bar : composer)
+/// ```
+class NotionReappear extends StatefulWidget {
+  const NotionReappear({
+    super.key,
+    required this.trigger,
+    required this.child,
+    this.rise = NotionMotion.rise,
+    this.duration = NotionMotion.short,
+  });
+
+  /// A value whose change replays the entrance.
+  final Object? trigger;
+  final Widget child;
+
+  /// Vertical travel in logical pixels (positive: rises from below).
+  final double rise;
+  final Duration duration;
+
+  @override
+  State<NotionReappear> createState() => _NotionReappearState();
+}
+
+class _NotionReappearState extends State<NotionReappear>
+    with SingleTickerProviderStateMixin {
+  static const _fadeCurve = Interval(0, .7, curve: NotionMotion.standard);
+
+  AnimationController? _motion;
+  CurvedAnimation? _fade, _move;
+
+  void _play() {
+    final controller = _motion ??= AnimationController(
+      vsync: this,
+      duration: widget.duration,
+    );
+    _fade ??= CurvedAnimation(parent: controller, curve: _fadeCurve);
+    _move ??= CurvedAnimation(
+      parent: controller,
+      curve: NotionMotion.emphasized,
+    );
+    controller.forward(from: 0);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (NotionMotion.reduced(context)) _motion?.value = 1;
+  }
+
+  @override
+  void didUpdateWidget(NotionReappear oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _motion?.duration = widget.duration;
+    if (oldWidget.trigger == widget.trigger) return;
+    if (NotionMotion.reduced(context)) {
+      _motion?.value = 1;
+    } else {
+      _play();
+    }
+  }
+
+  @override
+  void dispose() {
+    _fade?.dispose();
+    _move?.dispose();
+    _motion?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final move = _move ?? kAlwaysCompleteAnimation;
+    return FadeTransition(
+      opacity: _fade ?? kAlwaysCompleteAnimation,
+      child: AnimatedBuilder(
+        animation: move,
+        child: widget.child,
+        builder: (context, child) => Transform.translate(
+          offset: Offset(0, widget.rise * (1 - move.value)),
+          child: child,
+        ),
+      ),
+    );
+  }
+}

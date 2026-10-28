@@ -75,9 +75,11 @@ abstract final class NotionReactions {
     return emojis > bar ? emojis : bar;
   }
 
-  /// Compares reaction keys without the emoji presentation selector, so a
-  /// network's `❤` matches the picker's `❤️`.
-  static String normalize(String key) => key.replaceAll('️', '');
+  /// Compares reaction keys without variation selectors (U+FE0F, U+FE0E),
+  /// so a network's `❤` or `👍️` matches the picker's `❤️` or `👍`; skin
+  /// tones stay distinct.
+  static String normalize(String key) =>
+      key.replaceAll('\u{FE0F}', '').replaceAll('\u{FE0E}', '');
 }
 
 /// Timeline helper: the part of [t] (0–1 over [total]) between [start] and

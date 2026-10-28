@@ -386,6 +386,47 @@ void main() {
       expect(_opacity(tester, find.text('2')), 0);
     });
 
+    testWidgets('reappear replays on a new trigger only and keeps the '
+        'child element', (tester) async {
+      final mounts = <int>[];
+      Widget build(bool trigger, {bool reduced = false}) => _app(
+        NotionReappear(
+          trigger: trigger,
+          child: _MountCounter(mounts: mounts, label: 'Slot'),
+        ),
+        reduced: reduced,
+      );
+      await tester.pumpWidget(build(false));
+      await tester.pump();
+      expect(
+        tester.binding.hasScheduledFrame,
+        isFalse,
+        reason: 'No mount play',
+      );
+      expect(_identity(tester, find.text('Slot')), isTrue);
+
+      await tester.pumpWidget(build(true));
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(_opacity(tester, find.text('Slot')), lessThan(1));
+      expect(_shift(tester, find.text('Slot')).dy, greaterThan(0));
+      await tester.pumpAndSettle();
+      expect(_identity(tester, find.text('Slot')), isTrue);
+      expect(mounts, [1], reason: 'The child is never remounted');
+
+      // The same trigger again: nothing plays.
+      // (A rebuilt test app tweens its theme, so check the slot itself.)
+      await tester.pumpWidget(build(true));
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(_identity(tester, find.text('Slot')), isTrue);
+      await tester.pumpAndSettle();
+
+      await _fresh(tester, build(false, reduced: true));
+      await tester.pumpWidget(build(true, reduced: true));
+      await tester.pump();
+      expect(_identity(tester, find.text('Slot')), isTrue);
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('row highlight flashes only on a new trigger', (tester) async {
       Widget build(Object trigger) =>
           _app(NotionRowHighlight(trigger: trigger, child: const Text('Row')));
@@ -646,4 +687,27 @@ void main() {
       expect(_opacity(tester, find.text('Heavy')), 1);
     });
   });
+}
+
+/// Counts its own mounts (a remount would lose a row's state).
+class _MountCounter extends StatefulWidget {
+  const _MountCounter({required this.mounts, required this.label});
+
+  final List<int> mounts;
+  final String label;
+
+  @override
+  State<_MountCounter> createState() => _MountCounterState();
+}
+
+class _MountCounterState extends State<_MountCounter> {
+  @override
+  void initState() {
+    super.initState();
+    widget.mounts.add(widget.mounts.length + 1);
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      SizedBox(width: 300, height: 64, child: Text(widget.label));
 }
