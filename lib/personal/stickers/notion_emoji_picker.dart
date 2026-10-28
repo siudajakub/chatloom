@@ -1,86 +1,48 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'dart:convert';
-
-import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/conversation_source.dart';
+import 'package:chatloom/personal/emoji/emoji_picker.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart' show Emoji;
 import 'package:material_ui/material_ui.dart';
 
-/// The recently used emoji of every picker (composer panel, reactions,
-/// settings). The picker keeps them itself, in the app's preferences under
-/// `recent`; this reads that list so a picker opens on it (Telegram) and
-/// only falls back to the smileys while it is empty.
-abstract final class NotionEmojiRecents {
-  static const _key = 'recent';
+export 'package:chatloom/personal/emoji/emoji_picker.dart';
 
-  /// Whether at least one emoji was used.
-  static bool get any {
-    try {
-      final raw = AppSettings.store.getString(_key);
-      if (raw == null) return false;
-      final list = jsonDecode(raw);
-      return list is List && list.isNotEmpty;
-    } catch (_) {
-      // Preferences not ready (tests, early start) or unreadable.
-      return false;
-    }
-  }
+/// The composer panel's Emoji tab (Telegram's emoji page): search, the
+/// category bar, Recently used and the categories, typed into the composer
+/// at the cursor. The search field has its own focus node; the panel slot
+/// sees it through the panel's focus scope ([ChatEmojiPicker]) and stays
+/// above the keyboard while it is focused. A hidden tab lets go of focus.
+class ComposerEmojiTab extends StatefulWidget {
+  const ComposerEmojiTab({super.key, required this.host});
 
-  /// Where a picker opens: the recents, or the smileys while there are
-  /// none (never an empty page).
-  static Category get initialCategory =>
-      any ? Category.RECENT : Category.SMILEYS;
-}
-
-/// The emoji picker's configuration in Notion roles (instead of the
-/// legacy `colorScheme.onInverseSurface/primary` styling): transparent
-/// grid, muted category icons with the accent on the selected one, no
-/// search bar (the panel has its own controls). It opens on the recently
-/// used emoji ([NotionEmojiRecents.initialCategory]) unless [initCategory]
-/// says otherwise.
-Config notionEmojiPickerConfig(BuildContext context, {Category? initCategory}) {
-  final notion = context.notion;
-  final colors = notion.colors;
-  return Config(
-    height: null,
-    locale: Localizations.localeOf(context),
-    emojiViewConfig: EmojiViewConfig(
-      backgroundColor: Colors.transparent,
-      columns: 8,
-      emojiSizeMax: 30,
-      noRecents: const NotionEmojiNoRecents(),
-      loadingIndicator: const SizedBox.shrink(),
-    ),
-    bottomActionBarConfig: const BottomActionBarConfig(enabled: false),
-    categoryViewConfig: CategoryViewConfig(
-      initCategory: initCategory ?? NotionEmojiRecents.initialCategory,
-      backgroundColor: Colors.transparent,
-      iconColor: colors.textTertiary,
-      iconColorSelected: colors.accent,
-      indicatorColor: colors.accent,
-      backspaceColor: colors.textSecondary,
-      dividerColor: colors.border,
-    ),
-    skinToneConfig: SkinToneConfig(
-      dialogBackgroundColor: colors.selected,
-      indicatorColor: colors.textSecondary,
-    ),
-  );
-}
-
-/// "No recent emoji" in the emoji grid.
-class NotionEmojiNoRecents extends StatelessWidget {
-  const NotionEmojiNoRecents({super.key});
+  final ConversationComposerHost host;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Padding(
-      padding: const EdgeInsets.all(NotionSpace.md),
-      child: Text(
-        'Emoji you use show up here.',
-        textAlign: TextAlign.center,
-        style: context.notion.typography.calloutMuted,
-      ),
-    ),
+  State<ComposerEmojiTab> createState() => _ComposerEmojiTabState();
+}
+
+class _ComposerEmojiTabState extends State<ComposerEmojiTab> {
+  final _search = FocusNode(debugLabel: 'composer emoji search');
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The panel turns tickers off for hidden tabs.
+    final hidden = !TickerMode.valuesOf(context).enabled;
+    if (hidden && _search.hasFocus) _search.unfocus();
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => ChatLoomEmojiPicker(
+    focusNode: _search,
+    // The composer strip is a glass bar: its resting tone behind headers.
+    background: notionGlassOpaque(context, context.notion.glass.tint),
+    onSelected: (emoji) => widget.host.onEmojiSelected(null, Emoji(emoji, '')),
   );
 }
