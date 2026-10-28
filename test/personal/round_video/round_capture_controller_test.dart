@@ -588,6 +588,30 @@ void main() {
     await finish;
     controller.dispose();
   });
+  test('leaving or locking the app after the user stopped the recording '
+      'keeps the send: no review, nothing cancelled', () async {
+    final backend = FakeCapture()..pendingFinish = Completer();
+    final controller = RoundCaptureController(
+      backend: backend,
+      profile: profile,
+    );
+    await controller.initialize();
+    await controller.start();
+    // The finger left the screen: the recorder finishes and sends.
+    final finishing = controller.finish();
+    expect(controller.state, RoundCaptureState.preparing);
+    await controller.interrupt();
+    expect(controller.wasInterrupted, isFalse);
+    expect(controller.state, RoundCaptureState.preparing);
+    expect(backend.finishCalls, 1);
+    expect(backend.cancelCalls, 0);
+    await controller.cancel();
+    backend.pendingFinish!.completeError(
+      const RoundCaptureException('canceled'),
+    );
+    await finishing;
+    controller.dispose();
+  });
   test(
     'interruption with pending switch freezes hold send and preempts finish',
     () async {

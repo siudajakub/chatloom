@@ -253,6 +253,12 @@ class RoundCaptureController extends ChangeNotifier {
       _changed();
       return;
     }
+    if (state == RoundCaptureState.preparing && _finishing != null) {
+      // The user already stopped the recording (a release or Send sends it,
+      // Stop opens review). Leaving or locking the app while it is finalized
+      // no longer turns that send into review (J, 2026-10-27).
+      return;
+    }
     wasInterrupted = true;
     locked = true;
     if (active) {

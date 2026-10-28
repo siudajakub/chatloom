@@ -21,7 +21,9 @@ import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/foreground_service_controller.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
+import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:crypto/crypto.dart';
 import 'package:material_ui/material_ui.dart';
@@ -55,8 +57,25 @@ class TelegramRoundService extends ChangeNotifier
   final _subscriptions = <StreamSubscription<Event>>[];
 
   /// Drops the outbox's in-memory draft copies when the app is hidden (lock
-  /// screen, background): the drafts stay durable in protected storage.
+  /// screen, background): the drafts stay durable in protected storage. The
+  /// copies of rounds already committed and about to upload stay, so their
+  /// send does not read and encrypt them again.
   AppLifecycleListener? _lifecycle;
+
+  /// How long a round send keeps the short foreground service at most:
+  /// under Android's limit for it (about three minutes).
+  static const sendLeaseLimit = Duration(seconds: 150);
+
+  /// Keeps the process running (the short foreground service's `send_files`
+  /// lease) from the moment the user commits a round, or taps Retry, until
+  /// every such round of this process is sent or failed, for at most
+  /// [sendLeaseLimit]. Taken while the app is visible: Android does not
+  /// start the service from the background.
+  @visibleForTesting
+  static ForegroundLease sendLease = ForegroundServices.lease(
+    ForegroundServiceTasks.sendFiles,
+    maxHold: sendLeaseLimit,
+  );
   static final _dispatchEligibilityKey = Object();
   bool get _dispatchEligible {
     final test = Zone.current[_dispatchEligibilityKey];
@@ -264,6 +283,7 @@ class TelegramRoundService extends ChangeNotifier
               displayPendingEvent: true,
               retryOnTransportFailure: false,
             ),
+            committedRound: true,
             stillCurrent: () => _targetStillBound(
               target,
               RoundVideoDescriptor.fromContent(content),
@@ -292,12 +312,33 @@ class TelegramRoundService extends ChangeNotifier
     );
     try {
       _lifecycle ??= AppLifecycleListener(
-        onHide: () => _outbox?.releaseStaged(),
+        onHide: () =>
+            _outbox?.releaseStagedExcept({..._dispatching, ..._staging}),
       );
     } catch (_) {
       /* no widgets binding: the outbox's own TTL still bounds the copies */
     }
   }
+
+  /// Test seams: an outbox without protected storage, and the send checks
+  /// the outbox runs before and after the upload and at the final event.
+  @visibleForTesting
+  void debugUseOutbox(ImmediateMediaOutbox outbox) {
+    _outbox = outbox;
+    _opened = true;
+  }
+
+  @visibleForTesting
+  Future<void> debugGuard(
+    RoundSendTarget target,
+    RoundVideoDescriptor descriptor,
+  ) => _guard(target, descriptor);
+
+  @visibleForTesting
+  bool debugTargetStillBound(
+    RoundSendTarget target, [
+    RoundVideoDescriptor? descriptor,
+  ]) => _targetStillBound(target, descriptor);
 
   Room _sourceRoom(RoundSendTarget target) {
     final room = client.getRoomById(target.roomId);
@@ -322,10 +363,10 @@ class TelegramRoundService extends ChangeNotifier
     final caps = identity == null ? null : route!.capabilities(room!);
     if (room == null || identity == null || caps == null) return false;
     final profile = caps.profile;
+    // No lock or visibility condition: the user committed this round, and
+    // it may finish sending after the app was left or locked.
     return !_closed &&
         _dispatchEligible &&
-        PersonalPrivacy.surfaceUnlocked &&
-        _surfaceVisible &&
         room.encrypted &&
         client.encryptionEnabled &&
         client.fileEncryptionEnabled &&
@@ -362,12 +403,11 @@ class TelegramRoundService extends ChangeNotifier
         target.bridgeSenderId != identity.senderId) {
       throw const ImmediateMediaRejected('frozenBridgeIdentityChanged');
     }
-    if (!PersonalPrivacy.surfaceUnlocked ||
-        !_surfaceVisible ||
-        !room.encrypted ||
+    // A committed round is sent while the app is hidden or locked too.
+    if (!room.encrypted ||
         !client.encryptionEnabled ||
         !client.fileEncryptionEnabled) {
-      throw const ImmediateMediaRejected('encryptionOrSurfaceUnavailable');
+      throw const ImmediateMediaRejected('roomEncryptionUnavailable');
     }
     final caps = await _preflight(route, room);
     if (caps?.allowed != true ||
@@ -482,6 +522,8 @@ class TelegramRoundService extends ChangeNotifier
     notifyListeners();
     // Actions this call reserved in [_staging] (released in `finally`).
     final reserved = <String>{};
+    // The send lease from the commit on, until [_dispatch] takes it over.
+    void Function()? lease;
     try {
       await initialize();
       if (!context.mounted || !stillCurrent()) return null;
@@ -554,6 +596,8 @@ class TelegramRoundService extends ChangeNotifier
         ),
       );
       if (prepared == null) return null;
+      // Committed: the round is sent even if the app is left or locked now.
+      lease = sendLease.hold();
       // The bubble appears as the recorder closes (Telegram): a local echo
       // with the first frame and the frozen reply, sending until the server
       // has the round. Staging, encryption and the upload follow.
@@ -607,9 +651,13 @@ class TelegramRoundService extends ChangeNotifier
       notifyListeners();
       // Synchronously claims the action in [_dispatching] before the
       // reservation below is released.
-      unawaited(_dispatch(room, staged.actionId, onAccepted: onAccepted));
+      unawaited(
+        _dispatch(room, staged.actionId, onAccepted: onAccepted, lease: lease),
+      );
+      lease = null;
       return staged;
     } finally {
+      lease?.call();
       _staging.removeAll(reserved);
       capturing = false;
       if (!_closed) notifyListeners();
@@ -697,20 +745,19 @@ class TelegramRoundService extends ChangeNotifier
 
   /// Sends a durable draft in the background, in recording order per room.
   /// The bubble shows the upload and ends as sent, or as "Not sent" with
-  /// Retry. Leaving the chat does not stop it; a locked or backgrounded app
-  /// sends nothing (the guard checks that before and after the upload).
+  /// Retry. The user committed it, so leaving the chat or the app, or the
+  /// app locking, does not stop it (J, 2026-10-27); the guard still checks
+  /// the bridge, its capabilities and encryption before and after the
+  /// upload. [lease] (a [sendLease] hold) is released when this ends.
   Future<ImmediateMediaResult?> _dispatch(
     Room room,
     String actionId, {
     void Function(String eventId)? onAccepted,
+    void Function()? lease,
   }) async {
     final transactionId = 'round-$actionId';
-    if (_closed || !_dispatching.add(actionId)) return null;
-    if (!PersonalPrivacy.surfaceUnlocked || !_surfaceVisible) {
-      // Do not keep the multi-megabyte copy in memory; Retry reads storage.
-      _outbox!.releaseStaged(actionId);
-      await _markFailed(room, transactionId);
-      _dispatching.remove(actionId);
+    if (_closed || !_dispatching.add(actionId)) {
+      lease?.call();
       return null;
     }
     OutgoingEcho.own(room, transactionId);
@@ -742,6 +789,7 @@ class TelegramRoundService extends ChangeNotifier
       await _markFailed(room, transactionId);
       return null;
     } finally {
+      lease?.call();
       _dispatching.remove(actionId);
       OutgoingEcho.release(room, transactionId);
       UploadProgress.reset(transactionId);
@@ -858,25 +906,36 @@ class TelegramRoundService extends ChangeNotifier
     Room? room,
     bool Function()? stillCurrent,
   }) async {
-    await initialize();
-    if (stillCurrent?.call() == false) return null;
-    final unstaged = _unstagedFor(actionId);
-    final target =
-        room ??
-        (unstaged == null ? null : client.getRoomById(unstaged.$1.roomId)) ??
-        await _roomOf(actionId);
-    if (target == null) return null;
-    final transactionId = 'round-$actionId';
+    // A tap in the visible app: the send lease may start the service here.
+    final lease = sendLease.hold();
     try {
-      await OutgoingEcho.setStatus(target, transactionId, EventStatus.sending);
-    } catch (_) {}
-    if (unstaged == null) return _dispatch(target, actionId);
-    // Staging again: reconcile leaves the bubble alone until dispatch owns it.
-    _staging.add(actionId);
-    try {
-      return await _retryUnstaged(target, actionId, unstaged);
+      await initialize();
+      if (stillCurrent?.call() == false) return null;
+      final unstaged = _unstagedFor(actionId);
+      final target =
+          room ??
+          (unstaged == null ? null : client.getRoomById(unstaged.$1.roomId)) ??
+          await _roomOf(actionId);
+      if (target == null) return null;
+      final transactionId = 'round-$actionId';
+      try {
+        await OutgoingEcho.setStatus(
+          target,
+          transactionId,
+          EventStatus.sending,
+        );
+      } catch (_) {}
+      if (unstaged == null) return await _dispatch(target, actionId);
+      // Staging again: reconcile leaves the bubble alone until dispatch owns
+      // it.
+      _staging.add(actionId);
+      try {
+        return await _retryUnstaged(target, actionId, unstaged);
+      } finally {
+        _staging.remove(actionId);
+      }
     } finally {
-      _staging.remove(actionId);
+      lease();
     }
   }
 
@@ -960,9 +1019,13 @@ class TelegramRoundService extends ChangeNotifier
       return '$bridge does not accept round videos right now. $same';
     }
     return switch (code) {
+      // Rounds recorded before 2026-10-27 stopped when the app was left.
       'encryptionOrSurfaceUnavailable' =>
         'ChatLoom was locked or in the background, so the round video was '
             'not sent. Retry sends it now.',
+      'roomEncryptionUnavailable' =>
+        'Encryption was not available in this chat, so the round video was '
+            'not sent. $same',
       'roundCapabilityUnavailable' || 'encryptionUnavailable' =>
         '$bridge does not accept round videos right now. $same',
       'frozenRelationUnavailable' =>
@@ -991,19 +1054,6 @@ class TelegramRoundService extends ChangeNotifier
   /// them alone, so a chat opening meanwhile never says "Not sent" while
   /// the round is about to upload.
   final _staging = <String>{};
-
-  /// Sends continue while ChatLoom is on screen but not focused (`inactive`:
-  /// the notification shade, a permission or biometric dialog), as
-  /// Telegram's do. Hidden, paused or locked stops them.
-  static bool get _surfaceVisible {
-    if (PersonalPrivacy.surfaceForeground) return true;
-    try {
-      return WidgetsBinding.instance.lifecycleState ==
-          AppLifecycleState.inactive;
-    } catch (_) {
-      return false;
-    }
-  }
 
   /// Attempts whose server response was lost: their copy arriving in sync
   /// confirms them ([_receive]).
