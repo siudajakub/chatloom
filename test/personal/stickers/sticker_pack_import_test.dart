@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Pack import (ST-08): links, the bridges' image pack provisioning API and
 // human error messages. Fake transport, fictional packs; nothing leaves.
+import 'dart:async';
+
 import 'package:chatloom/personal/bridge_contact_search_provisioning.dart';
 import 'package:chatloom/personal/stickers/sticker_pack_import.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,7 +20,8 @@ class _Transport implements BridgeProvisioningTransport {
     BridgeProvisioningRequest request,
   ) async {
     requests.add(request);
-    return answer!(request);
+    final value = answer!(request);
+    return value is Future ? await value : value;
   }
 }
 
@@ -39,7 +42,11 @@ void main() {
       ]) {
         final link = StickerPackLink.parse(raw);
         expect(link?.network, 'telegram', reason: raw);
-        expect(link?.url, 'https://t.me/addstickers/FictionalPack', reason: raw);
+        expect(
+          link?.url,
+          'https://t.me/addstickers/FictionalPack',
+          reason: raw,
+        );
         expect(link?.emoji, isFalse);
       }
       expect(
@@ -138,11 +145,56 @@ void main() {
       expect(library.isInstalled(link.url), isTrue);
     });
 
-    Future<String> failure(BridgeProvisioningException e, {bool post = false}) async {
+    test(
+      'install is idempotent: one import for concurrent adds, none when added',
+      () async {
+        final link = StickerPackLink.parse('t.me/addstickers/FictionalPack')!;
+        final gate = Completer<Object?>();
+        transport.answer = (request) => request.method == 'POST'
+            ? gate.future
+            : {
+                'images': {'FictionalPack_smile': packImage('a')},
+                'pack': {'display_name': 'Fictional pack'},
+              };
+        final library = fakeLibrary(backend);
+        addTearDown(library.dispose);
+        final preview = await provisioning.preview(link);
+        final first = provisioning.install(
+          link,
+          preview: preview,
+          library: library,
+        );
+        final second = provisioning.install(
+          link,
+          preview: preview,
+          library: library,
+        );
+        await pumpEventQueue();
+        gate.complete({
+          'room_id': '!space:example.invalid',
+          'state_key': 'FictionalPack',
+        });
+        expect((await first).key, (await second).key);
+        final again = await provisioning.install(link, library: library);
+        expect(again.key, (await first).key);
+        expect(
+          transport.requests.where((r) => r.method == 'POST'),
+          hasLength(1),
+        );
+        expect(library.doc.packs, hasLength(1));
+      },
+    );
+
+    Future<String> failure(
+      BridgeProvisioningException e, {
+      bool post = false,
+    }) async {
       transport.answer = (_) => throw e;
       final link = StickerPackLink.parse('t.me/addstickers/FictionalPack')!;
       try {
-        post ? await provisioning.import(link) : await provisioning.preview(link);
+        post
+            ? await provisioning.import(link)
+            : await provisioning.preview(link);
       } on StickerImportException catch (error) {
         return error.message;
       }
@@ -183,7 +235,9 @@ void main() {
         'ChatLoom can’t reach your Telegram bridge right now.',
       );
       for (final message in [
-        await failure(const BridgeProvisioningException(500, errcode: 'M_UNKNOWN')),
+        await failure(
+          const BridgeProvisioningException(500, errcode: 'M_UNKNOWN'),
+        ),
       ]) {
         expect(message, isNot(contains('M_')));
         expect(message, isNot(contains('500')));

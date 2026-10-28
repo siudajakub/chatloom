@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -12,11 +14,14 @@ const stickerCacheName = 'stickers';
 /// The media of a sticker or GIF.
 ///
 /// Grid cells ([preview] false) load the server's small static thumbnail
-/// (`isThumbnail`, about the cell size × device pixel ratio) and never
-/// animate: animated WebP/GIF thumbnails are paused by the [TickerMode]
-/// the grids set, TGS/Lottie shows its first frame. Only the long-press
-/// preview loads the original and animates it (unless reduced motion).
-/// Video GIFs show their poster in both; the timeline plays them.
+/// (`isThumbnail`, about the cell size × device pixel ratio); TGS/Lottie
+/// stickers play only while the grid lets them ([StickerTile.animate]),
+/// otherwise they show their first frame. A cell built during a fast
+/// fling waits with its placeholder until the fling slows down
+/// ([Scrollable.recommendDeferredLoadingForContext]), so cells that only
+/// fly past never download, decrypt or parse. Only the long-press preview
+/// loads the original and animates it (unless reduced motion). Video GIFs
+/// show their poster in both; the timeline plays them.
 class StickerImage extends StatelessWidget {
   const StickerImage({
     super.key,
@@ -143,11 +148,55 @@ class StickerImage extends StatelessWidget {
         animationDuration: fade,
       );
     }
+    if (!preview) {
+      image = _ScrollAwareLoad(placeholder: placeholder, child: image);
+    }
     return SizedBox.square(
       dimension: size,
       child: Center(child: image),
     );
   }
+}
+
+/// Shows [placeholder] instead of [child] while the enclosing scrollable
+/// moves too fast to load media (the same rule as Flutter's
+/// `ScrollAwareImageProvider`, which only covers decoding): re-checked
+/// once per frame, no timers.
+class _ScrollAwareLoad extends StatefulWidget {
+  const _ScrollAwareLoad({required this.placeholder, required this.child});
+
+  final Widget placeholder;
+  final Widget child;
+
+  @override
+  State<_ScrollAwareLoad> createState() => _ScrollAwareLoadState();
+}
+
+class _ScrollAwareLoadState extends State<_ScrollAwareLoad> {
+  bool? _ready;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_ready != null) return;
+    _ready = !Scrollable.recommendDeferredLoadingForContext(context);
+    if (!_ready!) _recheck();
+  }
+
+  void _recheck() {
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      if (!mounted) return;
+      if (Scrollable.recommendDeferredLoadingForContext(context)) {
+        _recheck();
+      } else {
+        setState(() => _ready = true);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _ready! ? widget.child : widget.placeholder;
 }
 
 class _StickerPlaceholder extends StatelessWidget {
@@ -200,6 +249,13 @@ class _GifMark extends StatelessWidget {
 }
 
 /// One cell of a sticker or GIF grid: tap sends, long-press previews.
+///
+/// The image runs under its own [TickerMode]: off by default (static
+/// cells, battery), or following [animate] (the sticker grid turns it on
+/// while it rests, so visible animated stickers play and nothing decodes
+/// frames during a scroll). Only the image: a [TickerMode] around the grid
+/// would also stop the grid's fling and the press motion. [sent] carries
+/// the id of the last sent cell ([sentId]): that cell dips once.
 class StickerTile extends StatelessWidget {
   const StickerTile({
     super.key,
@@ -209,6 +265,9 @@ class StickerTile extends StatelessWidget {
     required this.onTap,
     this.onLongPress,
     this.fit = BoxFit.contain,
+    this.animate,
+    this.sent,
+    this.sentId,
   });
 
   final StickerItem item;
@@ -217,6 +276,9 @@ class StickerTile extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
   final BoxFit fit;
+  final ValueListenable<bool>? animate;
+  final ValueListenable<StickerSentPulse?>? sent;
+  final String? sentId;
 
   @override
   Widget build(BuildContext context) {
@@ -226,6 +288,31 @@ class StickerTile extends StatelessWidget {
         : item.emoji == null
         ? 'Sticker'
         : 'Sticker ${item.emoji}';
+    final image = StickerImage(
+      item: item,
+      client: client,
+      size: size - 2 * inset,
+      fit: fit,
+      borderRadius: fit == BoxFit.cover
+          ? NotionRadius.smAll
+          : NotionRadius.xsAll,
+    );
+    final animate = this.animate;
+    Widget child = Padding(
+      padding: EdgeInsets.all(inset),
+      child: animate == null
+          ? TickerMode(enabled: false, child: image)
+          : ValueListenableBuilder<bool>(
+              valueListenable: animate,
+              builder: (context, on, image) =>
+                  TickerMode(enabled: on, child: image!),
+              child: image,
+            ),
+    );
+    final sent = this.sent;
+    if (sent != null && sentId != null) {
+      child = _SentPulse(pulse: sent, id: sentId!, child: child);
+    }
     return Semantics(
       button: true,
       label: label,
@@ -235,27 +322,88 @@ class StickerTile extends StatelessWidget {
         onTap: onTap,
         // NotionPressable plays the long-press haptic itself.
         onLongPress: onLongPress,
-        child: Padding(
-          padding: EdgeInsets.all(inset),
-          // Static cells (battery); the long-press preview animates. Only
-          // the image: a TickerMode around the grid would also stop the
-          // grid's fling and the press motion.
-          child: TickerMode(
-            enabled: false,
-            child: StickerImage(
-              item: item,
-              client: client,
-              size: size - 2 * inset,
-              fit: fit,
-              borderRadius: fit == BoxFit.cover
-                  ? NotionRadius.smAll
-                  : NotionRadius.xsAll,
-            ),
-          ),
-        ),
+        child: child,
       ),
     );
   }
+}
+
+/// The last sticker sent from a grid: [id] of its cell and a counter, so
+/// sending the same sticker twice pulses twice.
+typedef StickerSentPulse = (String id, int count);
+
+/// A sent sticker's cell dips and springs back once (critically damped,
+/// no bounce: grid cells are not reward elements). The controller is
+/// created on the first pulse only, so cells built by scrolling cost
+/// nothing; reduced motion shows no pulse.
+class _SentPulse extends StatefulWidget {
+  const _SentPulse({
+    required this.pulse,
+    required this.id,
+    required this.child,
+  });
+
+  final ValueListenable<StickerSentPulse?> pulse;
+  final String id;
+  final Widget child;
+
+  @override
+  State<_SentPulse> createState() => _SentPulseState();
+}
+
+class _SentPulseState extends State<_SentPulse>
+    with SingleTickerProviderStateMixin {
+  AnimationController? _scale;
+  StickerSentPulse? _seen;
+
+  @override
+  void initState() {
+    super.initState();
+    _seen = widget.pulse.value;
+    widget.pulse.addListener(_pulsed);
+  }
+
+  @override
+  void didUpdateWidget(_SentPulse oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.pulse, widget.pulse)) {
+      oldWidget.pulse.removeListener(_pulsed);
+      widget.pulse.addListener(_pulsed);
+    }
+  }
+
+  void _pulsed() {
+    final value = widget.pulse.value;
+    if (value == _seen) return;
+    _seen = value;
+    if (value?.$1 != widget.id || !mounted || NotionMotion.reduced(context)) {
+      return;
+    }
+    final created = _scale == null;
+    final scale = _scale ??= AnimationController.unbounded(
+      vsync: this,
+      value: 1,
+    );
+    // Kick the spring inwards: a dip to about 90 % and back to 1.
+    scale.animateWith(
+      NotionMotion.springTo(NotionMotion.snappy, scale.value, 1, velocity: -6),
+    );
+    if (created) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.pulse.removeListener(_pulsed);
+    _scale?.dispose();
+    super.dispose();
+  }
+
+  static const _rest = AlwaysStoppedAnimation<double>(1);
+
+  // One shape before and after the first pulse: the image never remounts.
+  @override
+  Widget build(BuildContext context) =>
+      ScaleTransition(scale: _scale ?? _rest, child: widget.child);
 }
 
 /// One action of the long-press preview.
@@ -275,18 +423,25 @@ class StickerPreviewAction {
 }
 
 /// Telegram's sticker preview: the sticker large and animated over a dim
-/// page, its actions in a glass card below. [note] explains why sending is
-/// not possible here.
+/// page (it pops out of the grid), its emoji and [packTitle] under it and
+/// its actions in a glass card below. [note] explains why sending is not
+/// possible here. A tap on the sticker closes it.
 Future<void> showStickerPreview(
   BuildContext context, {
   required StickerItem item,
   required Client client,
   required List<StickerPreviewAction> actions,
   String? note,
+  String? packTitle,
 }) => showNotionCustomDialog<void>(
   context: context,
-  builder: (context) =>
-      _StickerPreview(item: item, client: client, actions: actions, note: note),
+  builder: (context) => _StickerPreview(
+    item: item,
+    client: client,
+    actions: actions,
+    note: note,
+    packTitle: packTitle,
+  ),
 );
 
 class _StickerPreview extends StatelessWidget {
@@ -295,12 +450,14 @@ class _StickerPreview extends StatelessWidget {
     required this.client,
     required this.actions,
     this.note,
+    this.packTitle,
   });
 
   final StickerItem item;
   final Client client;
   final List<StickerPreviewAction> actions;
   final String? note;
+  final String? packTitle;
 
   static const _cardWidth = 252.0;
 
@@ -315,27 +472,57 @@ class _StickerPreview extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            GestureDetector(
-              onTap: () => Navigator.of(context).pop(),
-              child: RepaintBoundary(
-                child: TickerMode(
-                  enabled: !NotionMotion.reduced(context),
-                  child: StickerImage(
-                    item: item,
-                    client: client,
-                    size: size,
-                    preview: true,
-                    fit: item.kind == StickerKind.gif
-                        ? BoxFit.cover
-                        : BoxFit.contain,
-                    borderRadius: NotionRadius.mdAll,
+            Semantics(
+              image: true,
+              label: item.kind == StickerKind.gif
+                  ? 'GIF preview'
+                  : 'Sticker preview',
+              child: NotionTapTarget(
+                onTap: () => Navigator.of(context).pop(),
+                child: NotionPop(
+                  bounce: false,
+                  child: RepaintBoundary(
+                    child: TickerMode(
+                      enabled: !NotionMotion.reduced(context),
+                      child: StickerImage(
+                        key: const ValueKey('sticker-preview-image'),
+                        item: item,
+                        client: client,
+                        size: size,
+                        preview: true,
+                        fit: item.kind == StickerKind.gif
+                            ? BoxFit.cover
+                            : BoxFit.contain,
+                        borderRadius: NotionRadius.mdAll,
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-            if (item.emoji != null && item.kind == StickerKind.sticker) ...[
+            if ((item.emoji != null && item.kind == StickerKind.sticker) ||
+                packTitle != null) ...[
               const SizedBox(height: NotionSpace.xs),
-              Text(item.emoji!, style: NotionType.heading),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    if (item.emoji != null && item.kind == StickerKind.sticker)
+                      TextSpan(text: item.emoji, style: NotionType.heading),
+                    if (item.emoji != null &&
+                        item.kind == StickerKind.sticker &&
+                        packTitle != null)
+                      const TextSpan(text: '  '),
+                    if (packTitle != null)
+                      TextSpan(
+                        text: packTitle,
+                        style: notion.typography.footnoteMuted,
+                      ),
+                  ],
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
             const SizedBox(height: NotionSpace.md),
             SizedBox(

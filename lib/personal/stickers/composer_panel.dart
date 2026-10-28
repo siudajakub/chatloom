@@ -363,7 +363,9 @@ class _ComposerPanelSlotState extends State<ComposerPanelSlot>
     if (_phase == _Phase.closed && _reveal.isDismissed) {
       return const SizedBox.shrink();
     }
-    final searching = _searching && _phase == _Phase.open;
+    // Only a soft keyboard needs the compact height: on desktop a focused
+    // search field leaves the panel as it is.
+    final searching = _soft && _searching && _phase == _Phase.open;
     final height = searching ? _searchHeight : _panelHeight;
     final space = searching ? height : _space(height);
     if (_content == null || _contentHeight != height) {

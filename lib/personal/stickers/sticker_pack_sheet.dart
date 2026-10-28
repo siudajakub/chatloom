@@ -25,6 +25,8 @@ Future<void> showStickerPackSheet(
   void Function(StickerItem item)? onSend,
   StickerPackProvisioning? provisioning,
   StickerLibrary? library,
+  Future<void> Function()? onAdd,
+  String? addNote,
 }) {
   assert(link != null || pack != null);
   return showNotionSheet<void>(
@@ -36,6 +38,8 @@ Future<void> showStickerPackSheet(
       onSend: onSend,
       provisioning: provisioning,
       library: library,
+      onAdd: onAdd,
+      addNote: addNote,
     ),
   );
 }
@@ -49,6 +53,8 @@ class StickerPackSheet extends StatefulWidget {
     this.onSend,
     this.provisioning,
     this.library,
+    this.onAdd,
+    this.addNote,
   });
 
   final Client client;
@@ -57,6 +63,14 @@ class StickerPackSheet extends StatefulWidget {
   final void Function(StickerItem item)? onSend;
   final StickerPackProvisioning? provisioning;
   final StickerLibrary? library;
+
+  /// Adds a [pack] that has no network link (a Matrix room's pack): shows
+  /// "Add N stickers" until the library has the pack. Throws
+  /// [StickerImportException] with a sentence.
+  final Future<void> Function()? onAdd;
+
+  /// A line under the Add button (e.g. that adding joins a room).
+  final String? addNote;
 
   @override
   State<StickerPackSheet> createState() => _StickerPackSheetState();
@@ -122,18 +136,23 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
 
   Future<void> _add() async {
     final link = _link;
-    if (link == null) return;
+    final onAdd = widget.onAdd;
+    if (link == null && onAdd == null) return;
     setState(() {
       _importing = true;
       _error = null;
     });
     try {
-      await _provisioning.install(
-        link,
-        title: _preview?.pack.displayName ?? widget.pack?.title,
-        preview: _preview,
-        library: _library,
-      );
+      if (link != null) {
+        await _provisioning.install(
+          link,
+          title: _preview?.pack.displayName ?? widget.pack?.title,
+          preview: _preview,
+          library: _library,
+        );
+      } else {
+        await onAdd!();
+      }
       if (!mounted) return;
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(content: Text('${_title()} added to your stickers')),
@@ -194,7 +213,10 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
     final tile = width / columns;
     final rows = (stickers.length / columns).ceil();
     final gridHeight = math.min(media.height * .5, math.max(1, rows) * tile);
-    final canAdd = installed == null && link != null && _preview != null;
+    final canAdd =
+        installed == null &&
+        ((link != null && (_preview != null || widget.pack != null)) ||
+            (link == null && widget.onAdd != null));
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -277,10 +299,12 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
             icon: Icons.error_outline,
             tone: NotionCalloutTone.warning,
             title: _error!,
-            actionLabel: _preview == null && installed == null
+            actionLabel:
+                _preview == null && installed == null && widget.pack == null
                 ? 'Try again'
                 : null,
-            onAction: _preview == null && installed == null
+            onAction:
+                _preview == null && installed == null && widget.pack == null
                 ? _loadPreview
                 : null,
           ),
@@ -296,16 +320,28 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
                   expand: true,
                   onPressed: () => _remove(installed),
                 )
-        else if (link != null)
+        else if (link != null || widget.onAdd != null) ...[
           NotionButton.primary(
             label: stickers.isEmpty
                 ? 'Add sticker pack'
+                : stickers.length == 1
+                ? 'Add 1 sticker'
                 : 'Add ${stickers.length} stickers',
             icon: Icons.add,
             expand: true,
             busy: _importing,
-            onPressed: canAdd ? _add : null,
+            onPressed: canAdd && !_importing ? _add : null,
           ),
+          if (widget.addNote != null)
+            Padding(
+              padding: const EdgeInsets.only(top: NotionSpace.xs),
+              child: Text(
+                widget.addNote!,
+                style: notion.typography.footnoteMuted,
+                textAlign: TextAlign.center,
+              ),
+            ),
+        ],
         if (link != null) ...[
           const SizedBox(height: NotionSpace.xs),
           NotionButton.ghost(

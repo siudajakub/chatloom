@@ -4,12 +4,14 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
+import 'add_sticker_packs.dart';
+import 'own_sticker_pack_page.dart';
 import 'sticker_library.dart';
 import 'sticker_models.dart';
-import 'sticker_pack_import.dart';
 import 'sticker_pack_sheet.dart';
 import 'sticker_store.dart';
 import 'sticker_tile.dart';
@@ -73,57 +75,6 @@ class _StickerSettingsPageState extends State<StickerSettingsPage> {
     final moved = keys.removeAt(from);
     keys.insert(to.clamp(0, keys.length), moved);
     _library.reorderPacks(keys);
-  }
-
-  Future<void> _addFromLink() async {
-    final controller = TextEditingController();
-    String? error;
-    final link = await showNotionCustomDialog<StickerPackLink>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) {
-          void submit() {
-            final parsed = StickerPackLink.parse(controller.text);
-            if (parsed == null) {
-              setState(
-                () => error =
-                    'Paste a t.me/addstickers or wa.me/stickerpack link.',
-              );
-              return;
-            }
-            Navigator.of(context).pop(parsed);
-          }
-
-          return NotionDialog(
-            title: 'Add a sticker pack',
-            content: NotionTextField(
-              controller: controller,
-              autofocus: true,
-              hint: 'https://t.me/addstickers/…',
-              error: error,
-              keyboardType: TextInputType.url,
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) => submit(),
-            ),
-            actions: [
-              NotionButton.ghost(
-                label: 'Cancel',
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-              NotionButton.primary(label: 'Open', onPressed: submit),
-            ],
-          );
-        },
-      ),
-    );
-    controller.dispose();
-    if (link == null || !mounted) return;
-    await showStickerPackSheet(
-      context,
-      client: widget.client,
-      link: link,
-      library: _library,
-    );
   }
 
   void _clearRecent() {
@@ -204,7 +155,7 @@ class _StickerSettingsPageState extends State<StickerSettingsPage> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: NotionSpace.xs),
               child: Text(
-                'No sticker packs yet. Import your Telegram packs or open a pack link.',
+                'No sticker packs yet. Add some below, or tap a pack link in a chat.',
                 style: notion.typography.footnoteMuted,
               ),
             )
@@ -268,12 +219,14 @@ class _StickerSettingsPageState extends State<StickerSettingsPage> {
                 leading: _packIcon(pack),
                 title: pack.title,
                 subtitle: _subtitle(pack),
-                onTap: () => showStickerPackSheet(
-                  context,
-                  client: widget.client,
-                  pack: pack,
-                  library: _library,
-                ),
+                onTap: pack.source == StickerPackSource.user
+                    ? () => context.push(ownStickerPackPath)
+                    : () => showStickerPackSheet(
+                        context,
+                        client: widget.client,
+                        pack: pack,
+                        library: _library,
+                      ),
                 trailing: NotionIconButton(
                   icon: Icons.visibility_off_outlined,
                   label: 'Hide ${pack.title}',
@@ -283,16 +236,24 @@ class _StickerSettingsPageState extends State<StickerSettingsPage> {
           ],
           const NotionSettingsSection('Add packs'),
           NotionListRow(
+            key: const ValueKey('sticker-settings-add'),
+            leading: const Icon(Icons.add),
+            title: 'Add stickers',
+            subtitle: 'Search Telegram’s packs or paste a pack link',
+            onTap: () => showAddStickerPacks(context, library: _library),
+          ),
+          NotionListRow(
             leading: const Icon(Icons.download_outlined),
             title: 'Import from Telegram',
             subtitle: 'The sticker packs installed in your Telegram account',
             onTap: () => showTelegramPackImport(context),
           ),
           NotionListRow(
-            leading: const Icon(Icons.link),
-            title: 'Add from a link',
-            subtitle: 't.me/addstickers/… or wa.me/stickerpack/…',
-            onTap: _addFromLink,
+            key: const ValueKey('sticker-settings-own'),
+            leading: const Icon(Icons.add_photo_alternate_outlined),
+            title: 'Your sticker pack',
+            subtitle: 'Make stickers from your own images',
+            onTap: () => context.push(ownStickerPackPath),
           ),
           const NotionSettingsSection('Suggestions'),
           NotionListRow(

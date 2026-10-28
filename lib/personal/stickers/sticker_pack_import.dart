@@ -330,13 +330,47 @@ class StickerPackProvisioning {
   /// Imports [link] and installs it in the library. [preview] (already
   /// loaded content) is cached so the pack works before its state syncs;
   /// without it the state is read from the room, or the preview loaded.
+  ///
+  /// Idempotent: a pack the library already has is not imported again, and
+  /// concurrent installs of one link (the Add sheet, the Telegram page and
+  /// the pack sheet) share one import.
   Future<StickerPackRef> install(
     StickerPackLink link, {
     String? title,
     ImagePackContent? preview,
     StickerLibrary? library,
-  }) async {
+  }) {
     final lib = library ?? StickerLibrary.of(client);
+    final existing = _installedRef(lib, link);
+    if (existing != null) return Future.value(existing);
+    final key = '${client.userID}|${link.url.toLowerCase()}';
+    final running = _installing[key];
+    if (running != null) return running;
+    final request = _install(link, title: title, preview: preview, lib: lib);
+    _installing[key] = request;
+    request.whenComplete(() => _installing.remove(key)).ignore();
+    return request;
+  }
+
+  static final _installing = <String, Future<StickerPackRef>>{};
+
+  static StickerPackRef? _installedRef(
+    StickerLibrary lib,
+    StickerPackLink link,
+  ) {
+    final wanted = link.url.toLowerCase();
+    for (final ref in lib.doc.packs) {
+      if (ref.packUrl?.toLowerCase() == wanted) return ref;
+    }
+    return lib.packByUrl(link.url)?.ref;
+  }
+
+  Future<StickerPackRef> _install(
+    StickerPackLink link, {
+    String? title,
+    ImagePackContent? preview,
+    required StickerLibrary lib,
+  }) async {
     final imported = await import(link);
     final ref = StickerPackRef(
       roomId: imported.roomId,

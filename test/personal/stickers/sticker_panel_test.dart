@@ -4,10 +4,12 @@
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/stickers/composer_panel.dart';
+import 'package:chatloom/personal/stickers/gif_tab.dart';
 import 'package:chatloom/personal/stickers/sticker_library.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/stickers/sticker_models.dart';
 import 'package:chatloom/personal/stickers/sticker_panel.dart';
+import 'package:chatloom/personal/stickers/sticker_tab.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -92,6 +94,8 @@ void main() {
     library = fakeLibrary(backend);
     StickerLibrary.debugSet(client, library);
     StickerPanel.debugResetTab(StickerPanelTab.stickers);
+    StickerTab.debugResetPosition();
+    GifTab.debugResetPosition();
   });
   tearDown(() {
     library.dispose();
@@ -119,13 +123,13 @@ void main() {
     child: StickerPanel(host: host, searchFocus: FocusNode()),
   );
 
-  testWidgets('no packs: an empty state that offers the Telegram import', (
+  testWidgets('no packs: an empty state that offers to add packs', (
     tester,
   ) async {
     await tester.pumpWidget(_app(panel()));
     await tester.pumpAndSettle();
     expect(find.text('No sticker packs yet'), findsOneWidget);
-    expect(find.text('Import from Telegram'), findsOneWidget);
+    expect(find.text('Add sticker packs'), findsOneWidget);
     expect(find.text('Emoji'), findsOneWidget);
     expect(find.text('GIFs'), findsOneWidget);
     expect(find.text('Stickers'), findsOneWidget);

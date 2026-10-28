@@ -339,6 +339,10 @@ class StickerLibrary extends ChangeNotifier {
   /// The user's order of installed packs (by key).
   void reorderPacks(List<String> keys) => _apply(OrderPacksOp(keys));
 
+  /// Re-reads packs after a change the backend made outside the library
+  /// (the account's own pack was just written), before its sync echo.
+  void refresh() => _invalidate();
+
   void _apply(StickerLibraryOp op) {
     if (_disposed) return;
     _pending.add(op);
