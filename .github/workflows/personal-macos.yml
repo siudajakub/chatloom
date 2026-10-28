@@ -56,8 +56,41 @@ jobs:
       - name: Account-free native storage and crypto smoke test
         timeout-minutes: 20
         run: python3 scripts/macos/build.py --smoke-test
+      # An ad-hoc signature changes with every build, so the login Keychain
+      # treats each update as a new program and asks once per stored item.
+      # The owner's self-signed certificate keeps the designated requirement
+      # stable; it lives in a temporary keychain removed after the build.
+      - name: Import stable signing certificate
+        id: signing
+        env:
+          P12: ${{ secrets.CHATLOOM_MACOS_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.CHATLOOM_MACOS_SIGNING_P12_PASSWORD }}
+          IDENTITY: ${{ vars.CHATLOOM_MACOS_SIGN_IDENTITY || 'ChatLoom Local Signing' }}
+        run: |
+          if [ -z "$P12" ]; then
+            echo "::warning::CHATLOOM_MACOS_SIGNING_P12 is not set: the app is ad-hoc signed and macOS asks for Keychain access after every update"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/chatloom-signing.keychain-db"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" \
+            -P "$P12_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          echo "CHATLOOM_MACOS_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
       - name: Build and verify release bundle
         run: python3 scripts/macos/build.py
+      - name: Remove signing keychain
+        if: always() && steps.signing.outputs.keychain != ''
+        run: security delete-keychain "${{ steps.signing.outputs.keychain }}"
       - name: Upload app and verification manifest
         uses: actions/upload-artifact@v4
         with:

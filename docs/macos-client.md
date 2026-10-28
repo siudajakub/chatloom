@@ -51,8 +51,10 @@ Spotlight show one app. Removing the bundle does not remove its data. Do not
 delete an existing installation's application data, Keychain items or Matrix
 devices.
 
-The CI artifact has an ad-hoc signature verified by `codesign`. It is not Apple
-notarized. macOS may require explicit approval in System Settings → Privacy &
+The CI artifact is signed with the owner's stable self-signed certificate
+when the repository has the `CHATLOOM_MACOS_SIGNING_P12` secret (see below);
+otherwise it falls back to an ad-hoc signature and the run shows a warning.
+Either signature is verified by `codesign`. It is not Apple notarized. macOS may require explicit approval in System Settings → Privacy &
 Security on the first launch. Developer ID signing and notarization require the
 owner's Apple certificate and notary credentials; this workflow does not
 request, export or upload those credentials.
@@ -89,8 +91,10 @@ Create the certificate once on the Mac:
    rtk security find-identity -p codesigning
    ```
 
-The certificate and its private key stay in the Mac's login Keychain. Never
-export them to the repository, the devbox or CI. Build with it:
+Set its validity to ten years (Let me override defaults → Validity Period
+3650): a new certificate brings the prompts back once. The certificate and
+its private key stay in the Mac's login Keychain and in the CI secret below;
+never put them in the repository or on the devbox. Build with it:
 
 ```sh
 rtk python3 scripts/macos/build.py --sign-identity "ChatLoom Local Signing"
@@ -107,7 +111,34 @@ asks for each Keychain item one last time: enter the password and choose
 **Always Allow**. Existing Keychain items, sessions and data are kept. Later
 builds signed with the same certificate do not ask again. If the certificate
 is deleted or replaced, the prompts return once for the new one. The smoke
-test and the CI workflow remain ad-hoc signed.
+test stays ad-hoc signed.
+
+#### The same certificate in CI
+
+The `Personal macOS` workflow signs with the same certificate, so a
+downloaded DMG and a local build are the same program to the Keychain. Store
+it once as repository secrets:
+
+1. Keychain Access → login → My Certificates → right-click
+   `ChatLoom Local Signing` → Export… → format Personal Information Exchange
+   (.p12), with a strong export password.
+2. Upload it and delete the file:
+
+   ```sh
+   rtk gh secret set CHATLOOM_MACOS_SIGNING_P12 --repo siudajakub/chatloom < <(base64 -i ChatLoom.p12)
+   rtk gh secret set CHATLOOM_MACOS_SIGNING_P12_PASSWORD --repo siudajakub/chatloom
+   rm ChatLoom.p12
+   ```
+
+A certificate with another name also needs the repository variable
+`CHATLOOM_MACOS_SIGN_IDENTITY`. The workflow imports the .p12 into a
+temporary keychain on the runner, re-signs the app and the DMG, and deletes
+that keychain afterwards. Secrets reach only workflow runs of this
+repository, not pull requests from forks. Whoever holds the .p12 can sign an
+app the Keychain trusts as ChatLoom, so keep the export password private and
+rotate the certificate if it leaks. The manifest's `signing` and
+`designated_requirement` fields show the identity; the requirement of a CI
+build must equal that of a local build (`codesign -d -r- ChatLoom.app`).
 
 ## Desktop behavior
 

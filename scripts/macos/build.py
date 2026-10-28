@@ -55,6 +55,7 @@ def resign(bundle, identity):
     # An ad-hoc designated requirement pins the cdhash, which changes per build.
     if 'designated =>' not in designated or 'cdhash' in designated:
         raise SystemExit('The signature has no stable designated requirement')
+    return designated.split('designated =>', 1)[1].strip()
 
 
 def main():
@@ -117,8 +118,7 @@ def main():
     if info['CFBundleIdentifier'] != 'pl.personal.chat':
         raise SystemExit('Unexpected bundle identifier')
     executable = bundle / 'Contents/MacOS' / info['CFBundleExecutable']
-    if args.sign_identity:
-        resign(bundle, args.sign_identity)
+    designated = resign(bundle, args.sign_identity) if args.sign_identity else None
     run('codesign', '--verify', '--deep', '--strict', str(bundle))
     architectures = run('lipo', '-archs', str(executable), capture_output=True,
                         text=True).stdout.strip().split()
@@ -155,6 +155,8 @@ def main():
         'archive': archive.name, 'sha256': digest,
         'disk_image': image.name, 'disk_image_sha256': image_digest,
         'signing': args.sign_identity or 'ad-hoc',
+        # Equal requirements keep Keychain approvals across CI and local builds.
+        'designated_requirement': designated,
         'notarized': False, 'system_notifications': False,
         'minimum_macos': info.get('LSMinimumSystemVersion'),
         'verified_native_images': native_images,
