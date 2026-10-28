@@ -12,6 +12,7 @@
   "provider_timeout_seconds": 8,
   "dedup_seconds": 86400,
   "max_dedup_entries": 20000,
+  "message_ttl_seconds": 86400,
   "registrations": [],
   "registration_openid_server": "matrix.beeper.com",
   "registration_openid_origin": "https://matrix.beeper.com",

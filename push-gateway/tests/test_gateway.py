@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -250,10 +251,51 @@ class GatewayTests(unittest.TestCase):
         counts=android_block(gateway.routing_data(packet(event=None)['notification']),'normal')
         self.assertEqual(counts['collapse_key'],'counts')
         self.assertEqual(counts['priority'],'normal')
+        self.assertEqual(counts['ttl'],'3600s')
         message=android_block(gateway.routing_data(packet()['notification']),'high')
         self.assertNotIn('collapse_key',message)
         reminder=android_block({"personal_wake":"reminder"},'high')
         self.assertNotIn('collapse_key',reminder)
+        # A night offline (airplane mode) must not expire message pushes or
+        # reminder wakes; FCM drops an expired message without a trace.
+        self.assertEqual(message['ttl'],'86400s')
+        self.assertEqual(reminder['ttl'],'86400s')
+        publisher.message_ttl=7*86400
+        self.assertEqual(android_block(gateway.routing_data(packet()['notification']),'high')['ttl'],'604800s')
+        self.assertEqual(android_block({"personal_wake":"reminder"},'high')['ttl'],'604800s')
+        self.assertEqual(android_block(gateway.routing_data(packet(event=None)['notification']),'normal')['ttl'],'3600s')
+
+    def test_message_ttl_is_validated_and_reaches_the_publisher(self):
+        with context() as (app,_):
+            self.assertEqual(app.config.message_ttl_seconds,86400)
+            for bad in (59,gateway.MAX_FCM_TTL_SECONDS+1,0,-1,True,'86400',86400.0):
+                with self.assertRaises(gateway.ConfigError,msg=repr(bad)):
+                    replace(app.config,message_ttl_seconds=bad).validate()
+            for good in (60,3600,gateway.MAX_FCM_TTL_SECONDS):
+                replace(app.config,message_ttl_seconds=good).validate()
+            configfile=Path(app.config.state_directory)/'config.json'
+            configfile.write_text(json.dumps({'project_id':'fixture-project',
+                'service_account_file':'/fixture/account.json','state_directory':app.config.state_directory,
+                'registrations':[],'message_ttl_seconds':172800}))
+            configfile.chmod(0o600)
+            self.assertEqual(gateway.Config.load(configfile).message_ttl_seconds,172800)
+            configfile.write_text(json.dumps({'project_id':'fixture-project',
+                'service_account_file':'/fixture/account.json','state_directory':app.config.state_directory,
+                'registrations':[],'message_ttl_seconds':30*86400}))
+            with self.assertRaises(gateway.ConfigError):gateway.Config.load(configfile)
+        # The configured value reaches the real publisher (google-auth stubbed).
+        service_account=types.SimpleNamespace(Credentials=types.SimpleNamespace(
+            from_service_account_info=lambda info,scopes:object()))
+        modules={'google':types.ModuleType('google'),
+            'google.oauth2':types.SimpleNamespace(service_account=service_account),
+            'google.oauth2.service_account':service_account}
+        info={'type':'service_account','project_id':'fixture-project',
+            'token_uri':'https://oauth2.googleapis.com/token',
+            'client_email':'fixture@fixture-project.iam.gserviceaccount.com'}
+        with patch.dict(sys.modules,modules),patch.object(gateway,'private_json',return_value=info):
+            config=gateway.Config(project_id='fixture-project',service_account_file='/fixture/account.json',
+                registrations=(),message_ttl_seconds=7200)
+            self.assertEqual(gateway.FcmPublisher(config).message_ttl,7200)
 
     @unittest.skipUnless(HAS_GOOGLE_AUTH, 'Run optional auth test in requirements.txt venv')
     def test_real_google_auth_signer_only_calls_mocked_google_endpoints(self):

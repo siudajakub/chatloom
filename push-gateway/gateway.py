@@ -42,6 +42,8 @@ STATS_FLUSH_SECONDS = 60
 # registered one is evicted (a phone re-enrolls after logout/login with a new
 # Matrix device id, so older rows of the same account become stale).
 MAX_DEVICES_PER_ACCOUNT = 8
+# FCM's own upper bound for android.ttl (28 days).
+MAX_FCM_TTL_SECONDS = 28 * 86400
 LOG = logging.getLogger("personal-push")
 PATH_NAMES = {ENDPOINT: "notify", REMINDER_ENDPOINT: "reminder", REGISTER_ENDPOINT: "register", "/healthz": "healthz"}
 # Only fixed enum/count names ever reach logs or the stats table.
@@ -181,6 +183,9 @@ class Config:
     provider_timeout_seconds: int = 8
     dedup_seconds: int = 86400
     max_dedup_entries: int = 20000
+    # How long FCM keeps a message push or reminder wake for a phone that is
+    # offline (airplane mode overnight). Count-only pushes keep COUNTS_TTL_SECONDS.
+    message_ttl_seconds: int = 86400
     reminder_credential_file: str | None = None
     # Explicit operator pins: never discover or fetch a host supplied by a phone.
     registration_openid_server: str = "matrix.beeper.com"
@@ -220,7 +225,7 @@ class Config:
             ("max_devices", 1, 8), ("rate_per_minute", 1, 600),
             ("max_concurrency", 1, 16), ("request_timeout_seconds", 1, 15),
             ("provider_timeout_seconds", 1, 15), ("dedup_seconds", 60, 604800),
-            ("max_dedup_entries", 100, 100000),
+            ("max_dedup_entries", 100, 100000), ("message_ttl_seconds", 60, MAX_FCM_TTL_SECONDS),
         ):
             val = getattr(self, name)
             if type(val) is not int or not low <= val <= high:
@@ -502,6 +507,8 @@ class OAuthRequest:
 
 
 COUNTS_COLLAPSE_KEY = "counts"
+# A badge/read-state update is only worth its newest value and soon stale.
+COUNTS_TTL_SECONDS = 3600
 
 
 def is_count_only(data: dict[str, str]) -> bool:
@@ -510,6 +517,9 @@ def is_count_only(data: dict[str, str]) -> bool:
 
 
 class FcmPublisher:
+    # Default for publishers built without __init__ (tests); see Config.
+    message_ttl = Config.message_ttl_seconds
+
     def __init__(self, config: Config):
         from google.oauth2 import service_account
         info = private_json(config.service_account_file)
@@ -523,6 +533,7 @@ class FcmPublisher:
             info, scopes=["https://www.googleapis.com/auth/firebase.messaging"])
         self.project_id = config.project_id
         self.timeout = config.provider_timeout_seconds
+        self.message_ttl = config.message_ttl_seconds
         self.auth_request = OAuthRequest(self.timeout)
         self.auth_lock = threading.Lock()
 
@@ -532,8 +543,14 @@ class FcmPublisher:
             headers = {"Content-Type": "application/json"}
             with self.auth_lock:
                 self.credentials.before_request(self.auth_request, "POST", url, headers)
-            android = {"priority": priority, "ttl": "3600s", "restricted_package_name": APP_ID}
-            if is_count_only(data):
+            count_only = is_count_only(data)
+            # FCM silently drops a message whose TTL ran out while the phone was
+            # offline. Message pushes and reminder wakes are kept for
+            # message_ttl_seconds (24 h by default), so a night in airplane mode
+            # still delivers them; the phone also catches up after one push.
+            ttl = COUNTS_TTL_SECONDS if count_only else self.message_ttl
+            android = {"priority": priority, "ttl": f"{ttl}s", "restricted_package_name": APP_ID}
+            if count_only:
                 # FCM keeps only the newest message per collapse key while the
                 # phone is idle or offline, so a Doze window delivers one count
                 # update instead of every queued one. Message pushes and
