@@ -50,6 +50,14 @@ final Map<String, DateTime> lastReceivedPushNotification = {};
 /// Time reserved after loading a message for a generic alert.
 const _fallbackReserve = Duration(seconds: 5);
 
+/// Pause before the one retry of an event fetch that failed on the network
+/// (the radio just came back, a request timed out).
+@visibleForTesting
+Duration pushFetchRetryDelay = const Duration(seconds: 3);
+
+/// The retry needs at least this much time for its own request.
+const _minFetchAttempt = Duration(seconds: 2);
+
 /// Test seam: the private client used for eligibility and previews.
 @visibleForTesting
 PersonalClient Function(Client client) pushPersonalClientOf = PersonalClient.of;
@@ -61,13 +69,15 @@ PersonalClient Function(Client client) pushPersonalClientOf = PersonalClient.of;
 /// fits; that alert has its own small budget. [test] marks the diagnostics
 /// test notification: it bypasses only the "already read" and "chat open on
 /// screen" checks and adds "(test)" to the title. Returns the recorded
-/// outcome (a failure is rethrown after recording it).
+/// outcome (a failure is rethrown after recording it); [onOutcome] gets the
+/// outcome also when the push fails.
 Future<PushOutcome> pushHelper(
   PushNotification notification, {
   List<Client>? clients,
   String? activeRoomId,
   required FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin,
   bool test = false,
+  void Function(PushOutcome outcome)? onOutcome,
 }) async {
   PersonalPrivacy.installLogging();
   final clock = Stopwatch()..start();
@@ -124,6 +134,7 @@ Future<PushOutcome> pushHelper(
     }
     rethrow;
   } finally {
+    onOutcome?.call(outcome);
     await PushDiagnostics.record(
       kind,
       outcome,
@@ -322,24 +333,8 @@ Future<PushOutcome> _tryPushHelper(
   }
 
   Logs().v('Load event...');
-  final fetchBudget = work.remaining - _fallbackReserve;
-  if (fetchBudget <= Duration.zero) {
-    throw TimeoutException('No time left to load the message');
-  }
   run.fetching = true;
-  final event = await work.wait(
-    () => client
-        .getEventByPushNotification(
-          notification,
-          storeInDatabase: false,
-          // Own read-position check below; the SDK one uses timestamps only.
-          returnNullIfSeen: false,
-          timeoutForServerRequests: fetchBudget < const Duration(seconds: 8)
-              ? fetchBudget
-              : const Duration(seconds: 8),
-        )
-        .timeout(fetchBudget),
-  );
+  final event = await _fetchPushEvent(client, notification, work);
   run.fetching = false;
   if (event == null) return PushOutcome.cleared;
 
@@ -358,10 +353,16 @@ Future<PushOutcome> _tryPushHelper(
 
   Logs().v('Push helper got notification event of type ${event.type}.');
 
-  // Messages sent by the account or its own bridge ghost never alert.
-  if (_isOwnEvent(client, event)) return PushOutcome.own;
-
-  if (!run.test && await _seen(event, work)) {
+  final private = projection ?? InboxProjection(personal);
+  final veto = await _notificationVeto(
+    client,
+    event,
+    projection: private,
+    work: work,
+    test: run.test,
+    activeRoomId: activeRoomId,
+  );
+  if (veto == PushOutcome.seen) {
     await _cancelChatNotification(
       client,
       event.room,
@@ -369,8 +370,99 @@ Future<PushOutcome> _tryPushHelper(
       plugin: flutterLocalNotificationsPlugin,
       work: work,
     );
-    return PushOutcome.seen;
   }
+  if (veto != null) return veto;
+  // Each message alerts once: a catch-up backlog or an earlier copy of this
+  // push may already have shown it (and the user may have dismissed it).
+  await work.wait(() => NotifiedMessages.load(store));
+  if (!run.test && !NotifiedMessages.claim(client.clientName, event.eventId)) {
+    Logs().v('[Push] already_notified');
+    return PushOutcome.shown;
+  }
+  try {
+    await _showMessageNotification(
+      client: client,
+      event: event,
+      projection: private,
+      personal: personal,
+      unread: notification.counts?.unread,
+      test: run.test,
+      quiet: await _quiet(client, event, private, work),
+      plugin: flutterLocalNotificationsPlugin,
+      work: work,
+    );
+  } catch (_) {
+    if (!run.test) NotifiedMessages.release(client.clientName, event.eventId);
+    rethrow;
+  }
+  return PushOutcome.shown;
+}
+
+/// Loads the push's event within [work], leaving the fallback reserve. A
+/// network failure or timeout is retried once after [pushFetchRetryDelay]
+/// when the budget still holds the retry and the reserve.
+Future<Event?> _fetchPushEvent(
+  Client client,
+  PushNotification notification,
+  PushWorkBudget work,
+) async {
+  for (var attempt = 1; ; attempt++) {
+    final fetchBudget = work.remaining - _fallbackReserve;
+    if (fetchBudget <= Duration.zero) {
+      throw TimeoutException('No time left to load the message');
+    }
+    try {
+      // Bounded below the work's own limit, then checked: a late result
+      // never continues after the deadline. A request timeout of the SDK
+      // does not end the work, so the retry still fits.
+      work.check();
+      final event = await client
+          .getEventByPushNotification(
+            notification,
+            storeInDatabase: false,
+            // Own read-position check below; the SDK one uses timestamps only.
+            returnNullIfSeen: false,
+            timeoutForServerRequests: fetchBudget < const Duration(seconds: 8)
+                ? fetchBudget
+                : const Duration(seconds: 8),
+          )
+          .timeout(fetchBudget);
+      work.check();
+      return event;
+    } catch (error) {
+      final network =
+          error is IOException ||
+          error is http.ClientException ||
+          error is TimeoutException;
+      if (attempt > 1 ||
+          !network ||
+          !work.active ||
+          work.remaining - _fallbackReserve - pushFetchRetryDelay <
+              _minFetchAttempt) {
+        rethrow;
+      }
+      Logs().v('[Push] fetch_retry', error.runtimeType.toString());
+      await Future<void>.delayed(pushFetchRetryDelay);
+    }
+  }
+}
+
+/// The message policy every alert passes, for a push and for the catch-up
+/// backlog alike: null when [event] alerts, otherwise why it does not.
+/// [test] (the diagnostics test push) skips only "already read" and "chat
+/// open on screen".
+Future<PushOutcome?> _notificationVeto(
+  Client client,
+  Event event, {
+  required InboxProjection projection,
+  required PushWorkBudget work,
+  bool test = false,
+  String? activeRoomId,
+}) async {
+  // Messages sent by the account or its own bridge ghost never alert.
+  if (_isOwnEvent(client, event)) return PushOutcome.own;
+
+  if (!test && await _seen(event, work)) return PushOutcome.seen;
 
   // The server already matched its rules; the phone re-checks the decrypted
   // event with the server's member counts and never vetoes on rules it
@@ -383,7 +475,7 @@ Future<PushOutcome> _tryPushHelper(
   // A merged person page shows its rooms without one room id in the route.
   // Behind the app lock the open chat is not visible, so it still alerts
   // (and is cleared locally once the chat is seen after unlocking).
-  if (!run.test &&
+  if (!test &&
       (activeRoomId == event.room.id ||
           SeenChatNotifications.isOpen(client.clientName, event.room.id)) &&
       PersonalPrivacy.surfaceUnlocked &&
@@ -392,30 +484,184 @@ Future<PushOutcome> _tryPushHelper(
     return PushOutcome.activeRoom;
   }
 
-  final private = projection ?? InboxProjection(personal);
-  final blocked = _blockedOutcome(private, event.room);
+  final blocked = _blockedOutcome(projection, event.room);
   if (blocked != null) return blocked;
   if (!await work.wait(
     () => personalNotificationEligible(
       event,
-      private.metadataFor(event.room),
-      notificationMode: private.notificationModeFor(event.room),
+      projection.metadataFor(event.room),
+      notificationMode: projection.notificationModeFor(event.room),
     ),
   )) {
     return PushOutcome.mentionsOnly;
   }
-  await _showMessageNotification(
-    client: client,
-    event: event,
-    projection: private,
-    personal: personal,
-    unread: notification.counts?.unread,
-    test: run.test,
-    quiet: await _quiet(client, event, private, work),
-    plugin: flutterLocalNotificationsPlugin,
-    work: work,
-  );
-  return PushOutcome.shown;
+  return null;
+}
+
+/// Vetoes that hold for the older messages of the same room as well.
+const _roomWideVetoes = {
+  PushOutcome.seen,
+  PushOutcome.own,
+  PushOutcome.activeRoom,
+  PushOutcome.muted,
+  PushOutcome.ignored,
+};
+
+/// Oldest unread message the catch-up backlog still alerts for: the
+/// gateway's default message TTL, after which FCM would have dropped the
+/// push anyway.
+const backlogMaxAge = Duration(hours: 24);
+
+int _newestFirst(Event a, Event b) =>
+    b.originServerTs.compareTo(a.originServerTs);
+
+/// Timeline events that are messages a push would have announced.
+bool _backlogMessage(Event event) =>
+    const {
+      EventTypes.Message,
+      EventTypes.Sticker,
+      EventTypes.Encrypted,
+    }.contains(event.type) &&
+    !event.redacted &&
+    event.relationshipType != RelationshipTypes.edit;
+
+/// Alerts for messages a catch-up sync delivered ([arrived], its timeline
+/// events) that no push showed: FCM dropped or expired their pushes while
+/// the phone was offline, or their push failed (see [PushCatchUp]).
+///
+/// Only unread messages of rooms the server counts notifications in
+/// ([Room.notificationCount]), at most [backlogMaxAge] old and never
+/// notified before ([NotifiedMessages]) qualify. Each passes the push's own
+/// policy ([_notificationVeto]: own, read, push rules, open chat, muted or
+/// ignored, mentions only) and is shown like a push, but a burst alerts
+/// once: every notification except the last is posted silently. At most
+/// [perThread] (the newest) per conversation and [perRun] in all, newest
+/// conversations first; the other chats keep their unread badge. Returns
+/// how many were shown; local private storage that cannot be read shows
+/// nothing.
+Future<int> pushBacklogHelper(
+  Client client,
+  Iterable<Event> arrived, {
+  required FlutterLocalNotificationsPlugin plugin,
+  String? activeRoomId,
+  PushWorkBudget? work,
+  int perThread = 3,
+  int perRun = 8,
+  DateTime Function() now = DateTime.now,
+}) async {
+  PersonalPrivacy.installLogging();
+  // Ends itself inside the catch-up's own wait (PushCatchUp.notifyWait).
+  final budget = work ?? PushWorkBudget(limit: const Duration(seconds: 18));
+  if (!client.isLogged()) return 0;
+  final store = await budget.wait(AppSettings.init);
+  await budget.wait(() => NotifiedMessages.load(store));
+  final cutoff = now().subtract(backlogMaxAge);
+  final byRoom = <String, List<Event>>{};
+  final ids = <String>{};
+  for (final event in arrived) {
+    final room = event.room;
+    if (!ids.add(event.eventId) ||
+        !_backlogMessage(event) ||
+        room.membership != Membership.join ||
+        room.notificationCount <= 0 ||
+        event.originServerTs.isBefore(cutoff) ||
+        PersonalPrivacy.isJournal(room) ||
+        NotifiedMessages.contains(client.clientName, event.eventId)) {
+      continue;
+    }
+    byRoom.putIfAbsent(room.id, () => []).add(event);
+  }
+  if (byRoom.isEmpty) return 0;
+
+  final personal = pushPersonalClientOf(client);
+  try {
+    await budget.wait(personal.loadLocal);
+  } on TimeoutException {
+    rethrow;
+  } catch (_) {
+    return 0;
+  }
+  if (personal.syncFailure == PrivateSyncFailure.storageUnavailable) return 0;
+  final projection = InboxProjection(personal);
+
+  // Eligible messages per notification (a merged person is one), newest
+  // first; each room is read from its newest message down.
+  final threads = <int, List<Event>>{};
+  for (final events in byRoom.values) {
+    events.sort(_newestFirst);
+    final thread = notificationThreadOf(
+      client.clientName,
+      events.first.room,
+      projection,
+    ).id;
+    final eligible = threads.putIfAbsent(thread, () => []);
+    var taken = 0;
+    for (final event in events) {
+      if (taken >= perThread) break;
+      final veto = await _notificationVeto(
+        client,
+        event,
+        projection: projection,
+        work: budget,
+        activeRoomId: activeRoomId,
+      );
+      // Read or answered up to here (so is everything older), or the chat
+      // is silent as a whole: nothing further in this room alerts.
+      if (_roomWideVetoes.contains(veto)) break;
+      if (veto != null) continue;
+      eligible.add(event);
+      taken++;
+    }
+  }
+  final ordered = [
+    for (final events in threads.values)
+      if (events.isNotEmpty)
+        (events..sort(_newestFirst)).take(perThread).toList(),
+  ]..sort((a, b) => _newestFirst(a.first, b.first));
+  // Breadth first: the newest message of each conversation before a second
+  // one of any.
+  final picked = <List<Event>>[for (final _ in ordered) []];
+  var left = perRun;
+  for (var depth = 0; depth < perThread && left > 0; depth++) {
+    for (var i = 0; i < ordered.length && left > 0; i++) {
+      if (depth < ordered[i].length) {
+        picked[i].add(ordered[i][depth]);
+        left--;
+      }
+    }
+  }
+  // Oldest first within a conversation, so its history ends on the newest.
+  final queue = [for (final events in picked.reversed) ...events.reversed];
+  if (queue.isEmpty) return 0;
+
+  final unread = PushCountSync.unreadOf(client);
+  updateAppBadge(unread);
+  var shown = 0;
+  for (final (index, event) in queue.indexed) {
+    if (!NotifiedMessages.claim(client.clientName, event.eventId)) continue;
+    try {
+      await _showMessageNotification(
+        client: client,
+        event: event,
+        projection: projection,
+        personal: personal,
+        unread: unread,
+        test: false,
+        quiet: await _quiet(client, event, projection, budget),
+        plugin: plugin,
+        work: budget,
+        silent: index < queue.length - 1,
+      );
+      shown++;
+    } on TimeoutException {
+      NotifiedMessages.release(client.clientName, event.eventId);
+      break;
+    } catch (_) {
+      NotifiedMessages.release(client.clientName, event.eventId);
+    }
+  }
+  if (shown > 0) Logs().i('[Push] backlog_shown', shown.toString());
+  return shown;
 }
 
 bool _technical(InboxProjection projection, Room room) {
@@ -562,6 +808,7 @@ AndroidNotificationDetails _messageDetails({
   Uint8List? largeIcon,
   bool reply = false,
   bool quiet = false,
+  bool silent = false,
 }) => AndroidNotificationDetails(
   quiet
       ? PersonalNotificationChannels.serviceId
@@ -583,6 +830,7 @@ AndroidNotificationDetails _messageDetails({
   when: when?.millisecondsSinceEpoch,
   largeIcon: largeIcon == null ? null : ByteArrayAndroidBitmap(largeIcon),
   actions: _messageActions(reply: reply),
+  silent: silent,
 );
 
 /// Avatars of one message notification; null parts were unavailable in time.
@@ -692,6 +940,7 @@ Future<void> _showMessageNotification({
   required PushWorkBudget work,
   required FlutterLocalNotificationsPlugin plugin,
   bool quiet = false,
+  bool silent = false,
 }) async {
   final room = event.room;
   // The app lock hides names and previews even when previews are on.
@@ -807,6 +1056,7 @@ Future<void> _showMessageNotification({
             largeIcon: avatars.chat,
             reply: _offersReply(replyRoom, previews: previews, test: test),
             quiet: quiet,
+            silent: silent,
           ),
           macOS: DarwinNotificationDetails(
             threadIdentifier: thread.threadIdentifier,

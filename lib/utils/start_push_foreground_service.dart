@@ -59,8 +59,18 @@ abstract class ForegroundServices {
     start: _startNativeService,
     stop: _stopNativeService,
     update: _updateNativeService,
+    isRunning: _nativeServiceRunning,
   );
   static List<String> get runningServices => _controller.runningServices;
+
+  /// Counted holds on the lease [name] (see [ForegroundLease]); a no-op
+  /// where the platform has no such service.
+  static ForegroundLease lease(String name, {Duration? maxHold}) =>
+      ForegroundLease(
+        start: () async => platformSupported && await startService(name),
+        stop: () => stopService(name),
+        maxHold: platformSupported ? maxHold : null,
+      );
 
   /// Text of the ongoing notification as last shown by this isolate.
   static String? _shownText;
@@ -80,6 +90,11 @@ abstract class ForegroundServices {
     } catch (_) {
       Logs().w('[PushHelper] Foreground service stop failed');
     }
+  }
+
+  static Future<bool> _nativeServiceRunning() async {
+    if (kIsWeb || !PlatformInfos.isMobile) return true;
+    return FlutterForegroundTask.isRunningService;
   }
 
   static Future<void> _stopNativeService() async {

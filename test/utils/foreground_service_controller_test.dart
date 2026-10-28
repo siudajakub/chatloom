@@ -261,4 +261,128 @@ void main() {
       expect(controller.runningServices, isEmpty);
     },
   );
+
+  test('a service the system ended (short-service timeout) is started again '
+      'by the next lease instead of being assumed running', () async {
+    var nativeRunning = false;
+    var starts = 0;
+    var stops = 0;
+    final controller = ForegroundServiceController(
+      start: () async {
+        starts++;
+        nativeRunning = true;
+      },
+      stop: () async {
+        stops++;
+        nativeRunning = false;
+      },
+      isRunning: () async => nativeRunning,
+    );
+    await controller.start('upload');
+    expect(starts, 1);
+    // Android's timeout: the plugin stops itself, the lease is still held.
+    nativeRunning = false;
+    await controller.start('round');
+    expect(starts, 2);
+    expect(nativeRunning, isTrue);
+    expect(controller.runningServices, ['upload', 'round']);
+    // Still running: a further lease joins it.
+    await controller.start('push');
+    expect(starts, 2);
+    await controller.stop('upload');
+    await controller.stop('round');
+    await controller.stop('push');
+    expect(stops, 1);
+    expect(nativeRunning, isFalse);
+  });
+
+  test('an unanswered running check keeps the current service', () async {
+    var starts = 0;
+    final controller = ForegroundServiceController(
+      operationTimeout: const Duration(milliseconds: 10),
+      start: () async => starts++,
+      stop: () async {},
+      isRunning: () => Completer<bool>().future,
+    );
+    await controller.start('upload');
+    await controller.start('round');
+    expect(starts, 1);
+    expect(controller.runningServices, ['upload', 'round']);
+  });
+
+  group('ForegroundLease', () {
+    test('the first hold takes the lease, the last release gives it back; '
+        'a release counts once', () async {
+      final calls = <String>[];
+      final lease = ForegroundLease(
+        start: () async {
+          calls.add('start');
+          return true;
+        },
+        stop: () async => calls.add('stop'),
+      );
+      final first = lease.hold();
+      final second = lease.hold();
+      expect(lease.holds, 2);
+      expect(lease.leased, isTrue);
+      first();
+      first();
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, ['start']);
+      second();
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, ['start', 'stop']);
+      expect(lease.holds, 0);
+      expect(lease.leased, isFalse);
+    });
+
+    test('a refused start is never given back (it would drop a lease of the '
+        'same name that other work holds)', () async {
+      var stops = 0;
+      final lease = ForegroundLease(
+        start: () async => throw StateError('synthetic refusal'),
+        stop: () async => stops++,
+      );
+      lease.hold()();
+      await Future<void>.delayed(Duration.zero);
+      expect(stops, 0);
+      expect(lease.leased, isFalse);
+    });
+
+    test('maxHold gives the lease back while work still holds it; the next '
+        'hold takes it again', () async {
+      final calls = <String>[];
+      final lease = ForegroundLease(
+        start: () async {
+          calls.add('start');
+          return true;
+        },
+        stop: () async => calls.add('stop'),
+        maxHold: const Duration(milliseconds: 20),
+      );
+      final upload = lease.hold();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(calls, ['start', 'stop']);
+      expect(lease.holds, 1);
+      expect(lease.leased, isFalse);
+      final retry = lease.hold();
+      expect(lease.leased, isTrue);
+      upload();
+      retry();
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, ['start', 'stop', 'start', 'stop']);
+    });
+
+    test('released before maxHold: no late stop', () async {
+      var stops = 0;
+      final lease = ForegroundLease(
+        start: () async => true,
+        stop: () async => stops++,
+        maxHold: const Duration(milliseconds: 20),
+      );
+      lease.hold()();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(stops, 1);
+    });
+  });
 }

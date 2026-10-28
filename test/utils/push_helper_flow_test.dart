@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
+import 'dart:io';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/message_notification.dart';
@@ -8,6 +9,7 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
+import 'package:chatloom/utils/background_push_catch_up.dart';
 import 'package:chatloom/utils/notification_client_routing.dart';
 import 'package:chatloom/utils/push_helper.dart';
 import 'package:chatloom/utils/start_push_foreground_service.dart';
@@ -232,6 +234,16 @@ class _Fixture {
     // The background catch-up decides on the returned outcome.
     expect(outcome, await _lastOutcome());
   }
+
+  /// The catch-up backlog of [arrived] at 13:00 on the fixture's day.
+  Future<int> backlog(List<Event> arrived, {int perThread = 3}) =>
+      pushBacklogHelper(
+        client,
+        arrived,
+        plugin: plugin,
+        perThread: perThread,
+        now: () => DateTime.utc(2026, 10, 17, 13),
+      );
 }
 
 Future<PushOutcome?> _lastOutcome() async =>
@@ -251,9 +263,16 @@ void main() {
     ForegroundServices.runningServices.add(sentinel);
     debugAppLockConfigured = () async => false;
     NotificationThreads.debugReset();
+    // AppSettings keeps one preferences instance for the whole file: forget
+    // the messages earlier tests notified.
+    await NotifiedMessages.saved;
+    NotifiedMessages.debugReset();
+    await AppSettings.store.remove(NotifiedMessages.storeKey);
+    pushFetchRetryDelay = const Duration(milliseconds: 10);
   });
 
   tearDown(() {
+    pushFetchRetryDelay = const Duration(seconds: 3);
     debugAppLockConfigured = null;
     ForegroundServices.runningServices.remove(sentinel);
     pushPersonalClientOf = PersonalClient.of;
@@ -642,6 +661,256 @@ void main() {
       );
       await f.push();
       expect(f.plugin.cancelled, contains(person));
+    });
+  });
+
+  group('missed pushes (2026-10-27)', () {
+    test('a fetch that failed on the network is retried once and then '
+        'shows the message', () async {
+      final f = fixture();
+      f.client.fetch = () async {
+        if (f.client.fetches == 1) {
+          throw const SocketException('Synthetic network down');
+        }
+        return f.event();
+      };
+      await f.push();
+      expect(f.client.fetches, 2);
+      expect(f.plugin.shown.single.body, 'Synthetic preview text');
+      expect(await _lastOutcome(), PushOutcome.shown);
+    });
+
+    test('a second network failure is not retried again: the generic '
+        'fallback follows', () async {
+      final f = fixture();
+      f.client.fetch = () async =>
+          throw const SocketException('Synthetic network down');
+      PushOutcome? reported;
+      await expectLater(
+        pushHelper(
+          PushNotification(
+            roomId: _roomId,
+            eventId: _eventId,
+            counts: const PushNotificationCounts(unread: 1),
+            devices: const [],
+          ),
+          clients: [f.client],
+          flutterLocalNotificationsPlugin: f.plugin,
+          onOutcome: (outcome) => reported = outcome,
+        ),
+        throwsA(isA<SocketException>()),
+      );
+      expect(f.client.fetches, 2);
+      expect(reported, PushOutcome.shownFallback);
+      expect(f.plugin.shown.single.body, 'Open the app to read your message.');
+    });
+
+    test('an answer from the server is not retried', () async {
+      final f = fixture();
+      f.client.fetch = () async =>
+          throw Exception('Unable to find event for this push notification!');
+      await expectLater(f.push(), throwsA(isA<Exception>()));
+      expect(f.client.fetches, 1);
+    });
+
+    test('a burst of failed pushes is followed by one catch-up', () async {
+      final f = fixture();
+      f.client.rooms.clear(); // unknown chats: no generic fallback either
+      f.client.fetch = () async =>
+          throw const SocketException('Synthetic network down');
+      var syncs = 0;
+      final catchUp = PushCatchUp(
+        sync: (_) async {
+          syncs++;
+          return const <Event>[];
+        },
+      );
+      final runs = <Future<int?>>[];
+      await Future.wait([
+        for (var i = 0; i < 5; i++)
+          pushHelper(
+            PushNotification(
+              roomId: _roomId,
+              eventId: '\$synthetic-burst-$i',
+              counts: const PushNotificationCounts(unread: 5),
+              devices: const [],
+            ),
+            clients: [f.client],
+            flutterLocalNotificationsPlugin: f.plugin,
+            onOutcome: (outcome) {
+              expect(outcome, PushOutcome.fetchFailed);
+              if (PushCatchUp.wanted(
+                outcome,
+                mobile: true,
+                lifecycle: AppLifecycleState.paused,
+              )) {
+                final run = catchUp.run(f.client);
+                if (run != null) runs.add(run);
+              }
+            },
+          ).then<void>((_) {}, onError: (Object _) {}),
+      ]);
+      await Future.wait(runs);
+      expect(f.client.fetches, 10, reason: 'each push retried once');
+      expect(syncs, 1);
+      expect(f.plugin.shown, isEmpty);
+    });
+
+    test('the catch-up backlog alerts once for unread messages no push '
+        'showed; a later push of one of them stays silent', () async {
+      final f = fixture();
+      f.room.notificationCount = 2;
+      final first = f.event(id: r'$backlog-1', body: 'First');
+      final second = f.event(
+        id: r'$backlog-2',
+        body: 'Second',
+        at: DateTime.utc(2026, 10, 17, 12, 1),
+      );
+      expect(await f.backlog([first, second]), 2);
+      expect(f.plugin.shown.map((n) => n.body), ['First', 'Second']);
+      // A burst alerts once: only the last one is not silent.
+      expect(f.plugin.shown.map((n) => n.details!.android!.silent), [
+        true,
+        false,
+      ]);
+      expect(
+        ChatLoomPushPayload.fromString(f.plugin.shown.last.payload!).eventId,
+        r'$backlog-2',
+      );
+      // The same backlog again, and the late push: nothing new.
+      expect(await f.backlog([first, second]), 0);
+      f.client.fetch = () async => second;
+      await f.push(eventId: r'$backlog-2');
+      expect(f.plugin.shown, hasLength(2));
+      expect(await _lastOutcome(), PushOutcome.shown);
+    });
+
+    test('a message a push already showed is not in the backlog', () async {
+      final f = fixture();
+      f.room.notificationCount = 2;
+      final pushed = f.event(id: r'$pushed');
+      f.client.fetch = () async => pushed;
+      await f.push(eventId: r'$pushed');
+      final missed = f.event(
+        id: r'$missed',
+        body: 'Missed',
+        at: DateTime.utc(2026, 10, 17, 12, 1),
+      );
+      expect(await f.backlog([pushed, missed]), 1);
+      expect(f.plugin.shown.map((n) => n.body), [
+        'Synthetic preview text',
+        'Missed',
+      ]);
+    });
+
+    test('read, answered, muted, mentions-only, not counted and old '
+        'messages are not in the backlog', () async {
+      List<Event> two(_Fixture f) => [
+        f.event(id: r'$older', at: DateTime.utc(2026, 10, 17, 12)),
+        f.event(id: r'$newer', at: DateTime.utc(2026, 10, 17, 12, 1)),
+      ];
+
+      final read = fixture();
+      read.room.notificationCount = 2;
+      read.room.roomAccountData['m.fully_read'] = BasicEvent(
+        type: 'm.fully_read',
+        content: {'event_id': r'$newer'},
+      );
+      expect(await read.backlog(two(read)), 0, reason: 'read elsewhere');
+
+      final answered = fixture();
+      answered.room.notificationCount = 1;
+      expect(
+        await answered.backlog([
+          ...two(answered),
+          answered.event(
+            id: r'$own-reply',
+            sender: _owner,
+            at: DateTime.utc(2026, 10, 17, 12, 2),
+          ),
+        ]),
+        0,
+        reason: 'the account wrote after them',
+      );
+
+      final muted = fixture();
+      muted.room.notificationCount = 2;
+      muted.mode(PersonalNotificationMode.muted);
+      expect(await muted.backlog(two(muted)), 0);
+
+      final mentions = fixture();
+      mentions.room.notificationCount = 2;
+      mentions.mode(PersonalNotificationMode.mentionsOnly);
+      expect(await mentions.backlog(two(mentions)), 0);
+
+      final uncounted = fixture();
+      expect(await uncounted.backlog(two(uncounted)), 0);
+
+      final old = fixture();
+      old.room.notificationCount = 1;
+      expect(
+        await old.backlog([
+          old.event(id: r'$yesterday', at: DateTime.utc(2026, 10, 16, 12)),
+        ]),
+        0,
+      );
+
+      for (final f in [read, answered, muted, mentions, uncounted, old]) {
+        expect(f.plugin.shown, isEmpty);
+      }
+    });
+
+    test('the backlog is capped per conversation and per run, newest '
+        'conversations first', () async {
+      final f = fixture(direct: false);
+      final rooms = [
+        f.room..notificationCount = 4,
+        for (var r = 1; r < 5; r++)
+          Room(
+            id: '!synthetic-backlog-$r:example.invalid',
+            client: f.client,
+            notificationCount: 4,
+          ),
+      ];
+      f.client.rooms
+        ..clear()
+        ..addAll(rooms);
+      final arrived = [
+        for (final (r, room) in rooms.indexed)
+          for (var m = 0; m < 4; m++)
+            f.event(
+              id: '\$backlog-$r-$m',
+              body: 'Room $r message $m',
+              inRoom: room,
+              at: DateTime.utc(2026, 10, 17, 12, r * 10 + m),
+            ),
+      ];
+      // Five conversations, four messages each: the eight alerts are the
+      // newest of every conversation, then a second one of the three newest.
+      expect(await f.backlog(arrived), 8);
+      final perRoom = <String, int>{};
+      for (final shown in f.plugin.shown) {
+        final room = ChatLoomPushPayload.fromString(shown.payload!).roomId!;
+        perRoom[room] = (perRoom[room] ?? 0) + 1;
+      }
+      expect(perRoom[rooms[0].id], 1);
+      expect(perRoom[rooms[1].id], 1);
+      expect(perRoom[rooms[4].id], 2);
+      expect(perRoom.values.fold<int>(0, (a, b) => a + b), 8);
+      expect(f.plugin.shown.last.body, 'Synthetic-peer: Room 4 message 3');
+      expect(f.plugin.shown.where((n) => !n.details!.android!.silent), [
+        f.plugin.shown.last,
+      ]);
+      // perThread bounds a single conversation.
+      final g = fixture();
+      g.room.notificationCount = 5;
+      expect(
+        await g.backlog([
+          for (var m = 0; m < 5; m++)
+            g.event(id: '\$single-$m', at: DateTime.utc(2026, 10, 17, 12, m)),
+        ], perThread: 2),
+        2,
+      );
     });
   });
 

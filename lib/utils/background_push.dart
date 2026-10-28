@@ -529,9 +529,7 @@ class BackgroundPush {
           pushers = await client.getPushers() ?? [];
           if (!current()) return;
           nonce = ownFcmGateway
-              ? await personalSecureStorage.read(
-                  key: 'personal_gateway_nonce',
-                )
+              ? await personalSecureStorage.read(key: 'personal_gateway_nonce')
               : null;
           if (!current()) return;
           if (automatic) {
@@ -722,32 +720,58 @@ class BackgroundPush {
   Future<void> _handleFcmMessage(
     Map<String, dynamic> message, {
     bool test = false,
-  }) =>
-      _processPush(() async {
-        final data = message.tryGetMap<String, Object>('data') ?? message;
-        final kind = pushKindOf(data, test: test);
-        await PushDiagnostics.received(kind);
-        if (kind == PushKind.reminder) {
-          await personalReminderWake(
-            clients: clients,
-            plugin: _flutterLocalNotificationsPlugin,
-          );
-          return;
-        }
-        final outcome = await pushHelper(
-          PushNotification.fromJson(data),
-          clients: clients,
-          activeRoomId: matrix?.activeRoomId,
-          flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
-          test: kind == PushKind.test,
-        );
-        if (kind == PushKind.message) await _catchUpAfter(outcome);
-      });
+  }) => _processPush(() async {
+    final data = message.tryGetMap<String, Object>('data') ?? message;
+    final kind = pushKindOf(data, test: test);
+    await PushDiagnostics.received(kind);
+    if (kind == PushKind.reminder) {
+      await personalReminderWake(
+        clients: clients,
+        plugin: _flutterLocalNotificationsPlugin,
+      );
+      return;
+    }
+    if (kind == PushKind.resync) {
+      await _resync();
+      return;
+    }
+    // A failed push is rethrown after its outcome is known; the
+    // catch-up still follows it (its message may be in the backlog).
+    var outcome = PushOutcome.error;
+    try {
+      outcome = await pushHelper(
+        PushNotification.fromJson(data),
+        clients: clients,
+        activeRoomId: matrix?.activeRoomId,
+        flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
+        test: kind == PushKind.test,
+        onOutcome: (value) => outcome = value,
+      );
+    } finally {
+      if (kind == PushKind.message) await _catchUpAfter(outcome);
+    }
+  });
 
-  /// Catch-up after a message notification shown in the background (see
-  /// [PushCatchUp]); runs inside the push's short foreground service.
+  /// Catch-up after a message push handled in the background, which alerts
+  /// for the backlog no push showed (see [PushCatchUp]); runs inside the
+  /// push's short foreground service.
   @visibleForTesting
-  final pushCatchUp = PushCatchUp();
+  late final pushCatchUp = PushCatchUp(
+    notify: (client, arrived) => pushBacklogHelper(
+      client,
+      arrived,
+      plugin: _flutterLocalNotificationsPlugin,
+      activeRoomId: matrix?.activeRoomId,
+    ),
+  );
+
+  /// The gateway's pushes carry no account: the single signed-in one.
+  Client? get _pushClient => selectNotificationClient<Client>(
+    clients,
+    null,
+    (client) => client.clientName,
+    isLoggedIn: (client) => client.isLogged(),
+  );
 
   Future<void> _catchUpAfter(PushOutcome outcome) async {
     if (!PushCatchUp.wanted(
@@ -757,15 +781,44 @@ class BackgroundPush {
     )) {
       return;
     }
-    // The gateway's pushes carry no account: the single signed-in one.
-    final client = selectNotificationClient<Client>(
-      clients,
-      null,
-      (client) => client.clientName,
-      isLoggedIn: (client) => client.isLogged(),
-    );
+    final client = _pushClient;
     if (client == null) return;
     await pushCatchUp.run(client);
+  }
+
+  /// FCM dropped pushes queued for this phone (`onDeletedMessages`, passed
+  /// on by `FcmPushService` as a content-free resync wake): one notifying
+  /// catch-up stands in for them, shared with one already running.
+  Future<void> _resync() async {
+    final clock = Stopwatch()..start();
+    var outcome = PushOutcome.cleared;
+    try {
+      final client = _pushClient;
+      if (client == null) {
+        outcome = PushOutcome.noClient;
+        return;
+      }
+      if (!PushCatchUp.away(
+        mobile: PlatformInfos.isMobile,
+        lifecycle: WidgetsBinding.instance.lifecycleState,
+      )) {
+        return; // The running sync loop already delivers everything.
+      }
+      // No run: a catch-up moments ago already brought the backlog.
+      final run = pushCatchUp.run(client);
+      final shown = run == null ? 0 : await run;
+      outcome = shown == null
+          ? PushOutcome.fetchFailed
+          : shown > 0
+          ? PushOutcome.shown
+          : PushOutcome.cleared;
+    } finally {
+      await PushDiagnostics.record(
+        PushKind.resync,
+        outcome,
+        elapsed: clock.elapsed,
+      );
+    }
   }
 
   /// Runs the real FCM message path with the gateway's exact data map for
@@ -807,9 +860,7 @@ class BackgroundPush {
     final gateway = gatewayUrl;
     String? nonce;
     try {
-      nonce = await personalSecureStorage.read(
-        key: 'personal_gateway_nonce',
-      );
+      nonce = await personalSecureStorage.read(key: 'personal_gateway_nonce');
     } catch (_) {
       nonce = null;
     }
@@ -1046,13 +1097,18 @@ class BackgroundPush {
         await PushDiagnostics.received(
           data['event_id'] is String ? PushKind.message : PushKind.countOnly,
         );
-        final outcome = await pushHelper(
-          PushNotification.fromJson(data),
-          clients: clients,
-          activeRoomId: matrix?.activeRoomId,
-          flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
-        );
-        await _catchUpAfter(outcome);
+        var outcome = PushOutcome.error;
+        try {
+          outcome = await pushHelper(
+            PushNotification.fromJson(data),
+            clients: clients,
+            activeRoomId: matrix?.activeRoomId,
+            flutterLocalNotificationsPlugin: _flutterLocalNotificationsPlugin,
+            onOutcome: (value) => outcome = value,
+          );
+        } finally {
+          await _catchUpAfter(outcome);
+        }
       });
 }
 

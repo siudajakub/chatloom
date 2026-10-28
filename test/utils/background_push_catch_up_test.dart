@@ -7,6 +7,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class _Client implements Client {
   bool logged = true;
@@ -16,7 +17,14 @@ class _Client implements Client {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/// One bounded catch-up sync after a background notification (2026-10-21).
+/// A timeline event the catch-up only passes on.
+class _Event implements Event {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// One bounded catch-up sync after a background notification (2026-10-21),
+/// and the alerts for its backlog (2026-10-27).
 void main() {
   test('a burst of notifications shares one catch-up per interval', () {
     fakeAsync((async) {
@@ -27,6 +35,7 @@ void main() {
         sync: (_) async {
           syncs++;
           await Future<void>.delayed(const Duration(milliseconds: 300));
+          return const <Event>[];
         },
       );
       final first = catchUp.run(client);
@@ -52,7 +61,7 @@ void main() {
   test('the wait is bounded and failures stay quiet', () {
     fakeAsync((async) {
       final client = _Client();
-      final hanging = Completer<void>();
+      final hanging = Completer<List<Event>?>();
       var calls = 0;
       final catchUp = PushCatchUp(
         wait: const Duration(seconds: 15),
@@ -62,7 +71,7 @@ void main() {
           calls++;
           return calls == 1
               ? hanging.future
-              : Future<void>.error(StateError('offline'));
+              : Future<List<Event>?>.error(StateError('offline'));
         },
       );
       var done = false;
@@ -76,17 +85,24 @@ void main() {
       catchUp.run(client)!.then((_) => failedDone = true);
       async.flushMicrotasks();
       expect(failedDone, isTrue, reason: 'an offline catch-up never throws');
-      hanging.complete();
+      hanging.complete(null);
       async.flushMicrotasks();
     });
   });
 
-  test('only a notification shown while the phone app is away catches up', () {
+  test('a message push that was shown, or whose message could not be '
+      'loaded, catches up while the phone app is away', () {
+    expect(PushCatchUp.after, {
+      PushOutcome.shown,
+      PushOutcome.shownFallback,
+      PushOutcome.fetchFailed,
+      PushOutcome.timeout,
+    });
     for (final outcome in PushOutcome.values) {
       for (final lifecycle in [null, ...AppLifecycleState.values]) {
         expect(
           PushCatchUp.wanted(outcome, mobile: true, lifecycle: lifecycle),
-          outcome == PushOutcome.shown &&
+          PushCatchUp.after.contains(outcome) &&
               lifecycle != AppLifecycleState.resumed,
           reason: '$outcome $lifecycle',
         );
@@ -106,9 +122,174 @@ void main() {
   test('a signed-out account is not synced', () {
     final client = _Client()..logged = false;
     var syncs = 0;
-    final catchUp = PushCatchUp(sync: (_) async => syncs++);
+    final catchUp = PushCatchUp(
+      sync: (_) async {
+        syncs++;
+        return null;
+      },
+    );
     expect(catchUp.run(client), isNull);
     expect(syncs, 0);
+  });
+
+  group('backlog alerts (2026-10-27)', () {
+    test('a burst of failed pushes runs one sync and alerts for its backlog '
+        'once; the pushes in the burst share that run', () {
+      fakeAsync((async) {
+        final client = _Client();
+        final arrived = [_Event(), _Event()];
+        var syncs = 0;
+        final notified = <List<Event>>[];
+        final catchUp = PushCatchUp(
+          clock: () => DateTime.utc(2026).add(async.elapsed),
+          sync: (_) async {
+            syncs++;
+            await Future<void>.delayed(const Duration(seconds: 1));
+            return arrived;
+          },
+          notify: (_, events) async {
+            notified.add(events);
+            return events.length;
+          },
+        );
+        final results = <int?>[];
+        for (final outcome in [
+          PushOutcome.fetchFailed,
+          PushOutcome.timeout,
+          PushOutcome.shownFallback,
+          PushOutcome.fetchFailed,
+        ]) {
+          expect(
+            PushCatchUp.wanted(
+              outcome,
+              mobile: true,
+              lifecycle: AppLifecycleState.paused,
+            ),
+            isTrue,
+          );
+          catchUp.run(client)?.then(results.add);
+          async.elapse(const Duration(milliseconds: 200));
+        }
+        async.elapse(const Duration(seconds: 2));
+        expect(syncs, 1);
+        expect(notified, hasLength(1));
+        expect(identical(notified.single, arrived), isTrue);
+        expect(results, [2, 2, 2, 2], reason: 'all joined the one run');
+        // Later in the interval: skipped, not synced or alerted again.
+        expect(catchUp.run(client), isNull);
+        expect(async.pendingTimers, isEmpty);
+      });
+    });
+
+    test('a failed sync alerts for nothing; an empty one has nothing to '
+        'alert for', () {
+      fakeAsync((async) {
+        final client = _Client();
+        List<Event>? arrived;
+        var notifies = 0;
+        final catchUp = PushCatchUp(
+          minInterval: Duration.zero,
+          clock: () => DateTime.utc(2026).add(async.elapsed),
+          sync: (_) async => arrived,
+          notify: (_, events) async {
+            notifies++;
+            return events.length;
+          },
+        );
+        int? failed = -1, empty = -1;
+        catchUp.run(client)!.then((value) => failed = value);
+        async.flushMicrotasks();
+        expect(failed, isNull, reason: 'the sync failed');
+        arrived = [];
+        catchUp.run(client)!.then((value) => empty = value);
+        async.flushMicrotasks();
+        expect(empty, 0);
+        expect(notifies, 0);
+      });
+    });
+
+    test('alerting is bounded and never throws', () {
+      fakeAsync((async) {
+        final client = _Client();
+        final catchUp = PushCatchUp(
+          minInterval: Duration.zero,
+          notifyWait: const Duration(seconds: 20),
+          clock: () => DateTime.utc(2026).add(async.elapsed),
+          sync: (_) async => [_Event()],
+          notify: (_, _) => Completer<int>().future,
+        );
+        var done = false;
+        int? result = -1;
+        catchUp.run(client)!.then((value) {
+          done = true;
+          result = value;
+        });
+        async.elapse(const Duration(seconds: 19));
+        expect(done, isFalse);
+        async.elapse(const Duration(seconds: 1));
+        expect(done, isTrue);
+        expect(result, isNull);
+
+        final failing = PushCatchUp(
+          minInterval: Duration.zero,
+          sync: (_) async => [_Event()],
+          notify: (_, _) => throw StateError('synthetic'),
+        );
+        var failedDone = false;
+        failing.run(client)!.then((_) => failedDone = true);
+        async.flushMicrotasks();
+        expect(failedDone, isTrue);
+      });
+    });
+  });
+
+  group('each message alerts once (NotifiedMessages)', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      NotifiedMessages.debugReset();
+    });
+
+    test('a claimed message cannot be claimed again, also after the process '
+        'restarted; a released one can', () async {
+      final store = await SharedPreferences.getInstance();
+      await NotifiedMessages.load(store);
+      expect(NotifiedMessages.claim('account', r'$synthetic-a'), isTrue);
+      expect(NotifiedMessages.claim('account', r'$synthetic-a'), isFalse);
+      expect(NotifiedMessages.contains('account', r'$synthetic-a'), isTrue);
+      expect(NotifiedMessages.contains('other', r'$synthetic-a'), isFalse);
+      expect(NotifiedMessages.claim('account', r'$synthetic-b'), isTrue);
+      NotifiedMessages.release('account', r'$synthetic-b');
+      await NotifiedMessages.saved;
+
+      NotifiedMessages.debugReset();
+      await NotifiedMessages.load(await SharedPreferences.getInstance());
+      expect(NotifiedMessages.claim('account', r'$synthetic-a'), isFalse);
+      expect(NotifiedMessages.claim('account', r'$synthetic-b'), isTrue);
+    });
+
+    test('only bounded one-way digests are stored', () async {
+      final store = await SharedPreferences.getInstance();
+      await NotifiedMessages.load(store);
+      for (var i = 0; i < NotifiedMessages.limit + 10; i++) {
+        NotifiedMessages.claim('synthetic-account', '\$synthetic-$i');
+      }
+      await NotifiedMessages.saved;
+      final stored = store.getStringList(NotifiedMessages.storeKey)!;
+      expect(stored, hasLength(NotifiedMessages.limit));
+      expect(stored.join(), isNot(contains('synthetic')));
+      // The oldest are forgotten first.
+      expect(
+        NotifiedMessages.contains('synthetic-account', r'$synthetic-0'),
+        isFalse,
+      );
+      expect(
+        NotifiedMessages.contains(
+          'synthetic-account',
+          '\$synthetic-${NotifiedMessages.limit + 9}',
+        ),
+        isTrue,
+      );
+    });
   });
 
   group('count-only pushes (BP-06a)', () {
