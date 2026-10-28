@@ -316,6 +316,82 @@ void main() {
   status(counted, available, 'Reaction count refused a replacement');
   check(counted.limits['reaction_count'] == 1, 'Reaction count not exposed');
 
+  // Wave 11 (J: "the reaction is unsupported"): the Telegram bridge spells
+  // `allowed_reactions` with `variationselector.Add` (U+FE0F after 👍, 👎,
+  // 😐, ⚡, ❤, ✍, 🕊, ☃ ...), the emoji picker sends the fully-qualified
+  // form without it. Both spellings are one reaction for the bridge.
+  final telegramReactions = BridgeRoomCapabilities.fromState({
+    'id': 'fi.mau.telegram.capabilities+reactions_any+any_list_x',
+    'reaction': 2,
+    'reaction_count': 1,
+    'allowed_reactions': [
+      '👍\u{FE0F}',
+      '👎\u{FE0F}',
+      '❤\u{FE0F}',
+      '🔥',
+      '⚡\u{FE0F}',
+      '❤\u{FE0F}\u{200D}🔥',
+      '🤷\u{200D}♂\u{FE0F}',
+      '😐\u{FE0F}',
+    ],
+  });
+  for (final picked in ['👍', '👎', '❤️', '❤', '⚡', '❤️‍🔥', '🤷‍♂️', '😐']) {
+    status(
+      telegramReactions.evidence(BridgeFeature.reaction, reaction: picked),
+      available,
+      'Picker spelling of $picked refused',
+    );
+  }
+  check(
+    telegramReactions.reactionSpelling('👍') == '👍\u{FE0F}' &&
+        telegramReactions.reactionSpelling('⚡') == '⚡\u{FE0F}' &&
+        telegramReactions.reactionSpelling('🔥') == '🔥',
+    'Network spelling not returned',
+  );
+  // Outside the list (or another skin tone): still refused.
+  for (final refused in ['😂', '👍🏽', '🎉', 'mxc://example.invalid/x']) {
+    status(
+      telegramReactions.evidence(BridgeFeature.reaction, reaction: refused),
+      blocked,
+      'Reaction $refused outside allowed_reactions accepted',
+    );
+    check(
+      telegramReactions.reactionSpelling(refused) == null,
+      'Spelling invented for $refused',
+    );
+  }
+  check(
+    telegramReactions.allowedReactions!.length == 8 &&
+        BridgeRoomCapabilities.fromState({'reaction': 2}).allowedReactions ==
+            null &&
+        BridgeRoomCapabilities.fromState({
+              'reaction': 2,
+              'allowed_reactions': [1],
+            }).allowedReactions ==
+            null,
+    'allowed_reactions not exposed exactly',
+  );
+  check(
+    BridgeRoomCapabilities.fromState({'reaction': 2}).reactionSpelling('😂') ==
+        '😂',
+    'Any emoji not kept without a list',
+  );
+  check(
+    normalizeReactionKey('❤\u{FE0F}') == normalizeReactionKey('❤\u{FE0E}') &&
+        normalizeReactionKey('👍🏽') != normalizeReactionKey('👍'),
+    'Reaction keys normalized wrongly',
+  );
+  // Telegram chats whose admins turned reactions off (`+reactions_none`).
+  final reactionsOff = BridgeRoomCapabilities.fromState({
+    'id': 'fi.mau.telegram.capabilities+reactions_none',
+    'reaction': -2,
+  }).evidence(BridgeFeature.reaction);
+  status(reactionsOff, blocked, 'Turned-off reactions allowed');
+  check(
+    reactionsOff.result.reason == "Reactions aren't available in this chat.",
+    'Turned-off reactions blame the network',
+  );
+
   // BR-02: a complete declaration (bridgev2 always sends its `id`) omits
   // what it does not support (`omitzero`): omitted means 0, unsupported.
   final telegramLike = BridgeRoomCapabilities.fromState({

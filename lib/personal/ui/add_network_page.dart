@@ -365,8 +365,22 @@ class _AddNetworkPageState extends State<AddNetworkPage> {
             ),
           ),
         ),
-        body,
-        if (showFallback) _fallback(context, entry),
+        // Each phase and step fades through to the next while the page
+        // height glides, instead of cutting (loading → options → code).
+        NotionAnimatedSize(
+          alignment: Alignment.topCenter,
+          child: NotionFadeThrough(
+            alignment: AlignmentDirectional.topCenter,
+            child: KeyedSubtree(
+              key: ValueKey((session.phase, session.step?.stepId)),
+              child: body,
+            ),
+          ),
+        ),
+        NotionSizeReveal(
+          visible: showFallback,
+          child: _fallback(context, entry),
+        ),
       ],
     );
   }
@@ -887,13 +901,15 @@ class _InputFormState extends State<_InputForm> {
                 ? null
                 : () => setState(() => _choices[field.id] = option),
           ),
-        if (error != null)
-          Text(
-            error,
+        NotionSizeReveal(
+          visible: error != null,
+          child: Text(
+            error ?? '',
             style: context.notion.typography.caption.copyWith(
               color: context.notion.colors.danger,
             ),
           ),
+        ),
       ],
     );
   }

@@ -52,6 +52,8 @@ void main() {
 
   test('push kinds come only from fixed markers', () {
     expect(pushKindOf({'personal_wake': 'reminder'}), PushKind.reminder);
+    // FcmPushService.onDeletedMessages: FCM dropped queued pushes.
+    expect(pushKindOf({'personal_wake': 'resync'}), PushKind.resync);
     // Remote data can never mark a push as a test; only the in-process flag.
     expect(
       pushKindOf({'event_id': r'$e', 'personal_test': '1'}),

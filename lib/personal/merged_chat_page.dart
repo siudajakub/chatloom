@@ -3164,14 +3164,18 @@ class _MergedChatPageState extends State<_MergedChatView>
                       ),
                       // The send target's bridge (merged chats send per source).
                       ChatBridgeNotice(room: room),
-                      if (searching)
-                        Positioned.fill(
+                      // Always mounted: the list fades out when the search
+                      // closes instead of vanishing with it.
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          ignoring: !searching,
                           child: ConversationSearchResults(
                             search: _searchController,
                             bottomInset: composerInset,
                             sourceLabel: sourceLabelFor,
                           ),
                         ),
+                      ),
                       Positioned(
                         bottom: 0,
                         left: 0,

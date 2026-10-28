@@ -17,6 +17,7 @@ import 'round_video/telegram_room_binding.dart';
 import 'round_video/telegram_round_service.dart';
 
 final _roundReadCutoffKey = Object();
+final _committedRoundKey = Object();
 
 abstract final class PersonalPrivacy {
   static bool _surfaceUnlocked = true;
@@ -104,15 +105,27 @@ abstract final class PersonalPrivacy {
 
   static final _observed = Map<Room, String>.identity();
   static String? frozenReadCutoff(Room room) => _observed[room];
+
+  /// [committedRound]: [action] sends the final event of a round video the
+  /// user committed (the round outbox), which may complete while the app is
+  /// hidden or locked; see [committedRoundSend].
   static Future<T> withFrozenRoundReadCutoff<T>(
     Room room,
     String? cutoff,
     Future<T> Function() action, {
     bool Function()? stillCurrent,
+    bool committedRound = false,
   }) => runZoned(
     action,
-    zoneValues: {_roundReadCutoffKey: (room, cutoff, stillCurrent)},
+    zoneValues: {
+      _roundReadCutoffKey: (room, cutoff, stillCurrent),
+      if (committedRound) _committedRoundKey: room,
+    },
   );
+
+  /// Inside the round outbox's own send of a committed round to [room].
+  static bool committedRoundSend(Room room) =>
+      identical(Zone.current[_committedRoundKey], room);
   static bool frozenRoundTargetCurrent(Room room) {
     final frozen = Zone.current[_roundReadCutoffKey];
     return frozen is! (Room, String?, bool Function()?) ||
@@ -266,7 +279,9 @@ abstract final class PersonalPrivacy {
           content,
         ).preflight(room);
         final profile = preflight?.profile;
-        if (!surfaceUnlocked ||
+        // A committed round may finish sending after the app locked (J,
+        // 2026-10-27); every other round event still needs it unlocked.
+        if ((!surfaceUnlocked && !committedRoundSend(room)) ||
             !room.encrypted ||
             !client.encryptionEnabled ||
             !client.fileEncryptionEnabled ||

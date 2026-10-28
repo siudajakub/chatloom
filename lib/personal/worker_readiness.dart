@@ -34,6 +34,14 @@ class WorkerReadiness {
   /// in the device list; never shown.
   final String? deviceKey;
 
+  /// True when the worker answers `metadata.resync` (publishes the state of
+  /// merged persons again); null for older workers.
+  final bool? metadataResync;
+
+  /// Own device ids whose journal commands the worker ignores as untrusted
+  /// (not pinned, not verified or blocked); empty for older workers.
+  final List<String> untrustedDevices;
+
   const WorkerReadiness({
     required this.receivedAt,
     this.healthy,
@@ -46,6 +54,8 @@ class WorkerReadiness {
     this.transcriptionMedia,
     this.autoTranscriptionLive,
     this.deviceKey,
+    this.metadataResync,
+    this.untrustedDevices = const [],
   });
 
   factory WorkerReadiness.fromPayload(
@@ -85,6 +95,15 @@ class WorkerReadiness {
           ? payload['autoTranscriptionLive'] as bool
           : null,
       deviceKey: deviceKey,
+      metadataResync: payload['metadataResync'] is int
+          ? (payload['metadataResync'] as int) >= 1
+          : null,
+      untrustedDevices: switch (payload['untrustedDevices']) {
+        final List<Object?> ids => List.unmodifiable(
+          ids.whereType<String>().where((id) => id.length <= 255).take(64),
+        ),
+        _ => const <String>[],
+      },
     );
   }
 
@@ -106,7 +125,17 @@ class WorkerReadiness {
       other.autoTranscription == autoTranscription &&
       other.transcriptionMedia == transcriptionMedia &&
       other.autoTranscriptionLive == autoTranscriptionLive &&
-      other.deviceKey == deviceKey;
+      other.deviceKey == deviceKey &&
+      other.metadataResync == metadataResync &&
+      _sameList(other.untrustedDevices, untrustedDevices);
+
+  static bool _sameList(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   @override
   int get hashCode => Object.hash(
@@ -121,6 +150,8 @@ class WorkerReadiness {
     transcriptionMedia,
     autoTranscriptionLive,
     deviceKey,
+    metadataResync,
+    Object.hashAll(untrustedDevices),
   );
 
   /// Short status of the background service for a settings row: a pill

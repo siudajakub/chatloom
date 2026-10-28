@@ -244,6 +244,7 @@ String syncEntityTitle(
     return 'Reminder${_conversationOf(personal, operation!.payload)}';
   }
   if (kind == 'worker.pairing') return 'Background service pairing';
+  if (kind == 'metadata.resync') return 'Refresh merged conversations';
   if (entity == transcriptionPolicyEntity) return 'Transcription settings';
   for (final (prefix, label) in const [
     ('org:', 'Chat settings'),
@@ -308,7 +309,7 @@ const _kindLabels = <String, String>{
   'round': 'round videos',
   'video': 'videos',
   'audio': 'other audio',
-  'reel': 'Instagram reels',
+  'reel': 'shared reels',
 };
 
 /// Keys that change on every save or say nothing to the user.

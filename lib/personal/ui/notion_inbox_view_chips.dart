@@ -19,8 +19,9 @@ String notionInboxChipLabel(InboxFilter view) =>
 /// list). They select the same view as the dock's "Show chats" menu, through
 /// [onViewSelected]; the page keeps no view state of its own. A view chosen
 /// elsewhere (Ignored, Archive, …) shows as one more selected chip so the
-/// list stays labelled.
-class NotionInboxViewChips extends StatelessWidget {
+/// list stays labelled. The counts roll when they change; a badge that
+/// appears after the first frame pops in (the first screen stays calm).
+class NotionInboxViewChips extends StatefulWidget {
   const NotionInboxViewChips({
     super.key,
     required this.selected,
@@ -40,7 +41,26 @@ class NotionInboxViewChips extends StatelessWidget {
   final int requestCount;
 
   @override
+  State<NotionInboxViewChips> createState() => _NotionInboxViewChipsState();
+}
+
+class _NotionInboxViewChipsState extends State<NotionInboxViewChips> {
+  /// False during the first frame: badges present from the start appear as
+  /// they are, later ones pop in.
+  bool _settled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _settled = true);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final selected = widget.selected;
+    final onViewSelected = widget.onViewSelected;
+    final unreadCount = widget.unreadCount;
+    final requestCount = widget.requestCount;
     final palette = context.notion.palette;
     final chips = [
       ...notionInboxChipViews,
@@ -61,31 +81,44 @@ class NotionInboxViewChips extends StatelessWidget {
                 label: notionInboxChipLabel(view),
                 selected: view == selected,
                 trailing: view == InboxFilter.requests && requestCount > 0
-                    ? Text(
-                        '$requestCount',
-                        semanticsLabel: '$requestCount waiting',
-                        style: context.notion.typography.captionMuted,
+                    ? Semantics(
+                        label: '$requestCount waiting',
+                        child: ExcludeSemantics(
+                          child: NotionAnimatedCount(
+                            count: requestCount,
+                            style: context.notion.typography.captionMuted,
+                          ),
+                        ),
                       )
                     : view == InboxFilter.unread && unreadCount > 0
-                    ? Container(
-                        constraints: const BoxConstraints(
-                          minWidth: 20,
-                          minHeight: 20,
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: NotionSpace.xxs,
-                        ),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: palette.accentFill,
-                          borderRadius: NotionRadius.pillAll,
-                        ),
-                        child: Text(
-                          unreadCount > 99 ? '99+' : '$unreadCount',
-                          semanticsLabel: '$unreadCount unread',
-                          style: NotionType.caption.copyWith(
-                            color: palette.onAccentFill,
-                            fontWeight: FontWeight.w600,
+                    ? NotionPop(
+                        trigger: unreadCount,
+                        playOnMount: _settled,
+                        child: Container(
+                          constraints: const BoxConstraints(
+                            minWidth: 20,
+                            minHeight: 20,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: NotionSpace.xxs,
+                          ),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: palette.accentFill,
+                            borderRadius: NotionRadius.pillAll,
+                          ),
+                          child: Semantics(
+                            label: '$unreadCount unread',
+                            child: ExcludeSemantics(
+                              child: NotionAnimatedCount(
+                                count: unreadCount,
+                                format: (n) => n > 99 ? '99+' : '$n',
+                                style: NotionType.caption.copyWith(
+                                  color: palette.onAccentFill,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       )
@@ -93,7 +126,7 @@ class NotionInboxViewChips extends StatelessWidget {
                 onPressed: onViewSelected == null
                     ? null
                     : () {
-                        if (view != selected) onViewSelected!(view);
+                        if (view != selected) onViewSelected(view);
                       },
               ),
             ],

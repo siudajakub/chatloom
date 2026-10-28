@@ -33,12 +33,12 @@ const transcriptionKindLabels = <AutoTranscriptionKind, (String, String)>{
   ),
   AutoTranscriptionKind.audio: ('Other audio', 'Audio files and recordings'),
   AutoTranscriptionKind.reel: (
-    'Instagram reels',
-    'Reels, posts and stories shared from Instagram',
+    'Shared reels',
+    'Reels, posts and stories shared from Instagram or Facebook',
   ),
 };
 
-/// Subtitle of a per-kind switch. Instagram reels say plainly that they are
+/// Subtitle of a per-kind switch. Shared reels say plainly that they are
 /// transcribed on demand (J, 2026-10-20) and when the background service
 /// still treats them as ordinary videos.
 String transcriptionKindSubtitle(
@@ -187,7 +187,7 @@ class TranscriptionSettingsSection extends StatelessWidget {
           title: 'Transcribe automatically',
           subtitle:
               'Voice messages, round videos and videos are transcribed on the server as soon as they arrive or you send them; only their audio is sent to OpenAI. Disappearing messages are never sent; muted and ignored chats are skipped.'
-              '${policy.kindEnabled(AutoTranscriptionKind.reel) ? '' : ' Instagram reels only when you tap Transcribe.'}'
+              '${policy.kindEnabled(AutoTranscriptionKind.reel) ? '' : ' Shared reels only when you tap Transcribe.'}'
               '${policy.auto && !personal.autoTranscriptionAvailable ? ' Currently off on the background service: tap Transcribe on a message instead.' : ''}',
           value: policy.auto,
           onChanged: editable

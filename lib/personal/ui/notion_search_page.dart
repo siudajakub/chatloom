@@ -9,6 +9,7 @@ import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/bridge_start_chat.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/local_message_search.dart';
+import 'package:chatloom/personal/matrix_start_chat.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/person_merge.dart' show personSearchText;
@@ -35,8 +36,10 @@ import 'package:matrix/matrix.dart';
 /// * Sending the query to a network ("Search WhatsApp for …", "Look up
 ///   +48… on Telegram") and starting a chat through a bridge are explicit
 ///   taps; starting a chat asks first.
-/// * Matrix itself is never searched: no user directory, no public rooms,
-///   no Matrix ids.
+/// * Matrix itself is never searched: no user directory, no public rooms.
+///   A typed Matrix id (`@anna:beeper.com`, or `@anna` on the account's
+///   server) offers one row; its tap asks the server for that profile and
+///   starting the chat asks first.
 class NotionSearchPage extends StatefulWidget {
   const NotionSearchPage({
     super.key,
@@ -483,6 +486,46 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     }
   }
 
+  /// The Matrix user the query names exactly, if any.
+  String? get _matrixId =>
+      matrixIdFromQuery(_applied, ownUserId: _client.userID);
+
+  Room? _matrixChat(String userId) {
+    final roomId = _client.getDirectChatFromUserId(userId);
+    return roomId == null ? null : _client.getRoomById(roomId);
+  }
+
+  Future<void> _tapMatrix(String userId) async {
+    final existing = _matrixChat(userId);
+    if (existing != null) {
+      _openRoom(existing);
+      return;
+    }
+    final key = 'matrix:$userId';
+    if (_starting.contains(key)) return;
+    setState(() => _starting.add(key));
+    try {
+      final name = await matrixProfileName(_client, userId);
+      if (!mounted) return;
+      final confirmed = await confirmMatrixChat(
+        context,
+        userId: userId,
+        name: name,
+      );
+      if (!confirmed || !mounted) return;
+      final room = await startMatrixChat(_client, userId);
+      if (!mounted) return;
+      _openRoom(room);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(matrixChatError(error, userId))));
+    } finally {
+      if (mounted) setState(() => _starting.remove(key));
+    }
+  }
+
   void _retry() => unawaited(_directory.probe(_bridges(), force: true));
 
   // -------------------------------------------------------------------------
@@ -585,7 +628,14 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
   List<_Item> _items(UnifiedSearchResults results) {
     final query = _applied;
     final items = <_Item>[];
+    final matrixId = _matrixId;
+    if (matrixId != null) {
+      items.add(_header('matrix', 'Matrix'));
+      items.add(_Item('matrix:$matrixId', (c) => _matrixRow(c, matrixId)));
+    }
     if (results.isEmpty && !_anyChecking() && !(_device?.searching ?? false)) {
+      // An exact Matrix id needs no "nothing found" below its row.
+      if (matrixId != null) return items;
       items.add(
         _Item(
           'empty',
@@ -930,6 +980,25 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     );
   }
 
+  Widget _matrixRow(BuildContext context, String userId) {
+    final existing = _matrixChat(userId);
+    final starting = _starting.contains('matrix:$userId');
+    return NotionListRow(
+      leading: const NotionNetworkGlyph(
+        network: 'matrix',
+        size: NotionSize.icon,
+      ),
+      title: existing != null
+          ? 'Open chat with $userId'
+          : 'Start a chat with $userId',
+      subtitle: existing != null
+          ? widget.inbox.projection.displayName(existing)
+          : 'Checks the account on your server, then asks first',
+      trailing: starting ? const NotionDelayedSpinner() : null,
+      onTap: starting ? null : () => unawaited(_tapMatrix(userId)),
+    );
+  }
+
   Widget _messageRow(BuildContext context, SearchMessageCandidate message) {
     final room = _client.getRoomById(message.roomId);
     if (room == null) return const SizedBox.shrink();
@@ -1079,7 +1148,8 @@ class _EmptySearch extends StatelessWidget {
           child: Text(
             'Type a name to find chats, people on your networks and recent '
             'messages. Phone numbers and @usernames can be looked up on '
-            'networks that support it.',
+            'networks that support it; a Matrix ID (@name:server) starts a '
+            'Matrix chat.',
             style: context.notion.typography.footnoteMuted,
           ),
         ),

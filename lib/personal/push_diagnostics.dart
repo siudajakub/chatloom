@@ -31,7 +31,9 @@ enum PushOutcome {
 }
 
 /// The kind of push wake, derived only from the content-free FCM data map.
-enum PushKind { message, countOnly, reminder, test }
+/// [resync]: FCM dropped queued pushes (`onDeletedMessages`), forwarded by
+/// the app itself.
+enum PushKind { message, countOnly, reminder, test, resync }
 
 /// The steps that must all succeed before the homeserver can reach this
 /// phone, in order: an FCM token, the private gateway's registration of that
@@ -123,7 +125,11 @@ String pushKindLabel(PushKind kind) => switch (kind) {
   PushKind.countOnly => 'Unread count',
   PushKind.reminder => 'Reminder',
   PushKind.test => 'Test',
+  PushKind.resync => 'Missed pushes',
 };
+
+/// `personal_wake` value `FcmPushService.onDeletedMessages` sends.
+const resyncWake = 'resync';
 
 /// Classifies an FCM data map without reading any value except the fixed
 /// wake marker and whether an event id is present.
@@ -133,6 +139,7 @@ String pushKindLabel(PushKind kind) => switch (kind) {
 /// "chat open" checks).
 PushKind pushKindOf(Map<String, Object?> data, {bool test = false}) {
   if (data['personal_wake'] == 'reminder') return PushKind.reminder;
+  if (data['personal_wake'] == resyncWake) return PushKind.resync;
   if (test) return PushKind.test;
   final event = data['event_id'];
   return event is String && event.isNotEmpty

@@ -470,6 +470,151 @@ void main() {
     );
   });
 
+  // A burst of voice notes (2026-10-26): the worker retries transient
+  // failures itself and publishes the job as queued with the failure code
+  // meanwhile; only retries used up end in an error.
+  group('failures the worker retries by itself', () {
+    test('only those count as retrying', () {
+      TranscriptionJob job(JobState state, String? code) => TranscriptionJob(
+        id: 'transcript:x',
+        source: const SourceEventRef(
+          conversation: ConversationRef(
+            accountId: '@a:example.invalid',
+            roomId: '!r:example.invalid',
+          ),
+          eventId: r'$x',
+        ),
+        state: state,
+        errorCode: code,
+      );
+      for (final code in [
+        'source_unavailable',
+        'local_source_unavailable',
+        'local_source_busy',
+        'openai_rate_limited',
+        'transcription_failed',
+      ]) {
+        expect(transcriptionRetrying(job(JobState.queued, code)), isTrue);
+        // Retries used up: a real error.
+        expect(transcriptionRetrying(job(JobState.failed, code)), isFalse);
+      }
+      expect(
+        transcriptionRetrying(
+          job(JobState.waitingSync, 'source_status_unknown'),
+        ),
+        isTrue,
+      );
+      expect(transcriptionRetrying(job(JobState.queued, null)), isFalse);
+      // A refusal of a duplicate request says nothing about retries.
+      expect(transcriptionRetrying(job(JobState.queued, 'conflict')), isFalse);
+      expect(
+        transcriptionRetrying(job(JobState.waitingKeys, 'waiting_keys')),
+        isFalse,
+      );
+      expect(
+        transcriptionErrorText('local_source_busy'),
+        'Couldn’t load the audio',
+      );
+    });
+
+    testWidgets('they stay one placeholder, never an error, until the '
+        'transcript appears in place', (tester) async {
+      personal.setJob(voice, JobState.queued, origin: TranscriptionOrigin.auto);
+      await pump(tester);
+      await settle(tester);
+      final placeholder = tester.state(find.byType(NotionShimmerLines));
+      for (final (state, code) in [
+        (JobState.processing, null),
+        (JobState.queued, 'source_unavailable'),
+        (JobState.queued, 'local_source_unavailable'),
+        (JobState.waitingSync, 'source_status_unknown'),
+        (JobState.queued, 'transcription_failed'),
+      ]) {
+        personal.setJob(
+          voice,
+          state,
+          errorCode: code,
+          origin: TranscriptionOrigin.auto,
+        );
+        await settle(tester);
+        expectPlaceholderOnly(tester);
+        expect(find.byIcon(Icons.error_outline_rounded), findsNothing);
+        expect(find.text('Retry'), findsNothing);
+        expect(
+          tester.state(find.byType(NotionShimmerLines)),
+          same(placeholder),
+          reason: 'no restart or flicker at $state $code',
+        );
+      }
+      personal.setJob(
+        voice,
+        JobState.done,
+        language: 'en',
+        text: 'Back in a minute',
+        origin: TranscriptionOrigin.auto,
+      );
+      await settle(tester);
+      expect(find.text('Back in a minute'), findsOneWidget);
+      expect(find.byIcon(Icons.error_outline_rounded), findsNothing);
+    });
+
+    testWidgets('a long back-off says it will try again, calmly', (
+      tester,
+    ) async {
+      personal.setJob(
+        voice,
+        JobState.queued,
+        errorCode: 'openai_rate_limited',
+        origin: TranscriptionOrigin.auto,
+      );
+      await pump(tester);
+      await settle(tester);
+      expect(
+        find.text(TranscriptBusyLines.retryWaitText),
+        findsNothing,
+        reason: 'a quick retry is silent',
+      );
+      final steps = (NotionMotion.loopCap.inMilliseconds / 500).ceil() + 4;
+      for (var i = 0; i < steps; i++) {
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+      expect(find.text(TranscriptBusyLines.retryWaitText), findsOneWidget);
+      expect(find.text(TranscriptBusyLines.longWaitText), findsNothing);
+      expect(find.byIcon(Icons.error_outline_rounded), findsNothing);
+    });
+
+    testWidgets('retries used up: one short reason and Retry, which goes '
+        'straight back to the placeholder', (tester) async {
+      personal.setJob(
+        voice,
+        JobState.failed,
+        errorCode: 'transcription_failed',
+        origin: TranscriptionOrigin.auto,
+      );
+      await pump(tester);
+      await settle(tester);
+      expect(find.text('Couldn’t transcribe this message'), findsOneWidget);
+      expect(find.byIcon(Icons.error_outline_rounded), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+      await tester.tap(find.text('Retry'));
+      await settle(tester);
+      expect(personal.requests, [null]);
+      expectPlaceholderOnly(tester);
+      expect(find.byIcon(Icons.error_outline_rounded), findsNothing);
+      // The worker accepts and starts the request: still the same line.
+      final placeholder = tester.state(find.byType(NotionShimmerLines));
+      for (final state in [JobState.queued, JobState.processing]) {
+        personal.setJob(voice, state);
+        await settle(tester);
+        expectPlaceholderOnly(tester);
+        expect(
+          tester.state(find.byType(NotionShimmerLines)),
+          same(placeholder),
+        );
+      }
+    });
+  });
+
   testWidgets('a message arriving in an open chat shows the placeholder, '
       'then its transcript in place', (tester) async {
     // The bubble is built before the client knows anything automatic.

@@ -18,7 +18,6 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -390,11 +389,11 @@ void main() {
       ),
       client,
     );
-    expect(find.byType(EmojiPicker), findsNothing);
+    expect(find.byType(NotionEmojiPicker), findsNothing);
     // UX-02: the emoji toggle sits beside "+", no tray to open first.
     await tester.tap(find.byTooltip('Emoji picker'));
     await tester.pumpAndSettle();
-    expect(find.byType(EmojiPicker), findsOneWidget);
+    expect(find.byType(NotionEmojiPicker), findsOneWidget);
   });
 
   testWidgets('merged header counts undecryptable rows of every source', (

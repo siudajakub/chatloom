@@ -911,6 +911,8 @@ class PersonalClient extends ChangeNotifier {
     }
     _journalReady = problem == null;
     if (ready) await stagePending();
+    // The attach replay ran before the journal counted as ready.
+    if (ready) unawaited(_resyncIfNeeded());
     if (measurement != null) {
       PersonalPerformanceProbe.emit('journal_attach', {
         'elapsed_ms': measurement.elapsedMilliseconds,
@@ -1108,6 +1110,7 @@ class PersonalClient extends ChangeNotifier {
         _replayAgain = false;
         await _replayPass();
       } while (_replayAgain && !_disposed);
+      if (!_disposed) unawaited(_resyncIfNeeded());
     } catch (error) {
       _setFailure(error, PersonalFailurePhase.journalReplay);
     } finally {
@@ -1226,12 +1229,25 @@ class PersonalClient extends ChangeNotifier {
       _replayAgain = true;
       return;
     }
-    JournalSettlement settle(Event event) => JournalReplayBatch.settle(
-      latest(event),
-      userId: client.userID,
-      trust: trust,
-      pendingAlert: (event) => pendingAlerts.contains(event.eventId),
-    );
+    JournalSettlement settle(Event event) {
+      final current = latest(event);
+      final settlement = JournalReplayBatch.settle(
+        current,
+        userId: client.userID,
+        trust: trust,
+        pendingAlert: (event) => pendingAlerts.contains(event.eventId),
+      );
+      if (settlement == JournalSettlement.settled &&
+          JournalReplayBatch.lostResult(
+            current,
+            userId: client.userID,
+            trust: trust,
+          )) {
+        _lostWorkerResults = true;
+      }
+      return settlement;
+    }
+
     final resolved = <String>{
       for (final id in heldIds)
         if (_unavailableHeld.contains(id) ||
@@ -1557,7 +1573,7 @@ class PersonalClient extends ChangeNotifier {
   bool get workerTranscribesAllMedia =>
       (workerReadiness?.transcriptionMedia ?? 0) >= 2;
 
-  /// True when the worker treats Instagram reels as their own kind
+  /// True when the worker treats shared reels as their own kind
   /// (heartbeat `transcriptionMedia` >= 3) and so honours the reel switch.
   /// A worker reporting 2 transcribes a reel automatically like any video
   /// while videos are on; on demand it transcribes reels either way.
@@ -2139,6 +2155,78 @@ class PersonalClient extends ChangeNotifier {
     } finally {
       // A staged delete keeps the group hidden through its pending operation.
       if (_unmerging.remove(id) && !staged) notifyListeners();
+    }
+  }
+
+  // ── Merged persons again from the worker (2026-10-26) ──────────────────
+  // Another device's change reaches this one only as the worker's result.
+  // A result this device could never decrypt or trust (it was added later,
+  // or got the keys only from backup) was settled for good, so merged
+  // persons differed between devices. `metadata.resync` asks the worker to
+  // publish its stored state again in the current session.
+
+  /// Metadata prefixes whose state [requestMetadataResync] asks for.
+  static const resyncPrefixes = ['person:', 'person-prefs:'];
+
+  /// Entity of the resync command; its record also marks that this device
+  /// asked once already.
+  static const resyncEntity = 'resync';
+
+  /// Shortest gap between two automatic resyncs after lost results.
+  static const resyncInterval = Duration(hours: 6);
+
+  bool _lostWorkerResults = false;
+  DateTime? _lastResyncAt;
+
+  /// Whether the worker can publish the merged persons again.
+  bool get canResyncMetadata =>
+      workerOnline && workerReadiness?.metadataResync == true;
+
+  /// Whether the worker reports that it ignores this device's changes: they
+  /// stay on this device only until the device is trusted by the worker.
+  bool get workerIgnoresThisDevice {
+    final id = client.deviceID;
+    return workerOnline &&
+        id != null &&
+        (workerReadiness?.untrustedDevices.contains(id) ?? false);
+  }
+
+  bool get _resyncPending => pending.values.any(
+    (op) => op.entityId == resyncEntity && op.kind == 'metadata.resync',
+  );
+
+  /// Asks the worker to publish the stored merged persons again. Returns
+  /// false when the worker cannot (offline or older) or a request already
+  /// waits for it.
+  Future<bool> requestMetadataResync() async {
+    if (_disposed || !canResyncMetadata || _resyncPending) return false;
+    _lastResyncAt = DateTime.now();
+    _lostWorkerResults = false;
+    try {
+      await command('metadata.resync', resyncEntity, {
+        'prefixes': resyncPrefixes,
+      });
+    } on StateError {
+      return false;
+    }
+    return true;
+  }
+
+  /// Resyncs once per device (no request recorded yet) and again after a
+  /// replay settled worker results this device can never apply, at most
+  /// once per [resyncInterval].
+  Future<void> _resyncIfNeeded() async {
+    if (!canResyncMetadata || _resyncPending) return;
+    final never = !revisions.containsKey(resyncEntity);
+    final last = _lastResyncAt;
+    final due =
+        _lostWorkerResults &&
+        (last == null || DateTime.now().difference(last) >= resyncInterval);
+    if (!never && !due) return;
+    try {
+      await requestMetadataResync();
+    } catch (_) {
+      // Retried after the next replay; sync status shows a lasting failure.
     }
   }
 

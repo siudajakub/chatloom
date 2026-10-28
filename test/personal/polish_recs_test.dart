@@ -288,6 +288,118 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('starting and ending a swipe never remounts the row', (
+      tester,
+    ) async {
+      narrow(tester);
+      final mounts = <int>[];
+      await tester.pumpWidget(
+        _host(
+          NotionSwipeAction(
+            key: const ValueKey('swipe'),
+            endToStart: NotionSwipeActionSide(
+              icon: Icons.archive_outlined,
+              label: 'Archive',
+              onCommit: () => committed.add('archive'),
+            ),
+            child: _SwipeMountProbe(mounts),
+          ),
+        ),
+      );
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('swipe'))),
+      );
+      await gesture.moveBy(const Offset(-40, 0));
+      await gesture.moveBy(const Offset(-40, 0));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(mounts, [1]);
+    });
+
+    testWidgets('a dismissing side flies off, closes its slot, then commits; '
+        'a row that stays comes back', (tester) async {
+      narrow(tester);
+      await tester.pumpWidget(
+        _host(
+          NotionSwipeAction(
+            key: const ValueKey('swipe'),
+            endToStart: NotionSwipeActionSide(
+              icon: Icons.archive_outlined,
+              label: 'Archive',
+              dismisses: true,
+              onCommit: () => committed.add('archive'),
+            ),
+            child: _row(),
+          ),
+        ),
+      );
+      final swipe = find.byKey(const ValueKey('swipe'));
+      final height = tester.getSize(swipe).height;
+      final rest = tester.getTopLeft(find.text('Fictional person'));
+      await tester.drag(swipe, const Offset(-200, 0));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(committed, isEmpty, reason: 'Commits after the slot closed');
+      expect(
+        tester.getTopLeft(find.text('Fictional person')).dx,
+        lessThan(rest.dx - 200),
+      );
+      // Fly-off spring plus the collapse.
+      for (var i = 0; i < 40 && committed.isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(committed, ['archive']);
+      expect(tester.getSize(swipe).height, 0);
+      // Nobody removed the row: it grows and slides back.
+      await tester.pumpAndSettle();
+      expect(tester.getSize(swipe).height, height);
+      expect(tester.getTopLeft(find.text('Fictional person')), rest);
+      expect(find.text('Archive'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a dismissing row removed by its list leaves nothing behind', (
+      tester,
+    ) async {
+      narrow(tester);
+      var shown = true;
+      late StateSetter update;
+      await tester.pumpWidget(
+        _host(
+          StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (shown)
+                    NotionSwipeAction(
+                      key: const ValueKey('swipe'),
+                      endToStart: NotionSwipeActionSide(
+                        icon: Icons.archive_outlined,
+                        label: 'Archive',
+                        dismisses: true,
+                        onCommit: () => update(() => shown = false),
+                      ),
+                      child: _row(),
+                    ),
+                  const Text('Below'),
+                ],
+              );
+            },
+          ),
+        ),
+      );
+      await tester.drag(
+        find.byKey(const ValueKey('swipe')),
+        const Offset(-200, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('swipe')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('a swipe from the back-gesture edge is the system\'s', (
       tester,
     ) async {
@@ -371,4 +483,26 @@ void main() {
       expect(published.last, [a], reason: 'Back after removal at once');
     });
   });
+}
+
+/// Counts the mounts of a swiped row's content.
+class _SwipeMountProbe extends StatefulWidget {
+  const _SwipeMountProbe(this.mounts);
+
+  final List<int> mounts;
+
+  @override
+  State<_SwipeMountProbe> createState() => _SwipeMountProbeState();
+}
+
+class _SwipeMountProbeState extends State<_SwipeMountProbe> {
+  @override
+  void initState() {
+    super.initState();
+    widget.mounts.add(widget.mounts.length + 1);
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      const SizedBox(height: 64, child: Text('Probe'));
 }

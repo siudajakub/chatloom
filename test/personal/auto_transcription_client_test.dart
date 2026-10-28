@@ -150,7 +150,12 @@ Event video(
 
 /// A reel shared from Instagram, as mautrix-meta delivers it: the post's own
 /// video with the post's link as `external_url` (see personal_core).
-Event reel(Room room, String id) => Event(
+Event reel(
+  Room room,
+  String id, {
+  String url = 'https://www.instagram.com/reel/Cfixture/',
+  Map<String, dynamic> extra = const {},
+}) => Event(
   room: room,
   eventId: id,
   type: EventTypes.Message,
@@ -161,7 +166,8 @@ Event reel(Room room, String id) => Event(
     'body': 'Caption of the shared post',
     'url': 'mxc://example.invalid/reel',
     'info': {'mimetype': 'video/mp4', 'duration': 30000},
-    'external_url': 'https://www.instagram.com/reel/Cfixture/',
+    'external_url': url,
+    ...extra,
   },
 );
 
@@ -604,6 +610,57 @@ void main() {
         ),
         isNull,
       );
+    },
+  );
+
+  test(
+    'Facebook reels shared on Messenger are never requested automatically',
+    () async {
+      // 2026-10-26: a Facebook reel was classified as an ordinary video
+      // and transcribed automatically. Shape from mautrix-meta's Messenger
+      // converter: the share URL as `external_url` plus the post title keys.
+      personal.workerReadiness = heartbeat('scan', media: 3);
+      for (final (id, url) in [
+        (r'$fbreel', 'https://www.facebook.com/reel/1234567890'),
+        (r'$fbwatch', 'https://fb.watch/fixture/'),
+        (r'$igreel', 'https://www.instagram.com/reel/Cfixture/'),
+      ]) {
+        final shared = reel(
+          cloud,
+          id,
+          url: url,
+          extra: const {
+            'com.beeper.meta.full_post_title': 'fixture',
+            'com.beeper.meta.caption_body_text': '',
+          },
+        );
+        expect(
+          PersonalClient.autoTranscriptionKind(shared),
+          AutoTranscriptionKind.reel,
+          reason: url,
+        );
+        expect(
+          personal.autoTranscriptionBlockFor(shared, DateTime.now()),
+          'kind_disabled',
+          reason: url,
+        );
+        expect(personal.autoTranscriptPending(shared), isFalse, reason: url);
+        // Still offered on demand.
+        expect(personal.transcribableKind(shared), AutoTranscriptionKind.reel);
+      }
+      await flushTimers();
+      expect(personal.requests, isEmpty, reason: 'no automatic request');
+      // A round and a voice note in the same state are still automatic.
+      expect(
+        personal.autoTranscriptionBlockFor(
+          round(local, r'$round'),
+          DateTime.now(),
+        ),
+        isNull,
+      );
+      expect(personal.autoTranscriptPending(voice(cloud, r'$voice')), isTrue);
+      await flushTimers();
+      expect(personal.requests.single.payload['origin'], 'auto');
     },
   );
 
@@ -1190,7 +1247,7 @@ void main() {
       NotionSettingsToggle reels() => tester.widget<NotionSettingsToggle>(
         find.byKey(const ValueKey('transcription-kind-reel')),
       );
-      expect(find.text('Instagram reels'), findsOneWidget);
+      expect(find.text('Shared reels'), findsOneWidget);
       expect(reels().value, isFalse);
       expect(
         reels().subtitle,
@@ -1198,7 +1255,7 @@ void main() {
         'service is updated, reels follow Videos',
       );
       expect(
-        find.textContaining('Instagram reels only when you tap Transcribe'),
+        find.textContaining('Shared reels only when you tap Transcribe'),
         findsOneWidget,
       );
       personal.workerReadiness = heartbeat('scan', media: 3);
@@ -1207,7 +1264,7 @@ void main() {
       expect(
         reels().subtitle,
         'On demand · tap Transcribe under a reel · '
-        'Reels, posts and stories shared from Instagram',
+        'Reels, posts and stories shared from Instagram or Facebook',
       );
       await tester.tap(find.byKey(const ValueKey('transcription-kind-reel')));
       await tester.pumpAndSettle();

@@ -41,6 +41,7 @@ String transcriptionErrorText(String? errorCode) => switch (errorCode) {
   'empty_transcript' => 'No speech detected',
   'source_too_large' || 'audio_chunk_too_large' => 'Too large to transcribe',
   'local_source_unavailable' ||
+  'local_source_busy' ||
   'source_status_unknown' ||
   'source_unavailable' ||
   'room_unavailable' => 'Couldn’t load the audio',
@@ -62,6 +63,33 @@ String? transcriptionDelayText(TranscriptionJob job) =>
     job.state == JobState.waitingKeys
     ? 'Waiting for this message to decrypt'
     : null;
+
+/// Failures the worker tries again by itself after a pause (the worker's
+/// `transientRetryCodes`, plus `transcription_failed` for an unclassified
+/// error before anything was sent to the provider). The worker publishes
+/// such a job as queued with the code until its retries are used up; only
+/// then does it fail.
+const _retriedCodes = {
+  'local_source_unavailable',
+  'local_source_busy',
+  'source_unavailable',
+  'room_unavailable',
+  'openai_rate_limited',
+  'openai_unavailable',
+  'openai_unreachable',
+  'source_policy_unknown',
+  'transcription_failed',
+};
+
+/// True while the worker waits to try [job] again after a transient failure
+/// (a dropped connection, a busy source or provider), or to check its source
+/// again. It is still on its way: the panel keeps the placeholder, never an
+/// error, and only a wait longer than the shimmer says so (calmly).
+bool transcriptionRetrying(TranscriptionJob job) => switch (job.state) {
+  JobState.queued => _retriedCodes.contains(job.errorCode),
+  JobState.waitingSync => job.errorCode == 'source_status_unknown',
+  _ => false,
+};
 
 /// Transcription controls and result for one voice note, audio, round or
 /// video message (also media sent as a file).
@@ -381,6 +409,7 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
     final cancelling =
         job != null && personal.isTranscriptCancellationPending(job.id);
     final delay = job == null ? null : transcriptionDelayText(job);
+    final retrying = job != null && transcriptionRetrying(job);
     return Semantics(
       key: const ValueKey('transcript-busy'),
       container: true,
@@ -407,6 +436,11 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
                       color: foreground,
                       // A delay already explains itself below.
                       explainLongWait: delay == null,
+                      // A quick retry stays silent; a longer back-off
+                      // says what is happening instead of "Transcribing…".
+                      waitText: retrying
+                          ? TranscriptBusyLines.retryWaitText
+                          : TranscriptBusyLines.longWaitText,
                       caption: (text) => _caption(text, foreground),
                     ),
                   ),
@@ -674,14 +708,22 @@ class TranscriptBusyLines extends StatefulWidget {
     required this.color,
     required this.caption,
     this.explainLongWait = true,
+    this.waitText = longWaitText,
   });
 
   final Color color;
   final Widget Function(String text) caption;
   final bool explainLongWait;
 
+  /// Caption once the shimmer rests ([longWaitText] or [retryWaitText]).
+  final String waitText;
+
   /// Caption of a long wait.
   static const longWaitText = 'Transcribing…';
+
+  /// Caption of a long wait while the worker backs off before trying again
+  /// after a transient failure.
+  static const retryWaitText = 'Trying again shortly…';
 
   @override
   State<TranscriptBusyLines> createState() => _TranscriptBusyLinesState();
@@ -701,8 +743,7 @@ class _TranscriptBusyLinesState extends State<TranscriptBusyLines> {
           if (mounted) setState(() => _rested = true);
         },
       ),
-      if (_rested && widget.explainLongWait)
-        widget.caption(TranscriptBusyLines.longWaitText),
+      if (_rested && widget.explainLongWait) widget.caption(widget.waitText),
     ],
   );
 }

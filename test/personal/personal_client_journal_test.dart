@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
+import 'package:chatloom/personal/sync_changes.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/encryption.dart';
 import 'package:matrix/encryption/utils/session_key.dart';
@@ -18,6 +19,8 @@ final _t0 = DateTime.utc(2026, 10, 17, 8);
 class _Client implements Client {
   @override
   String? userID = _user;
+  @override
+  String? deviceID = 'SYNTHETIC-THIS';
   @override
   Future<void> get accountDataLoading => Future<void>.value();
   @override
@@ -1005,6 +1008,136 @@ void main() {
     );
     await _idle();
     expect(changes, 1);
+  });
+
+  group('merged persons resync', () {
+    Event liveHeartbeat(_Journal room, Map<String, dynamic> payload) => _op(
+      room,
+      'hb-live',
+      DateTime.now().toUtc(),
+      'worker.heartbeat',
+      payload: {'healthy': true, 'verified': true, ...payload},
+    );
+
+    test('a device asks a capable worker once for the stored persons', () async {
+      final store = _Store();
+      final journal = _Journal();
+      journal.history
+        ..add(_create(journal))
+        ..add(liveHeartbeat(journal, {'metadataResync': 1}));
+      final personal = _start(client, store, journal);
+      addTearDown(personal.dispose);
+      await personal.load();
+      await _idle();
+      expect(personal.canResyncMetadata, isTrue);
+      final asked = personal.pending.values
+          .where((op) => op.kind == 'metadata.resync')
+          .toList();
+      expect(asked, hasLength(1));
+      expect(asked.single.entityId, PersonalClient.resyncEntity);
+      expect(asked.single.payload['prefixes'], PersonalClient.resyncPrefixes);
+      // While it waits, another request is not staged.
+      expect(await personal.requestMetadataResync(), isFalse);
+      expect(
+        syncEntityTitle(
+          personal,
+          PersonalClient.resyncEntity,
+          operation: asked.single,
+        ),
+        'Refresh merged conversations',
+      );
+    });
+
+    test('an older worker is never asked', () async {
+      final store = _Store();
+      final journal = _Journal();
+      journal.history
+        ..add(_create(journal))
+        ..add(liveHeartbeat(journal, const {}));
+      final personal = _start(client, store, journal);
+      addTearDown(personal.dispose);
+      await personal.load();
+      await _idle();
+      expect(personal.canResyncMetadata, isFalse);
+      expect(personal.pending.values.where((op) => op.kind == 'metadata.resync'),
+          isEmpty);
+      expect(await personal.requestMetadataResync(), isFalse);
+    });
+
+    test('a republished person and tombstone apply as foreign state', () async {
+      final store = _Store();
+      final journal = _Journal();
+      journal.history
+        ..add(_create(journal))
+        ..add(
+          _op(
+            journal,
+            'old',
+            _min(1),
+            'metadata.result',
+            entity: 'person:gone',
+            payload: {
+              'state': 'done',
+              'revision': 1,
+              'value': {'id': 'gone'},
+            },
+          ),
+        )
+        ..add(
+          _op(
+            journal,
+            'resync-a',
+            _min(2),
+            'metadata.result',
+            entity: 'person:a',
+            payload: {
+              'state': 'done',
+              'revision': 3,
+              'value': {'id': 'a'},
+              'resync': true,
+            },
+          ),
+        )
+        ..add(
+          _op(
+            journal,
+            'resync-gone',
+            _min(3),
+            'metadata.result',
+            entity: 'person:gone',
+            payload: {
+              'state': 'done',
+              'revision': 2,
+              'value': null,
+              'deleted': true,
+              'resync': true,
+            },
+          ),
+        );
+      final personal = _start(client, store, journal);
+      addTearDown(personal.dispose);
+      await personal.load();
+      expect(personal.values['person:a'], {'id': 'a'});
+      expect(personal.values.containsKey('person:gone'), isFalse);
+    });
+
+    test('the worker naming this device marks its changes as local', () async {
+      final store = _Store();
+      final journal = _Journal();
+      journal.history
+        ..add(_create(journal))
+        ..add(
+          liveHeartbeat(journal, {
+            'untrustedDevices': ['OTHER', 'SYNTHETIC-THIS'],
+          }),
+        );
+      final personal = _start(client, store, journal);
+      addTearDown(personal.dispose);
+      await personal.load();
+      expect(personal.workerIgnoresThisDevice, isTrue);
+      client.deviceID = 'SYNTHETIC-ELSE';
+      expect(personal.workerIgnoresThisDevice, isFalse);
+    });
   });
 
   test('a fresh heartbeat inside the resume margin survives restart', () async {

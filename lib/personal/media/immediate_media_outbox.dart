@@ -109,8 +109,9 @@ class ImmediateMediaOutbox {
   /// The draft this outbox staged and read back moments ago (with its early
   /// ciphertext), handed to the first dispatch so it neither re-reads and
   /// re-verifies the same BLOBs nor encrypts again. Multi-megabyte, so it is
-  /// dropped after [stagedCacheLifetime], by [releaseStaged] (lock,
-  /// background, skipped dispatch) and by any other operation on the action.
+  /// dropped after [stagedCacheLifetime], by [releaseStaged] (session closed)
+  /// or [releaseStagedExcept] (lock, background) and by any other operation
+  /// on the action.
   final _staged = <String, _StagedDraft>{};
   static const stagedCacheLifetime = Duration(minutes: 2);
   final DateTime Function() _now;
@@ -141,6 +142,11 @@ class ImmediateMediaOutbox {
       _staged.remove(actionId);
     }
   }
+
+  /// Drops every in-memory draft except those of [keep] (rounds the user
+  /// committed that are about to upload; they still expire).
+  void releaseStagedExcept(Set<String> keep) =>
+      _staged.removeWhere((actionId, _) => !keep.contains(actionId));
 
   _StagedDraft? _takeStaged(String actionId) {
     final draft = _staged.remove(actionId);

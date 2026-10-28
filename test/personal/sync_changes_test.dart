@@ -227,7 +227,7 @@ void main() {
       describeSyncValue(transcriptionPolicyEntity, {
         'kinds': {'video': false, 'reel': true},
       }, against: const {}),
-      'Media: off for videos · automatic for Instagram reels',
+      'Media: off for videos · automatic for shared reels',
     );
   });
 

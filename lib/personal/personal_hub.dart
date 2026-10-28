@@ -457,6 +457,41 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                 ),
                 WorkerStatusRow(personal: personal),
                 NotionSizeReveal(
+                  visible: personal.workerIgnoresThisDevice,
+                  child: const NotionCallout(
+                    icon: Icons.phonelink_lock_outlined,
+                    tone: NotionCalloutTone.warning,
+                    title: 'Changes from this device stay here',
+                    message:
+                        'The background service does not trust this device yet, '
+                        'so merges and other private changes made here do not '
+                        'reach your other devices. Verify this device and add '
+                        'it to the service\'s trusted devices.',
+                  ),
+                ),
+                NotionSizeReveal(
+                  visible: personal.canResyncMetadata,
+                  child: NotionListRow(
+                    leading: const Icon(Icons.sync),
+                    title: 'Refresh merged conversations',
+                    subtitle:
+                        'Load the merged conversations saved by your other devices again.',
+                    onTap: () => run(() async {
+                      final asked = await personal.requestMetadataResync();
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(this.context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            asked
+                                ? 'Refreshing merged conversations…'
+                                : 'A refresh is already on its way.',
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+                NotionSizeReveal(
                   visible: personal.problem != null,
                   child: NotionListRow(
                     title: 'Retry private sync',

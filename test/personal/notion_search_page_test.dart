@@ -7,6 +7,7 @@
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat_list/inbox_controller.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart';
+import 'package:chatloom/personal/matrix_start_chat.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_network_selector.dart';
@@ -36,6 +37,47 @@ class _Client extends Client {
   _Client() : super('synthetic search', database: _NoDatabase());
   @override
   String get userID => _owner;
+
+  /// Matrix profiles the fake server knows; anyone else is M_NOT_FOUND.
+  final profiles = <String, String?>{};
+  final profileLookups = <String>[];
+  final startedChats = <String>[];
+
+  @override
+  Future<CachedProfileInformation> getUserProfile(
+    String userId, {
+    Duration timeout = const Duration(seconds: 30),
+    Duration maxCacheAge = const Duration(days: 1),
+  }) async {
+    profileLookups.add(userId);
+    if (!profiles.containsKey(userId)) {
+      throw MatrixException.fromJson({
+        'errcode': 'M_NOT_FOUND',
+        'error': 'Profile not found',
+      });
+    }
+    return CachedProfileInformation.fromProfile(
+      ProfileInformation(displayname: profiles[userId]),
+      outdated: false,
+      updated: DateTime.utc(2026),
+    );
+  }
+
+  @override
+  Future<String> startDirectChat(
+    String mxid, {
+    bool? enableEncryption,
+    List<StateEvent>? initialState,
+    bool waitForSync = true,
+    Map<String, dynamic>? powerLevelContentOverride,
+    CreateRoomPreset? preset = CreateRoomPreset.trustedPrivateChat,
+    bool skipExistingChat = false,
+  }) async {
+    startedChats.add(mxid);
+    const id = '!matrix-dm:example.invalid';
+    rooms.add(Room(id: id, client: this, membership: Membership.join));
+    return id;
+  }
 }
 
 void _state(
@@ -561,6 +603,88 @@ void main() {
     await tester.tap(recent);
     await tester.pumpAndSettle();
     expect(opened.rooms, [fixture.dm.id]);
+    await tester.pumpWidget(const SizedBox.shrink());
+    fixture.dispose();
+  });
+
+  test('a typed Matrix id names one user; anything else names none', () {
+    String? id(String query) => matrixIdFromQuery(query, ownUserId: _owner);
+    expect(id('@friend:beeper.com'), '@friend:beeper.com');
+    expect(id('  @friend:beeper.com '), '@friend:beeper.com');
+    // A bare @name is that name on the account's own server.
+    expect(id('@Friend'), '@friend:example.invalid');
+    expect(id('friend'), isNull);
+    expect(id('@'), isNull);
+    expect(id('@friend :beeper.com'), isNull);
+    expect(id('#room:beeper.com'), isNull);
+    expect(id(_owner), isNull);
+    expect(matrixIdFromQuery('@friend', ownUserId: null), isNull);
+  });
+
+  testWidgets('a Matrix id starts a Matrix chat only after a confirmed tap', (
+    tester,
+  ) async {
+    final fixture = _Fixture();
+    fixture.client.profiles['@friend:beeper.com'] = 'Fictional Friend';
+    final opened = _Opened();
+    await _openSearch(
+      tester,
+      fixture,
+      BridgeDirectory.disabled('Not available in tests.'),
+      opened,
+    );
+    await _type(tester, 'anna');
+    expect(find.textContaining('Matrix'), findsNothing);
+
+    await _type(tester, '@friend:beeper.com');
+    expect(find.text('Start a chat with @friend:beeper.com'), findsOneWidget);
+    // Typing alone asks no server.
+    expect(fixture.client.profileLookups, isEmpty);
+    expect(find.textContaining('No results'), findsNothing);
+
+    await tester.tap(find.text('Start a chat with @friend:beeper.com'));
+    await tester.pumpAndSettle();
+    expect(fixture.client.profileLookups, ['@friend:beeper.com']);
+    expect(
+      find.text('Start a Matrix chat with Fictional Friend?'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(fixture.client.startedChats, isEmpty);
+    expect(opened.rooms, isEmpty);
+
+    await tester.tap(find.text('Start a chat with @friend:beeper.com'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Start chat'));
+    await tester.pumpAndSettle();
+    expect(fixture.client.startedChats, ['@friend:beeper.com']);
+    expect(opened.rooms, ['!matrix-dm:example.invalid']);
+    await tester.pumpWidget(const SizedBox.shrink());
+    fixture.dispose();
+  });
+
+  testWidgets('an unknown Matrix id says so and creates nothing', (
+    tester,
+  ) async {
+    final fixture = _Fixture();
+    final opened = _Opened();
+    await _openSearch(
+      tester,
+      fixture,
+      BridgeDirectory.disabled('Not available in tests.'),
+      opened,
+    );
+    await _type(tester, '@ghost');
+    await tester.tap(find.text('Start a chat with @ghost:example.invalid'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Start a Matrix chat'), findsNothing);
+    expect(
+      find.text('No Matrix account @ghost:example.invalid.'),
+      findsOneWidget,
+    );
+    expect(fixture.client.startedChats, isEmpty);
+    expect(opened.rooms, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
     fixture.dispose();
   });

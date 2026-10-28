@@ -5,6 +5,7 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_read_button.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/read_targets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -79,6 +80,79 @@ Future<void> _mount(
   );
   await tester.pumpAndSettle();
 }
+
+const _anna = '@fixture:example.invalid';
+const _bot = '@whatsappbot:example.invalid';
+
+Event _event(
+  Room room,
+  String id, {
+  required String sender,
+  required int minute,
+  String type = EventTypes.Message,
+  Map<String, Object?>? content,
+  EventStatus status = EventStatus.synced,
+}) => Event(
+  room: room,
+  eventId: id,
+  type: type,
+  senderId: sender,
+  status: status,
+  originServerTs: DateTime.utc(2026, 10, 21, 0, minute),
+  content:
+      content ?? {'msgtype': MessageTypes.Text, 'body': 'Fictional message'},
+);
+
+/// The bridge's delivery report about [eventId], as Beeper bridges send it.
+Event _status(Room room, String id, String eventId, int minute) => _event(
+  room,
+  id,
+  sender: _bot,
+  minute: minute,
+  type: 'com.beeper.message_send_status',
+  content: {
+    'status': 'SUCCESS',
+    'm.relates_to': {
+      'rel_type': RelationshipTypes.reference,
+      'event_id': eventId,
+    },
+  },
+);
+
+Event _reaction(
+  Room room,
+  String id,
+  String eventId, {
+  required String sender,
+  required int minute,
+  EventStatus status = EventStatus.synced,
+}) => _event(
+  room,
+  id,
+  sender: sender,
+  minute: minute,
+  type: EventTypes.Reaction,
+  status: status,
+  content: {
+    'm.relates_to': {
+      'rel_type': RelationshipTypes.reaction,
+      'event_id': eventId,
+      'key': '👍',
+    },
+  },
+);
+
+LatestReceiptState _ownPublic(String eventId, int minute) => LatestReceiptState(
+  global: LatestReceiptStateForTimeline(
+    ownPrivate: null,
+    ownPublic: LatestReceiptStateData(
+      eventId,
+      DateTime.utc(2026, 10, 21, 0, minute).millisecondsSinceEpoch,
+    ),
+    latestOwnReceipt: null,
+    otherUsers: {},
+  ),
+);
 
 void main() {
   setUp(() async {
@@ -223,11 +297,10 @@ void main() {
     final loaded = a.latest!;
     final echo = a.echo();
     final b = _Room(client, '!b:example.invalid');
-    await _mount(
-      tester,
-      [a, b],
-      loaded: (room) => room == a ? [echo, loaded] : const [],
-    );
+    await _mount(tester, [
+      a,
+      b,
+    ], loaded: (room) => room == a ? [echo, loaded] : const []);
     await tester.tap(find.byType(ConversationReadButton));
     await tester.pumpAndSettle();
     expect(a.receipts, [(r'$loaded', r'$loaded', true)]);
@@ -259,5 +332,174 @@ void main() {
     await tester.tap(find.byType(ConversationReadButton));
     expect(room.receipts, isEmpty);
     PersonalPrivacy.surfaceForeground = true;
+  });
+
+  group('visibility follows the actual unread state', () {
+    test('own message followed by the bridge delivery report is read', () {
+      final room = _Room(_Client(), '!fixture:example.invalid');
+      final own = room.client.userID!;
+      final loaded = [
+        _status(room, r'$status', r'$mine', 3),
+        _event(room, r'$mine', sender: own, minute: 2),
+        _event(room, r'$theirs', sender: _anna, minute: 1),
+      ];
+      room.latest = loaded[1];
+      expect(conversationSourceUnread(room, loaded: loaded), isFalse);
+      expect(
+        conversationNeedsPublicRead([room], loaded: (_) => loaded),
+        isFalse,
+      );
+    });
+
+    test('own reaction reads at once, also while it is still sending, and '
+        'a newer message from someone else is unread again', () {
+      final room = _Room(_Client(), '!fixture:example.invalid');
+      final own = room.client.userID!;
+      final theirs = _event(room, r'$theirs', sender: _anna, minute: 1);
+      room.latest = theirs;
+      final loaded = <Event>[theirs];
+      expect(conversationSourceUnread(room, loaded: loaded), isTrue);
+
+      // The local echo of the reaction, before the server confirmed it.
+      loaded.insert(
+        0,
+        Event(
+          room: room,
+          eventId: 'fixture-transaction',
+          type: EventTypes.Reaction,
+          senderId: own,
+          status: EventStatus.sending,
+          originServerTs: DateTime.now(),
+          content: {
+            'm.relates_to': {
+              'rel_type': RelationshipTypes.reaction,
+              'event_id': r'$theirs',
+              'key': '👍',
+            },
+          },
+        ),
+      );
+      expect(conversationSourceUnread(room, loaded: loaded), isFalse);
+
+      loaded
+        ..removeAt(0)
+        ..insertAll(0, [
+          _status(room, r'$status', r'$reaction', 3),
+          _reaction(room, r'$reaction', r'$theirs', sender: own, minute: 2),
+        ]);
+      expect(conversationSourceUnread(room, loaded: loaded), isFalse);
+
+      final next = _event(room, r'$next', sender: _anna, minute: 4);
+      loaded.insert(0, next);
+      room.latest = next;
+      expect(conversationSourceUnread(room, loaded: loaded), isTrue);
+    });
+
+    test('a failed own send reads nothing', () {
+      final room = _Room(_Client(), '!fixture:example.invalid')
+        ..incoming(r'$one');
+      final incoming = room.latest!;
+      final echo = room.echo();
+      expect(conversationSourceUnread(room, loaded: [echo, incoming]), isTrue);
+    });
+
+    test('reactions, edits and reports from others are not unread', () {
+      final room = _Room(_Client(), '!fixture:example.invalid');
+      final own = room.client.userID!;
+      final loaded = [
+        _status(room, r'$status', r'$mine', 5),
+        _event(
+          room,
+          r'$edit',
+          sender: _anna,
+          minute: 4,
+          content: {
+            'msgtype': MessageTypes.Text,
+            'body': '* Fictional edit',
+            'm.new_content': {
+              'msgtype': MessageTypes.Text,
+              'body': 'Fictional edit',
+            },
+            'm.relates_to': {
+              'rel_type': RelationshipTypes.edit,
+              'event_id': r'$old',
+            },
+          },
+        ),
+        _reaction(room, r'$their-reaction', r'$mine', sender: _anna, minute: 3),
+        _event(room, r'$mine', sender: own, minute: 2),
+        _event(room, r'$old', sender: _anna, minute: 1),
+      ];
+      room.latest = loaded[3];
+      expect(conversationSourceUnread(room, loaded: loaded), isFalse);
+    });
+
+    test('a receipt at or after the newest message reads it; an older one '
+        'does not', () {
+      final room = _Room(_Client(), '!fixture:example.invalid');
+      final theirs = _event(room, r'$theirs', sender: _anna, minute: 2);
+      final loaded = [
+        _status(room, r'$status', r'$theirs', 3),
+        theirs,
+        _event(room, r'$older', sender: _anna, minute: 1),
+      ];
+      room.latest = theirs;
+      room.receiptState = _ownPublic(r'$older', 1);
+      expect(conversationSourceUnread(room, loaded: loaded), isTrue);
+      // Read on another device; the receipt points past the message.
+      room.receiptState = _ownPublic(r'$status', 3);
+      expect(conversationSourceUnread(room, loaded: loaded), isFalse);
+      // Only the preview is known: the receipt time decides.
+      expect(conversationSourceUnread(room), isFalse);
+      room.receiptState = _ownPublic(r'$unknown', 1);
+      expect(conversationSourceUnread(room), isTrue);
+    });
+
+    test('the fully read marker reads the conversation', () {
+      final room = _Room(_Client(), '!fixture:example.invalid')
+        ..incoming(r'$one');
+      room.roomAccountData['m.fully_read'] = BasicEvent(
+        type: 'm.fully_read',
+        content: {'event_id': r'$one'},
+      );
+      expect(conversationSourceUnread(room), isFalse);
+    });
+  });
+
+  testWidgets('the button hides once the own reaction syncs, though the '
+      'bridge reports on it afterwards', (tester) async {
+    final client = _Client();
+    final room = _Room(client, '!fixture:example.invalid')..incoming(r'$one');
+    final loaded = <Event>[room.latest!];
+    await _mount(tester, [room], loaded: (_) => loaded);
+    expect(find.byType(NotionGlassPill), findsOneWidget);
+
+    loaded.insertAll(0, [
+      _status(room, r'$status', r'$reaction', 2),
+      _reaction(room, r'$reaction', r'$one', sender: client.userID, minute: 1),
+    ]);
+    client.onSync.add(
+      SyncUpdate(
+        nextBatch: '',
+        rooms: RoomsUpdate(join: {room.id: JoinedRoomUpdate()}),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(NotionGlassPill), findsNothing);
+  });
+
+  testWidgets('a merged conversation stays unread while another source is', (
+    tester,
+  ) async {
+    final client = _Client();
+    final a = _Room(client, '!a:example.invalid')..incoming(r'$a');
+    final b = _Room(client, '!b:example.invalid')..incoming(r'$b');
+    final reply = _event(a, r'$reply', sender: client.userID, minute: 5);
+    a.latest = reply;
+    await _mount(tester, [a, b]);
+    expect(find.byType(NotionGlassPill), findsOneWidget);
+    b.latest = _event(b, r'$b-reply', sender: client.userID, minute: 6);
+    await _mount(tester, [a, b]);
+    expect(find.byType(NotionGlassPill), findsNothing);
   });
 }

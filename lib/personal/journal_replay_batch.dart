@@ -62,6 +62,25 @@ class JournalReplayBatch {
   /// settle, so they cannot exhaust the held slots. [pendingAlert] holds an
   /// applied due reminder until its alert is claimed, so the alert survives a
   /// restart.
+  /// Whether [event], settled for good, may have been a worker result this
+  /// device will never apply: undecryptable, or an own result whose key it
+  /// cannot trust (forwarded or from backup). Such state only returns when
+  /// the worker publishes it again (`metadata.resync`).
+  static bool lostResult(
+    Event event, {
+    required String? userId,
+    required JournalTrust trust,
+  }) {
+    if (event.redacted || event.senderId != userId) return false;
+    if (event.type == EventTypes.Encrypted) return true;
+    final kind = event.content['kind'];
+    return event.type == personalEventType &&
+        kind is String &&
+        kind.endsWith('.result') &&
+        event.originalSource?.type == EventTypes.Encrypted &&
+        !trust.trusts(event);
+  }
+
   static JournalSettlement settle(
     Event event, {
     required String? userId,

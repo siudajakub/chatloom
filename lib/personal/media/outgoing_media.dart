@@ -238,7 +238,11 @@ abstract final class OutgoingMedia {
   /// first, at most [maxHeldBytes] beyond the files a job still sends.
   static final _held = <String, (MatrixFile, MatrixImageFile?)>{};
   static const maxHeldBytes = 256 * 1024 * 1024;
-  static int _running = 0;
+
+  /// Keeps uploads alive when the app goes to the background.
+  static final _sendLease = ForegroundServices.lease(
+    ForegroundServiceTasks.sendFiles,
+  );
 
   /// The preparation of each file until it was sent or deleted, so Retry
   /// can prepare a file whose bytes were never stored (MD-05).
@@ -688,7 +692,7 @@ abstract final class OutgoingMedia {
     final previous = _tails[roomKey] ?? Future<void>.value();
     late final Future<String> job;
     job = previous.then((_) async {
-      _started();
+      final release = _sendLease.hold();
       try {
         String? eventId;
         try {
@@ -743,7 +747,7 @@ abstract final class OutgoingMedia {
           OutgoingEcho.release(room, id);
           UploadProgress.reset(id);
         }
-        _stopped();
+        release();
         if (_discarded.remove(key)) {
           _held.remove(key);
           _prepares.remove(key);
@@ -777,19 +781,6 @@ abstract final class OutgoingMedia {
           'Retry sends the same attempt, so it is never delivered twice.',
     _ => sendErrorText(error, upload: true),
   };
-
-  static void _started() {
-    if (_running++ == 0 && ForegroundServices.platformSupported) {
-      // Keeps an upload alive when the app goes to the background.
-      unawaited(ForegroundServices.startService('send_files'));
-    }
-  }
-
-  static void _stopped() {
-    if (--_running == 0 && ForegroundServices.platformSupported) {
-      unawaited(ForegroundServices.stopService('send_files'));
-    }
-  }
 }
 
 class _PrepareFailed implements Exception {

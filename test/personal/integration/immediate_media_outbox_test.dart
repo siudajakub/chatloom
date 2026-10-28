@@ -615,6 +615,68 @@ Future<void> main() async {
       fastEncryptions == beforeReleased + 1,
       'Released in-memory draft was still used',
     );
+    // Hiding or locking the app keeps the in-memory copy of a round the user
+    // committed (it is about to upload: no second read and encryption) and
+    // drops every other one.
+    final committed = await stageFast(outboxA);
+    final idle = await stageFast(outboxA);
+    outboxA.releaseStagedExcept({committed.actionId});
+    final beforeHidden = fastEncryptions;
+    final committedSent = await outboxA.dispatch(committed.actionId);
+    check(
+      committedSent.state == ImmediateMediaState.matrixAccepted &&
+          fastEncryptions == beforeHidden,
+      'Committed round lost its in-memory draft when the app was hidden',
+    );
+    await outboxA.dispatch(idle.actionId);
+    check(
+      fastEncryptions == beforeHidden + 1,
+      'Hiding the app kept an uncommitted in-memory draft',
+    );
+
+    // The guard runs before and after the upload: a send that continues
+    // while the app is hidden still stops when the bridge is revoked during
+    // the upload (nothing is sent; Retry may try again).
+    var guardCalls = 0;
+    var revokeAfterUpload = false;
+    var revokedSends = 0, revokedUploads = 0;
+    final revoking = ImmediateMediaOutbox(
+      accountId: 'a',
+      deviceId: 'd',
+      store: faults,
+      newActionId: () => 'fixture-${++actions}',
+      now: () => clock,
+      guard: (target, descriptor) async {
+        if (++guardCalls == 2 && revokeAfterUpload) {
+          throw const ImmediateMediaRejected('frozenBridgeIdentityChanged');
+        }
+      },
+      encrypt: (bytes, thumb) async => RoundEncryptionResult(
+        bytes: Uint8List.fromList(bytes.map((b) => b ^ 85).toList()),
+        thumbnailBytes: thumb == null
+            ? null
+            : Uint8List.fromList(thumb.map((b) => b ^ 85).toList()),
+        fileDescriptor: encryptedDescriptor(),
+        thumbnailDescriptor: thumb == null ? null : encryptedDescriptor(),
+      ),
+      upload: (target, bytes, part) async =>
+          Uri.parse('mxc://fixture.invalid/revoked-${++revokedUploads}'),
+      sendEvent: (target, content, txid) async {
+        revokedSends++;
+        return '\$fixture-$txid';
+      },
+    );
+    final revokedDraft = await stageFast(revoking);
+    revokeAfterUpload = true;
+    final revoked = await revoking.dispatch(revokedDraft.actionId);
+    check(
+      revoked.state == ImmediateMediaState.failed &&
+          revoked.errorCode == 'frozenBridgeIdentityChanged' &&
+          guardCalls == 2 &&
+          revokedUploads == 2 &&
+          revokedSends == 0,
+      'A bridge revoked during the upload did not stop the send',
+    );
     check(
       !recoveredUpload.toString().contains('fixture-key'),
       'Result leaks descriptors',
