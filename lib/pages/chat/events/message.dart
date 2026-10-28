@@ -540,7 +540,15 @@ class Message extends StatelessWidget {
                   enabled: !textSelectionActive,
                   swipeRightToLeft: AppSettings.swipeRightToLeftToReply.value,
                   onReply: canReply ? onSwipe : null,
-                  quickLikeEnabled: AppSettings.doubleTapToReact.value,
+                  // Only where a reaction can go out: no "unsupported"
+                  // notice from a double tap on a chat without reactions
+                  // or on a message still sending.
+                  quickLikeEnabled:
+                      AppSettings.doubleTapToReact.value &&
+                      ConversationMessageActions.canReactAtAll(
+                        event,
+                        strict: strictCapabilities,
+                      ),
                   likeLabel: 'Quick reaction',
                   likePreview: () {
                     final emoji = ConversationMessageActions.doubleTapReaction(
@@ -591,19 +599,20 @@ class Message extends StatelessWidget {
   /// The long-press menu: quick reactions of this network (when it takes
   /// reactions here) above the lifted bubble, the host's actions below.
   void _openMenu(BuildContext context, ConversationMessagePress press) {
-    final reactions =
-        ConversationMessageActions.canReactAtAll(
-          event,
-          strict: strictCapabilities,
-        )
+    final canReact = ConversationMessageActions.canReactAtAll(
+      event,
+      strict: strictCapabilities,
+    );
+    final reactions = canReact
         ? ConversationMessageActions.quickReactions(event.room)
         : const <String>[];
+    final own = ConversationMessageActions.ownReactionKeys(event, timeline);
     showConversationMessageMenu(
       context: context,
       press: press,
       outgoing: event.senderId == event.room.client.userID,
       reactions: reactions,
-      ownReactions: ConversationMessageActions.ownReactionKeys(event, timeline),
+      ownReactions: own,
       onReact: (emoji) => ConversationMessageActions.react(
         context,
         event,
@@ -612,23 +621,20 @@ class Message extends StatelessWidget {
         toggle: true,
         strict: strictCapabilities,
       ),
-      onMoreReactions: () => _customReaction(context),
+      // "+" grows into the picker of exactly what this chat takes; a chat
+      // whose whole set is already on the bar gets no "+".
+      moreReactions:
+          canReact && ConversationMessageActions.hasMoreReactions(event.room)
+          ? EmojiReactionChoices(
+              allowed: ConversationMessageActions.reactionChoices(event.room),
+              quick: reactions,
+              own: own,
+            )
+          : null,
       actions: press.reactionsOnly
           ? const []
           : menuActions?.call(event) ?? const [],
       caption: event.originServerTs.localizedDetailedTime(context),
-    );
-  }
-
-  Future<void> _customReaction(BuildContext context) async {
-    final emoji = await showConversationReactionPicker(context, event.room);
-    if (emoji == null || !context.mounted) return;
-    await ConversationMessageActions.react(
-      context,
-      event,
-      timeline,
-      emoji,
-      strict: strictCapabilities,
     );
   }
 }

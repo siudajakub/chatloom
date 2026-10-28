@@ -278,13 +278,17 @@ class ChatView extends StatelessWidget {
                             ),
                           timelineBody,
                           ChatBridgeNotice(room: controller.room),
-                          if (searching)
-                            Positioned.fill(
+                          // Always mounted: it fades its list out when the
+                          // search closes instead of vanishing with it.
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              ignoring: !searching,
                               child: ConversationSearchResults(
                                 search: controller.search,
                                 bottomInset: controller.composerInset,
                               ),
                             ),
+                          ),
                           Positioned(
                             bottom: 0,
                             left: 0,
@@ -453,17 +457,26 @@ class ChatView extends StatelessWidget {
                               ),
                             ),
                           ),
-                          if (controller.dragging)
-                            Container(
-                              color: theme.scaffoldBackgroundColor.withAlpha(
-                                230,
-                              ),
-                              alignment: Alignment.center,
-                              child: const Icon(
-                                Icons.upload_outlined,
-                                size: 100,
-                              ),
+                          // A file dragged over the chat: the drop hint
+                          // fades in and out rather than cutting.
+                          IgnorePointer(
+                            child: NotionFadeThrough(
+                              child: controller.dragging
+                                  ? Container(
+                                      key: const ValueKey('drop-hint'),
+                                      color: theme.scaffoldBackgroundColor
+                                          .withAlpha(230),
+                                      alignment: Alignment.center,
+                                      child: const Icon(
+                                        Icons.upload_outlined,
+                                        size: 100,
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(
+                                      key: ValueKey('no-drop-hint'),
+                                    ),
                             ),
+                          ),
                         ],
                       ),
                     ),

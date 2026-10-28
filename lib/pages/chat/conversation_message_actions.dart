@@ -201,8 +201,12 @@ class ConversationReactionCoordinator extends ChangeNotifier {
         };
 
   /// Whether [emoji] of one message is hidden behind a replacement.
-  bool replacing(ConversationReactionScope scope, String emoji) =>
-      replacedFor(scope).values.any((value) => value.emoji == emoji);
+  bool replacing(ConversationReactionScope scope, String emoji) {
+    final key = normalizeReactionKey(emoji);
+    return replacedFor(
+      scope,
+    ).values.any((value) => normalizeReactionKey(value.emoji) == key);
+  }
 
   /// Hides [old] (event ID → emoji) while [by] replaces them.
   void hideReplaced(Map<String, String> old, ConversationReactionKey by) {
@@ -262,6 +266,17 @@ abstract final class ConversationMessageActions {
     removal: removal,
   );
 
+  /// Whether reaction [e] has [emoji]'s key; spellings that differ only in
+  /// variation selectors (`👍` / `👍️`) are one reaction on every network.
+  static bool _hasKey(Event e, String emoji) {
+    final key = e.content
+        .tryGetMap<String, Object?>('m.relates_to')
+        ?.tryGet<String>('key');
+    return key != null &&
+        (key == emoji ||
+            normalizeReactionKey(key) == normalizeReactionKey(emoji));
+  }
+
   static List<Event> ownReactions(
     Event event,
     Timeline timeline,
@@ -276,10 +291,7 @@ abstract final class ConversationMessageActions {
             e.senderId == event.room.client.userID &&
             // Replaced by a newer reaction; the bridge is removing it.
             !coordinator(event).isReplaced(e.eventId) &&
-            e.content
-                    .tryGetMap<String, Object?>('m.relates_to')
-                    ?.tryGet<String>('key') ==
-                emoji,
+            _hasKey(e, emoji),
       )
       .toList();
 
@@ -443,10 +455,7 @@ abstract final class ConversationMessageActions {
         (e) =>
             e.status.isError &&
             e.senderId == event.room.client.userID &&
-            e.content
-                    .tryGetMap<String, Object?>('m.relates_to')
-                    ?.tryGet<String>('key') ==
-                emoji,
+            _hasKey(e, emoji),
       )
       .toList();
 
@@ -624,7 +633,11 @@ abstract final class ConversationMessageActions {
         !room.canSendEvent(EventTypes.Reaction)) {
       return false;
     }
-    final result = _reactionCapability(event, timeline, emoji);
+    final result = _reactionCapability(
+      event,
+      timeline,
+      networkSpelling(room, emoji),
+    );
     return result.allowed ||
         (!strict && result.status == CapabilityStatus.unverified);
   }
@@ -639,6 +652,7 @@ abstract final class ConversationMessageActions {
     bool strict = false,
   }) {
     final manager = coordinator(event);
+    emoji = networkSpelling(event.room, emoji);
     if (manager.keysFor(scope(event)).any(manager.unresolved)) return false;
     if (manager.replacing(scope(event), emoji)) return false;
     return ownReactions(event, timeline, emoji).isEmpty &&
@@ -719,30 +733,42 @@ abstract final class ConversationMessageActions {
   }
 
   /// The `allowed_reactions` the room's bridge declares, or null when it
-  /// declares none (any emoji). Picks the declaration exactly like
-  /// [RoomCapabilities.declared]: the single one of the room's bridge, or the
-  /// only one; several unrelated declarations count as none (the capability
-  /// check, which refuses them, stays the authority when sending).
-  static List<String>? _allowedReactions(Room room) {
-    final states = room.states[bridgeFeaturesEventType];
-    if (states == null || states.isEmpty) return null;
-    final bridgeKeys = <String>{
-      for (final type in const [
-        'm.bridge',
-        'uk.half-shot.bridge',
-        'com.beeper.bridge',
-      ])
-        ...?room.states[type]?.keys,
+  /// declares none (any emoji): the declaration the capability check reads
+  /// ([RoomCapabilities.declared], cached per state change), so the bar, the
+  /// picker and the check never disagree.
+  static List<String>? _allowedReactions(Room room) =>
+      RoomCapabilities.declared(room).allowedReactions;
+
+  /// [emoji] as [room]'s network spells it in its `allowed_reactions`
+  /// (Telegram: `variationselector.Add`, `👍️`), or unchanged. Every send
+  /// uses it, so a picked `👍` joins the network's `👍️` chip instead of
+  /// being refused or starting a second one.
+  static String networkSpelling(Room room, String emoji) =>
+      RoomCapabilities.declared(room).reactionSpelling(emoji) ?? emoji;
+
+  /// What the full reaction picker offers in [room]: exactly the network's
+  /// `allowed_reactions` (its order and spelling; image reactions left out),
+  /// or null for any emoji. Telegram shows only the reactions a chat takes.
+  static List<String>? reactionChoices(Room room) {
+    final allowed = _allowedReactions(room);
+    if (allowed == null) return null;
+    final seen = <String>{};
+    return List.unmodifiable([
+      for (final key in allowed)
+        if (!key.startsWith('mxc://') && seen.add(normalizeReactionKey(key)))
+          key,
+    ]);
+  }
+
+  /// Whether the full picker ("+") offers more than the quick reactions:
+  /// a chat that takes only the bar's reactions gets no "+".
+  static bool hasMoreReactions(Room room) {
+    final choices = reactionChoices(room);
+    if (choices == null) return true;
+    final quick = {
+      for (final e in quickReactions(room)) normalizeReactionKey(e),
     };
-    final matches = states.keys.where(bridgeKeys.contains).toList();
-    final content = matches.length == 1
-        ? states[matches.single]?.content
-        : matches.isEmpty && states.length == 1
-        ? states.values.single.content
-        : null;
-    final allowed = content?['allowed_reactions'];
-    if (allowed is! List || allowed.any((e) => e is! String)) return null;
-    return allowed.cast<String>();
+    return choices.any((e) => !quick.contains(normalizeReactionKey(e)));
   }
 
   static Future<bool> react(
@@ -754,6 +780,9 @@ abstract final class ConversationMessageActions {
     bool strict = false,
     bool Function()? isCurrent,
   }) async {
+    // The network's spelling (`👍️` on Telegram): the same chip as everyone
+    // else's, and the key the capability check knows.
+    emoji = networkSpelling(event.room, emoji);
     final manager = coordinator(event);
     final addingKey = key(event, emoji);
     final removingKey = key(event, emoji, removal: true);

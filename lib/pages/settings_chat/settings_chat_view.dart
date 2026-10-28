@@ -3,18 +3,15 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:math' as math;
-
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
-import 'package:chatloom/personal/stickers/notion_emoji_picker.dart';
+import 'package:chatloom/personal/emoji/emoji_picker.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/settings_switch_list_tile.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -353,47 +350,20 @@ class _QuickReactionsEditorState extends State<_QuickReactionsEditor> {
 Future<String?> showEmojiChoiceSheet(
   BuildContext context, {
   required String title,
-}) => showNotionSheet<String>(
-  context: context,
-  title: title,
-  builder: (context) => SizedBox(
-    height: math.min(420.0, MediaQuery.sizeOf(context).height * .5),
-    child: EmojiPicker(
-      onEmojiSelected: (_, emoji) => Navigator.of(context).pop(emoji.emoji),
-      config: notionEmojiPickerConfig(context, initCategory: Category.SMILEYS),
-    ),
-  ),
-);
+}) => showEmojiPickerSheet(context, title: title);
 
 /// The double-tap reaction picker as a Notion sheet (Telegram's "Quick
 /// reaction"): the emoji grid, and "Automatic" to follow each network's
 /// first quick reaction. Returns the emoji, '' for Automatic, or null when
 /// dismissed.
 Future<String?> showDoubleTapReactionPicker(BuildContext context) =>
-    showNotionSheet<String>(
-      context: context,
+    showEmojiPickerSheet(
+      context,
       title: L10n.of(context).doubleTapReaction,
-      builder: (context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Flexible(
-            child: SizedBox(
-              height: math.min(420.0, MediaQuery.sizeOf(context).height * .5),
-              child: EmojiPicker(
-                onEmojiSelected: (_, emoji) =>
-                    Navigator.of(context).pop(emoji.emoji),
-                config: notionEmojiPickerConfig(context),
-              ),
-            ),
-          ),
-          const SizedBox(height: NotionSpace.sm),
-          NotionButton(
-            key: const Key('double_tap_reaction_automatic'),
-            expand: true,
-            label: 'Automatic',
-            onPressed: () => Navigator.of(context).pop(''),
-          ),
-        ],
+      footer: (context) => NotionButton(
+        key: const Key('double_tap_reaction_automatic'),
+        expand: true,
+        label: 'Automatic',
+        onPressed: () => Navigator.of(context).pop(''),
       ),
     );

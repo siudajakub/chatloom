@@ -992,6 +992,11 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
                     ? Icons.unarchive_outlined
                     : Icons.archive_outlined,
                 label: archived ? 'Unarchive' : 'Archive',
+                // The row leaves this view: it flies off and its slot closes
+                // before the change (Telegram), instead of vanishing.
+                dismisses: archived
+                    ? personalFilter == InboxFilter.archive
+                    : _archiveLeavesView.contains(personalFilter),
                 onCommit: () => commit(
                   archived ? ChatMenuAction.unarchive : ChatMenuAction.archive,
                   'Archive needs private sync. Try again in a moment.',
@@ -1036,6 +1041,18 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       ),
     );
   }
+
+  /// Views an archived chat drops out of (`inbox_filtering.dart`); in the
+  /// others (All chats, a label, Low priority) the row stays where it is.
+  static const _archiveLeavesView = {
+    InboxFilter.inbox,
+    InboxFilter.unread,
+    InboxFilter.drafts,
+    InboxFilter.unanswered,
+    InboxFilter.direct,
+    InboxFilter.groups,
+    InboxFilter.requests,
+  };
 
   Object? _unreadKey;
   int _unreadChats = 0;

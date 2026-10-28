@@ -4,14 +4,17 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/personal/stickers/notion_emoji_picker.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/gestures.dart' show PointerScrollEvent, kTouchSlop;
 import 'package:flutter/rendering.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+
+export 'package:chatloom/personal/emoji/emoji_picker.dart'
+    show EmojiReactionChoices;
 
 /// One entry of a message's action menu (reply, copy, forward, delete...).
 /// The host decides which apply to a message, exactly as its capability
@@ -48,11 +51,14 @@ const double _hoverSlop = kTouchSlop;
 /// [reactions] above it and the [actions] card below. The bubble moves only
 /// when the bar or the card would not fit on screen.
 ///
-/// Tapping an emoji calls [onReact]; "+" closes the overlay and calls
-/// [onMoreReactions]; an action closes it and runs. A tap on the scrim, Back
-/// or any scroll attempt dismisses it. While the finger that opened it is
-/// still down, sliding it over the bar highlights the emoji under it and
-/// releasing there reacts.
+/// Tapping an emoji calls [onReact]; "+" expands the bar in place into the
+/// full reaction picker of [moreReactions] (Telegram: the pill grows into a
+/// panel, the action card fades away; a pick calls [onReact] and closes),
+/// or, without it, closes the overlay and calls [onMoreReactions]; an
+/// action closes it and runs. A tap on the scrim, Back or any scroll
+/// attempt dismisses it. While the finger that opened it is still down,
+/// sliding it over the bar highlights the emoji under it and releasing
+/// there reacts.
 ///
 /// It is an [OverlayEntry] of the root overlay, not a route: pushing a route
 /// makes the navigator cancel every active pointer, which would end the held
@@ -68,6 +74,7 @@ Future<void> showConversationMessageMenu({
   Set<String> ownReactions = const {},
   ValueChanged<String>? onReact,
   VoidCallback? onMoreReactions,
+  EmojiReactionChoices? moreReactions,
   List<ConversationMessageAction> actions = const [],
   String? caption,
 }) {
@@ -77,9 +84,10 @@ Future<void> showConversationMessageMenu({
       ? overlayBox.localToGlobal(Offset.zero)
       : Offset.zero;
   final reduced = NotionMotion.reduced(context);
+  final more = onMoreReactions != null || moreReactions != null;
   final barSlots = onReact == null || reactions.isEmpty
       ? 0
-      : reactions.length + (onMoreReactions == null ? 0 : 1);
+      : reactions.length + (more ? 1 : 0);
   final entrance = [
     if (barSlots > 0) NotionReactions.barEntrance(barSlots),
     if (actions.isNotEmpty) _cardDelay + NotionReactions.smoothCurve.duration,
@@ -128,6 +136,7 @@ Future<void> showConversationMessageMenu({
         ownReactions: ownReactions,
         onReact: onReact,
         onMoreReactions: onMoreReactions,
+        moreReactions: moreReactions,
         actions: actions,
         caption: caption,
         onClosed: closed,
@@ -160,6 +169,7 @@ class _MessageMenu extends StatefulWidget {
     required this.ownReactions,
     required this.onReact,
     required this.onMoreReactions,
+    required this.moreReactions,
     required this.actions,
     required this.caption,
     required this.onClosed,
@@ -179,6 +189,7 @@ class _MessageMenu extends StatefulWidget {
   final Set<String> ownReactions;
   final ValueChanged<String>? onReact;
   final VoidCallback? onMoreReactions;
+  final EmojiReactionChoices? moreReactions;
   final List<ConversationMessageAction> actions;
   final String? caption;
   final VoidCallback onClosed;
@@ -188,7 +199,7 @@ class _MessageMenu extends StatefulWidget {
 }
 
 class _MessageMenuState extends State<_MessageMenu>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final _barKey = GlobalKey();
   final _geometry = _MenuGeometry();
   int? _hovered;
@@ -214,6 +225,10 @@ class _MessageMenuState extends State<_MessageMenu>
   );
   bool _settled = false;
 
+  /// "+" grows the bar into the picker panel (Telegram); created on use.
+  AnimationController? _expansion;
+  bool get _expanded => _expansion != null;
+
   ConversationMenuPointer? get _pointer => widget.press.pointer;
 
   @override
@@ -234,11 +249,16 @@ class _MessageMenuState extends State<_MessageMenu>
     widget.route?.secondaryAnimation?.removeStatusListener(_routeChanged);
     _scrim.dispose();
     _animation.dispose();
+    _expansion?.dispose();
     super.dispose();
   }
 
-  void _status(AnimationStatus status) {
-    final settled = status == AnimationStatus.completed;
+  /// Glass blurs only while nothing moves: the entrance and the expansion
+  /// both done.
+  void _status(AnimationStatus _) {
+    final settled =
+        _animation.status == AnimationStatus.completed &&
+        (_expansion?.isCompleted ?? true);
     if (settled != _settled && mounted) setState(() => _settled = settled);
   }
 
@@ -287,12 +307,14 @@ class _MessageMenuState extends State<_MessageMenu>
     }
   }
 
-  int get _slots =>
-      widget.reactions.length + (widget.onMoreReactions == null ? 0 : 1);
+  bool get _hasMore =>
+      widget.onMoreReactions != null || widget.moreReactions != null;
+
+  int get _slots => widget.reactions.length + (_hasMore ? 1 : 0);
 
   void _pointerChanged() {
     final pointer = _pointer;
-    if (pointer == null || _closing || !mounted) return;
+    if (pointer == null || _closing || _expanded || !mounted) return;
     final position = pointer.position;
     if (!_hoverArmed &&
         position != null &&
@@ -341,8 +363,36 @@ class _MessageMenuState extends State<_MessageMenu>
   }
 
   void _more() {
+    if (_closing || _expanded) return;
+    if (widget.moreReactions == null) {
+      dismiss(then: widget.onMoreReactions);
+      return;
+    }
+    // The bar grows into the picker where it is; the held finger no longer
+    // chooses.
+    _pointer?.removeListener(_pointerChanged);
+    final expansion = AnimationController(
+      vsync: this,
+      duration: _expand,
+      value: NotionMotion.reduced(context) ? 1 : 0,
+    )..addStatusListener(_status);
+    setState(() {
+      _hovered = null;
+      _expansion = expansion;
+      _settled = false;
+    });
+    if (expansion.isCompleted) {
+      _status(AnimationStatus.completed);
+    } else {
+      expansion.forward();
+    }
+  }
+
+  /// A pick from the expanded picker: reacts at once, the menu fades.
+  void _pick(String emoji) {
     if (_closing) return;
-    dismiss(then: widget.onMoreReactions);
+    _close();
+    widget.onReact?.call(emoji);
   }
 
   void _select(ConversationMessageAction action) {
@@ -413,33 +463,54 @@ class _MessageMenuState extends State<_MessageMenu>
       if (widget.reactions.isNotEmpty)
         LayoutId(
           id: _MenuSlot.bar,
-          child: NotionReactionBar(
-            key: _barKey,
-            reactions: widget.reactions,
-            selected: widget.ownReactions,
-            hovered: _hovered,
-            chosen: _chosen,
-            slot: slot,
-            entrance: animation,
-            origin: widget.outgoing
-                ? Alignment.bottomRight
-                : Alignment.bottomLeft,
-            moreLabel: L10n.of(context).customReaction,
-            onSelected: (emoji) => _react(widget.reactions.indexOf(emoji)),
-            onMore: widget.onMoreReactions == null ? null : _more,
+          child: _Recede(
+            expansion: _expansion,
+            child: NotionReactionBar(
+              key: _barKey,
+              reactions: widget.reactions,
+              selected: widget.ownReactions,
+              hovered: _hovered,
+              chosen: _chosen,
+              slot: slot,
+              entrance: animation,
+              origin: widget.outgoing
+                  ? Alignment.bottomRight
+                  : Alignment.bottomLeft,
+              moreLabel: L10n.of(context).customReaction,
+              onSelected: (emoji) => _react(widget.reactions.indexOf(emoji)),
+              onMore: _hasMore ? _more : null,
+            ),
           ),
         ),
       if (widget.actions.isNotEmpty)
         LayoutId(
           id: _MenuSlot.card,
-          child: _MenuCardEntrance(
-            animation: animation,
-            total: widget.total,
-            alignment: widget.outgoing ? Alignment.topRight : Alignment.topLeft,
-            child: _MenuCard(
-              caption: widget.caption,
-              actions: widget.actions,
-              onSelected: _select,
+          child: _Recede(
+            expansion: _expansion,
+            child: _MenuCardEntrance(
+              animation: animation,
+              total: widget.total,
+              alignment: widget.outgoing
+                  ? Alignment.topRight
+                  : Alignment.topLeft,
+              child: _MenuCard(
+                caption: widget.caption,
+                actions: widget.actions,
+                onSelected: _select,
+              ),
+            ),
+          ),
+        ),
+      if (_expansion case final expansion?)
+        LayoutId(
+          id: _MenuSlot.picker,
+          child: _PickerPanel(
+            expansion: expansion,
+            exit: animation,
+            geometry: _geometry,
+            child: ChatLoomEmojiPicker(
+              reactions: widget.moreReactions,
+              onSelected: _pick,
             ),
           ),
         ),
@@ -463,6 +534,7 @@ class _MessageMenuState extends State<_MessageMenu>
             ),
             outgoing: widget.outgoing,
             geometry: _geometry,
+            expanded: _expanded,
           ),
           children: children,
         ),
@@ -471,14 +543,29 @@ class _MessageMenuState extends State<_MessageMenu>
   }
 }
 
-enum _MenuSlot { scrim, bubble, bar, card }
+enum _MenuSlot { scrim, bubble, bar, card, picker }
 
-/// Where layout put the lifted copy; read while painting (the copy's
-/// entrance is a paint-time transform, so nothing relayouts per frame).
+/// Where layout put the lifted copy, the bar and the picker panel; read
+/// while painting (entrance and expansion are paint-time transforms and
+/// clips, so nothing relayouts per frame).
 class _MenuGeometry {
   double slot = NotionReactions.barSlot;
   Rect target = Rect.zero;
+  Rect bar = Rect.zero;
+  Rect panel = Rect.zero;
+
+  /// The copy's place when the picker opened: the keyboard of its search
+  /// moves the panel, never the message under it.
+  Rect? frozen;
 }
+
+/// The expanded picker panel (Telegram's reaction sheet in place).
+const double _pickerWidth = 380;
+const double _pickerHeight = 420;
+const double _pickerMinHeight = 200;
+
+/// The bar → panel morph.
+const Duration _expand = NotionMotion.medium;
 
 /// Bar above the bubble, card below, both on the bubble's sender side and
 /// inside the safe area; the bubble shifts only as much as needed, and a
@@ -489,12 +576,14 @@ class _MenuLayout extends MultiChildLayoutDelegate {
     required this.insets,
     required this.outgoing,
     required this.geometry,
+    this.expanded = false,
   });
 
   final Rect bubble;
   final EdgeInsets insets;
   final bool outgoing;
   final _MenuGeometry geometry;
+  final bool expanded;
 
   @override
   void performLayout(Size size) {
@@ -541,17 +630,23 @@ class _MenuLayout extends MultiChildLayoutDelegate {
       y = top + bar.height + barGap;
       visible = math.max(0.0, bottom - card.height - cardGap - y);
     }
-    final target = Rect.fromLTWH(bubble.left, y, bubble.width, visible);
+    var target = Rect.fromLTWH(bubble.left, y, bubble.width, visible);
+    if (expanded) {
+      target = geometry.frozen ??= target;
+    } else {
+      geometry.frozen = null;
+    }
+    y = target.top;
+    visible = target.height;
     geometry.target = target;
     layoutChild(_MenuSlot.bubble, BoxConstraints.tight(target.size));
     positionChild(_MenuSlot.bubble, target.topLeft);
     double edge(double width) => (outgoing ? bubble.right - width : bubble.left)
         .clamp(side, math.max(side, size.width - side - width));
     if (hasChild(_MenuSlot.bar)) {
-      positionChild(
-        _MenuSlot.bar,
-        Offset(edge(bar.width), y - barGap - bar.height),
-      );
+      final at = Offset(edge(bar.width), y - barGap - bar.height);
+      geometry.bar = at & bar;
+      positionChild(_MenuSlot.bar, at);
     }
     if (hasChild(_MenuSlot.card)) {
       positionChild(
@@ -559,13 +654,214 @@ class _MenuLayout extends MultiChildLayoutDelegate {
         Offset(edge(card.width), y + visible + cardGap),
       );
     }
+    if (hasChild(_MenuSlot.picker)) {
+      // Grows from the bar: same sender-side edge, top at the bar's top,
+      // moved up only as far as the screen (and the keyboard) requires.
+      final width = math.min(_pickerWidth, maxWidth);
+      final height = math.max(
+        math.min(_pickerMinHeight, available),
+        math.min(_pickerHeight, available),
+      );
+      layoutChild(_MenuSlot.picker, BoxConstraints.tight(Size(width, height)));
+      final from = geometry.bar == Rect.zero
+          ? Offset(edge(width), top)
+          : geometry.bar.topLeft;
+      final at = Offset(
+        edge(width),
+        from.dy.clamp(top, math.max(top, bottom - height)),
+      );
+      geometry.panel = at & Size(width, height);
+      positionChild(_MenuSlot.picker, at);
+    }
   }
 
   @override
   bool shouldRelayout(_MenuLayout oldDelegate) =>
       bubble != oldDelegate.bubble ||
       insets != oldDelegate.insets ||
-      outgoing != oldDelegate.outgoing;
+      outgoing != oldDelegate.outgoing ||
+      expanded != oldDelegate.expanded;
+}
+
+/// The bar and the card while the picker expands: they fade and shrink a
+/// little towards the panel (transform and opacity only), and stop taking
+/// touches at once.
+class _Recede extends StatelessWidget {
+  const _Recede({required this.expansion, required this.child});
+
+  final Animation<double>? expansion;
+  final Widget child;
+
+  static const _fade = Interval(0, .45, curve: NotionMotion.exitFast);
+
+  @override
+  Widget build(BuildContext context) {
+    // One tree shape in every phase: nothing below remounts on "+".
+    final receding = expansion != null;
+    final animation = expansion ?? kAlwaysDismissedAnimation;
+    return IgnorePointer(
+      ignoring: receding,
+      child: ExcludeSemantics(
+        excluding: receding,
+        child: AnimatedBuilder(
+          animation: animation,
+          child: child,
+          builder: (context, child) {
+            final t = _fade.transform(animation.value.clamp(0.0, 1.0));
+            return Opacity(
+              opacity: 1 - t,
+              child: Transform.scale(scale: 1 - .04 * t, child: child),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// The reaction picker growing out of the bar: a glass panel whose clip
+/// morphs from the bar's pill to the panel (corners from pill to `lg`) on
+/// [NotionMotion.emphasized], content fading in behind it. Glass stays off
+/// (opaque tint) until the morph settles; the menu's [exit] fades it out.
+class _PickerPanel extends StatelessWidget {
+  const _PickerPanel({
+    required this.expansion,
+    required this.exit,
+    required this.geometry,
+    required this.child,
+  });
+
+  final Animation<double> expansion;
+  final Animation<double> exit;
+  final _MenuGeometry geometry;
+  final Widget child;
+
+  static const _content = Interval(.3, 1, curve: NotionMotion.standard);
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: exit,
+    builder: (context, child) => Opacity(
+      opacity: exit.status == AnimationStatus.reverse
+          ? exit.value.clamp(0.0, 1.0)
+          : 1,
+      child: child,
+    ),
+    child: _MorphClip(
+      animation: CurvedAnimation(
+        parent: expansion,
+        curve: NotionMotion.emphasized,
+      ),
+      geometry: geometry,
+      child: NotionGlassPanel(
+        padding: const EdgeInsets.only(top: NotionSpace.xs),
+        child: FadeTransition(
+          opacity: CurvedAnimation(parent: expansion, curve: _content),
+          child: Semantics(
+            label: 'All reactions',
+            explicitChildNodes: true,
+            child: child,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _MorphClip extends SingleChildRenderObjectWidget {
+  const _MorphClip({
+    required this.animation,
+    required this.geometry,
+    super.child,
+  });
+
+  final Animation<double> animation;
+  final _MenuGeometry geometry;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderMorphClip(animation, geometry);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderMorphClip renderObject) {
+    renderObject.animation = animation;
+  }
+}
+
+class _RenderMorphClip extends RenderProxyBox {
+  _RenderMorphClip(this._animation, this.geometry);
+
+  final _MenuGeometry geometry;
+  Animation<double> _animation;
+  set animation(Animation<double> value) {
+    if (identical(value, _animation)) return;
+    if (attached) _animation.removeListener(markNeedsPaint);
+    _animation = value;
+    if (attached) _animation.addListener(markNeedsPaint);
+    markNeedsPaint();
+  }
+
+  final _clip = LayerHandle<ClipRRectLayer>();
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _animation.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    _animation.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  @override
+  void dispose() {
+    _clip.layer = null;
+    super.dispose();
+  }
+
+  double get _t => _animation.value.clamp(0.0, 1.0);
+
+  /// The current clip in local coordinates (the whole panel at rest).
+  RRect _rrect() {
+    final full = Offset.zero & size;
+    final bar = geometry.bar == Rect.zero
+        ? Rect.fromLTWH(0, 0, size.width, NotionReactions.barSlot)
+        : geometry.bar.shift(-geometry.panel.topLeft);
+    final rect = Rect.lerp(bar, full, _t)!;
+    final radius = ui.lerpDouble(bar.shortestSide / 2, NotionRadius.lg, _t)!;
+    return RRect.fromRectAndRadius(
+      rect,
+      Radius.circular(math.min(radius, rect.shortestSide / 2)),
+    );
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    // Nothing inside takes a touch until it has grown.
+    if (_t < 1) return false;
+    return super.hitTest(result, position: position);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final child = this.child;
+    if (child == null) return;
+    if (_t >= 1) {
+      _clip.layer = null;
+      context.paintChild(child, offset);
+      return;
+    }
+    _clip.layer = context.pushClipRRect(
+      needsCompositing,
+      offset,
+      Offset.zero & size,
+      _rrect(),
+      (context, offset) => context.paintChild(child, offset),
+      oldLayer: _clip.layer,
+    );
+  }
 }
 
 /// The lifted copy of the pressed bubble: its snapshot at natural size,
@@ -848,22 +1144,25 @@ class _MenuCard extends StatelessWidget {
   }
 }
 
-/// The full emoji picker behind the bar's "+": the custom reaction sheet
-/// of the ordinary chat. Resolves to the chosen emoji. Reactions are emoji
-/// only: an image reaction (an `mxc://` key) reaches the network only on
-/// Telegram and Slack, and only for images the bridge itself created.
+/// The full reaction picker as a sheet (the bar's "+" expands in place
+/// instead; this serves hosts without the menu). It offers what the room's
+/// network takes: exactly its `allowed_reactions` when it declares them
+/// (Telegram), any emoji otherwise; [quick] on top and [own] marked.
+/// Resolves to the chosen emoji. Reactions are emoji only: an image
+/// reaction (an `mxc://` key) reaches the network only on Telegram and
+/// Slack, and only for images the bridge itself created.
 Future<String?> showConversationReactionPicker(
   BuildContext context,
-  Room room,
-) => showNotionSheet<String>(
-  context: context,
+  Room room, {
+  List<String> quick = const [],
+  Set<String> own = const {},
+}) => showEmojiPickerSheet(
+  context,
   title: L10n.of(context).customReaction,
-  builder: (context) => SizedBox(
-    height: math.min(420.0, MediaQuery.sizeOf(context).height * .55),
-    child: EmojiPicker(
-      onEmojiSelected: (_, emoji) => Navigator.of(context).pop(emoji.emoji),
-      config: notionEmojiPickerConfig(context),
-    ),
+  reactions: EmojiReactionChoices(
+    allowed: ConversationMessageActions.reactionChoices(room),
+    quick: quick,
+    own: own,
   ),
 );
 

@@ -336,7 +336,8 @@ class ConversationSearchField extends StatelessWidget {
 
 /// Takes the composer's place while searching: the composer stays mounted
 /// (draft, recording and focus state survive) but is neither painted nor
-/// focusable, and the bar measures as the composer's height.
+/// focusable, and the bar measures as the composer's height. Whichever of
+/// the two comes in rises and fades in ([NotionReappear]), never a hard cut.
 class ConversationSearchComposerSwitch extends StatelessWidget {
   const ConversationSearchComposerSwitch({
     super.key,
@@ -350,18 +351,21 @@ class ConversationSearchComposerSwitch extends StatelessWidget {
   final WidgetBuilder bar;
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Offstage(
-        offstage: searching,
-        child: ExcludeFocus(
-          excluding: searching,
-          child: TickerMode(enabled: !searching, child: composer),
+  Widget build(BuildContext context) => NotionReappear(
+    trigger: searching,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Offstage(
+          offstage: searching,
+          child: ExcludeFocus(
+            excluding: searching,
+            child: TickerMode(enabled: !searching, child: composer),
+          ),
         ),
-      ),
-      if (searching) bar(context),
-    ],
+        if (searching) bar(context),
+      ],
+    ),
   );
 }
 

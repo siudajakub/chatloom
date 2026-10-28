@@ -13,6 +13,12 @@ import 'package:matrix/matrix.dart';
 /// The cutoff is the newest server event of the page's loaded timeline
 /// ([loadedEvents]) or the preview, never a local echo; a source with
 /// nothing to mark is skipped ([conversationReadTargets]).
+///
+/// Shown only while a source is actually unread
+/// ([conversationSourceUnread]): the user's own message or reaction, a read
+/// receipt or the fully read marker at or after the newest message from
+/// someone else hides it; bridge delivery reports and other hidden events
+/// never show it.
 class ConversationReadButton extends StatefulWidget {
   final List<Room> rooms;
 
@@ -42,12 +48,19 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
   @override
   void didUpdateWidget(ConversationReadButton oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _listen();
+    // The parent rebuilds on every timeline change; keep the subscriptions
+    // unless the sources changed.
+    if (oldWidget.rooms.length != widget.rooms.length ||
+        Iterable<int>.generate(widget.rooms.length)
+            .any((i) => !identical(oldWidget.rooms[i], widget.rooms[i]))) {
+      _listen();
+    }
   }
 
   /// Re-evaluates visibility only when a sync touches one of the sources
-  /// (new message or the own receipt moved) or a source was marked read
-  /// locally; the button alone rebuilds.
+  /// (new message, an own local echo or send, the own receipt or fully read
+  /// marker moved) or a source was marked read locally; the button alone
+  /// rebuilds.
   void _listen() {
     for (final subscription in _subscriptions) {
       unawaited(subscription.cancel());
