@@ -241,14 +241,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.15.1"
-  crop_image:
-    dependency: "direct main"
-    description:
-      name: crop_image
-      sha256: "27cbce1685a595efee62caab81c98b49b636f765c1da86353f58f5b2bf2775d8"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.0.17"
   cross_file:
     dependency: "direct main"
     description:
@@ -1426,6 +1418,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.6.0"
+  pro_image_editor:
+    dependency: "direct main"
+    description:
+      name: pro_image_editor
+      sha256: dcf88aef2f36f1e7f5d51f36ef9d07b48cc77df9eb6821725f6d0454dc838dda
+      url: "https://pub.dev"
+    source: hosted
+    version: "14.21.1"
+  pro_video_editor:
+    dependency: "direct main"
+    description:
+      name: pro_video_editor
+      sha256: ea5a88b4d088a0b2e268ff06a2d472e998fe2986fe9241713c64e4f8ac7a34b6
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.47.0"
   process:
     dependency: transitive
     description:
