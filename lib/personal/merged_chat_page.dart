@@ -1872,6 +1872,35 @@ class _MergedChatPageState extends State<_MergedChatView>
     );
   }
 
+  /// The person's sources for "Send via", with why one cannot be chosen.
+  List<ConversationSourceOption> _sourceOptions(PersonGroup frozenGroup) => [
+    for (final member in frozenGroup.members)
+      if (personal.client.getRoomById(member.roomId) case final room?)
+        ConversationSourceOption(
+          conversation: member,
+          title: room.getLocalizedDisplayname(),
+          // Telegram-like: what the choice means, never "Source 2".
+          subtitle: [
+            if (member.roomId == frozenGroup.defaultRoomId) 'Default',
+            ?personSourceActivity(context, room),
+          ].join(' · ').nullIfEmpty,
+          available:
+              member.accountId == personal.client.userID &&
+              _routing.$1.contains(member) &&
+              room.canSendDefaultMessages,
+          unavailableReason: _routing.$1.contains(member)
+              ? 'Sending is not available on this network right now'
+              : 'This chat is no longer part of this conversation',
+        )
+      else
+        ConversationSourceOption(
+          conversation: member,
+          title: 'Chat no longer available',
+          available: false,
+          unavailableReason: 'Left or deleted',
+        ),
+  ];
+
   /// One picker at a time: a second tap before the sheet is up is ignored.
   bool _choosingSource = false;
 
@@ -1886,33 +1915,7 @@ class _MergedChatPageState extends State<_MergedChatView>
     final value = await showConversationSourcePicker(
       context,
       selected: _needsNetworkChoice ? null : target.conversation,
-      sources: [
-        for (final member in frozenGroup.members)
-          if (personal.client.getRoomById(member.roomId) case final room?)
-            ConversationSourceOption(
-              conversation: member,
-              title: room.getLocalizedDisplayname(),
-              // Telegram-like: what the choice means, never "Source 2".
-              subtitle: [
-                if (member.roomId == frozenGroup.defaultRoomId) 'Default',
-                ?personSourceActivity(context, room),
-              ].join(' · ').nullIfEmpty,
-              available:
-                  member.accountId == personal.client.userID &&
-                  _routing.$1.contains(member) &&
-                  room.canSendDefaultMessages,
-              unavailableReason: _routing.$1.contains(member)
-                  ? 'Sending is not available on this network right now'
-                  : 'This chat is no longer part of this conversation',
-            )
-          else
-            ConversationSourceOption(
-              conversation: member,
-              title: 'Chat no longer available',
-              available: false,
-              unavailableReason: 'Left or deleted',
-            ),
-      ],
+      sources: _sourceOptions(frozenGroup),
     ).whenComplete(() => _choosingSource = false);
     // The keyboard stays up across the switch (Telegram, Messenger).
     if (wasFocused && mounted && !inputFocus.hasFocus) {
@@ -2419,32 +2422,96 @@ class _MergedChatPageState extends State<_MergedChatView>
           identical(replyEvent, sourceReply);
       final files = await pick();
       if (!mounted || files.isEmpty || !isCurrent()) return;
-      final result = await showSendFileDialog(
-        context,
-        SendFileDialog(
-          files: files,
+      final frozenGroup = group;
+      // The attachments of a merged chat may go through another of the
+      // person's sources than the composer's (chosen in the preview); a
+      // reply stays with its own source.
+      AttachmentDestination destination(ConversationRef member, Room room) {
+        final reply = member == frozen.conversation ? sourceReply : null;
+        // Another source's first accepted attachment may move the automatic
+        // route to it; that must not void the rest of the selection.
+        bool stillCurrent() =>
+            (member == frozen.conversation
+                ? isCurrent()
+                : _stillHere() && identical(replyEvent, sourceReply)) &&
+            samePersonMembers(group, frozenGroup);
+        return AttachmentDestination(
           room: room,
-          outerContext: context,
-          threadRootEventId: null,
-          threadLastEventId: null,
-          replyTo: sourceReply,
-          initialCaption: oldText,
-          sendAsFiles: asFiles,
+          replyTo: reply,
           composeContext: FrozenAttachmentContext(
             room: room,
-            replyTo: sourceReply,
-            isCurrent: isCurrent,
+            replyTo: reply,
+            isCurrent: stillCurrent,
           ),
           preflight: (context, files, caption) => mergedAttachmentPreflight(
             context,
             room: room,
-            replyTo: sourceReply,
+            replyTo: reply,
             files: files,
             caption: caption,
           ),
           onAccepted: (id, at) {
-            if (mounted) _rememberAccepted(frozen, id, at);
+            if (!mounted) return;
+            _rememberAccepted(
+              SendTarget(
+                conversation: member,
+                readUpToEventId: viewed[member.roomId]?.eventId,
+              ),
+              id,
+              at,
+            );
           },
+        );
+      }
+
+      final initial = destination(frozen.conversation, room);
+      final result = await showSendFileDialog(
+        context,
+        SendFileDialog(
+          files: files,
+          room: initial.room,
+          outerContext: context,
+          threadRootEventId: null,
+          threadLastEventId: null,
+          replyTo: initial.replyTo,
+          initialCaption: oldText,
+          sendAsFiles: asFiles,
+          composeContext: initial.composeContext,
+          preflight: initial.preflight,
+          onAccepted: initial.onAccepted,
+          sourceChoice: AttachmentSourceChoice(
+            chip: (context, room, onPressed) => ConversationSourceChip(
+              network: PersonalClient.networkOf(room),
+              compact: false,
+              locked: sourceReply != null,
+              onPressed: sourceReply == null && frozenGroup.members.length > 1
+                  ? onPressed
+                  : null,
+            ),
+            choose: (context, current) async {
+              final value = await showConversationSourcePicker(
+                context,
+                selected: personal.ref(current),
+                sources: _sourceOptions(frozenGroup),
+              );
+              if (value == null ||
+                  !mounted ||
+                  !isCurrent() ||
+                  !samePersonMembers(group, frozenGroup) ||
+                  !group.members.contains(value) ||
+                  value.accountId != personal.client.userID ||
+                  !_routing.$1.contains(value)) {
+                return null;
+              }
+              final room = personal.client.getRoomById(value.roomId);
+              if (room == null ||
+                  room.membership != Membership.join ||
+                  !room.canSendDefaultMessages) {
+                return null;
+              }
+              return destination(value, room);
+            },
+          ),
         ),
       );
       if (!mounted || result == null) return;
