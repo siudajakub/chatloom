@@ -345,7 +345,7 @@ class ForwardSheet extends StatefulWidget {
 
 class _ForwardSheetState extends State<ForwardSheet> {
   final _search = TextEditingController();
-  late final List<ForwardTarget> _targets = forwardTargets(
+  late List<ForwardTarget> _targets = forwardTargets(
     widget.personal,
     accepts: widget.accepts,
   );
@@ -359,6 +359,42 @@ class _ForwardSheetState extends State<ForwardSheet> {
   final _rooms = <String, Room?>{};
   String _query = '';
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadNames());
+  }
+
+  /// A chat without its own name is named after its members, which the SDK
+  /// loads lazily: opened from a share intent right after start, the sheet
+  /// would show bridge IDs ("Sh-whatsapp Lid-…"). Loads them once, then
+  /// rebuilds the names.
+  Future<void> _loadNames() async {
+    final rooms = {
+      for (final target in _targets)
+        for (final room in [target.representative, ...target.rooms])
+          if (room.name.trim().isEmpty) room.id: room,
+    }.values.toList();
+    if (rooms.isEmpty) return;
+    for (var i = 0; i < rooms.length; i += 8) {
+      await Future.wait(
+        rooms
+            .skip(i)
+            .take(8)
+            .map(
+              (room) => room.loadHeroUsers().then<void>(
+                (_) {},
+                onError: (Object _) {},
+              ),
+            ),
+      );
+      if (!mounted) return;
+    }
+    setState(() {
+      _targets = forwardTargets(widget.personal, accepts: widget.accepts);
+    });
+  }
 
   @override
   void dispose() {
