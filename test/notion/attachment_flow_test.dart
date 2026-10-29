@@ -44,7 +44,7 @@ typedef _Send = ({
 class _MediaRoom extends ConversationRoom {
   final sent = <_Send>[];
   Future<String?> Function(int attempt)? response;
-  _MediaRoom(Client client) : super(client, '!fictional-media:example.invalid');
+  _MediaRoom(super.client, [super.id = '!fictional-media:example.invalid']);
 
   @override
   Future<String?> sendFileEvent(
@@ -137,6 +137,7 @@ void main() {
     ValueChanged<AttachmentSendResult?>? onResult,
     bool asFiles = false,
     String caption = 'Fictional caption',
+    AttachmentSourceChoice? sourceChoice,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -159,6 +160,7 @@ void main() {
                     replyTo: frozen?.replyTo,
                     threadRootEventId: frozen?.threadRootEventId,
                     threadLastEventId: frozen?.threadLastEventId,
+                    sourceChoice: sourceChoice,
                   ),
                 );
                 onResult?.call(result);
@@ -335,6 +337,51 @@ void main() {
       expect(find.text('Fictional caption'), findsOneWidget);
     },
   );
+
+  testWidgets('a merged chat sends the attachments via the chosen source', (
+    tester,
+  ) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final client = _MediaClient();
+    final first = _MediaRoom(client, '!fictional-first:example.invalid');
+    final second = _MediaRoom(client, '!fictional-second:example.invalid');
+    final accepted = <String>[];
+    final checked = <String>[];
+    Room? choosingFrom;
+    await open(
+      tester,
+      first,
+      caption: '',
+      sourceChoice: AttachmentSourceChoice(
+        chip: (context, room, onPressed) =>
+            TextButton(onPressed: onPressed, child: Text('via ${room.id}')),
+        choose: (context, current) async {
+          choosingFrom = current;
+          return AttachmentDestination(
+            room: second,
+            preflight: (context, files, caption) async {
+              checked.add(second.id);
+              return true;
+            },
+            onAccepted: (id, at) => accepted.add(second.id),
+          );
+        },
+      ),
+    );
+    expect(find.text('via ${first.id}'), findsOneWidget);
+    await tester.tap(find.text('via ${first.id}'));
+    await tester.pumpAndSettle();
+    expect(choosingFrom, first);
+    expect(find.text('via ${second.id}'), findsOneWidget);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SendFileDialog), findsNothing);
+    expect(first.sent, isEmpty);
+    expect(second.sent.map((send) => send.name), ['fictional.txt']);
+    expect(checked, [second.id]);
+    expect(accepted, [second.id]);
+  });
 
   testWidgets('files go out in order, each with its own transaction', (
     tester,

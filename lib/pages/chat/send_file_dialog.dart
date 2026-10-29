@@ -64,6 +64,52 @@ class FrozenAttachmentContext {
   }
 }
 
+/// Where a send preview's attachments go: the room with the reply, guard,
+/// destination checks and accepted-event callback that belong to it.
+class AttachmentDestination {
+  final Room room;
+  final Event? replyTo;
+  final FrozenAttachmentContext? composeContext;
+  final Future<bool> Function(
+    BuildContext context,
+    List<XFile> files,
+    String caption,
+  )?
+  preflight;
+  final void Function(String eventId, DateTime acceptedAt)? onAccepted;
+
+  const AttachmentDestination({
+    required this.room,
+    this.replyTo,
+    this.composeContext,
+    this.preflight,
+    this.onAccepted,
+  });
+}
+
+/// A merged chat's source in the send preview: a chip beside the caption
+/// names the network the attachments go to and, until the first one is in
+/// the chat, lets the user send them through another source.
+class AttachmentSourceChoice {
+  /// The chip for [room]; [onPressed] is null while the choice is locked
+  /// (a send is under way or some attachments are already in the chat).
+  final Widget Function(
+    BuildContext context,
+    Room room,
+    VoidCallback? onPressed,
+  )
+  chip;
+
+  /// Asks for another source; null keeps the current one.
+  final Future<AttachmentDestination?> Function(
+    BuildContext context,
+    Room current,
+  )
+  choose;
+
+  const AttachmentSourceChoice({required this.chip, required this.choose});
+}
+
 class AttachmentSendResult {
   final String caption;
   const AttachmentSendResult(this.caption);
@@ -186,6 +232,10 @@ class SendFileDialog extends StatefulWidget {
   /// outgoing message as its routing anchor).
   final void Function(String eventId, DateTime acceptedAt)? onAccepted;
 
+  /// A merged chat: which source the attachments go through, switchable in
+  /// the preview. The fields above are the initial source.
+  final AttachmentSourceChoice? sourceChoice;
+
   const SendFileDialog({
     required this.room,
     required this.files,
@@ -198,6 +248,7 @@ class SendFileDialog extends StatefulWidget {
     this.sendAsFiles = false,
     this.preflight,
     this.onAccepted,
+    this.sourceChoice,
     super.key,
   });
 
@@ -278,6 +329,36 @@ class SendFileDialogState extends State<SendFileDialog> {
 
   bool get _locked => _sending || _accepted > 0;
 
+  /// The current destination; [SendFileDialog.sourceChoice] may replace it
+  /// until the first attachment is accepted.
+  late AttachmentDestination _to = AttachmentDestination(
+    room: widget.room,
+    replyTo: widget.replyTo,
+    composeContext: widget.composeContext,
+    preflight: widget.preflight,
+    onAccepted: widget.onAccepted,
+  );
+
+  bool _choosingSource = false;
+
+  Future<void> _chooseSource() async {
+    final choice = widget.sourceChoice;
+    if (choice == null || _locked || _choosingSource) return;
+    _choosingSource = true;
+    final AttachmentDestination? next;
+    try {
+      next = await choice.choose(context, _to.room);
+    } finally {
+      _choosingSource = false;
+    }
+    if (next == null || !mounted || _locked) return;
+    setState(() {
+      _to = next!;
+      _problem = null;
+      _split = _captionNeedsSplit(_labelTextController.text.trim());
+    });
+  }
+
   bool get _hasMedia => _items.any((item) => item.kind != _Kind.other);
 
   Future<int> _calcTotalSize() async {
@@ -306,7 +387,7 @@ class SendFileDialogState extends State<SendFileDialog> {
     if (caption.isEmpty || _items.isEmpty) return false;
     final last = _items.last;
     return CaptionFollowUp.needsSplit(
-      widget.room,
+      _to.room,
       mimeType: _sendMimeType(last),
       caption: caption,
     );
@@ -425,23 +506,23 @@ class SendFileDialogState extends State<SendFileDialog> {
       _problem = null;
     });
     try {
-      widget.composeContext?.validate();
-      final preflight = widget.preflight;
+      _to.composeContext?.validate();
+      final preflight = _to.preflight;
       if (preflight != null) {
         final files = _files.skip(_accepted).toList();
         if (!await preflight(context, files, label) || !mounted) return;
-        widget.composeContext?.validate();
+        _to.composeContext?.validate();
       }
-      final proceed = await showTrustUserInRoomDialog(context, widget.room);
+      final proceed = await showTrustUserInRoomDialog(context, _to.room);
       if (!mounted || !proceed) return;
-      widget.composeContext?.validate();
-      if (!widget.room.otherPartyCanReceiveMessages) {
+      _to.composeContext?.validate();
+      if (!_to.room.otherPartyCanReceiveMessages) {
         throw OtherPartyCanNotReceiveMessages();
       }
       // Cached by the SDK (days); a network fetch only on first use.
-      final clientConfig = await widget.room.client.getConfig();
+      final clientConfig = await _to.room.client.getConfig();
       if (!mounted) return;
-      widget.composeContext?.validate();
+      _to.composeContext?.validate();
       final maxUploadSize = clientConfig.mUploadSize ?? 100 * 1000 * 1000;
       // Telegram: one caption under the album, on its newest item (an
       // album only forms when the older items carry none). A network that
@@ -451,7 +532,7 @@ class SendFileDialogState extends State<SendFileDialog> {
 
       for (var i = _accepted; i < _items.length; i++) {
         if (!mounted) return;
-        widget.composeContext?.validate();
+        _to.composeContext?.validate();
         final item = _items[i];
         final xfile = item.file;
         final mimeType = item.mimeType;
@@ -511,12 +592,12 @@ class SendFileDialogState extends State<SendFileDialog> {
           }
         }
         if (!mounted) return;
-        widget.composeContext?.validate();
+        _to.composeContext?.validate();
         final ticket = await OutgoingMedia.send(
-          widget.room,
+          _to.room,
           file,
           txid: _transactionIds[i],
-          inReplyTo: widget.replyTo,
+          inReplyTo: _to.replyTo,
           // The long side also selects the JPEG quality (q80, HD q85) and
           // is stored with the bubble, so Retry keeps the same profile.
           shrinkImageMaxDimension:
@@ -530,7 +611,7 @@ class SendFileDialogState extends State<SendFileDialog> {
           cancelPrepare: cancelPrepare,
         );
         lastAccepted = ticket.accepted;
-        final onAccepted = widget.onAccepted;
+        final onAccepted = _to.onAccepted;
         if (onAccepted != null) {
           unawaited(
             ticket.accepted.then(
@@ -580,7 +661,7 @@ class SendFileDialogState extends State<SendFileDialog> {
   /// follows the media in the chat (Telegram, Instagram). It is not sent
   /// when the user cancelled the media.
   void _sendCaptionAfter(Future<String> media, String caption) {
-    final room = widget.room;
+    final room = _to.room;
     final thread = widget.threadRootEventId;
     Future<void> send() => CaptionFollowUp.send(room, caption, threadId: thread)
         .catchError((Object e) {
@@ -782,6 +863,17 @@ class SendFileDialogState extends State<SendFileDialog> {
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
+                                  if (widget.sourceChoice case final choice?)
+                                    Padding(
+                                      padding: const EdgeInsetsDirectional.only(
+                                        end: NotionSpace.xxs,
+                                      ),
+                                      child: choice.chip(
+                                        context,
+                                        _to.room,
+                                        _locked ? null : _chooseSource,
+                                      ),
+                                    ),
                                   Expanded(
                                     child: Focus(
                                       onKeyEvent: _captionKey,
