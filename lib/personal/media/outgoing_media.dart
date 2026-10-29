@@ -551,8 +551,10 @@ abstract final class OutgoingMedia {
       _discarded.add(key);
       _cancelled.add(id);
       UploadProgress.abort(id);
+      // Also for a queued job: it never starts, and its cancel releases
+      // what the preparation owns (an edited video's render).
       final cancel = _cancelPrepares[key];
-      if (cancel != null && _preparing.contains(key)) {
+      if (cancel != null) {
         try {
           await cancel();
         } catch (_) {
@@ -561,7 +563,13 @@ abstract final class OutgoingMedia {
       }
       return;
     }
-    _cancelPrepares.remove(key);
+    // A failed preparation kept for Retry: its cancel releases what it owns.
+    final cancel = _cancelPrepares.remove(key);
+    if (cancel != null) {
+      try {
+        await cancel();
+      } catch (_) {}
+    }
     _held.remove(key);
     await _forgetCopies(room, id);
   }

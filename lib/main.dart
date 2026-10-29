@@ -199,6 +199,8 @@ Future<void> _cleanupPrivateMedia() async {
       'personal_audio',
       'personal_video',
       'personal_media',
+      // Renders of edited videos a closed preview or a crash left behind.
+      'personal_media_edits',
     ]) {
       await MediaAccess.open(directory: Directory('${temporary.path}/$folder'));
     }
