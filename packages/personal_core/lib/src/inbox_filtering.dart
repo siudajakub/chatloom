@@ -38,9 +38,8 @@ class InboxRecord {
   final bool hasDraft;
   final bool unanswered;
 
-  /// An unanswered one-to-one chat the user has not moved down: it sorts
-  /// above every other unpinned chat until they reply, or until a newer
-  /// message arrives after they moved it down.
+  /// An unanswered one-to-one chat the user has not moved down. It no longer
+  /// changes the order: unpinned chats sort by latest activity only.
   final bool awaitingReply;
   final DateTime? lastActivity;
   final ConversationMetadata metadata;
@@ -136,8 +135,8 @@ List<InboxRecord> projectInbox(
     if (a.metadata.isPinned) {
       final pin = a.metadata.pinOrder!.compareTo(b.metadata.pinOrder!);
       if (pin != 0) return pin;
-    } else if (a.awaitingReply != b.awaitingReply) {
-      return a.awaitingReply ? -1 : 1;
+    } else if (_raised(a) != _raised(b)) {
+      return _raised(a) ? -1 : 1;
     }
     final time = (b.lastActivity ?? DateTime.fromMillisecondsSinceEpoch(0))
         .compareTo(a.lastActivity ?? DateTime.fromMillisecondsSinceEpoch(0));
@@ -145,3 +144,7 @@ List<InboxRecord> projectInbox(
   });
   return List.unmodifiable(result);
 }
+
+/// Unread, unmuted chats sit above the other unpinned chats; inside each
+/// band the newest message comes first.
+bool _raised(InboxRecord record) => record.unread && !record.metadata.muted;

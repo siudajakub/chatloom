@@ -159,24 +159,18 @@ void main() {
       'incoming',
     );
   });
-  test('chats awaiting a reply sort above newer ones, below pins', () {
+  test('unread chats sort above newer read ones, below pins', () {
     final items = [
       fixture('newest', activity: now),
       fixture(
-        'older-waiting',
-        unanswered: true,
-        awaiting: true,
+        'older-unread',
+        unread: true,
         activity: now.subtract(const Duration(days: 2)),
       ),
+      fixture('read', activity: now.subtract(const Duration(days: 1))),
       fixture(
-        'moved-down',
-        unanswered: true,
-        activity: now.subtract(const Duration(days: 1)),
-      ),
-      fixture(
-        'old-waiting',
-        unanswered: true,
-        awaiting: true,
+        'old-unread',
+        unread: true,
         activity: now.subtract(const Duration(days: 3)),
       ),
       fixture(
@@ -187,10 +181,10 @@ void main() {
     ];
     expect(projectInbox(items).map((r) => r.entityId), [
       'pinned',
-      'older-waiting',
-      'old-waiting',
+      'older-unread',
+      'old-unread',
       'newest',
-      'moved-down',
+      'read',
     ]);
   });
   test('people and groups never duplicate one another', () {
