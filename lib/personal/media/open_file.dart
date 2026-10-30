@@ -6,6 +6,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:chatloom/pages/chat/events/outgoing_upload_progress.dart';
+import 'package:chatloom/personal/media/avatar_cache.dart';
 import 'package:chatloom/personal/media/cancellable_download.dart';
 import 'package:chatloom/personal/media/media_store.dart';
 import 'package:chatloom/personal/media/video_file_cache.dart';
@@ -227,11 +228,12 @@ class OpenedFileCopy {
 
 /// Logout and "clear cache" (`ProtectedMatrixDatabase.clearFileCaches`):
 /// the ciphertext video cache, every opened-file copy and the sealed
-/// sticker media cache.
+/// sticker and avatar media caches.
 Future<void> clearPrivateFileCaches() async {
   await VideoFileCache.clearShared();
   await OpenedFileCopies.clearShared();
   await StickerMediaCache.clearShared();
+  await AvatarCache.clearShared();
 }
 
 /// Hands [file] to the system's default app for [mimeType]; false when no
