@@ -498,16 +498,29 @@ class ConversationSourceChip extends StatelessWidget {
       ? '$_name, choose sending source'
       : 'Sending via $_name';
 
+  /// The compact glyph's start inset: where a lone glyph sits centred in its
+  /// 48dp target. A chip with a lock or chooser chevron keeps the same inset,
+  /// so the glyph never moves towards the field's edge in a merged chat.
+  static const double glyphInset =
+      (NotionSize.touchTarget - NotionSize.icon) / 2;
+
+  bool get _trailing => locked || _selectable;
+
+  EdgeInsetsGeometry get _padding => compact
+      ? EdgeInsetsDirectional.only(
+          start: glyphInset,
+          end: _trailing ? NotionSpace.xxs : glyphInset,
+        )
+      : const EdgeInsets.symmetric(horizontal: NotionSpace.xs);
+
   /// Includes the actual label and system text scaling, rather than guessing
   /// from the network identifier or clipping the name to an icon.
   double preferredWidth(BuildContext context) {
-    final trailing = locked || _selectable
-        ? NotionSpace.xxs + NotionSize.iconSm
-        : 0.0;
+    final trailing = _trailing ? NotionSpace.xxs + NotionSize.iconSm : 0.0;
     if (compact) {
       return math.max(
         NotionSize.touchTarget,
-        NotionSpace.xs * 2 + NotionSize.icon + trailing,
+        _padding.horizontal + NotionSize.icon + trailing,
       );
     }
     final painter = TextPainter(
@@ -519,8 +532,7 @@ class ConversationSourceChip extends StatelessWidget {
       textScaler: MediaQuery.textScalerOf(context),
       maxLines: 1,
     )..layout();
-    final width =
-        painter.width + 16 + 20 + 6 + (locked || _selectable ? 22 : 0);
+    final width = painter.width + 16 + 20 + 6 + (_trailing ? 22 : 0);
     painter.dispose();
     return width.ceilToDouble();
   }
@@ -583,7 +595,7 @@ class ConversationSourceChip extends StatelessWidget {
                 minWidth: NotionSize.touchTarget,
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
+                padding: _padding,
                 child: IconTheme.merge(
                   data: IconThemeData(color: foreground),
                   child: Row(
@@ -612,7 +624,7 @@ class ConversationSourceChip extends StatelessWidget {
                           ),
                         ),
                       ],
-                      if (locked || _selectable) ...[
+                      if (_trailing) ...[
                         SizedBox(width: compact ? NotionSpace.xxs : 6),
                         Icon(
                           locked ? Icons.lock_outline : Icons.expand_more,

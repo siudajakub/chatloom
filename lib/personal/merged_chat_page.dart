@@ -48,6 +48,7 @@ import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/media/media_export_actions.dart';
 import 'package:chatloom/personal/message_bookmarks.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
@@ -1650,7 +1651,12 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
     await showForwardSheet(
       context,
-      items: [ContentShareItem(forward.content.copy())],
+      items: [
+        for (final content in GalleryContent.forwardContents(
+          forward.content.copy(),
+        ))
+          ContentShareItem(content),
+      ],
     );
   }
 

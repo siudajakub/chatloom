@@ -9,7 +9,7 @@ export 'package:chatloom/personal/emoji/emoji_picker.dart';
 
 /// The composer panel's Emoji tab (Telegram's emoji page): search, the
 /// category bar, Recently used and the categories, typed into the composer
-/// at the cursor. The search field has its own focus node; the panel slot
+/// at the cursor; a tap closes the panel. The search field has its own focus node; the panel slot
 /// sees it through the panel's focus scope ([ChatEmojiPicker]) and stays
 /// above the keyboard while it is focused. A hidden tab lets go of focus.
 class ComposerEmojiTab extends StatefulWidget {
@@ -43,6 +43,15 @@ class _ComposerEmojiTabState extends State<ComposerEmojiTab> {
     focusNode: _search,
     // The composer strip is a glass bar: its resting tone behind headers.
     background: notionGlassOpaque(context, context.notion.glass.tint),
-    onSelected: (emoji) => widget.host.onEmojiSelected(null, Emoji(emoji, '')),
+    onSelected: _selected,
   );
+
+  /// One emoji per tap (Telegram, WhatsApp): it goes in at the cursor, then
+  /// the panel closes as its toggle closes it, the field taking focus so the
+  /// keyboard comes back. Search results land here too.
+  void _selected(String emoji) {
+    final host = widget.host;
+    host.onEmojiSelected(null, Emoji(emoji, ''));
+    if (host.showEmojiPicker) host.emojiPickerAction();
+  }
 }

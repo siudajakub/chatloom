@@ -1,6 +1,8 @@
 import 'dart:ui' as ui;
 
 import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/personal/ui/notion_network_selector.dart'
+    show NotionNetworkGlyph;
 import 'package:chatloom/ui/notion/notion.dart' show NotionGlassMenuRow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -19,6 +21,7 @@ void main() {
     Widget? add,
     Widget? primary,
     double scale = 1,
+    TextDirection direction = TextDirection.ltr,
   }) => MaterialApp(
     theme: ThemeData.dark(),
     home: Scaffold(
@@ -27,18 +30,24 @@ void main() {
           data: MediaQuery.of(
             context,
           ).copyWith(textScaler: TextScaler.linear(scale)),
-          child: Align(
-            alignment: Alignment.bottomCenter,
-            child: CompactComposer(
-              input: input,
-              source: source,
-              contextPreview: preview,
-              addAction:
-                  add ??
-                  const IconButton(onPressed: null, icon: Icon(Icons.add)),
-              primaryAction:
-                  primary ??
-                  const IconButton(onPressed: null, icon: Icon(Icons.mic_none)),
+          child: Directionality(
+            textDirection: direction,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: CompactComposer(
+                input: input,
+                source: source,
+                contextPreview: preview,
+                addAction:
+                    add ??
+                    const IconButton(onPressed: null, icon: Icon(Icons.add)),
+                primaryAction:
+                    primary ??
+                    const IconButton(
+                      onPressed: null,
+                      icon: Icon(Icons.mic_none),
+                    ),
+              ),
             ),
           ),
         ),
@@ -198,7 +207,7 @@ void main() {
     expect(find.byIcon(Icons.expand_more), findsOneWidget);
     expect(
       tester.getSize(find.byType(ConversationSourceChip)).width,
-      lessThanOrEqualTo(56),
+      lessThanOrEqualTo(58),
     );
     expect(
       tester.getSize(find.byType(TextField)).width,
@@ -642,4 +651,56 @@ void main() {
     expect(find.byType(ConversationSourceChip).hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  // J (wave 13): the merged chat's chip (glyph + chooser chevron) had its
+  // glyph 8dp from the field's edge, the ordinary chat's lone glyph 14dp.
+  for (final direction in TextDirection.values) {
+    testWidgets('glyph keeps one start inset with or without a chevron '
+        '(${direction.name})', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(411, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final variants = <String, Widget>{
+        'ordinary': const ConversationSourceChip(network: 'whatsapp'),
+        'merged': ConversationSourceChip(network: 'whatsapp', onPressed: () {}),
+        'locked': const ConversationSourceChip(
+          network: 'whatsapp',
+          locked: true,
+        ),
+      };
+      final insets = <String, double>{};
+      for (final MapEntry(:key, :value) in variants.entries) {
+        await tester.pumpWidget(
+          shell(input: const TextField(), source: value, direction: direction),
+        );
+        await tester.pumpAndSettle();
+        final field = tester.getRect(
+          find
+              .ancestor(
+                of: find.byType(ConversationSourceChip),
+                matching: find.byType(AnimatedSize),
+              )
+              .first,
+        );
+        final chip = tester.getRect(find.byType(ConversationSourceChip));
+        final glyph = tester.getRect(find.byType(NotionNetworkGlyph));
+        insets[key] = direction == TextDirection.ltr
+            ? glyph.left - field.left
+            : field.right - glyph.right;
+        // The glyph sits where a lone glyph is centred in a 48dp target.
+        expect(
+          direction == TextDirection.ltr
+              ? glyph.left - chip.left
+              : chip.right - glyph.right,
+          ConversationSourceChip.glyphInset,
+          reason: key,
+        );
+        expect(chip.height, greaterThanOrEqualTo(48), reason: key);
+        expect(chip.width, greaterThanOrEqualTo(48), reason: key);
+      }
+      expect(insets['merged'], insets['ordinary']);
+      expect(insets['locked'], insets['ordinary']);
+      expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
 }
