@@ -99,6 +99,38 @@ Widget _chrome() => ListView(
 
 void _noop() {}
 
+const _drawTools = [
+  NotionEditorChoice(
+    value: PaintMode.freeStyle,
+    label: 'Pen',
+    icon: Icons.edit_rounded,
+  ),
+  NotionEditorChoice(
+    value: PaintMode.arrow,
+    label: 'Arrow',
+    icon: Icons.arrow_outward_rounded,
+  ),
+  NotionEditorChoice(
+    value: PaintMode.rect,
+    label: 'Box',
+    icon: Icons.crop_square_rounded,
+  ),
+  NotionEditorChoice(
+    value: PaintMode.circle,
+    label: 'Circle',
+    icon: Icons.circle_outlined,
+  ),
+  NotionEditorChoice(
+    value: PaintMode.eraser,
+    label: 'Eraser',
+    icon: Icons.auto_fix_normal_rounded,
+  ),
+];
+
+/// Stand-in for the paint modes, so this primitive test does not import the
+/// editor package.
+enum PaintMode { freeStyle, arrow, rect, circle, eraser }
+
 void main() {
   setUpAll(() async {
     final loader = FontLoader('Roboto');
@@ -215,6 +247,207 @@ void main() {
     await tester.pump();
     expect(tester.hasRunningAnimations, isFalse);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the title keeps its distance from the pills', (tester) async {
+    Future<void> check(double width, NotionEditorTopBar bar) async {
+      tester.view.physicalSize = Size(width, 200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(_app(bar));
+      await tester.pumpAndSettle();
+      final title = tester.getRect(find.text(bar.title));
+      final close = tester.getRect(find.byType(NotionGlassPill).first);
+      final done = tester.getRect(find.byType(NotionButton));
+      final right = find.byIcon(Icons.undo_rounded).evaluate().isEmpty
+          ? done.left
+          : tester.getRect(find.byTooltip('Undo')).left;
+      expect(title.left - close.right, greaterThanOrEqualTo(NotionSpace.sm));
+      expect(right - title.right, greaterThanOrEqualTo(NotionSpace.sm));
+      expect(tester.takeException(), isNull);
+    }
+
+    // Room enough: centred on the bar.
+    final filters = NotionEditorTopBar(
+      title: 'Filters',
+      onClose: () {},
+      onDone: () {},
+    );
+    await check(390, filters);
+    expect(tester.getCenter(find.text('Filters')).dx, closeTo(195, 0.5));
+    // A 360-dp phone with undo and redo: between the pills.
+    for (final title in ['Edit photo', 'Blur']) {
+      await check(
+        360,
+        NotionEditorTopBar(
+          title: title,
+          onClose: () {},
+          onUndo: () {},
+          onRedo: () {},
+          canUndo: true,
+          onDone: () {},
+        ),
+      );
+    }
+  });
+
+  testWidgets('tool chips that do not fit become icons, all in view', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 300);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    PaintMode? picked;
+    await tester.pumpWidget(
+      _app(
+        NotionEditorPanel(
+          children: [
+            NotionEditorChoices<PaintMode>(
+              options: _drawTools,
+              selected: PaintMode.freeStyle,
+              onSelected: (mode) => picked = mode,
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Pen'), findsOneWidget);
+    expect(find.text('Eraser'), findsNothing);
+    final eraser = find.byTooltip('Eraser');
+    expect(tester.getRect(eraser).right, lessThanOrEqualTo(360));
+    await tester.tap(eraser);
+    expect(picked, PaintMode.eraser);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final (width, scale) in [(300.0, 1.0), (390.0, 2.5)]) {
+    testWidgets('a dock too narrow for its labels keeps touch-size icons '
+        '($width dp, text ×$scale)', (tester) async {
+      tester.view.physicalSize = Size(width, 300);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      NotionEditorTool? tapped;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: NotionTheme.build(Brightness.dark),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: Center(
+              child: NotionEditorDock(
+                tools: _tools,
+                selected: 'draw',
+                onSelected: (tool) => tapped = tool,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Filters'), findsNothing);
+      // Not scaled down: every cell keeps at least the touch target.
+      for (final tool in _tools) {
+        final cell = tester.getRect(find.byTooltip(tool.label));
+        expect(cell.width, greaterThanOrEqualTo(NotionSize.touchTarget));
+        expect(cell.right, lessThanOrEqualTo(width));
+      }
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('Adjust')),
+        matchesSemantics(
+          label: 'Adjust',
+          isButton: true,
+          hasSelectedState: true,
+          hasTapAction: true,
+        ),
+      );
+      await tester.tap(find.byTooltip('Adjust'));
+      expect(tapped?.id, 'tune');
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('the dock takes its own height in a bottom bar', (tester) async {
+    tester.view.physicalSize = const Size(360, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: NotionTheme.build(Brightness.dark),
+        home: Scaffold(
+          body: const SizedBox.expand(key: Key('stage')),
+          bottomNavigationBar: NotionEditorDock(
+            tools: _tools,
+            onSelected: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // A plain Center here took the whole height and left the stage 0 px.
+    expect(
+      tester.getSize(find.byKey(const Key('stage'))).height,
+      greaterThan(600),
+    );
+    expect(tester.getSize(find.byType(NotionEditorDock)).height, lessThan(80));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('media editor top bar golden at 360 dp', (tester) async {
+    tester.view.physicalSize = const Size(360, 260);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: const Key('media-editor-bar-golden'),
+        child: _app(
+          Column(
+            children: [
+              NotionEditorTopBar(
+                title: 'Edit photo',
+                onClose: () {},
+                onUndo: () {},
+                onRedo: () {},
+                canUndo: true,
+                onDone: () {},
+              ),
+              NotionEditorTopBar(
+                title: 'Blur',
+                closeIcon: Icons.arrow_back_rounded,
+                closeLabel: 'Back',
+                onClose: () {},
+                onUndo: () {},
+                onRedo: () {},
+                canRedo: true,
+                onDone: () {},
+              ),
+              NotionEditorTopBar(
+                title: 'Filters',
+                closeIcon: Icons.arrow_back_rounded,
+                closeLabel: 'Back',
+                onClose: () {},
+                onDone: () {},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await expectLater(
+      find.byKey(const Key('media-editor-bar-golden')),
+      matchesGoldenFile('goldens/primitives/media-editor-bar-360.png'),
+    );
   });
 
   for (final brightness in Brightness.values) {

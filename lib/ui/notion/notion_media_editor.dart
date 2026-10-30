@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:math' as math;
+
 import 'package:material_ui/material_ui.dart';
 
 import 'notion.dart';
@@ -25,6 +27,13 @@ class NotionEditorTool {
 
 /// The editor's top bar: close (or back from a tool), a title that fades
 /// through when the tool changes, optional undo/redo and the primary "Done".
+///
+/// Undo and redo share one glass pill; a disabled one is dimmed, so a tap
+/// that cannot do anything does not look like it failed. The title keeps at
+/// least [NotionSpace.sm] from every pill: centred on the bar when it fits
+/// there, otherwise centred between the pills, ellipsized when even that is
+/// too narrow and left out below [_minTitleWidth] (the tool is still named
+/// by the dock and the panel).
 class NotionEditorTopBar extends StatelessWidget {
   final String title;
   final VoidCallback? onClose;
@@ -57,26 +66,35 @@ class NotionEditorTopBar extends StatelessWidget {
   /// The bar's height without the status bar.
   static const double height = NotionSize.headerHeight + NotionSpace.xs;
 
+  /// Narrower than this the title is left out rather than cut to "…".
+  static const double _minTitleWidth = NotionSpace.xxl + NotionSpace.xs;
+
   @override
   Widget build(BuildContext context) {
     final onUndo = this.onUndo, onRedo = this.onRedo;
+    final hasHistory = onUndo != null || onRedo != null;
     return SizedBox(
       height: height,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
-        // Pills keep their touch-target height inside the taller bar.
-        child: Center(
-          child: SizedBox(
-            height: NotionSize.touchTarget,
-            child: Row(
+        child: CustomMultiChildLayout(
+          delegate: _TopBarLayout(
+            gap: NotionSpace.sm,
+            minTitleWidth: _minTitleWidth,
+          ),
           children: [
-            NotionGlassPill(
-              icon: closeIcon,
-              tooltip: closeLabel,
-              onPressed: busy ? null : onClose,
+            LayoutId(
+              id: _TopBarSlot.leading,
+              child: NotionGlassPill(
+                icon: closeIcon,
+                tooltip: closeLabel,
+                onPressed: busy ? null : onClose,
+              ),
             ),
-            Expanded(
+            LayoutId(
+              id: _TopBarSlot.title,
               child: NotionFadeThrough(
+                alignment: AlignmentDirectional.center,
                 child: Text(
                   title,
                   key: ValueKey(title),
@@ -89,29 +107,163 @@ class NotionEditorTopBar extends StatelessWidget {
                 ),
               ),
             ),
-            if (onUndo != null) ...[
-              NotionGlassPill(
-                icon: Icons.undo_rounded,
-                tooltip: 'Undo',
-                onPressed: canUndo && !busy ? onUndo : null,
+            LayoutId(
+              id: _TopBarSlot.trailing,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (hasHistory) ...[
+                    _HistoryPill(
+                      cells: [
+                        if (onUndo != null)
+                          _HistoryCell(
+                            icon: Icons.undo_rounded,
+                            label: 'Undo',
+                            onPressed: canUndo && !busy ? onUndo : null,
+                          ),
+                        if (onRedo != null)
+                          _HistoryCell(
+                            icon: Icons.redo_rounded,
+                            label: 'Redo',
+                            onPressed: canRedo && !busy ? onRedo : null,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(width: NotionSpace.xs),
+                  ],
+                  NotionButton.primary(
+                    label: doneLabel,
+                    icon: Icons.check_rounded,
+                    busy: busy,
+                    onPressed: busy ? null : onDone,
+                  ),
+                ],
               ),
-              const SizedBox(width: NotionSpace.xxs),
-            ],
-            if (onRedo != null) ...[
-              NotionGlassPill(
-                icon: Icons.redo_rounded,
-                tooltip: 'Redo',
-                onPressed: canRedo && !busy ? onRedo : null,
-              ),
-              const SizedBox(width: NotionSpace.xs),
-            ],
-            NotionButton.primary(
-              label: doneLabel,
-              icon: Icons.check_rounded,
-              busy: busy,
-              onPressed: busy ? null : onDone,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _TopBarSlot { leading, title, trailing }
+
+/// Places the close pill on the left, the actions on the right (both at
+/// their own size, centred vertically) and the title between them.
+class _TopBarLayout extends MultiChildLayoutDelegate {
+  final double gap;
+  final double minTitleWidth;
+
+  _TopBarLayout({required this.gap, required this.minTitleWidth});
+
+  @override
+  void performLayout(Size size) {
+    // Pills keep their touch-target height inside the taller bar.
+    final loose = BoxConstraints.loose(
+      Size(size.width, math.min(size.height, NotionSize.touchTarget)),
+    );
+    final leading = layoutChild(_TopBarSlot.leading, loose);
+    final trailing = layoutChild(
+      _TopBarSlot.trailing,
+      loose.copyWith(maxWidth: math.max(0, size.width - leading.width)),
+    );
+    positionChild(
+      _TopBarSlot.leading,
+      Offset(0, (size.height - leading.height) / 2),
+    );
+    positionChild(
+      _TopBarSlot.trailing,
+      Offset(size.width - trailing.width, (size.height - trailing.height) / 2),
+    );
+    final start = leading.width + gap;
+    final end = size.width - trailing.width - gap;
+    final room = end - start;
+    if (room < minTitleWidth) {
+      layoutChild(_TopBarSlot.title, BoxConstraints.tight(Size.zero));
+      positionChild(_TopBarSlot.title, Offset(start, size.height / 2));
+      return;
+    }
+    final title = layoutChild(
+      _TopBarSlot.title,
+      BoxConstraints(maxWidth: room, maxHeight: size.height),
+    );
+    final centred = (size.width - title.width) / 2;
+    final x = centred >= start && centred + title.width <= end
+        ? centred
+        : start + (room - title.width) / 2;
+    positionChild(
+      _TopBarSlot.title,
+      Offset(x, (size.height - title.height) / 2),
+    );
+  }
+
+  @override
+  bool shouldRelayout(_TopBarLayout oldDelegate) =>
+      oldDelegate.gap != gap || oldDelegate.minTitleWidth != minTitleWidth;
+}
+
+/// Undo and redo as two cells of one glass pill.
+class _HistoryPill extends StatelessWidget {
+  final List<Widget> cells;
+
+  const _HistoryPill({required this.cells});
+
+  @override
+  Widget build(BuildContext context) => NotionGlassScope(
+    mode: NotionGlassMode.off,
+    child: NotionGlassSurface(
+      dock: true,
+      borderRadius: NotionGlass.dockRadius,
+      border: Border.all(color: context.notion.glass.border),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Row(mainAxisSize: MainAxisSize.min, children: cells),
+      ),
+    ),
+  );
+}
+
+/// One history action; dimmed while [onPressed] is null.
+class _HistoryCell extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+
+  const _HistoryCell({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  /// Narrower than a lone pill: the two cells read as one control.
+  static const double _width = NotionSize.touchTarget - NotionSpace.xxs;
+
+  @override
+  Widget build(BuildContext context) {
+    final onPressed = this.onPressed;
+    final colors = context.notion.colors;
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        enabled: onPressed != null,
+        label: label,
+        excludeSemantics: true,
+        child: InkWell(
+          onTap: onPressed,
+          customBorder: NotionShapes.pill,
+          child: NotionPressable(
+            enabled: onPressed != null,
+            scale: NotionMotion.pressIcon,
+            child: SizedBox(
+              width: _width,
+              height: NotionSize.touchTarget,
+              child: Icon(
+                icon,
+                size: NotionSize.iconLg,
+                color: onPressed == null ? colors.textTertiary : colors.text,
+              ),
             ),
           ),
         ),
@@ -135,56 +287,115 @@ class NotionEditorDock extends StatelessWidget {
     required this.onSelected,
   });
 
+  /// The dock's own padding and border around its cells.
+  static const double _frame = 2 * NotionSpace.xxs + 2 * NotionSize.border;
+
+  /// Whether every cell fits [maxWidth] with its label.
+  bool _labelsFit(BuildContext context, double maxWidth) {
+    if (!maxWidth.isFinite) return true;
+    final painter = TextPainter(
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    );
+    var width = _frame;
+    for (final tool in tools) {
+      painter.text = TextSpan(text: tool.label, style: NotionType.micro);
+      painter.layout();
+      width += _DockCell.labelledWidth(painter.width);
+    }
+    painter.dispose();
+    return width <= maxWidth;
+  }
+
   @override
   Widget build(BuildContext context) {
     final onSelected = this.onSelected;
+    // `heightFactor: 1`: in the editor's bottom-bar slot the constraints are
+    // loose up to the full height, and a plain Center would take all of it,
+    // leaving the photo's stage zero pixels tall. A screen too narrow for
+    // the labels (or large text) gets icon cells, which keep their touch
+    // size; only a dock too narrow even for those is scaled down.
     return Center(
-      child: NotionGlassSurface(
-        dock: true,
-        borderRadius: NotionGlass.dockRadius,
-        border: Border.all(color: context.notion.glass.border),
-        child: Material(
-          type: MaterialType.transparency,
-          child: Padding(
-            padding: const EdgeInsets.all(NotionSpace.xxs),
-            child: NotionEntranceScope(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final (i, tool) in tools.indexed)
-                    NotionEntrance(
-                      index: i,
-                      child: _DockCell(
-                        tool: tool,
-                        selected: tool.id == selected,
-                        onTap: onSelected == null
-                            ? null
-                            : () => onSelected(tool),
-                      ),
-                    ),
-                ],
-              ),
+      heightFactor: 1,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
+        child: LayoutBuilder(
+          builder: (context, constraints) => FittedBox(
+            fit: BoxFit.scaleDown,
+            child: _dock(
+              context,
+              onSelected,
+              iconsOnly: !_labelsFit(context, constraints.maxWidth),
             ),
           ),
         ),
       ),
     );
   }
+
+  Widget _dock(
+    BuildContext context,
+    ValueChanged<NotionEditorTool>? onSelected, {
+    required bool iconsOnly,
+  }) => NotionGlassSurface(
+    dock: true,
+    borderRadius: NotionGlass.dockRadius,
+    border: Border.all(color: context.notion.glass.border),
+    child: Material(
+      type: MaterialType.transparency,
+      child: Padding(
+        padding: const EdgeInsets.all(NotionSpace.xxs),
+        child: NotionEntranceScope(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final (i, tool) in tools.indexed)
+                NotionEntrance(
+                  index: i,
+                  child: _DockCell(
+                    tool: tool,
+                    selected: tool.id == selected,
+                    iconOnly: iconsOnly,
+                    onTap: onSelected == null ? null : () => onSelected(tool),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _DockCell extends StatelessWidget {
   final NotionEditorTool tool;
   final bool selected;
+
+  /// Only the icon, the label in its tooltip (semantics keep it either way).
+  final bool iconOnly;
   final VoidCallback? onTap;
 
-  const _DockCell({required this.tool, required this.selected, this.onTap});
+  const _DockCell({
+    required this.tool,
+    required this.selected,
+    this.iconOnly = false,
+    this.onTap,
+  });
+
+  static const double _minWidth = NotionSize.touchTarget + NotionSpace.md;
+  static const double _padding = NotionSpace.xs;
+
+  /// The cell's width with a label of [labelWidth].
+  static double labelledWidth(double labelWidth) =>
+      math.max(_minWidth, 2 * _padding + labelWidth);
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.notion;
     final foreground = selected ? tokens.colors.accent : tokens.colors.text;
     // One node per tool: its label and the tap, not the icon and text.
-    return Semantics(
+    Widget cell = Semantics(
       button: true,
       selected: selected,
       label: tool.label,
@@ -199,12 +410,12 @@ class _DockCell extends StatelessWidget {
           child: AnimatedContainer(
             duration: NotionMotion.of(context, NotionMotion.quick),
             curve: NotionMotion.standard,
-            constraints: const BoxConstraints(
-              minWidth: NotionSize.touchTarget + NotionSpace.md,
+            constraints: BoxConstraints(
+              minWidth: iconOnly ? NotionSize.touchTarget : _minWidth,
               minHeight: NotionSize.touchTarget + NotionSpace.xs,
             ),
             padding: const EdgeInsets.symmetric(
-              horizontal: NotionSpace.xs,
+              horizontal: _padding,
               vertical: NotionSpace.xxs,
             ),
             decoration: ShapeDecoration(
@@ -216,19 +427,23 @@ class _DockCell extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(tool.icon, size: NotionSize.iconMd, color: foreground),
-                const SizedBox(height: 2),
-                Text(
-                  tool.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: NotionType.micro.copyWith(color: foreground),
-                ),
+                if (!iconOnly) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    tool.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: NotionType.micro.copyWith(color: foreground),
+                  ),
+                ],
               ],
             ),
           ),
         ),
       ),
     );
+    if (iconOnly) cell = Tooltip(message: tool.label, child: cell);
+    return cell;
   }
 }
 
@@ -261,7 +476,10 @@ class NotionEditorPanel extends StatelessWidget {
 }
 
 /// A row of single-choice chips (aspect ratios, brush tools, adjustments).
-/// Scrolls sideways when it does not fit; the selected chip is on the
+/// When the labelled chips do not fit and every option has an icon, the
+/// chips that are not selected show only their icon (the label stays their
+/// tooltip and semantics), so every tool is in view on a narrow phone;
+/// otherwise the row scrolls sideways. The selected chip is on the
 /// `accentTint` pill.
 class NotionEditorChoices<T> extends StatelessWidget {
   final List<NotionEditorChoice<T>> options;
@@ -275,20 +493,48 @@ class NotionEditorChoices<T> extends StatelessWidget {
     required this.onSelected,
   });
 
+  static const double _rowPadding = NotionSpace.xs;
+
+  /// Whether the labelled chips are wider than [maxWidth].
+  bool _overflows(BuildContext context, double maxWidth) {
+    if (!maxWidth.isFinite) return false;
+    final painter = TextPainter(
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    );
+    var width = 2 * _rowPadding;
+    for (final option in options) {
+      painter.text = TextSpan(text: option.label, style: NotionType.callout);
+      painter.layout();
+      width += _ChoiceChip.labelledWidth(painter.width, icon: option.icon);
+    }
+    painter.dispose();
+    return width > maxWidth;
+  }
+
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    scrollDirection: Axis.horizontal,
-    padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
-    child: Row(
-      children: [
-        for (final option in options)
-          _ChoiceChip(
-            option: option,
-            selected: option.value == selected,
-            onTap: () => onSelected(option.value),
-          ),
-      ],
-    ),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final compact =
+          options.every((option) => option.icon != null) &&
+          _overflows(context, constraints.maxWidth);
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: _rowPadding),
+        child: Row(
+          children: [
+            for (final option in options)
+              _ChoiceChip(
+                option: option,
+                selected: option.value == selected,
+                iconOnly: compact && option.value != selected,
+                onTap: () => onSelected(option.value),
+              ),
+          ],
+        ),
+      );
+    },
   );
 }
 
@@ -308,13 +554,26 @@ class NotionEditorChoice<T> {
 class _ChoiceChip<T> extends StatelessWidget {
   final NotionEditorChoice<T> option;
   final bool selected;
+
+  /// Only the icon; the label becomes the tooltip.
+  final bool iconOnly;
   final VoidCallback onTap;
 
   const _ChoiceChip({
     required this.option,
     required this.selected,
     required this.onTap,
+    this.iconOnly = false,
   });
+
+  static const double _padding = NotionSpace.sm;
+  static const double _iconGap = NotionSpace.xxs + 2;
+
+  /// The width of the chip with its label of [labelWidth].
+  static double labelledWidth(double labelWidth, {IconData? icon}) =>
+      2 * _padding +
+      (icon == null ? 0 : NotionSize.icon + _iconGap) +
+      labelWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -323,9 +582,11 @@ class _ChoiceChip<T> extends StatelessWidget {
         ? tokens.colors.accent
         : tokens.colors.textSecondary;
     final icon = option.icon;
-    return Semantics(
+    final iconOnly = this.iconOnly && icon != null;
+    Widget chip = Semantics(
       button: true,
       selected: selected,
+      label: iconOnly ? option.label : null,
       child: InkWell(
         onTap: onTap,
         customBorder: NotionShapes.pill,
@@ -337,7 +598,7 @@ class _ChoiceChip<T> extends StatelessWidget {
             constraints: const BoxConstraints(
               minHeight: NotionSize.touchTarget - NotionSpace.xs,
             ),
-            padding: const EdgeInsets.symmetric(horizontal: NotionSpace.sm),
+            padding: const EdgeInsets.symmetric(horizontal: _padding),
             decoration: ShapeDecoration(
               shape: NotionShapes.pill,
               color: selected ? tokens.palette.accentTint : Colors.transparent,
@@ -345,20 +606,23 @@ class _ChoiceChip<T> extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (icon != null) ...[
+                if (icon != null)
                   Icon(icon, size: NotionSize.icon, color: foreground),
-                  const SizedBox(width: NotionSpace.xxs + 2),
+                if (!iconOnly) ...[
+                  if (icon != null) const SizedBox(width: _iconGap),
+                  Text(
+                    option.label,
+                    style: NotionType.callout.copyWith(color: foreground),
+                  ),
                 ],
-                Text(
-                  option.label,
-                  style: NotionType.callout.copyWith(color: foreground),
-                ),
               ],
             ),
           ),
         ),
       ),
     );
+    if (iconOnly) chip = Tooltip(message: option.label, child: chip);
+    return chip;
   }
 }
 
@@ -568,7 +832,11 @@ class NotionEditorBadge extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (icon != null) ...[
-              Icon(icon, size: NotionSize.iconSm, color: NotionMediaColors.onScrim),
+              Icon(
+                icon,
+                size: NotionSize.iconSm,
+                color: NotionMediaColors.onScrim,
+              ),
               const SizedBox(width: NotionSpace.xxs),
             ],
             NotionFadeThrough(
