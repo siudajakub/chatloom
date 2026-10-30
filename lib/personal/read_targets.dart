@@ -91,6 +91,10 @@ bool conversationNeedsPublicRead(
 /// the account's public or private read receipt, the fully read marker, or
 /// a read marked on this device ([PersonalPrivacy.readCutoff]).
 ///
+/// While the server still counts the room unread, any newer event from
+/// someone else counts too: Beeper notifies a reaction to the user's
+/// message, and only a read marker at or past it clears that count.
+///
 /// Events come from [loaded] (any order) and the room preview. A failed own
 /// send reads nothing. A receipt whose event is not loaded is compared by
 /// its timestamp, as the SDK's `hasNewMessages` does.
@@ -108,51 +112,86 @@ bool conversationSourceUnread(Room room, {Iterable<Event> loaded = const []}) {
       : event.originServerTs.millisecondsSinceEpoch;
 
   Event? newest;
+  Event? counted;
   for (final event in events.values) {
     if (event.senderId == own ||
         !event.eventId.startsWith(r'$') ||
-        !event.status.isSent ||
-        !_unreadTypes.contains(event.type) ||
-        !event.isVisibleInGui) {
+        !event.status.isSent) {
       continue;
     }
+    if (counted == null || position(event) > position(counted)) {
+      counted = event;
+    }
+    if (!_unreadTypes.contains(event.type) || !event.isVisibleInGui) continue;
     if (newest == null || position(event) > position(newest)) newest = event;
   }
-  if (newest == null) return false;
-  final unread = newest;
-  final cutoff = position(unread);
 
-  bool readsPast(String? eventId) {
-    if (eventId == null) return false;
-    if (eventId == unread.eventId) return true;
-    final event = events[eventId];
-    return event != null && position(event) >= cutoff;
-  }
+  bool readAt(Event unread) {
+    final cutoff = position(unread);
+    bool readsPast(String? eventId) {
+      if (eventId == null) return false;
+      if (eventId == unread.eventId) return true;
+      final event = events[eventId];
+      return event != null && position(event) >= cutoff;
+    }
 
-  if (events.values.any(
-    (event) =>
-        event.senderId == own &&
-        _ownActivityTypes.contains(event.type) &&
-        position(event) >= cutoff,
-  )) {
-    return false;
-  }
-  if (readsPast(room.fullyRead) ||
-      readsPast(PersonalPrivacy.readCutoff(room))) {
-    return false;
-  }
-  final receipts = room.receiptState;
-  for (final timeline in [receipts.global, ?receipts.mainThread]) {
-    for (final receipt in [timeline.ownPublic, timeline.ownPrivate]) {
-      if (receipt == null) continue;
-      if (events.containsKey(receipt.eventId)
-          ? readsPast(receipt.eventId)
-          : receipt.ts >= unread.originServerTs.millisecondsSinceEpoch) {
-        return false;
+    if (events.values.any(
+      (event) =>
+          event.senderId == own &&
+          _ownActivityTypes.contains(event.type) &&
+          position(event) >= cutoff,
+    )) {
+      return true;
+    }
+    if (readsPast(room.fullyRead) ||
+        readsPast(PersonalPrivacy.readCutoff(room))) {
+      return true;
+    }
+    final receipts = room.receiptState;
+    for (final timeline in [receipts.global, ?receipts.mainThread]) {
+      for (final receipt in [timeline.ownPublic, timeline.ownPrivate]) {
+        if (receipt == null) continue;
+        if (events.containsKey(receipt.eventId)
+            ? readsPast(receipt.eventId)
+            : receipt.ts >= unread.originServerTs.millisecondsSinceEpoch) {
+          return true;
+        }
       }
     }
+    return false;
   }
-  return true;
+
+  if (newest != null && !readAt(newest)) return true;
+  return room.notificationCount > 0 &&
+      counted != null &&
+      !identical(counted, newest) &&
+      !readAt(counted);
+}
+
+/// The newest server event of [room] of any type, for a read marker that
+/// must clear the server's unread count. The preview skips reactions,
+/// which Beeper counts (a reaction to the user's message), so a marker on
+/// the preview leaves such a chat unread forever. Asks the homeserver for
+/// the room's last event and falls back to [conversationReadTarget].
+Future<String?> newestServerEventId(Room room) async {
+  final fallback = conversationReadTarget(room);
+  try {
+    final response = await room.client.getRoomEvents(
+      room.id,
+      Direction.b,
+      limit: 1,
+    );
+    final newest = response.chunk.firstOrNull;
+    if (newest != null &&
+        newest.eventId.startsWith(r'$') &&
+        (fallback == null ||
+            !newest.originServerTs.isBefore(fallback.originServerTs))) {
+      return newest.eventId;
+    }
+  } catch (_) {
+    // Offline or refused: the preview is still better than nothing.
+  }
+  return fallback?.eventId;
 }
 
 /// Sends one manual read marker per target, all sources in parallel, and

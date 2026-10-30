@@ -434,6 +434,31 @@ void main() {
       expect(conversationSourceUnread(room, loaded: loaded), isFalse);
     });
 
+    test('a reaction the server counts stays unread until a marker reaches '
+        'it', () {
+      final room = _Room(_Client(), '!fixture:example.invalid');
+      final own = room.client.userID!;
+      final mine = _event(room, r'$mine', sender: own, minute: 2);
+      final loaded = [
+        _reaction(room, r'$their-reaction', r'$mine', sender: _anna, minute: 3),
+        mine,
+        _event(room, r'$old', sender: _anna, minute: 1),
+      ];
+      room.latest = mine;
+      room.notificationCount = 1;
+      expect(conversationSourceUnread(room, loaded: loaded), isTrue);
+      // The button marks the reaction, not the preview.
+      expect(
+        conversationReadTarget(room, loaded: loaded)?.eventId,
+        r'$their-reaction',
+      );
+      // A receipt on the user's own message does not reach the reaction.
+      room.receiptState = _ownPublic(r'$mine', 2);
+      expect(conversationSourceUnread(room, loaded: loaded), isTrue);
+      room.receiptState = _ownPublic(r'$their-reaction', 3);
+      expect(conversationSourceUnread(room, loaded: loaded), isFalse);
+    });
+
     test('a receipt at or after the newest message reads it; an older one '
         'does not', () {
       final room = _Room(_Client(), '!fixture:example.invalid');
