@@ -7,6 +7,7 @@ import 'package:chatloom/utils/error_reporter.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
+import 'sticker_convert.dart';
 import 'sticker_library.dart';
 import 'sticker_models.dart';
 import 'sticker_send_plan.dart';
@@ -60,14 +61,75 @@ abstract final class StickerSender {
     // The panel may be closed by the time the server answers: report on
     // the app's navigator.
     const reporter = ErrorReporter.action(null, action: ErrorAction.send);
-    room
-        .sendEvent(
-          content,
-          type: plan.type,
-          threadRootEventId: thread,
-          threadLastEventId: host.threadLastEventId,
-        )
-        .then<void>((_) {}, onError: reporter.onErrorCallback);
+    final relation = content['m.relates_to'];
+    Future<void> sendPlan(
+      StickerSendPlan plan,
+      Map<String, Object?> content,
+    ) async {
+      await room.sendEvent(
+        {...content, 'm.relates_to': ?relation},
+        type: plan.type,
+        threadRootEventId: thread,
+        threadLastEventId: host.threadLastEventId,
+      );
+    }
+
+    final conversion = plan.conversion;
+    if (conversion == null) {
+      sendPlan(
+        plan,
+        content,
+      ).then<void>((_) {}, onError: reporter.onErrorCallback);
+      return true;
+    }
+    // Converting and uploading take a moment: the panel stays usable and
+    // the sticker goes out when ready (or as [StickerSendPlan.fallback]).
+    _sendConverted(
+      room,
+      item,
+      plan,
+      conversion,
+      content,
+      sendPlan,
+    ).then<void>((_) {}, onError: reporter.onErrorCallback);
     return true;
   }
+
+  static Future<void> _sendConverted(
+    Room room,
+    StickerItem item,
+    StickerSendPlan plan,
+    StickerConversion conversion,
+    Map<String, Object?> content,
+    Future<void> Function(StickerSendPlan, Map<String, Object?>) sendPlan,
+  ) async {
+    Map<String, Object?>? converted;
+    try {
+      converted = await StickerConvertedMedia.prepare(
+        room,
+        item,
+        conversion,
+        content,
+      );
+    } catch (e) {
+      // The error's type only: no media, room or server details.
+      Logs().w(
+        'Sticker conversion failed (${e.runtimeType}), sending fallback',
+      );
+    }
+    if (converted != null) return sendPlan(plan, converted);
+    final fallback = plan.fallback;
+    if (fallback == null || !fallback.possible) {
+      throw StickerUnsendable(fallback?.reason);
+    }
+    return sendPlan(fallback, fallback.content!);
+  }
+}
+
+/// A converted sticker that failed with nothing else to send.
+class StickerUnsendable implements Exception {
+  const StickerUnsendable(this.reason);
+  final String? reason;
+  @override
+  String toString() => reason ?? 'This sticker can’t be sent to this chat.';
 }

@@ -127,60 +127,66 @@ void main() {
       expect(plan.content!.containsKey('msgtype'), isFalse);
     });
 
-    test('Telegram: a GIF sticker the bridge rejects goes as an image', () {
-      final plan = StickerSendPlan.forRoom(
-        _room('telegram'),
-        _sticker('image/gif'),
-      );
-      expect(plan.mode, StickerSendMode.image);
-      expect(plan.content!['msgtype'], MessageTypes.Image);
-      expect(plan.content!['body'], 'sticker.gif');
-      expect(
-        (plan.content!['info'] as Map).containsKey('fi.mau.bridged_sticker'),
-        isFalse,
-      );
-      // ChatLoom draws it at sticker size, not as a photo.
-      expect((plan.content!['info'] as Map)[StickerEvents.marker], isTrue);
-    });
+    test(
+      'a GIF sticker the bridge rejects converts, else goes as an image',
+      () {
+        // This fixture's Telegram declaration has no image/gif sticker (the
+        // fork's real one does: sticker_convert_test.dart).
+        final converted = StickerSendPlan.forRoom(
+          _room('telegram'),
+          _sticker('image/gif'),
+        );
+        expect(converted.mode, StickerSendMode.convertedSticker);
+        expect(converted.conversion!.staticMime, 'image/png');
+        final plan = converted.fallback!;
+        expect(plan.mode, StickerSendMode.image);
+        expect(plan.content!['msgtype'], MessageTypes.Image);
+        expect(plan.content!['body'], 'sticker.gif');
+        expect(
+          (plan.content!['info'] as Map).containsKey('fi.mau.bridged_sticker'),
+          isFalse,
+        );
+        // ChatLoom draws it at sticker size, not as a photo.
+        expect((plan.content!['info'] as Map)[StickerEvents.marker], isTrue);
+      },
+    );
 
-    test('Telegram: a raw TGS sticker cannot be sent', () {
+    test('a raw TGS sticker the bridge rejects converts, never an image', () {
       final plan = StickerSendPlan.forRoom(
         _room('telegram'),
         _sticker('application/x-tgsticker'),
       );
-      expect(plan.possible, isFalse);
-      expect(plan.reason, 'This sticker can’t be sent to Telegram.');
+      expect(plan.mode, StickerSendMode.convertedSticker);
+      expect(plan.fallback!.possible, isFalse);
+      expect(plan.fallback!.reason, 'This sticker can’t be sent to Telegram.');
     });
 
-    test('WhatsApp: webp is native, a GIF sticker becomes an image', () {
+    test('WhatsApp: webp is native, GIF and TGS convert to stills', () {
       final room = _room('whatsapp');
       expect(
         StickerSendPlan.forRoom(room, _sticker('image/webp')).mode,
         StickerSendMode.sticker,
       );
-      expect(
-        StickerSendPlan.forRoom(room, _sticker('image/gif')).mode,
-        StickerSendMode.image,
+      final gif = StickerSendPlan.forRoom(room, _sticker('image/gif'));
+      expect(gif.mode, StickerSendMode.convertedSticker);
+      expect(gif.fallback!.mode, StickerSendMode.image);
+      final tgs = StickerSendPlan.forRoom(
+        room,
+        _sticker('application/x-tgsticker'),
       );
-      expect(
-        StickerSendPlan.forRoom(
-          room,
-          _sticker('application/x-tgsticker'),
-        ).reason,
-        'This sticker can’t be sent to WhatsApp.',
-      );
+      expect(tgs.mode, StickerSendMode.convertedSticker);
+      expect(tgs.fallback!.reason, 'This sticker can’t be sent to WhatsApp.');
     });
 
-    test('Messenger: png/webp stickers, GIF stickers as images', () {
+    test('Messenger: png/webp stickers, GIF stickers converted', () {
       final room = _room('facebookgo');
       expect(
         StickerSendPlan.forRoom(room, _sticker('image/webp')).mode,
         StickerSendMode.sticker,
       );
-      expect(
-        StickerSendPlan.forRoom(room, _sticker('image/gif')).mode,
-        StickerSendMode.image,
-      );
+      final gif = StickerSendPlan.forRoom(room, _sticker('image/gif'));
+      expect(gif.mode, StickerSendMode.convertedSticker);
+      expect(gif.fallback!.mode, StickerSendMode.image);
     });
 
     test('Slack has no stickers: an image without the sticker tag', () {

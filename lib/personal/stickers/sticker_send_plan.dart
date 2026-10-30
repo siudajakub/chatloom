@@ -4,6 +4,7 @@ import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/widgets/lottie_sticker_data.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 
@@ -14,6 +15,12 @@ enum StickerSendMode {
   /// `m.sticker` as it is. With `fi.mau.bridged_sticker` the Telegram
   /// bridge sends the original Telegram sticker.
   sticker,
+
+  /// `m.sticker` with media converted on this device into a format the
+  /// room's bridge takes as a sticker ([StickerSendPlan.conversion]): an
+  /// animated PNG or a square static PNG. [StickerSendPlan.fallback] goes
+  /// out when the conversion fails.
+  convertedSticker,
 
   /// `m.image` with the same media: networks without stickers (Slack) or
   /// whose bridge rejects the sticker's format get an image.
@@ -35,9 +42,47 @@ enum StickerSendMode {
 /// Instagram as images, Slack as an image or file) decided from the room's
 /// bridge capability declaration (`com.beeper.room_features`, the same
 /// checks the outgoing gate applies), never from the network's name.
+/// What a converted sticker becomes, decided from the declaration: the
+/// conversion itself runs at send time (`sticker_convert.dart`).
+@immutable
+class StickerConversion {
+  const StickerConversion({
+    this.animatedMime,
+    this.staticMime,
+    this.onlyIfAnimated = false,
+    this.fromThumbnail = false,
+  }) : assert(animatedMime != null || staticMime != null);
+
+  /// `image/apng` when the bridge takes animated PNG stickers (Signal).
+  final String? animatedMime;
+
+  /// `image/png` when the bridge takes static PNG stickers (WhatsApp,
+  /// Messenger, Signal, Telegram).
+  final String? staticMime;
+
+  /// The original already goes out (partially supported): convert only
+  /// when the source turns out to animate, which the bridge would flatten.
+  final bool onlyIfAnimated;
+
+  /// The source is the item's still thumbnail (a video sticker's poster).
+  final bool fromThumbnail;
+
+  /// Identity of the conversion result, for the session cache.
+  String get cacheKey =>
+      '${animatedMime ?? '-'}|${staticMime ?? '-'}|$onlyIfAnimated|'
+      '$fromThumbnail';
+}
+
 @immutable
 class StickerSendPlan {
-  const StickerSendPlan._(this.mode, this.type, this.content, this.reason);
+  const StickerSendPlan._(
+    this.mode,
+    this.type,
+    this.content,
+    this.reason, {
+    this.conversion,
+    this.fallback,
+  });
 
   final StickerSendMode mode;
 
@@ -50,7 +95,28 @@ class StickerSendPlan {
   /// Why it cannot be sent here, in words for people (unsupported only).
   final String? reason;
 
+  /// Convert the media before sending (null: send [content] as it is).
+  /// The converted media replaces `url`/`file` and `info` of [content].
+  final StickerConversion? conversion;
+
+  /// What goes out when [conversion] fails or is not worth it (a static
+  /// source for an [StickerConversion.onlyIfAnimated] upgrade).
+  final StickerSendPlan? fallback;
+
   bool get possible => mode != StickerSendMode.unsupported;
+
+  /// Source formats the converter decodes: the `image` package's raster
+  /// decoders and Lottie (rendered with the `lottie` package).
+  static const _rasterMimes = {
+    'image/gif',
+    'image/webp',
+    'image/png',
+    'image/apng',
+    'image/jpeg',
+  };
+
+  /// Formats that may animate: worth an animated PNG.
+  static const _animatedMimes = {'image/gif', 'image/webp', 'image/apng'};
 
   static const _gifFlags = [
     'fi.mau.gif',
@@ -76,14 +142,43 @@ class StickerSendPlan {
       room,
       media: media,
     );
-    if (_ok(sticker)) {
-      return StickerSendPlan._(
+    if (_ok(sticker) && !_foreignLottie(room, item, sticker)) {
+      final plan = StickerSendPlan._(
         StickerSendMode.sticker,
         EventTypes.Sticker,
         _stickerContent(item),
         null,
       );
+      final upgrade = _animatedUpgrade(room, item, sticker);
+      if (upgrade == null) return plan;
+      return StickerSendPlan._(
+        StickerSendMode.sticker,
+        EventTypes.Sticker,
+        plan.content,
+        null,
+        conversion: upgrade,
+        fallback: plan,
+      );
     }
+    final fallback = _asImage(room, item, media, sticker);
+    final conversion = _conversionFor(room, item);
+    if (conversion == null) return fallback;
+    return StickerSendPlan._(
+      StickerSendMode.convertedSticker,
+      EventTypes.Sticker,
+      {'body': _stickerContent(item)['body']},
+      null,
+      conversion: conversion,
+      fallback: fallback,
+    );
+  }
+
+  static StickerSendPlan _asImage(
+    Room room,
+    StickerItem item,
+    BridgeMediaRequest? media,
+    BridgeCapabilityEvidence sticker,
+  ) {
     final image = RoomCapabilities.evidenceForFeature(
       BridgeFeature.image,
       room,
@@ -98,6 +193,78 @@ class StickerSendPlan {
       );
     }
     return _unsupported(room, 'sticker', sticker, image);
+  }
+
+  /// WhatsApp declares Lottie stickers partially: only its own (imported
+  /// from WhatsApp) go out. Another network's Lottie (Telegram's) is
+  /// converted instead of failing on the bridge.
+  static bool _foreignLottie(
+    Room room,
+    StickerItem item,
+    BridgeCapabilityEvidence sticker,
+  ) {
+    if (!sticker.partial || !LottieStickerData.isLottieMime(item.mimetype)) {
+      return false;
+    }
+    final origin = canonicalNetwork(item.bridged?.network);
+    return origin != canonicalNetwork(PersonalClient.networkOf(room));
+  }
+
+  /// Whether the room's bridge takes a sticker of [mime] (a fresh,
+  /// square sticker of the converter's size).
+  static BridgeCapabilityEvidence _target(Room room, String mime) =>
+      RoomCapabilities.evidenceForFeature(
+        BridgeFeature.sticker,
+        room,
+        media: BridgeMediaRequest(mimeType: mime, width: 512, height: 512),
+      );
+
+  /// A partially supported animated format (Signal takes WebP but its
+  /// clients draw it still) goes out as an animated PNG where that is
+  /// fully supported. A static source still goes out untouched.
+  static StickerConversion? _animatedUpgrade(
+    Room room,
+    StickerItem item,
+    BridgeCapabilityEvidence sticker,
+  ) {
+    final mime = item.mimetype?.toLowerCase();
+    if (!sticker.partial || mime == null || mime == 'image/apng') return null;
+    if (!_animatedMimes.contains(mime)) return null;
+    final apng = _target(room, 'image/apng');
+    if (!_ok(apng) || apng.partial) return null;
+    return const StickerConversion(
+      animatedMime: 'image/apng',
+      onlyIfAnimated: true,
+    );
+  }
+
+  /// A sticker whose format the bridge rejects, converted into one it
+  /// takes: animated PNG for animated sources where accepted, else a
+  /// square static PNG. A video sticker converts from its poster.
+  static StickerConversion? _conversionFor(Room room, StickerItem item) {
+    final mime = item.mimetype?.toLowerCase();
+    final lottie = LottieStickerData.isLottieMime(mime);
+    final bool fromThumbnail;
+    if (lottie || _rasterMimes.contains(mime)) {
+      fromThumbnail = false;
+    } else if (item.thumbnailUri != null ||
+        item.info['thumbnail_file'] is Map) {
+      fromThumbnail = true;
+    } else {
+      return null;
+    }
+    final animates =
+        !fromThumbnail && (lottie || _animatedMimes.contains(mime));
+    final animatedMime = animates && _ok(_target(room, 'image/apng'))
+        ? 'image/apng'
+        : null;
+    final staticMime = _ok(_target(room, 'image/png')) ? 'image/png' : null;
+    if (animatedMime == null && staticMime == null) return null;
+    return StickerConversion(
+      animatedMime: animatedMime,
+      staticMime: staticMime,
+      fromThumbnail: fromThumbnail,
+    );
   }
 
   static StickerSendPlan _imageGif(
