@@ -3,10 +3,12 @@ import 'dart:math' as math;
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/events/inline_loop_video.dart';
 import 'package:chatloom/pages/chat/events/outgoing_upload_progress.dart';
 import 'package:chatloom/pages/chat/events/sticker_event.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
+import 'package:chatloom/personal/media/gallery_batch.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
 import 'package:chatloom/widgets/blur_hash.dart';
@@ -63,12 +65,24 @@ abstract final class MediaAlbums {
     return policy.canPlay;
   }
 
-  static bool _adjacent(Event newer, Event older) =>
-      identical(newer.room.client, older.room.client) &&
-      newer.room.id == older.room.id &&
-      newer.senderId == older.senderId &&
-      newer.originServerTs.difference(older.originServerTs).abs() <= maxGap &&
-      newer.originServerTs.toLocal().day == older.originServerTs.toLocal().day;
+  /// One sender's neighbours within [maxGap], or of one ChatLoom multi-pick
+  /// ([MediaAlbumBatch]) however long its uploads took; two different picks
+  /// stay two albums.
+  static bool _adjacent(Event newer, Event older) {
+    final newerBatch = MediaAlbumBatch.idOf(newer);
+    final olderBatch = MediaAlbumBatch.idOf(older);
+    if (newerBatch != null && olderBatch != null && newerBatch != olderBatch) {
+      return false;
+    }
+    return identical(newer.room.client, older.room.client) &&
+        newer.room.id == older.room.id &&
+        newer.senderId == older.senderId &&
+        ((newerBatch != null && newerBatch == olderBatch) ||
+            newer.originServerTs.difference(older.originServerTs).abs() <=
+                maxGap) &&
+        newer.originServerTs.toLocal().day ==
+            older.originServerTs.toLocal().day;
+  }
 
   /// Album slots for [events] (newest first, as the reversed timeline).
   /// [standalone] keeps an event out of albums as a hidden member (it has
@@ -123,13 +137,16 @@ abstract final class MediaAlbums {
 }
 
 /// The album bubble content: a grid of thumbnails; a tap opens the viewer at
-/// that item (it pages across the chat's media as usual).
+/// that item (it pages across the chat's media as usual, or across
+/// [viewerEvents]). At most [MediaAlbums.maxItems] tiles; the last one then
+/// counts the rest ("+5"), which the viewer still pages through.
 class MediaAlbumGrid extends StatelessWidget {
   const MediaAlbumGrid({
     super.key,
     required this.events,
     required this.borderRadius,
     this.timelineFor,
+    this.viewerEvents,
     this.maxWidth = NotionBubble.mediaMaxWidth,
   });
 
@@ -137,6 +154,10 @@ class MediaAlbumGrid extends StatelessWidget {
   final List<Event> events;
   final BorderRadius borderRadius;
   final Timeline? Function(Event event)? timelineFor;
+
+  /// What the viewer pages through instead of the chat's media (a gallery
+  /// message's own items, whose events are not in the timeline).
+  final List<Event>? viewerEvents;
   final double maxWidth;
 
   /// Space between tiles.
@@ -147,7 +168,10 @@ class MediaAlbumGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rows = MediaAlbums.rows(events.length);
+    final shown = events.length > MediaAlbums.maxItems
+        ? events.sublist(0, MediaAlbums.maxItems)
+        : events;
+    final rows = MediaAlbums.rows(shown.length);
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = math.min(
@@ -171,13 +195,15 @@ class MediaAlbumGrid extends StatelessWidget {
           final tileWidth = (width - gap * (columns - 1)) / columns;
           final tiles = <Widget>[];
           for (var c = 0; c < columns; c++) {
-            final event = events[index++];
+            final event = shown[index++];
             tiles.add(
               _AlbumTile(
                 event: event,
                 width: tileWidth,
                 height: height,
                 timeline: timelineFor?.call(event),
+                viewerEvents: viewerEvents,
+                more: index == shown.length ? events.length - shown.length : 0,
               ),
             );
           }
@@ -213,12 +239,18 @@ class _AlbumTile extends StatelessWidget {
     required this.width,
     required this.height,
     required this.timeline,
+    this.viewerEvents,
+    this.more = 0,
   });
 
   final Event event;
   final double width;
   final double height;
   final Timeline? timeline;
+  final List<Event>? viewerEvents;
+
+  /// Items after this (last) tile that the grid does not show.
+  final int more;
 
   @override
   Widget build(BuildContext context) {
@@ -240,56 +272,77 @@ class _AlbumTile extends StatelessWidget {
     return SizedBox(
       width: width,
       height: height,
-      child: NotionTapTarget(
-        onTap: uploading
-            ? null
-            : () => showImageViewer(context, event, timeline: timeline),
-        child: Hero(
-          tag: event.eventId,
-          createRectTween: NotionMediaHero.rectTween,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (thumbnail)
-                MxcImage(
-                  event: event,
-                  cacheKey: event.transactionId ?? event.eventId,
-                  cacheName: event.room.id,
-                  isThumbnail: true,
-                  width: width,
-                  height: height,
-                  fit: BoxFit.cover,
-                  placeholder: placeholder,
-                )
-              else
-                placeholder(context),
-              if (uploading)
-                Center(
-                  child: OutgoingUploadOverlay(
-                    progress: uploadProgressOf(event),
-                  ),
-                )
-              else if (video)
-                Center(
-                  child: DecoratedBox(
-                    decoration: const ShapeDecoration(
-                      color: NotionMediaColors.scrim,
-                      shape: CircleBorder(),
+      // A double tap on a tile reacts to the album; a single tap opens it.
+      child: ConversationMessageChromeTap(
+        child: NotionTapTarget(
+          onTap: uploading
+              ? null
+              : () => showImageViewer(
+                  context,
+                  event,
+                  timeline: timeline,
+                  mediaEvents: viewerEvents,
+                ),
+          child: Hero(
+            tag: event.eventId,
+            createRectTween: NotionMediaHero.rectTween,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (thumbnail)
+                  MxcImage(
+                    event: event,
+                    cacheKey: event.transactionId ?? event.eventId,
+                    cacheName: event.room.id,
+                    isThumbnail: true,
+                    width: width,
+                    height: height,
+                    fit: BoxFit.cover,
+                    placeholder: placeholder,
+                  )
+                else
+                  placeholder(context),
+                if (uploading)
+                  Center(
+                    child: OutgoingUploadOverlay(
+                      progress: uploadProgressOf(event),
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(NotionSpace.xs),
-                      child: Icon(
-                        Icons.play_arrow_rounded,
-                        color: NotionMediaColors.onScrim,
-                        size: NotionSize.iconMd,
-                        semanticLabel: duration == null
-                            ? 'Video'
-                            : 'Video, ${NotionMediaPlaybackControls.formatTime(Duration(milliseconds: duration))}',
+                  )
+                else if (video)
+                  Center(
+                    child: DecoratedBox(
+                      decoration: const ShapeDecoration(
+                        color: NotionMediaColors.scrim,
+                        shape: CircleBorder(),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(NotionSpace.xs),
+                        child: Icon(
+                          Icons.play_arrow_rounded,
+                          color: NotionMediaColors.onScrim,
+                          size: NotionSize.iconMd,
+                          semanticLabel: duration == null
+                              ? 'Video'
+                              : 'Video, ${NotionMediaPlaybackControls.formatTime(Duration(milliseconds: duration))}',
+                        ),
                       ),
                     ),
                   ),
-                ),
-            ],
+                if (more > 0)
+                  ColoredBox(
+                    color: NotionMediaColors.scrim,
+                    child: Center(
+                      child: Text(
+                        '+$more',
+                        semanticsLabel: '$more more',
+                        style: context.notion.typography.headline.copyWith(
+                          color: NotionMediaColors.onScrim,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart'
     show bridgedNetworkLabel;
 import 'package:chatloom/personal/personal_client.dart';
@@ -125,9 +126,8 @@ class HiddenMessages extends ChangeNotifier {
   }
 
   /// Shows [event] again (Undo).
-  void unhide(Event event) => _unhideKeys(event.room.client, [
-    _key(event.room.id, event.eventId),
-  ]);
+  void unhide(Event event) =>
+      _unhideKeys(event.room.client, [_key(event.room.id, event.eventId)]);
 
   /// Number of hidden messages of [rooms] (one account), for chat details.
   int countIn(Iterable<Room> rooms) {
@@ -204,6 +204,25 @@ class HiddenMessages extends ChangeNotifier {
   }) {
     final hidden = registry ?? instance;
     final messenger = ScaffoldMessenger.maybeOf(context);
+    // The bubble shrinks away first when it is on screen (not under reduced
+    // motion); otherwise it goes at once.
+    final exit = ConversationMessageEntrance.leave([
+      event.eventId,
+      event.transactionId,
+    ]);
+    if (exit != null) {
+      unawaited(exit.then((_) => _hideNow(hidden, event, refresh, messenger)));
+    } else {
+      _hideNow(hidden, event, refresh, messenger);
+    }
+  }
+
+  static void _hideNow(
+    HiddenMessages hidden,
+    Event event,
+    VoidCallback? refresh,
+    ScaffoldMessengerState? messenger,
+  ) {
     hidden.hide(event);
     refresh?.call();
     final network = bridgedNetworkLabel(event.room);

@@ -14,6 +14,7 @@ import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/instagram_share.dart';
+import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
@@ -30,6 +31,7 @@ import '../../../utils/platform_infos.dart';
 import '../../../utils/url_launcher.dart';
 import 'audio_player.dart';
 import 'cute_events.dart';
+import 'gallery_message.dart';
 import 'html_message.dart';
 import 'image_bubble.dart';
 import 'inline_loop_video.dart';
@@ -122,6 +124,26 @@ class MessageContent extends StatelessWidget {
     // cannot decrypt looks and recovers the same way in each.
     if (isUndecryptable(event)) {
       return UndecryptableMessage(event, textColor: textColor);
+    }
+    // MSC4274 gallery: one message, many photos/videos/files.
+    final gallery = GalleryContent.of(event);
+    if (gallery != null) {
+      final media = GalleryMessage(
+        event,
+        gallery: gallery,
+        borderRadius: borderRadius,
+        textColor: textColor,
+        linkColor: linkColor,
+      );
+      final caption = gallery.caption;
+      if (caption == null) return media;
+      return _MediaCaption(
+        media: media,
+        caption: caption,
+        width: NotionBubble.mediaMaxWidth,
+        textColor: textColor,
+        linkColor: linkColor,
+      );
     }
     final album = this.album;
     if (album != null && album.length > 1) {
