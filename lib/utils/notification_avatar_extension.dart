@@ -3,9 +3,11 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:chatloom/personal/media/avatar_cache.dart';
 import 'package:chatloom/utils/client_download_content_extension.dart';
 import 'package:matrix/matrix.dart';
 
@@ -50,6 +52,25 @@ extension NotificationAvatarExtension on Client {
   Future<Uint8List?> tryDownloadNotificationAvatar(Uri? avatar) async {
     if (avatar == null) return null;
     try {
+      // The in-app avatar cache first: the picture the inbox already shows
+      // is on disk, so a notification never waits on a bridge's media.
+      try {
+        final cached = await AvatarCache.loadAvatar(
+          this,
+          avatar,
+          width: notificationAvatarDimension,
+          height: notificationAvatarDimension,
+          isThumbnail: true,
+          animated: false,
+          thumbnailMethod: ThumbnailMethod.crop,
+        ).timeout(const Duration(seconds: 3));
+        return await _roundedSquare(cached, notificationAvatarDimension);
+      } on TimeoutException {
+        // The same network would time out again; show the letter avatar.
+        return null;
+      } catch (e) {
+        Logs().d('Avatar cache miss for notification', e);
+      }
       try {
         return await downloadMxcCached(
           avatar,
