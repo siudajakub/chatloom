@@ -75,6 +75,8 @@ class _Host implements ConversationComposerHost {
       sendController.text += emoji?.emoji ?? '';
   @override
   void emojiPickerBackspace() {}
+  @override
+  void emojiPickerAction() => showEmojiPicker = !showEmojiPicker;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

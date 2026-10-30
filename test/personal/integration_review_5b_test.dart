@@ -213,8 +213,8 @@ void main() {
       unawaited(controller.redactEventAction(own));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Delete'));
-      await tester.pump();
-      await tester.pump();
+      // The bubble's exit motion runs before the redaction goes out.
+      await tester.pumpAndSettle();
       expect(room.redactions, 1);
       // Hidden without waiting for any timeline update.
       expect(controller.timelineRevision, greaterThan(revision));

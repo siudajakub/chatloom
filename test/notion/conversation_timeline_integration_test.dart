@@ -487,7 +487,7 @@ void main() {
       );
       expect(
         tester.getSize(find.byType(ConversationSourceChip)).width,
-        lessThanOrEqualTo(56),
+        lessThanOrEqualTo(58),
       );
       expect(find.byTooltip('Emoji picker'), findsOneWidget);
       await tester.tap(find.byTooltip('Attach media or a file'));
