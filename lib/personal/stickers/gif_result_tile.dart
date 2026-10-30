@@ -18,6 +18,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import 'gif_search.dart';
+import 'sticker_media_cache.dart';
 import 'sticker_tile.dart' show stickerCacheName;
 
 /// One GIF search result in the grid, as Telegram shows them: the blurred
@@ -377,6 +378,7 @@ class _GifResultTileState extends State<GifResultTile>
                   fit: BoxFit.cover,
                   cacheKey: thumbnail.toString(),
                   cacheName: stickerCacheName,
+                  loadBytes: StickerMediaCache.loadMxc,
                   placeholder: blurred,
                   usePlaceholderOnError: true,
                   animationDuration: Duration.zero,

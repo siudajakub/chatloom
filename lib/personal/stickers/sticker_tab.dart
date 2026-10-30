@@ -11,6 +11,7 @@ import 'package:matrix/matrix.dart';
 
 import 'add_sticker_packs.dart';
 import 'sticker_library.dart';
+import 'sticker_media_cache.dart';
 import 'sticker_models.dart';
 import 'sticker_pack_sheet.dart';
 import 'sticker_search.dart';
@@ -91,6 +92,34 @@ List<StickerSection> stickerSections(StickerLibrary library, Room room) {
         iconUri: pack.icon,
         pack: pack,
       ),
+  ];
+}
+
+/// What the tab warms the sticker cache with ([StickerPrefetch]):
+/// favourites and recents, then the first [rows] rows of each pack, starting
+/// at the pack at the top ([first]) and wrapping around.
+@visibleForTesting
+List<StickerItem> stickerPrefetchOrder(
+  List<StickerSection> sections, {
+  required int columns,
+  int first = 0,
+  int rows = 3,
+}) {
+  final packs = [
+    for (final section in sections)
+      if (section.pack != null) section,
+  ];
+  final start = packs.isEmpty
+      ? 0
+      : math.max(
+          0,
+          packs.indexOf(sections[first.clamp(0, sections.length - 1)]),
+        );
+  return [
+    for (final section in sections)
+      if (section.pack == null) ...section.items,
+    for (var i = 0; i < packs.length; i++)
+      ...packs[(start + i) % packs.length].items.take(columns * rows),
   ];
 }
 
@@ -245,6 +274,11 @@ class _StickerTabState extends State<StickerTab>
 
   _GridLayout? _layout;
 
+  /// Background warm-up of the sticker cache for the sections in
+  /// [_prefetchedKey]; cancelled when the tab goes away.
+  StickerPrefetch? _prefetch;
+  (int, String)? _prefetchedKey;
+
   static const _stripExtent = NotionSize.touchTarget;
 
   FocusNode get _searchFocus =>
@@ -285,6 +319,7 @@ class _StickerTabState extends State<StickerTab>
 
   @override
   void dispose() {
+    _prefetch?.cancel();
     _library.removeListener(_changed);
     _searchFocus.removeListener(_focusChanged);
     _ownFocus?.dispose();
@@ -322,6 +357,23 @@ class _StickerTabState extends State<StickerTab>
       _results = _searchIndex.searchRanked(query, languageCode: language);
     }
     return _results;
+  }
+
+  /// Downloads what the grid is about to show into the sticker cache
+  /// (bounded, cancelled with the tab), so scrolling finds it on disk.
+  void _warm(List<StickerSection> sections, int columns) {
+    if (!mounted || sections.isEmpty) return;
+    _prefetch?.cancel();
+    final prefetch = _prefetch = StickerPrefetch(widget.host.room.client);
+    unawaited(
+      prefetch.run(
+        stickerPrefetchOrder(
+          sections,
+          columns: columns,
+          first: _selected.value,
+        ),
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -677,6 +729,12 @@ class _StickerTabState extends State<StickerTab>
       search: search,
       sections: sections,
     );
+    if (_prefetchedKey != _sectionsKey) {
+      _prefetchedKey = _sectionsKey;
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _warm(sections, columns),
+      );
+    }
     final stripShown = !_searchActive;
     _applyLayout(
       layout,
@@ -1000,6 +1058,7 @@ class _StickerTabState extends State<StickerTab>
                                     fit: BoxFit.contain,
                                     cacheKey: uri.toString(),
                                     cacheName: stickerCacheName,
+                                    loadBytes: StickerMediaCache.loadMxc,
                                     borderRadius: NotionRadius.xsAll,
                                     placeholder: (_) => Icon(
                                       Icons.sticky_note_2_outlined,

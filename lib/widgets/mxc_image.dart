@@ -35,6 +35,21 @@ enum MxcImageLoad {
   failed,
 }
 
+/// Fetches the bytes of an unencrypted `mxc://` [uri] in place of
+/// `downloadMxcCached` (the same request: [isThumbnail] at physical [width]
+/// × [height]). The sticker panel keeps its own long-lived disk cache this
+/// way without a fork of [MxcImage].
+typedef MxcBytesLoader =
+    Future<Uint8List> Function(
+      Client client,
+      Uri uri, {
+      num? width,
+      num? height,
+      required bool isThumbnail,
+      required bool animated,
+      required ThumbnailMethod thumbnailMethod,
+    });
+
 class MxcImage extends StatefulWidget {
   final Uri? uri;
   final Event? event;
@@ -77,6 +92,12 @@ class MxcImage extends StatefulWidget {
   /// Called after the frame in which the state changes (never during
   /// build); the widget starts in [MxcImageLoad.loading].
   final ValueChanged<MxcImageLoad>? onLoadStateChanged;
+
+  /// Loads an [uri] without [encryption] instead of the default download
+  /// (which goes through the SQLCipher media cache and falls back from a
+  /// missing thumbnail to the original). The memory cache, decoding and
+  /// Lottie handling stay the same.
+  final MxcBytesLoader? loadBytes;
 
   static void clearCache(String cacheName) =>
       _MxcImageState._imageDataCache.removeWhere((key) => key.$2 == cacheName);
@@ -157,6 +178,7 @@ class MxcImage extends StatefulWidget {
     this.maxDecodeSide,
     this.encryption,
     this.onLoadStateChanged,
+    this.loadBytes,
     super.key,
   });
 
@@ -365,6 +387,22 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       final realHeight = height == null ? null : height * devicePixelRatio;
 
       Uint8List remoteData;
+      final loadBytes = widget.loadBytes;
+      if (loadBytes != null) {
+        remoteData = await loadBytes(
+          client,
+          uri,
+          width: realWidth,
+          height: realHeight,
+          isThumbnail: widget.isThumbnail,
+          animated: widget.animated,
+          thumbnailMethod: widget.thumbnailMethod,
+        );
+        if (!mounted || generation != _generation) return;
+        if (await _acceptLottie(remoteData, key, generation, client)) return;
+        _accept(remoteData, key, generation);
+        return;
+      }
       try {
         remoteData = await client.downloadMxcCached(
           uri,

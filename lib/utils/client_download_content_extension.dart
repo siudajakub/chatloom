@@ -10,6 +10,9 @@ import 'dart:ui';
 import 'package:matrix/matrix.dart';
 
 extension ClientDownloadContentExtension on Client {
+  /// Downloads [mxc] (or its thumbnail), through the SQLCipher media cache
+  /// unless [databaseCache] is false: callers with their own long-lived
+  /// cache (sticker panel) skip it, so their reads never queue behind sync.
   Future<Uint8List> downloadMxcCached(
     Uri mxc, {
     num? width,
@@ -18,6 +21,7 @@ extension ClientDownloadContentExtension on Client {
     bool? animated,
     ThumbnailMethod? thumbnailMethod,
     bool rounded = false,
+    bool databaseCache = true,
   }) async {
     // To stay compatible with previous storeKeys:
     final cacheKey = isThumbnail
@@ -31,8 +35,10 @@ extension ClientDownloadContentExtension on Client {
           )
         : mxc;
 
-    final cachedData = await database.getFile(cacheKey);
-    if (cachedData != null) return cachedData;
+    if (databaseCache) {
+      final cachedData = await database.getFile(cacheKey);
+      if (cachedData != null) return cachedData;
+    }
 
     final httpUri = isThumbnail
         ? await mxc.getThumbnailUri(
@@ -62,7 +68,7 @@ extension ClientDownloadContentExtension on Client {
       );
     }
 
-    await database.storeFile(cacheKey, imageData, 0);
+    if (databaseCache) await database.storeFile(cacheKey, imageData, 0);
 
     return imageData;
   }

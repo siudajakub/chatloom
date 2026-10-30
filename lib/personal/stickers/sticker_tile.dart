@@ -6,17 +6,24 @@ import 'package:flutter/scheduler.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
+import 'sticker_media_cache.dart';
 import 'sticker_models.dart';
 
-/// Memory cache bucket of panel thumbnails (`MxcImage`'s bounded cache).
+/// Memory cache bucket of panel media (`MxcImage`'s bounded cache).
 const stickerCacheName = 'stickers';
 
 /// The media of a sticker or GIF.
 ///
-/// Grid cells ([preview] false) load the server's small static thumbnail
-/// (`isThumbnail`, about the cell size × device pixel ratio); TGS/Lottie
-/// stickers play only while the grid lets them ([StickerTile.animate]),
-/// otherwise they show their first frame. A cell built during a fast
+/// Unencrypted media goes through [StickerMediaCache] (encrypted on disk,
+/// kept for a year), so the panel does not ask the server again. Grid
+/// cells ([preview] false) of stickers load the original file once
+/// ([StickerMediaCache.prefersOriginal]: stickers are ≤ 512 px, many
+/// bridged ones have no server thumbnail, and one file serves every cell
+/// size) and decode it at about the cell size × device pixel ratio; GIFs
+/// and posters keep the server's thumbnail. Animated stickers (TGS/Lottie,
+/// animated WebP) play only while the grid lets them
+/// ([StickerTile.animate]) and the autoplay setting is on, otherwise they
+/// show their first frame. A cell built during a fast
 /// fling waits with its placeholder until the fling slows down
 /// ([Scrollable.recommendDeferredLoadingForContext]), so cells that only
 /// fly past never download, decrypt or parse. Only the long-press preview
@@ -81,6 +88,7 @@ class StickerImage extends StatelessWidget {
           isThumbnail: !preview,
           cacheKey: poster.toString(),
           cacheName: stickerCacheName,
+          loadBytes: StickerMediaCache.loadMxc,
           borderRadius: borderRadius,
           placeholder: (_) => placeholder,
           usePlaceholderOnError: true,
@@ -126,6 +134,9 @@ class StickerImage extends StatelessWidget {
         animated: preview,
         cacheKey: item.key,
         cacheName: stickerCacheName,
+        loadBytes: StickerMediaCache.prefersOriginal(item)
+            ? StickerMediaCache.loadOriginal
+            : StickerMediaCache.loadMxc,
         borderRadius: borderRadius,
         placeholder: (_) => placeholder,
         usePlaceholderOnError: true,
