@@ -262,29 +262,37 @@ class StickerItem {
     _ => value,
   };
 
-  static Map<String, Object?> _trimInfo(Map<String, Object?>? info) {
-    if (info == null) return {};
-    final out = <String, Object?>{};
-    for (final entry in info.entries) {
-      if (!_keptInfoKeys.contains(entry.key)) continue;
-      final value = entry.value;
-      if (entry.key == 'thumbnail_info' && value is Map) {
-        out[entry.key] = {
-          for (final e in value.entries)
-            if (_keptThumbnailInfoKeys.contains(e.key))
-              e.key as String: e.value,
-        };
-      } else {
-        out[entry.key] = value is Map ? _copy(value) : value;
-      }
+  static Map<String, Object?> _trimInfo(Map<String, Object?>? info) =>
+      trimStickerInfo(info);
+}
+
+/// The `info` of a sticker without decoration (previews, blurhashes): what
+/// a bridge needs to send it natively stays. Keeps synced copies small.
+Map<String, Object?> trimStickerInfo(Map<String, Object?>? info) {
+  if (info == null) return {};
+  final out = <String, Object?>{};
+  for (final entry in info.entries) {
+    if (!_keptInfoKeys.contains(entry.key)) continue;
+    final value = entry.value;
+    if (entry.key == 'thumbnail_info' && value is Map) {
+      out[entry.key] = {
+        for (final e in value.entries)
+          if (_keptThumbnailInfoKeys.contains(e.key)) e.key as String: e.value,
+      };
+    } else {
+      out[entry.key] = value is Map ? StickerItem._copy(value) : value;
     }
-    return out;
   }
+  return out;
 }
 
 /// An installed pack: where its state lives. The pack content stays in the
 /// room (normally the bridge's personal space), the library only points at
 /// it. [stateKey] is the first (or combined) key of a split pack.
+///
+/// A network pack the bridge could not keep in its space is saved in the
+/// account instead ([accountPack], `sticker_account_packs.dart`); its
+/// [roomId] is empty.
 @immutable
 class StickerPackRef {
   const StickerPackRef({
@@ -294,10 +302,25 @@ class StickerPackRef {
     this.network,
     this.title,
     this.addedTs = 0,
+    this.accountPack,
   });
+
+  /// A pack saved in the account's own data under [id].
+  const StickerPackRef.account(
+    String id, {
+    this.packUrl,
+    this.network,
+    this.title,
+    this.addedTs = 0,
+  }) : roomId = '',
+       stateKey = id,
+       accountPack = id;
 
   final String roomId;
   final String stateKey;
+
+  /// Id of the account data pack, or null for a pack in room state.
+  final String? accountPack;
 
   /// The pack's network link (`https://t.me/addstickers/<name>`), if any.
   final String? packUrl;
@@ -307,21 +330,56 @@ class StickerPackRef {
   final String? title;
   final int addedTs;
 
-  String get key => packKeyOf(roomId, stateKey);
+  String get key {
+    final id = accountPack;
+    return id != null ? accountPackKeyOf(id) : packKeyOf(roomId, stateKey);
+  }
 
   static String packKeyOf(String roomId, String stateKey) =>
       '$roomId|$stateKey';
 
+  static String accountPackKeyOf(String id) => 'account|$id';
+
+  /// A copy with [addedTs].
+  StickerPackRef withAdded(int addedTs) => accountPack != null
+      ? StickerPackRef.account(
+          accountPack!,
+          packUrl: packUrl,
+          network: network,
+          title: title,
+          addedTs: addedTs,
+        )
+      : StickerPackRef(
+          roomId: roomId,
+          stateKey: stateKey,
+          packUrl: packUrl,
+          network: network,
+          title: title,
+          addedTs: addedTs,
+        );
+
+  static final _accountId = RegExp(r'^[a-z0-9_-]+\.[a-z0-9_-]+$');
+
   static StickerPackRef? fromJson(Object? json) {
     if (json is! Map) return null;
+    String? text(Object? value) =>
+        value is String && value.isNotEmpty ? value : null;
+    final added = json['added_ts'];
+    final account = json['account_pack'];
+    if (account is String && _accountId.hasMatch(account)) {
+      return StickerPackRef.account(
+        account,
+        packUrl: text(json['pack_url']),
+        network: text(json['network']),
+        title: text(json['title']),
+        addedTs: added is int ? added : 0,
+      );
+    }
     final room = json['room_id'];
     final key = json['state_key'];
     if (room is! String || !room.startsWith('!') || key is! String) {
       return null;
     }
-    String? text(Object? value) =>
-        value is String && value.isNotEmpty ? value : null;
-    final added = json['added_ts'];
     return StickerPackRef(
       roomId: room,
       stateKey: key,
@@ -333,8 +391,12 @@ class StickerPackRef {
   }
 
   Map<String, Object?> toJson() => {
-    'room_id': roomId,
-    'state_key': stateKey,
+    if (accountPack != null)
+      'account_pack': accountPack
+    else ...{
+      'room_id': roomId,
+      'state_key': stateKey,
+    },
     'pack_url': ?packUrl,
     'network': ?network,
     'title': ?title,

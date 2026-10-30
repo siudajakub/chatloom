@@ -346,6 +346,10 @@ List<(StickerPackRef, StickerPack, ImagePackContent)> packsInJoinedRooms(
         fallbackTitle: room.getLocalizedDisplayname(),
       );
       if (pack.stickers.isEmpty) continue;
+      // The bridge space's copy of a pack the library has (saved in the
+      // account, or imported on another device).
+      final url = pack.packUrl;
+      if (url != null && library.isInstalled(url)) continue;
       out.add((
         StickerPackRef(roomId: room.id, stateKey: entry.key, title: pack.title),
         pack,

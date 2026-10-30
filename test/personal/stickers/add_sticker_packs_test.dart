@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // "Add stickers" (wave 11): browse/search Telegram's catalogue through the
 // bridge fork, its states (loading, results, old bridge, error, offline),
-// pasted links and packs of joined rooms. Fake transports, fictional packs.
+// pasted links and packs of joined rooms. Wave 12: a typed pack name
+// resolved through the preview (works without the catalogue), search
+// through the user's and the rooms' packs. Fake transports, fictional packs.
 import 'dart:async';
 
 import 'package:chatloom/personal/bridge_contact_search_provisioning.dart';
@@ -9,6 +11,7 @@ import 'package:chatloom/personal/stickers/add_sticker_packs.dart';
 import 'package:chatloom/personal/stickers/room_sticker_packs.dart';
 import 'package:chatloom/personal/stickers/sticker_catalog.dart';
 import 'package:chatloom/personal/stickers/sticker_library.dart';
+import 'package:chatloom/personal/stickers/sticker_models.dart';
 import 'package:chatloom/personal/stickers/sticker_pack_import.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
@@ -145,11 +148,17 @@ void main() {
     final h = _Harness();
     addTearDown(h.library.dispose);
     h.catalogTransport.answer = (_) => _page([]);
+    // Nothing in the catalogue: the word is tried as a pack name too.
+    h.importTransport.answer = (_) =>
+        throw const BridgeProvisioningException(404, errcode: 'M_NOT_FOUND');
     await tester.pumpWidget(h.app());
     await tester.enterText(find.byType(TextField), 'nothing');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     expect(find.text('No packs found'), findsOneWidget);
+    expect(h.importTransport.requests.single.query, {
+      'pack_url': 'https://t.me/addstickers/nothing',
+    });
   });
 
   testWidgets(
@@ -162,6 +171,8 @@ void main() {
             404,
             errcode: 'M_UNRECOGNIZED',
           );
+      h.importTransport.answer = (_) =>
+          throw const BridgeProvisioningException(404, errcode: 'M_NOT_FOUND');
       await tester.pumpWidget(h.app());
       await tester.pumpAndSettle();
       expect(
@@ -169,7 +180,7 @@ void main() {
         findsOneWidget,
       );
       await tester.enterText(find.byType(TextField), 'cats');
-      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
       expect(h.catalogTransport.requests, hasLength(1));
       expect(find.textContaining('paste a t.me/addstickers'), findsOneWidget);
@@ -265,5 +276,166 @@ void main() {
     expect(h.library.packs.single.title, 'Fictional group pack');
     // Added: no longer a suggestion.
     expect(find.text('Packs in your rooms'), findsNothing);
+  });
+
+  group('packs by name and local packs', () {
+    final named = pack('Fictional pack', {
+      'FictionalPack_a': packImage('n1'),
+      'FictionalPack_b': packImage('n2'),
+    }, url: 'https://t.me/addstickers/FictionalPack').toJson();
+
+    void oldBridge(_Harness h) => h.catalogTransport.answer = (_) =>
+        throw const BridgeProvisioningException(404, errcode: 'M_UNRECOGNIZED');
+
+    testWidgets(
+      'without the catalogue a typed name resolves; Add saves it in the account',
+      (tester) async {
+        final h = _Harness();
+        addTearDown(h.library.dispose);
+        oldBridge(h);
+        final gate = Completer<Object?>();
+        h.importTransport.answer = (r) => r.method == 'GET'
+            ? gate.future
+            : throw const BridgeProvisioningException(
+                404,
+                errcode: 'M_NOT_FOUND',
+                message:
+                    'Can\'t import image pack to space when personal filtering spaces are disabled',
+              );
+        await tester.pumpWidget(h.app());
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), 'FictionalPack');
+        await tester.pump(const Duration(milliseconds: 100));
+        // Waiting for the typing pause: a placeholder, no request yet.
+        expect(find.byType(NotionSkeleton), findsOneWidget);
+        expect(h.importTransport.requests, isEmpty);
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+        expect(find.text('Telegram pack “FictionalPack”'), findsOneWidget);
+        expect(find.byType(NotionSkeleton), findsOneWidget);
+        gate.complete(named);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('named-pack')), findsOneWidget);
+        expect(find.text('Fictional pack'), findsOneWidget);
+        expect(find.text('2 stickers'), findsOneWidget);
+
+        await tester.tap(find.widgetWithText(NotionButton, 'Add'));
+        await tester.pumpAndSettle();
+        expect(
+          h.library.isInstalled('https://t.me/addstickers/FictionalPack'),
+          isTrue,
+        );
+        expect(h.library.packs.single.ref?.accountPack, isNotNull);
+        // The preview shown was saved: one GET, the space POST, no second GET.
+        expect(h.importTransport.requests.map((r) => r.method), [
+          'GET',
+          'POST',
+        ]);
+        // Installed now: it shows among the user's packs.
+        expect(find.text('In your stickers'), findsOneWidget);
+      },
+    );
+
+    testWidgets('a name Telegram doesn’t know: a calm empty state', (
+      tester,
+    ) async {
+      final h = _Harness();
+      addTearDown(h.library.dispose);
+      oldBridge(h);
+      h.importTransport.answer = (_) => throw const BridgeProvisioningException(
+        404,
+        errcode: 'M_NOT_FOUND',
+        message: 'Sticker set not found',
+      );
+      await tester.pumpWidget(h.app());
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'NoSuchPack');
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('No packs found'), findsOneWidget);
+      expect(find.textContaining('No Telegram pack is named'), findsOneWidget);
+      expect(find.byType(NotionEmptyState), findsOneWidget);
+    });
+
+    testWidgets('a failed lookup reads as a sentence with Try again', (
+      tester,
+    ) async {
+      final h = _Harness();
+      addTearDown(h.library.dispose);
+      oldBridge(h);
+      var fail = true;
+      h.importTransport.answer = (_) =>
+          fail ? throw const BridgeProvisioningException(0) : named;
+      await tester.pumpWidget(h.app());
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'FictionalPack');
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('named-error')), findsOneWidget);
+      expect(find.textContaining('didn’t answer'), findsOneWidget);
+      fail = false;
+      await tester.tap(find.text('Try again'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('named-pack')), findsOneWidget);
+    });
+
+    testWidgets('with the catalogue, a name is tried when it finds nothing', (
+      tester,
+    ) async {
+      final h = _Harness();
+      addTearDown(h.library.dispose);
+      h.catalogTransport.answer = (_) => _page([]);
+      h.importTransport.answer = (_) => named;
+      await tester.pumpWidget(h.app());
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'FictionalPack');
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('named-pack')), findsOneWidget);
+      expect(find.text('No packs found'), findsNothing);
+    });
+
+    testWidgets('a search also finds the user’s packs and the rooms’ packs', (
+      tester,
+    ) async {
+      final h = _Harness();
+      addTearDown(h.library.dispose);
+      h.catalogTransport.answer = (_) => _page([]);
+      h.importTransport.answer = (_) =>
+          throw const BridgeProvisioningException(404, errcode: 'M_NOT_FOUND');
+      final backend = h.library.backend as FakeStickerBackend;
+      backend.rooms['!space:example.invalid'] = {
+        'Mine': pack('Fictional cats', {'m': packImage('m1')}),
+      };
+      h.library.addPack(
+        const StickerPackRef(
+          roomId: '!space:example.invalid',
+          stateKey: 'Mine',
+        ),
+      );
+      ConversationRoom(h.client, '!group:example.invalid').state(
+        'im.ponies.room_emotes',
+        pack('Fictional cats of the group', {
+          'g': packImage('g1', tagged: false),
+        }).toJson(),
+        key: 'group',
+      );
+      await tester.pumpWidget(h.app());
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'cats');
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+      expect(find.text('In your stickers'), findsOneWidget);
+      expect(find.text('Fictional cats'), findsOneWidget);
+      expect(find.text('Packs in your rooms'), findsOneWidget);
+      expect(find.text('Fictional cats of the group'), findsOneWidget);
+      expect(find.text('No packs found'), findsNothing);
+      // Other words don't match them.
+      await tester.enterText(find.byType(TextField), 'dogs');
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+      expect(find.text('Fictional cats'), findsNothing);
+      expect(find.text('No packs found'), findsOneWidget);
+    });
   });
 }

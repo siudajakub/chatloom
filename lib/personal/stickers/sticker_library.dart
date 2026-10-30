@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 
+import 'sticker_account_packs.dart';
 import 'sticker_models.dart';
 import 'sticker_search.dart';
 import 'sticker_store.dart';
@@ -36,6 +37,9 @@ abstract interface class StickerLibraryBackend {
 
   /// The account's own pack (`m.image_pack` / `im.ponies.user_emotes`).
   ImagePackContent? userPack();
+
+  /// Types of the synced account data events starting with [prefix].
+  Iterable<String> syncedTypes(String prefix);
 }
 
 /// The account's stickers and GIFs (Telegram's sticker library):
@@ -155,21 +159,52 @@ class StickerLibrary extends ChangeNotifier {
     final roomPacks = <String, Map<String, ImagePackContent>?>{};
     Map<String, ImagePackContent>? statesOf(String roomId) =>
         roomPacks.putIfAbsent(roomId, () => backend.packsOfRoom(roomId));
+    // One pack per network link: a pack saved in the account and the same
+    // pack imported into a bridge space later show once (the first).
+    final urls = <String>{};
+    bool firstOfUrl(StickerPack pack) {
+      final url = pack.packUrl;
+      return url == null || urls.add(_normalizePackUrl(url));
+    }
+
     for (final ref in doc.packs) {
       if (!seen.add(ref.key)) continue;
+      final account = ref.accountPack;
       final content =
-          statesOf(ref.roomId)?[ref.stateKey] ?? _packCache.content(ref.key);
+          (account != null
+              ? _accountPack(account)?.content
+              : statesOf(ref.roomId)?[ref.stateKey]) ??
+          _packCache.content(ref.key);
       if (content == null) continue;
       final pack = StickerPack.fromContent(
         content,
         key: ref.key,
         source: StickerPackSource.installed,
-        fallbackTitle: backend.roomName(ref.roomId),
+        fallbackTitle: account != null ? null : backend.roomName(ref.roomId),
         ref: ref,
       );
-      if (pack.stickers.isNotEmpty) out.add(pack);
+      if (pack.stickers.isNotEmpty && firstOfUrl(pack)) out.add(pack);
     }
     final hidden = doc.hidden.toSet();
+    // Packs saved in the account that the list doesn't name (an older app
+    // version stored the list without them): still installed, last. A
+    // removed one is hidden until its emptied parts are stored.
+    for (final type in backend.syncedTypes(accountPackTypePrefix)) {
+      final id = accountPackIdOfType(type);
+      if (id == null || _accountRemoved.contains(id)) continue;
+      final key = StickerPackRef.accountPackKeyOf(id);
+      if (seen.contains(key) || hidden.contains(key)) continue;
+      final saved = _accountPack(id);
+      if (saved == null) continue;
+      seen.add(key);
+      final pack = StickerPack.fromContent(
+        saved.content,
+        key: key,
+        source: StickerPackSource.installed,
+        ref: saved.ref(),
+      );
+      if (pack.stickers.isNotEmpty && firstOfUrl(pack)) out.add(pack);
+    }
     for (final (roomId, stateKey) in backend.enabledElsewhere()) {
       final key = StickerPackRef.packKeyOf(roomId, stateKey);
       if (hidden.contains(key) || !seen.add(key)) continue;
@@ -197,6 +232,9 @@ class StickerLibrary extends ChangeNotifier {
   }
 
   static const _userPackKey = 'user|';
+
+  SavedAccountPack? _accountPack(String id) =>
+      decodeAccountPack(id, backend.readSynced);
 
   StickerPack? packByKey(String key) =>
       packs.where((p) => p.key == key).firstOrNull;
@@ -304,19 +342,122 @@ class StickerLibrary extends ChangeNotifier {
     _apply(AddPackOp(ref.addedTs == 0 ? _withAdded(ref) : ref));
   }
 
-  StickerPackRef _withAdded(StickerPackRef ref) => StickerPackRef(
-    roomId: ref.roomId,
-    stateKey: ref.stateKey,
-    packUrl: ref.packUrl,
-    network: ref.network,
-    title: ref.title,
-    addedTs: _now,
-  );
+  StickerPackRef _withAdded(StickerPackRef ref) => ref.withAdded(_now);
+
+  // ---------------------------------------------------------------------
+  // Packs saved in the account (sticker_account_packs.dart).
+
+  /// Ids removed in this session: their parts may still be non-empty until
+  /// the cleared versions sync back.
+  final _accountRemoved = <String>{};
+
+  /// Content of removed account packs, for Undo.
+  final _accountUndo = <String, (ImagePackContent, String, String)>{};
+
+  /// Account pack writes, one at a time in order (save, remove, restore).
+  Future<void> _accountWrites = Future.value();
+
+  Future<T> _queueAccountWrite<T>(Future<T> Function() write) {
+    final result = _accountWrites.then((_) => write());
+    _accountWrites = result.then<void>((_) {}, onError: (_) {});
+    return result;
+  }
+
+  /// Saves a network pack (its preview content) in the account and installs
+  /// it. Idempotent: the same pack is stored under the same id on every
+  /// device. Throws when it can't be stored (offline, rejected, or
+  /// [AccountPackTooLarge]); nothing is installed then.
+  Future<StickerPackRef> saveAccountPack(
+    ImagePackContent content, {
+    required String packUrl,
+    required String network,
+    required String name,
+    String? title,
+  }) async {
+    final id = accountPackIdOf(network, name);
+    final ref = StickerPackRef.account(
+      id,
+      packUrl: packUrl,
+      network: network,
+      title: title ?? content.pack.displayName,
+      addedTs: _now,
+    );
+    await _queueAccountWrite(
+      () => _writeAccountParts(id, content, packUrl: packUrl, network: network),
+    );
+    _accountRemoved.remove(id);
+    _accountUndo.remove(id);
+    // Shown at once; the synced parts take over when they arrive.
+    _packCache.put(ref.key, content, _now);
+    unawaited(_writeCache());
+    _apply(AddPackOp(ref));
+    return ref;
+  }
+
+  Future<void> _writeAccountParts(
+    String id,
+    ImagePackContent content, {
+    required String packUrl,
+    required String network,
+  }) async {
+    final previous = backend.readSynced(accountPackType(id, 0))?['parts'];
+    final parts = encodeAccountPack(
+      content,
+      packUrl: packUrl,
+      network: network,
+      rev: _now,
+    );
+    for (var i = parts.length - 1; i >= 0; i--) {
+      await backend.writeSynced(accountPackType(id, i), parts[i]);
+    }
+    // A smaller new version: empty the parts it no longer uses.
+    final stale = previous is int ? previous.clamp(0, accountPackMaxParts) : 0;
+    for (var i = parts.length; i < stale; i++) {
+      await backend.writeSynced(accountPackType(id, i), const {});
+    }
+  }
+
+  Future<void> _clearAccountParts(String id) async {
+    final count = backend.readSynced(accountPackType(id, 0))?['parts'];
+    final parts = count is int ? count.clamp(1, accountPackMaxParts) : 1;
+    // Part 0 first: once it is empty the pack is gone everywhere.
+    for (var i = 0; i < parts; i++) {
+      final type = accountPackType(id, i);
+      if (backend.readSynced(type)?.isNotEmpty ?? false) {
+        await backend.writeSynced(type, const {});
+      }
+    }
+  }
 
   /// Removes a pack from ChatLoom; a pack enabled by another client is
-  /// hidden instead.
-  void removePack(StickerPack pack) =>
-      _apply(RemovePackOp(pack.key, hide: pack.ref == null));
+  /// hidden instead, a pack saved in the account is deleted from it.
+  void removePack(StickerPack pack) {
+    final id = pack.ref?.accountPack;
+    if (id != null) {
+      final content = _accountPack(id)?.content ?? _packCache.content(pack.key);
+      if (content != null) {
+        _accountUndo[id] = (
+          content,
+          pack.packUrl ?? pack.ref?.packUrl ?? '',
+          pack.network ?? pack.ref?.network ?? '',
+        );
+      }
+      _accountRemoved.add(id);
+      _packCache.remove(pack.key);
+      unawaited(_writeCache());
+      unawaited(
+        _queueAccountWrite(() => _clearAccountParts(id)).catchError((
+          Object e,
+          StackTrace s,
+        ) {
+          // Offline: the list no longer names it; the parts stay until the
+          // pack is added and removed again.
+          Logs().d('Saved sticker pack not cleared', e, s);
+        }),
+      );
+    }
+    _apply(RemovePackOp(pack.key, hide: pack.ref == null || id != null));
+  }
 
   /// Puts a removed pack back (Undo).
   void restorePack(StickerPack pack, {int? index}) {
@@ -324,6 +465,28 @@ class StickerLibrary extends ChangeNotifier {
     if (ref == null) {
       _apply(UnhidePackOp(pack.key));
       return;
+    }
+    final id = ref.accountPack;
+    if (id != null) {
+      _accountRemoved.remove(id);
+      final undo = _accountUndo.remove(id);
+      if (undo != null) {
+        final (content, packUrl, network) = undo;
+        _packCache.put(ref.key, content, _now);
+        unawaited(_writeCache());
+        unawaited(
+          _queueAccountWrite(
+            () => _writeAccountParts(
+              id,
+              content,
+              packUrl: packUrl,
+              network: network,
+            ),
+          ).catchError((Object e, StackTrace s) {
+            Logs().d('Saved sticker pack not restored', e, s);
+          }),
+        );
+      }
     }
     _apply(AddPackOp(ref));
     if (index != null) {
@@ -529,6 +692,8 @@ class _PackCache {
     }
   }
 
+  void remove(String key) => _entries.remove(key);
+
   void put(String key, ImagePackContent content, int ts) {
     _entries[key] = (ts, content.toJson());
     final byAge = _entries.entries.toList()
@@ -596,7 +761,11 @@ class MatrixStickerBackend implements StickerLibraryBackend {
   Stream<void> get changes => client.onSync.stream.where(_relevant).map((_) {});
 
   static bool _relevant(SyncUpdate update) {
-    if (update.accountData?.any((e) => _accountTypes.contains(e.type)) ??
+    if (update.accountData?.any(
+          (e) =>
+              _accountTypes.contains(e.type) ||
+              e.type.startsWith(accountPackTypePrefix),
+        ) ??
         false) {
       return true;
     }
@@ -641,6 +810,10 @@ class MatrixStickerBackend implements StickerLibraryBackend {
     }
     return out;
   }
+
+  @override
+  Iterable<String> syncedTypes(String prefix) =>
+      client.accountData.keys.where((type) => type.startsWith(prefix));
 
   @override
   ImagePackContent? userPack() {

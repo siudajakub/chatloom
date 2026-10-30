@@ -25,6 +25,11 @@ import 'telegram_pack_import_page.dart';
 /// rooms the account is in, the user's own Telegram packs and a pack made
 /// from the user's images. Every pack opens the pack sheet with Add/Remove;
 /// added packs show in the composer panel at once (the library notifies).
+///
+/// A search also looks through the user's packs and the packs of joined
+/// rooms (no request), and resolves a typed Telegram pack name
+/// (`t.me/addstickers/<name>`) through the bridge's preview, which every
+/// bridge offers: names work before the catalogue routes are deployed.
 Future<void> showAddStickerPacks(
   BuildContext context, {
   StickerLibrary? library,
@@ -52,6 +57,7 @@ class AddStickerPacksSheet extends StatefulWidget {
     this.roomLoader,
     this.router,
     this.searchDelay = const Duration(milliseconds: 400),
+    this.nameDelay = const Duration(milliseconds: 900),
   });
 
   final Client client;
@@ -63,6 +69,10 @@ class AddStickerPacksSheet extends StatefulWidget {
 
   /// Typing pause before a search is sent.
   final Duration searchDelay;
+
+  /// Typing pause before a typed pack name is looked up without the
+  /// catalogue (a preview makes the bridge fetch the whole pack).
+  final Duration nameDelay;
 
   @override
   State<AddStickerPacksSheet> createState() => _AddStickerPacksSheetState();
@@ -107,6 +117,10 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
   final _adding = <String>{};
   final _addErrors = <String, String>{};
 
+  /// Packs looked up by their Telegram name (lowercase), this sheet only.
+  final _named = <String, _NamedPack>{};
+  Timer? _nameDebounce;
+
   @override
   void initState() {
     super.initState();
@@ -125,6 +139,7 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _nameDebounce?.cancel();
     _library.removeListener(_changed);
     _controller.dispose();
     super.dispose();
@@ -135,6 +150,7 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
 
   void _onChanged(String text) {
     _debounce?.cancel();
+    _nameDebounce?.cancel();
     final packLink = StickerPackLink.parse(text);
     final roomLink = packLink == null ? RoomPackLink.parse(text) : null;
     final query = packLink != null || roomLink != null ? '' : text.trim();
@@ -157,8 +173,51 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
     if (roomLink != null && _roomPreview == null && !_roomLoading) {
       unawaited(_loadRoom(roomLink));
     }
-    if (query.isEmpty || !_catalog.availability.usable) return;
+    if (query.isEmpty) return;
+    if (!_catalog.availability.usable) {
+      // No catalogue: a typed name is the way to find a Telegram pack.
+      if (_nameLink(query) != null) {
+        _nameDebounce = Timer(
+          widget.nameDelay,
+          () => _resolveName(query, generation),
+        );
+      }
+      return;
+    }
     _debounce = Timer(widget.searchDelay, () => _search(query, generation));
+  }
+
+  // ---------------------------------------------------------------------
+  // Packs by name.
+
+  static final _shortName = RegExp(r'^[A-Za-z][A-Za-z0-9_]{2,63}$');
+
+  /// The Telegram pack link a typed [query] may name, or null when it
+  /// can't be a set name or there is no Telegram bridge to ask.
+  StickerPackLink? _nameLink(String query) {
+    if (!_shortName.hasMatch(query)) return null;
+    if (_provisioning.bridgeFor('telegram') == null) return null;
+    return StickerPackLink.parse('https://t.me/addstickers/$query');
+  }
+
+  /// Looks [query] up as a Telegram pack name (cached per sheet).
+  Future<void> _resolveName(String query, int generation) async {
+    final link = _nameLink(query);
+    if (link == null || !mounted || generation != _generation) return;
+    final key = query.toLowerCase();
+    final known = _named[key];
+    if (known != null && (known.loading || known.error == null)) return;
+    setState(() => _named[key] = const _NamedPack.loading());
+    _NamedPack result;
+    try {
+      final content = await _provisioning.preview(link);
+      result = _NamedPack.found(link, content);
+    } on StickerImportException catch (e) {
+      result = e.cause?.errcode == 'M_NOT_FOUND'
+          ? const _NamedPack.missing()
+          : _NamedPack.failed(e.message);
+    }
+    if (mounted) setState(() => _named[key] = result);
   }
 
   /// Return opens a pasted link, or sends a search that is still waiting
@@ -170,6 +229,10 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
     if (link != null) {
       _openLink(link);
       return;
+    }
+    if (_nameDebounce?.isActive ?? false) {
+      _nameDebounce?.cancel();
+      unawaited(_resolveName(_query, _generation));
     }
     if (pending && _query.isNotEmpty) unawaited(_search(_query, _generation));
   }
@@ -184,6 +247,8 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
       final page = await _catalog.search(query);
       if (!mounted || generation != _generation) return;
       setState(() => _results = page);
+      // Nothing in the catalogue: maybe the exact name of a pack.
+      if (page.sets.isEmpty) unawaited(_resolveName(query, generation));
     } on StickerCatalogException catch (e) {
       if (!mounted || generation != _generation) return;
       setState(() => _searchError = e.message);
@@ -271,7 +336,11 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
 
   /// Imports a network pack; idempotent (the provisioning skips a pack the
   /// library has and joins a running import of the same link).
-  Future<void> _addNetworkPack(StickerPackLink link, String title) async {
+  Future<void> _addNetworkPack(
+    StickerPackLink link,
+    String title, {
+    ImagePackContent? preview,
+  }) async {
     final key = link.url;
     if (_adding.contains(key) || _library.isInstalled(link.url)) return;
     setState(() {
@@ -279,7 +348,12 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
       _addErrors.remove(key);
     });
     try {
-      await _provisioning.install(link, title: title, library: _library);
+      await _provisioning.install(
+        link,
+        title: title,
+        preview: preview,
+        library: _library,
+      );
     } on StickerImportException catch (e) {
       if (mounted) setState(() => _addErrors[key] = e.message);
     } finally {
@@ -476,49 +550,201 @@ class _AddStickerPacksSheetState extends State<AddStickerPacksSheet> {
     ];
   }
 
-  List<Widget> _searchBody() {
-    final available = _catalog.availability;
-    if (!available.usable) {
+  /// The user's packs and packs of joined rooms whose title or link
+  /// contains [query] (no request).
+  (List<StickerPack>, List<(StickerPackRef, StickerPack, ImagePackContent)>)
+  _localMatches(String query) {
+    final q = query.toLowerCase();
+    bool hit(StickerPack pack) =>
+        pack.title.toLowerCase().contains(q) ||
+        (pack.packUrl?.toLowerCase().contains(q) ?? false);
+    return (
+      [
+        for (final pack in _library.packs)
+          if (pack.source == StickerPackSource.installed && hit(pack)) pack,
+      ],
+      [
+        for (final entry in packsInJoinedRooms(widget.client, _library))
+          if (hit(entry.$2)) entry,
+      ],
+    );
+  }
+
+  Widget _installedRow(StickerPack pack) => NotionListRow(
+    key: ValueKey('mine-${pack.key}'),
+    leading: _PackIcon(uri: pack.icon, client: widget.client),
+    title: pack.title,
+    subtitle: [
+      pack.stickers.length == 1
+          ? '1 sticker'
+          : '${pack.stickers.length} stickers',
+      'In your stickers',
+    ].join(' · '),
+    onTap: () => showStickerPackSheet(
+      context,
+      client: widget.client,
+      pack: pack,
+      provisioning: _provisioning,
+      library: _library,
+    ),
+    trailing: _addTrailing(pack.key, installed: true),
+  );
+
+  /// The row of a pack looked up by name: loading, found, missing, failed.
+  List<Widget> _namedSection(String query) {
+    final link = _nameLink(query);
+    final named = _named[query.toLowerCase()];
+    if (link == null || named == null) return const [];
+    if (_installed(link)) return const [];
+    final header = NotionSectionHeader(title: 'Telegram pack “$query”');
+    if (named.loading) return [header, _skeleton(1)];
+    final error = named.error;
+    if (error != null) {
       return [
+        header,
+        NotionCallout(
+          key: const ValueKey('named-error'),
+          icon: Icons.error_outline,
+          tone: NotionCalloutTone.warning,
+          title: error,
+          actionLabel: 'Try again',
+          onAction: () => _resolveName(query, _generation),
+        ),
+      ];
+    }
+    final content = named.content;
+    if (content == null) return const [];
+    final pack = StickerPack.fromContent(
+      content,
+      key: 'named|${link.url}',
+      source: StickerPackSource.installed,
+      fallbackTitle: link.name,
+    );
+    final title = pack.title;
+    return [
+      header,
+      NotionListRow(
+        key: const ValueKey('named-pack'),
+        leading: _PackIcon(uri: pack.icon, client: widget.client),
+        title: title,
+        subtitle:
+            _addErrors[link.url] ??
+            (pack.stickers.length == 1
+                ? '1 sticker'
+                : '${pack.stickers.length} stickers'),
+        onTap: () => showStickerPackSheet(
+          context,
+          client: widget.client,
+          link: link,
+          preview: content,
+          provisioning: _provisioning,
+          library: _library,
+        ),
+        trailing: _addTrailing(
+          link.url,
+          installed: false,
+          onAdd: () => _addNetworkPack(link, title, preview: content),
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _searchBody() {
+    final query = _query;
+    final available = _catalog.availability;
+    final (allMine, rooms) = _localMatches(query);
+    // A pack the catalogue lists shows there (with its check), once.
+    final listed = {
+      for (final set in _results?.sets ?? const <CatalogStickerSet>[])
+        set.link.url.toLowerCase(),
+    };
+    final mine = [
+      for (final pack in allMine)
+        if (!listed.contains(pack.packUrl?.toLowerCase())) pack,
+    ];
+    final named = _namedSection(query);
+    final local = [
+      if (mine.isNotEmpty) ...[
+        const NotionSectionHeader(title: 'In your stickers'),
+        for (final pack in mine) _installedRow(pack),
+      ],
+      if (rooms.isNotEmpty) ...[
+        const NotionSectionHeader(title: 'Packs in your rooms'),
+        for (final (ref, pack, content) in rooms)
+          _roomPackRow(
+            RoomPackPreview(
+              roomId: ref.roomId,
+              roomName: widget.client
+                  .getRoomById(ref.roomId)
+                  ?.getLocalizedDisplayname(),
+              packs: {ref.stateKey: content},
+              joined: true,
+            ),
+            pack,
+            subtitle: widget.client
+                .getRoomById(ref.roomId)
+                ?.getLocalizedDisplayname(),
+          ),
+      ],
+    ];
+    final nameState = _named[query.toLowerCase()];
+    final nameMissing =
+        _nameLink(query) == null || (nameState?.missing ?? false);
+    if (!available.usable) {
+      final waiting = _nameLink(query) != null && nameState == null;
+      return [
+        ...local,
+        ...named,
+        if (local.isEmpty && named.isEmpty && waiting) _skeleton(1),
+        if (local.isEmpty && named.isEmpty && !waiting)
+          NotionEmptyState(
+            icon: Icons.search_off,
+            title: 'No packs found',
+            message: _nameLink(query) != null
+                ? 'No Telegram pack is named “$query”. Paste its '
+                      't.me/addstickers link instead.'
+                : 'Type a pack’s name or paste its link.',
+          ),
+        const SizedBox(height: NotionSpace.sm),
         _availabilityCallout(available),
         const SizedBox(height: NotionSpace.sm),
         Text(
-          'You can still paste a t.me/addstickers, wa.me/stickerpack or '
-          'matrix.to pack link.',
+          'Type a Telegram pack’s name, or paste a t.me/addstickers, '
+          'wa.me/stickerpack or matrix.to pack link.',
           style: context.notion.typography.footnoteMuted,
         ),
       ];
     }
     final error = _searchError;
-    if (error != null) {
-      return [
+    final results = _results;
+    return [
+      ...local,
+      ...named,
+      if (error != null)
         NotionCallout(
           icon: Icons.error_outline,
           tone: NotionCalloutTone.warning,
           title: error,
           actionLabel: 'Try again',
-          onAction: () => _search(_query, _generation),
+          onAction: () => _search(query, _generation),
+        )
+      else if (results == null)
+        _skeleton(local.isEmpty ? 5 : 2)
+      else if (results.sets.isEmpty) ...[
+        if (local.isEmpty && named.isEmpty && nameMissing)
+          const NotionEmptyState(
+            icon: Icons.search_off,
+            title: 'No packs found',
+            message: 'Try another word, or paste a pack link.',
+          ),
+      ] else ...[
+        NotionSectionHeader(
+          title: results.sets.length == 1
+              ? '1 pack on Telegram'
+              : '${results.sets.length} packs on Telegram',
         ),
-      ];
-    }
-    final results = _results;
-    if (results == null) return [_skeleton(5)];
-    if (results.sets.isEmpty) {
-      return [
-        const NotionEmptyState(
-          icon: Icons.search_off,
-          title: 'No packs found',
-          message: 'Try another word, or paste a pack link.',
-        ),
-      ];
-    }
-    return [
-      NotionSectionHeader(
-        title: results.sets.length == 1
-            ? '1 pack on Telegram'
-            : '${results.sets.length} packs on Telegram',
-      ),
-      for (final set in results.sets) _setRow(set),
+        for (final set in results.sets) _setRow(set),
+      ],
     ];
   }
 
@@ -755,4 +981,42 @@ class _PackIcon extends StatelessWidget {
             ),
     );
   }
+}
+
+/// A pack looked up by its Telegram name.
+@immutable
+class _NamedPack {
+  const _NamedPack.loading()
+    : loading = true,
+      missing = false,
+      link = null,
+      content = null,
+      error = null;
+  const _NamedPack.found(
+    StickerPackLink this.link,
+    ImagePackContent this.content,
+  ) : loading = false,
+      missing = false,
+      error = null;
+  const _NamedPack.missing()
+    : loading = false,
+      missing = true,
+      link = null,
+      content = null,
+      error = null;
+  const _NamedPack.failed(String this.error)
+    : loading = false,
+      missing = false,
+      link = null,
+      content = null;
+
+  final bool loading;
+
+  /// Telegram has no pack of that name.
+  final bool missing;
+  final StickerPackLink? link;
+  final ImagePackContent? content;
+
+  /// Why it couldn't be looked up (a sentence).
+  final String? error;
 }

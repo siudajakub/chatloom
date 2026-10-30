@@ -27,6 +27,7 @@ Future<void> showStickerPackSheet(
   StickerLibrary? library,
   Future<void> Function()? onAdd,
   String? addNote,
+  ImagePackContent? preview,
 }) {
   assert(link != null || pack != null);
   return showNotionSheet<void>(
@@ -40,6 +41,7 @@ Future<void> showStickerPackSheet(
       library: library,
       onAdd: onAdd,
       addNote: addNote,
+      preview: preview,
     ),
   );
 }
@@ -55,6 +57,7 @@ class StickerPackSheet extends StatefulWidget {
     this.library,
     this.onAdd,
     this.addNote,
+    this.preview,
   });
 
   final Client client;
@@ -72,6 +75,10 @@ class StickerPackSheet extends StatefulWidget {
   /// A line under the Add button (e.g. that adding joins a room).
   final String? addNote;
 
+  /// The pack's content when the caller already loaded it (a search result
+  /// resolved by name): shown at once, no second request.
+  final ImagePackContent? preview;
+
   @override
   State<StickerPackSheet> createState() => _StickerPackSheetState();
 }
@@ -81,7 +88,7 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
       widget.library ?? StickerLibrary.of(widget.client);
   late final StickerPackProvisioning _provisioning =
       widget.provisioning ?? StickerPackProvisioning.of(widget.client);
-  ImagePackContent? _preview;
+  late ImagePackContent? _preview = widget.preview;
   bool _loading = false, _importing = false;
   String? _error;
 
@@ -103,7 +110,9 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
   void initState() {
     super.initState();
     _library.addListener(_changed);
-    if (_installed == null && widget.pack == null) unawaited(_loadPreview());
+    if (_installed == null && widget.pack == null && _preview == null) {
+      unawaited(_loadPreview());
+    }
   }
 
   void _changed() {

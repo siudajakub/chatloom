@@ -65,6 +65,10 @@ class FakeStickerBackend implements StickerLibraryBackend {
 
   @override
   ImagePackContent? userPack() => user;
+
+  @override
+  Iterable<String> syncedTypes(String prefix) =>
+      synced.keys.where((type) => type.startsWith(prefix)).toList();
 }
 
 StickerLibrary fakeLibrary(FakeStickerBackend backend, {int now = 1000}) {
@@ -110,8 +114,7 @@ ImagePackContent pack(
   'pack': {
     'display_name': title,
     'usage': ['sticker'],
-    if (url != null)
-      'fi.mau.bridged_pack': {'network': 'telegram', 'url': url},
+    if (url != null) 'fi.mau.bridged_pack': {'network': 'telegram', 'url': url},
   },
 });
 

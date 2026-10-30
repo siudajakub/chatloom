@@ -4,6 +4,7 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 
+import 'sticker_account_packs.dart';
 import 'sticker_library.dart';
 import 'sticker_models.dart';
 
@@ -137,9 +138,21 @@ class ImportedStickerPack {
 
 /// A failed import, with a sentence for people (never an error code).
 class StickerImportException implements Exception {
-  const StickerImportException(this.message, {this.retryable = true});
+  const StickerImportException(
+    this.message, {
+    this.retryable = true,
+    this.cause,
+    this.saveInstead = false,
+  });
   final String message;
   final bool retryable;
+
+  /// The bridge's answer (status and code), for deciding what to try next.
+  final BridgeProvisioningException? cause;
+
+  /// The bridge could not keep the pack in its space, but its preview may
+  /// still be saved in the account (`sticker_account_packs.dart`).
+  final bool saveInstead;
 
   @override
   String toString() => 'StickerImportException';
@@ -228,8 +241,28 @@ class StickerPackProvisioning {
       throw StickerImportException(
         _message(e, label, importing: importing),
         retryable: !e.unsupported,
+        cause: e,
+        saveInstead: importing && _saveInstead(e),
       );
     }
+  }
+
+  /// Whether a failed space import may still be saved in the account from
+  /// the pack's preview: every failure of the space itself (personal
+  /// filtering spaces disabled, the space can't be created or written, an
+  /// internal error) and a bridge without the import route. Not when the
+  /// pack doesn't exist, the login is missing or Telegram asked to slow
+  /// down: the preview fails the same way. A request without an answer
+  /// (status 0) may still finish at the bridge; the preview, served from
+  /// what that import already uploaded, decides.
+  static bool _saveInstead(BridgeProvisioningException e) {
+    switch (e.errcode) {
+      case 'FI.MAU.NOT_LOGGED_IN' || 'M_LIMIT_EXCEEDED':
+        return false;
+      case 'M_NOT_FOUND':
+        return (e.message ?? '').toLowerCase().contains('space');
+    }
+    return e.status != 401;
   }
 
   static String _message(
@@ -281,8 +314,21 @@ class StickerPackProvisioning {
     return packs;
   }
 
-  /// The pack's content without importing it.
-  Future<ImagePackContent> preview(StickerPackLink link) async {
+  /// The pack's content without importing it. [retry]: one more attempt
+  /// when the bridge didn't answer in time (a large pack's stickers are
+  /// uploaded on the first request; the second finds them done).
+  Future<ImagePackContent> preview(
+    StickerPackLink link, {
+    bool retry = false,
+  }) async {
+    if (retry) {
+      try {
+        return await preview(link);
+      } on StickerImportException catch (e) {
+        if (e.cause?.status != 0) rethrow;
+        return preview(link);
+      }
+    }
     final json = await _send(
       link.network,
       BridgeProvisioningRequest(
@@ -322,6 +368,7 @@ class StickerPackProvisioning {
     if (imported == null) {
       throw const StickerImportException(
         'The sticker pack couldn’t be added. Try again.',
+        saveInstead: true,
       );
     }
     return imported;
@@ -330,6 +377,11 @@ class StickerPackProvisioning {
   /// Imports [link] and installs it in the library. [preview] (already
   /// loaded content) is cached so the pack works before its state syncs;
   /// without it the state is read from the room, or the preview loaded.
+  ///
+  /// The bridge's space is the first choice (every Beeper client sees the
+  /// pack there). When the space import fails for a reason of the space
+  /// (see [_saveInstead]), the preview is saved in the account instead:
+  /// the same stickers, synced to every ChatLoom device.
   ///
   /// Idempotent: a pack the library already has is not imported again, and
   /// concurrent installs of one link (the Add sheet, the Telegram page and
@@ -371,7 +423,16 @@ class StickerPackProvisioning {
     ImagePackContent? preview,
     required StickerLibrary lib,
   }) async {
-    final imported = await import(link);
+    final ImportedStickerPack imported;
+    try {
+      imported = await import(link);
+    } on StickerImportException catch (e) {
+      if (!e.saveInstead) rethrow;
+      Logs().i(
+        'Sticker pack not imported to the bridge space (${e.cause?.reason ?? 'bad answer'}); saving it in the account',
+      );
+      return _saveInAccount(link, title: title, preview: preview, lib: lib);
+    }
     final ref = StickerPackRef(
       roomId: imported.roomId,
       stateKey: imported.stateKey,
@@ -386,6 +447,34 @@ class StickerPackProvisioning {
     }
     lib.addPack(ref, content: content);
     return ref;
+  }
+
+  Future<StickerPackRef> _saveInAccount(
+    StickerPackLink link, {
+    String? title,
+    ImagePackContent? preview,
+    required StickerLibrary lib,
+  }) async {
+    final content = preview ?? await this.preview(link, retry: true);
+    try {
+      return await lib.saveAccountPack(
+        content,
+        packUrl: link.url,
+        network: link.network,
+        name: link.name,
+        title: title,
+      );
+    } on AccountPackTooLarge {
+      throw const StickerImportException(
+        'This sticker pack is too large to keep in your account.',
+        retryable: false,
+      );
+    } catch (e, s) {
+      Logs().d('Sticker pack not saved in the account', e, s);
+      throw const StickerImportException(
+        'The sticker pack couldn’t be saved. Check your connection and try again.',
+      );
+    }
   }
 
   /// Reads the imported state from the room (it may not have synced yet),
