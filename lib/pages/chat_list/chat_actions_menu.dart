@@ -27,6 +27,7 @@ enum ChatMenuAction {
   read,
   unread,
   pin,
+  moveDown,
   mute,
   unmute,
   archive,

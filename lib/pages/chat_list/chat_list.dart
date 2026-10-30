@@ -31,6 +31,7 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/personal_search_page.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/push_rule_mirror.dart';
+import 'package:chatloom/personal/read_targets.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
@@ -109,6 +110,15 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
       pinned ? unpinLabel : pinLabel,
       enabled: joined && NotionMetadataActions.canEdit(owner, entity),
     ),
+    // An unanswered chat sorts on top until the user replies; this lets it
+    // take its usual place until the next message arrives.
+    if (!pinned && projection.recordFor(room).awaitingReply)
+      ChatMenuItem(
+        ChatMenuAction.moveDown,
+        Icons.low_priority,
+        'Move down',
+        enabled: joined && owner.ready,
+      ),
     metadata.muted
         ? ChatMenuItem(
             ChatMenuAction.unmute,
@@ -196,10 +206,15 @@ Future<void> markInboxRowRead(
       continue;
     }
     if (source.markedUnread) await source.markUnread(false);
-    final id = source.lastEvent?.eventId;
     // A chat ChatLoom silences on the server has no count (push_rule_mirror).
-    if ((source.notificationCount > 0 || chatLoomSilencedUnread(source)) &&
-        id != null) {
+    // A counted chat needs its newest event of any kind: a reaction to the
+    // user's message counts but never becomes the preview.
+    final id = source.notificationCount > 0
+        ? await newestServerEventId(source)
+        : chatLoomSilencedUnread(source)
+        ? source.lastEvent?.eventId
+        : null;
+    if (id != null) {
       await PersonalPrivacy.markRead(
         source,
         id,
@@ -208,6 +223,20 @@ Future<void> markInboxRowRead(
       );
     }
   }
+}
+
+/// The newest preview event of [room]'s inbox row across its sources.
+Event? latestInboxEvent(PersonalClient owner, Room room) {
+  Event? latest;
+  for (final source in inboxSources(owner, room)) {
+    final event = source.lastEvent;
+    if (event != null &&
+        (latest == null ||
+            event.originServerTs.isAfter(latest.originServerTs))) {
+      latest = event;
+    }
+  }
+  return latest;
 }
 
 /// Marks [room]'s inbox row unread (Telegram's dot): the manual-unread flag
@@ -726,6 +755,24 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
           failure: pinned
               ? 'Couldn’t unpin the chat. Check private sync and try again.'
               : 'Couldn’t pin the chat. Check private sync and try again.',
+        );
+        return;
+      case ChatMenuAction.moveDown:
+        final target = entity();
+        final latest = latestInboxEvent(owner, room);
+        if (latest == null) return;
+        final key = InboxProjection.movedDownKey(target);
+        final previous = owner.values[key]?['until'];
+        _runChange(
+          owner,
+          account,
+          () => owner.put(key, {
+            'until': latest.originServerTs.millisecondsSinceEpoch,
+          }),
+          failure:
+              'Couldn’t move the chat down. Check private sync and try again.',
+          done: 'Moved down until the next message',
+          undo: () => owner.put(key, {'until': previous is int ? previous : 0}),
         );
         return;
       case ChatMenuAction.mute:
