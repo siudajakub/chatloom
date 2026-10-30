@@ -100,7 +100,8 @@ double notionInterval(
 /// A reaction under a bubble: a compact pill with the emoji and, from two
 /// reactions on, a rolling count. Own reactions get a subtle tint and
 /// hairline; nothing is square. Pops in when [popIn], pulses when the count
-/// or own state changes, presses with a bounce.
+/// or own state changes, presses with a bounce, and pops out (keeping its
+/// place) when [visible] turns false.
 class NotionReactionChip extends StatelessWidget {
   const NotionReactionChip({
     super.key,
@@ -111,6 +112,7 @@ class NotionReactionChip extends StatelessWidget {
     this.pending = false,
     this.ring,
     this.popIn = false,
+    this.visible = true,
     this.onTap,
     this.onLongPress,
   });
@@ -127,6 +129,10 @@ class NotionReactionChip extends StatelessWidget {
   /// Colour of the ring around the pill (the chat background), or none.
   final Color? ring;
   final bool popIn;
+
+  /// False pops the chip out (a reaction that was just taken back); the
+  /// owner drops it once the pop-out is over.
+  final bool visible;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
 
@@ -195,25 +201,29 @@ class NotionReactionChip extends StatelessWidget {
         ),
       );
     }
-    return Semantics(
-      button: onTap != null,
-      selected: own,
-      label: semanticLabel,
-      excludeSemantics: true,
-      onTap: onTap,
-      onLongPress: onLongPress,
-      // A new chip springs in; a changed count or own toggle pulses it.
-      child: NotionPop(
-        playOnMount: popIn,
-        trigger: (count, own),
-        child: NotionPressable(
-          scale: NotionMotion.pressIcon,
-          bounce: true,
-          child: AnimatedOpacity(
-            opacity: pending ? .55 : 1,
-            duration: NotionMotion.of(context, NotionMotion.short),
-            curve: NotionMotion.standard,
-            child: pill,
+    return ExcludeSemantics(
+      excluding: !visible,
+      child: Semantics(
+        button: onTap != null,
+        selected: own,
+        label: semanticLabel,
+        excludeSemantics: true,
+        onTap: onTap,
+        onLongPress: onLongPress,
+        // A new chip springs in; a changed count or own toggle pulses it.
+        child: NotionPop(
+          playOnMount: popIn,
+          visible: visible,
+          trigger: (count, own),
+          child: NotionPressable(
+            scale: NotionMotion.pressIcon,
+            bounce: true,
+            child: AnimatedOpacity(
+              opacity: pending ? .55 : 1,
+              duration: NotionMotion.of(context, NotionMotion.short),
+              curve: NotionMotion.standard,
+              child: pill,
+            ),
           ),
         ),
       ),

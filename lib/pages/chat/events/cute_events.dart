@@ -7,6 +7,7 @@ import 'dart:math';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -37,15 +38,17 @@ class _CuteContentState extends State<CuteContent> {
       builder: (context, snapshot) {
         final label = generateLabel(snapshot.data);
 
-        return GestureDetector(
-          onTap: addOverlay,
-          child: Column(
-            mainAxisSize: .min,
-            mainAxisAlignment: .center,
-            children: [
-              Text(widget.event.text, style: const TextStyle(fontSize: 150)),
-              if (label != null) Text(label),
-            ],
+        return ConversationMessageChromeTap(
+          child: GestureDetector(
+            onTap: addOverlay,
+            child: Column(
+              mainAxisSize: .min,
+              mainAxisAlignment: .center,
+              children: [
+                Text(widget.event.text, style: const TextStyle(fontSize: 150)),
+                if (label != null) Text(label),
+              ],
+            ),
           ),
         );
       },

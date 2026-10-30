@@ -276,8 +276,11 @@ class _PersonalSearchPageState extends State<PersonalSearchPage> {
   }
 
   Future<void> _date(bool start) async {
-    final chosen = await showDatePicker(
+    // The Notion calendar sheet (spring motion, glass), as in "jump to
+    // date", instead of the Material dialog.
+    final chosen = await showNotionDatePicker(
       context: context,
+      title: start ? 'From date' : 'To date',
       initialDate: (start ? afterDay : beforeDay) ?? DateTime.now(),
       firstDate: DateTime(1970),
       lastDate: DateTime.now().add(const Duration(days: 1)),

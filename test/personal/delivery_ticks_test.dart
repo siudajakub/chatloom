@@ -496,9 +496,7 @@ void main() {
       expect(tick(tester), NotionDeliveryState.delivered);
     });
 
-    testWidgets('no ticks on incoming, sending or failed messages', (
-      tester,
-    ) async {
+    testWidgets('no ticks on incoming or failed messages', (tester) async {
       final client = ConversationClient();
       final room = _bridged(client);
       final incoming = room.message(r'$in', 'Hello');
@@ -520,6 +518,14 @@ void main() {
       expect(find.textContaining('Not delivered'), findsOneWidget);
       timeline.cancelSubscriptions();
 
+      timeline.cancelSubscriptions();
+    });
+
+    testWidgets('the clock of a sending message turns into the ✓ in place', (
+      tester,
+    ) async {
+      final client = ConversationClient();
+      final room = _bridged(client);
       final sending = room.message(
         'txn-1',
         'Wait',
@@ -527,11 +533,60 @@ void main() {
         minute: 42,
         status: EventStatus.sending,
       );
-      timeline = _timeline(room);
+      var timeline = _timeline(room);
       await mount(tester, client, message(sending, timeline));
       await tester.pump(const Duration(seconds: 1));
-      expect(find.byType(NotionDeliveryTick), findsNothing);
+      expect(tick(tester), NotionDeliveryState.sending);
+      expect(find.byIcon(Icons.schedule), findsOneWidget);
+      final l10n = L10n.of(tester.element(find.byType(Message)));
+      expect(find.text(l10n.sending), findsOneWidget);
+      final switcher = tester.state(
+        find.descendant(
+          of: find.byType(NotionDeliveryTick),
+          matching: find.byType(NotionLazySwitcher),
+        ),
+      );
       timeline.cancelSubscriptions();
+
+      // The server has it: same slot, the ✓ grows in, "Sending…" folds.
+      final sent = room.message(
+        'txn-1',
+        'Wait',
+        outgoing: true,
+        minute: 42,
+        status: EventStatus.sent,
+      );
+      timeline = _timeline(room);
+      addTearDown(timeline.cancelSubscriptions);
+      final before = NotionLazySwitcher.debugControllers;
+      await tester.pumpWidget(
+        Provider<MatrixState>.value(
+          value: ConversationMatrix(
+            client,
+            await SharedPreferences.getInstance(),
+          ),
+          child: MaterialApp(
+            localizationsDelegates: L10n.localizationsDelegates,
+            supportedLocales: L10n.supportedLocales,
+            theme: NotionTheme.build(Brightness.dark),
+            home: message(sent, timeline),
+          ),
+        ),
+      );
+      expect(NotionLazySwitcher.debugControllers, greaterThan(before));
+      expect(
+        tester.state(
+          find.descendant(
+            of: find.byType(NotionDeliveryTick),
+            matching: find.byType(NotionLazySwitcher),
+          ),
+        ),
+        same(switcher),
+      );
+      await tester.pumpAndSettle();
+      expect(tick(tester), NotionDeliveryState.sent);
+      expect(find.byIcon(Icons.schedule), findsNothing);
+      expect(find.text(l10n.sending), findsNothing);
     });
   });
 
@@ -552,7 +607,7 @@ void main() {
 
     testWidgets('ticks sit before the time and are announced', (tester) async {
       final semantics = tester.ensureSemantics();
-        await tester.pumpWidget(row(NotionDeliveryState.read));
+      await tester.pumpWidget(row(NotionDeliveryState.read));
       final tick = find.byKey(const ValueKey('notion_inbox_delivery'));
       expect(tick, findsOneWidget);
       expect(

@@ -234,13 +234,8 @@ class ConversationBubble extends StatelessWidget {
         final avatarSlot = display.messageAvatars
             ? NotionBubble.avatarSlot
             : 0.0;
-        final scaledBody = MediaQuery(
-          data: MediaQuery.of(context).copyWith(
-            textScaler: NotionMessageTextScaler(
-              MediaQuery.textScalerOf(context),
-              display.messageTextScale,
-            ),
-          ),
+        final scaledBody = _MessageTextScale(
+          factor: display.messageTextScale,
           child: body,
         );
         // Own bubbles take the accent fill (a gradient in Vivid) and its
@@ -413,21 +408,35 @@ class ConversationBubble extends StatelessWidget {
               ),
               // Reaction chips overlap the bubble's bottom edge on the
               // sender side (Messenger), slightly inset from its corner.
-              if (reactions != null)
-                NotionReactionOverlap(
-                  child: Padding(
-                    padding: EdgeInsetsDirectional.only(
-                      start: outgoing ? 0 : avatarSlot + NotionSpace.xs,
-                      end: outgoing ? NotionSpace.xs : 0,
-                    ),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: math.max(0.0, maxWidth - NotionSpace.xs),
-                      ),
-                      child: reactions,
-                    ),
-                  ),
+              // The slot is always there: it opens when the first reaction
+              // arrives and closes after the last one left, so the rows
+              // above glide instead of jumping (never on a first build).
+              NotionReactionOverlap(
+                child: ConversationReveal(
+                  // Chips keep their place under the bubble while the
+                  // space beneath them opens.
+                  alignment: outgoing
+                      ? AlignmentDirectional.topEnd
+                      : AlignmentDirectional.topStart,
+                  child: reactions == null
+                      ? null
+                      : Padding(
+                          padding: EdgeInsetsDirectional.only(
+                            start: outgoing ? 0 : avatarSlot + NotionSpace.xs,
+                            end: outgoing ? NotionSpace.xs : 0,
+                          ),
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: math.max(
+                                0.0,
+                                maxWidth - NotionSpace.xs,
+                              ),
+                            ),
+                            child: reactions,
+                          ),
+                        ),
                 ),
+              ),
               if (footer != null)
                 Padding(
                   padding: EdgeInsetsDirectional.only(
@@ -450,6 +459,30 @@ class ConversationBubble extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// The message text size (Appearance) on top of the system scale. Its own
+/// widget, so only this small node depends on the whole [MediaQuery]: the
+/// keyboard changes `viewInsets` on every frame of its slide, and a
+/// dependency in the bubble's layout builder would rebuild every visible
+/// bubble per frame. Text below depends on the scaler alone, which stays
+/// equal.
+class _MessageTextScale extends StatelessWidget {
+  const _MessageTextScale({required this.factor, required this.child});
+
+  final double factor;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    return MediaQuery(
+      data: media.copyWith(
+        textScaler: NotionMessageTextScaler(media.textScaler, factor),
+      ),
+      child: child,
     );
   }
 }

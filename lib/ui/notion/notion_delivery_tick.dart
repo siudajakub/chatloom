@@ -2,7 +2,21 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'notion_lazy_switcher.dart';
+import 'notion_motion.dart';
+import 'notion_switchers.dart';
 import 'notion_tokens.dart';
+
+/// How a [NotionDeliveryTick] in the sending state shows its clock.
+enum NotionSendingClock {
+  /// At once (an inbox row).
+  shown,
+
+  /// After [NotionMotion.loaderGrace] (a bubble being sent right now).
+  delayed,
+
+  /// Not at all: something else shows the progress (an upload ring).
+  hidden,
+}
 
 /// How far an own message got, as its ticks show it.
 enum NotionDeliveryState {
@@ -24,9 +38,13 @@ enum NotionDeliveryState {
 /// sending, ✓ sent, ✓✓ delivered, ✓✓ in the accent once read.
 ///
 /// Quiet by design: a glyph in the metadata colour, only "read" takes the
-/// accent. A change of state cross-fades once in place
-/// ([NotionLazySwitcher]); the first build and rows built while scrolling
-/// never animate and cost no ticker.
+/// accent. A new glyph morphs in place (the clock shrinks away and the ✓
+/// grows in, ✓ → ✓✓ the same way, [NotionLazySwitcher]); "read" only
+/// cross-fades the colour. The first build and rows built while scrolling
+/// never animate and cost no ticker. [sendingClock] can hold the clock
+/// back for [NotionMotion.loaderGrace] (a fast send goes straight from
+/// nothing to ✓) or leave it out (an upload shows its own ring); the slot
+/// is reserved throughout.
 ///
 /// ```dart
 /// NotionDeliveryTick(state: NotionDeliveryState.delivered, color: muted)
@@ -38,6 +56,7 @@ class NotionDeliveryTick extends StatelessWidget {
     this.color,
     this.readColor,
     this.size = NotionDeliveryTick.defaultSize,
+    this.sendingClock = NotionSendingClock.shown,
   });
 
   final NotionDeliveryState state;
@@ -49,6 +68,9 @@ class NotionDeliveryTick extends StatelessWidget {
   /// Colour of the read ✓✓; defaults to `colors.accent`.
   final Color? readColor;
   final double size;
+
+  /// How [NotionDeliveryState.sending] shows its clock.
+  final NotionSendingClock sendingClock;
 
   /// A hair larger than the 11–13 pt time it sits beside, like Telegram's.
   static const double defaultSize = 14;
@@ -76,6 +98,7 @@ class NotionDeliveryTick extends StatelessWidget {
     // The clock is drawn a little smaller so its circle matches the ticks'
     // optical weight.
     final glyphSize = state == NotionDeliveryState.sending ? size - 2 : size;
+    final icon = Icon(glyphOf(state), size: glyphSize, color: tint);
     return Semantics(
       label: labelOf(state),
       excludeSemantics: true,
@@ -83,13 +106,24 @@ class NotionDeliveryTick extends StatelessWidget {
         width: size,
         height: size,
         child: NotionLazySwitcher(
+          // ✓ → ✓✓ in the accent is the same glyph: only the colour fades.
+          style: state == NotionDeliveryState.read
+              ? NotionLazySwitch.fade
+              : NotionLazySwitch.morph,
           alignment: AlignmentDirectional.center,
-          child: Icon(
-            glyphOf(state),
-            key: ValueKey(state),
-            size: glyphSize,
-            color: tint,
-          ),
+          child: switch (state == NotionDeliveryState.sending
+              ? sendingClock
+              : NotionSendingClock.shown) {
+            NotionSendingClock.shown => KeyedSubtree(
+              key: ValueKey(state),
+              child: icon,
+            ),
+            NotionSendingClock.delayed => NotionDelayedReveal(
+              key: ValueKey(state),
+              child: icon,
+            ),
+            NotionSendingClock.hidden => SizedBox.shrink(key: ValueKey(state)),
+          },
         ),
       ),
     );

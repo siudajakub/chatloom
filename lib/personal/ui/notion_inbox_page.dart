@@ -11,11 +11,17 @@ import 'package:personal_core/personal_core.dart';
 /// Rows are either a prebuilt [rows] list (captures, small fixtures) or a lazy
 /// [rowCount]/[rowBuilder] pair; [rowIndexOf] maps a row key to its index so
 /// reordering keeps each row's element (avatars do not reload or fade).
+/// When the order changes, rows glide to their new places and new rows fade
+/// in ([NotionListMotion]); lazy rows name their order in [rowOrder].
 class NotionInboxPage extends StatelessWidget {
   final List<Widget> rows;
   final int? rowCount;
   final IndexedWidgetBuilder? rowBuilder;
   final int? Function(Key key)? rowIndexOf;
+
+  /// Identities of the lazy rows in order (for example room IDs); a change
+  /// moves the rows. Prebuilt [rows] use their keys.
+  final List<Object?>? rowOrder;
   final List<NotionPinnedShortcut> pins;
   final VoidCallback onSettings;
 
@@ -54,6 +60,7 @@ class NotionInboxPage extends StatelessWidget {
     this.rowCount,
     this.rowBuilder,
     this.rowIndexOf,
+    this.rowOrder,
     required this.pins,
     required this.onSettings,
     required this.onSearch,
@@ -99,138 +106,157 @@ class NotionInboxPage extends StatelessWidget {
         // The first screenful of pins and rows rises in once per page; rows
         // built later by scrolling or filtering appear as they are.
         body: NotionEntranceScope(
-          child: CustomScrollView(
-            controller: scrollController,
-            slivers: [
-              PinnedHeaderSliver(
-                child: NotionGlassBar(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      NotionSpace.inset,
-                      safe.top + NotionSpace.xs,
-                      NotionSpace.inset,
-                      NotionSpace.xxs,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // New chats start from Search (dock), like Telegram
-                        // and Messenger; the title keeps the touch-row height.
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(
-                            minHeight: NotionSize.touchTarget,
-                          ),
-                          child: Align(
-                            alignment: AlignmentDirectional.centerStart,
-                            child: Text('Chats', style: NotionTokens.title),
-                          ),
-                        ),
-                        _RetainedReveal(
-                          revealOnMount: false,
-                          child: headerStatus,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              if (status != null)
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  sliver: SliverToBoxAdapter(child: status),
-                ),
-              // Pins grow in and out instead of jumping.
-              SliverToBoxAdapter(
-                child: _RetainedReveal(
-                  revealOnMount: false,
-                  child: showPins
-                      ? Padding(
-                          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                          child: NotionEntrance(
-                            rise: NotionMotion.riseList,
-                            child: NotionPinnedShortcuts(
-                              pins: pins,
-                              onReorder: onReorderPins,
+          // A chat that moves (new message) glides to its place while the
+          // rows it passes slide aside; another view or network, or the end
+          // of the first load, swaps the list without motion.
+          child: NotionListMotion(
+            order:
+                rowOrder ??
+                (rowBuilder == null
+                    ? [for (final row in rows) row.key]
+                    : const []),
+            epoch: (selectedView, selectedNetwork, loading),
+            background: Theme.of(context).scaffoldBackgroundColor,
+            child: CustomScrollView(
+              controller: scrollController,
+              slivers: [
+                PinnedHeaderSliver(
+                  child: NotionGlassBar(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        NotionSpace.inset,
+                        safe.top + NotionSpace.xs,
+                        NotionSpace.inset,
+                        NotionSpace.xxs,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // New chats start from Search (dock), like Telegram
+                          // and Messenger; the title keeps the touch-row height.
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              minHeight: NotionSize.touchTarget,
+                            ),
+                            child: Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: Text('Chats', style: NotionTokens.title),
                             ),
                           ),
-                        )
-                      : null,
-                ),
-              ),
-              // One-tap views (UX-16) instead of a second large title; the
-              // same state as the dock's "Show chats" menu.
-              SliverPadding(
-                padding: EdgeInsets.fromLTRB(
-                  NotionSpace.inset,
-                  showPins ? NotionSpace.md : NotionSpace.sm,
-                  NotionSpace.inset,
-                  NotionSpace.xs,
-                ),
-                sliver: SliverToBoxAdapter(
-                  child: NotionInboxViewChips(
-                    selected: selectedView,
-                    onViewSelected: onViewSelected,
-                    unreadCount: unreadCount,
-                    requestCount: requestCount,
+                          _RetainedReveal(
+                            revealOnMount: false,
+                            child: headerStatus,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              if (loading)
+                if (status != null)
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    sliver: SliverToBoxAdapter(child: status),
+                  ),
+                // Pins grow in and out instead of jumping.
+                SliverToBoxAdapter(
+                  child: _RetainedReveal(
+                    revealOnMount: false,
+                    child: showPins
+                        ? Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                            child: NotionEntrance(
+                              rise: NotionMotion.riseList,
+                              child: NotionPinnedShortcuts(
+                                pins: pins,
+                                onReorder: onReorderPins,
+                              ),
+                            ),
+                          )
+                        : null,
+                  ),
+                ),
+                // One-tap views (UX-16) instead of a second large title; the
+                // same state as the dock's "Show chats" menu.
                 SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  padding: EdgeInsets.fromLTRB(
+                    NotionSpace.inset,
+                    showPins ? NotionSpace.md : NotionSpace.sm,
+                    NotionSpace.inset,
+                    NotionSpace.xs,
+                  ),
                   sliver: SliverToBoxAdapter(
-                    child: Semantics(
-                      label: 'Loading chats',
-                      child: ExcludeSemantics(
-                        child: NotionSkeleton(
-                          child: Column(
-                            children: List.filled(
-                              _skeletonRows,
-                              const NotionSkeletonRow(),
+                    child: NotionInboxViewChips(
+                      selected: selectedView,
+                      onViewSelected: onViewSelected,
+                      unreadCount: unreadCount,
+                      requestCount: requestCount,
+                    ),
+                  ),
+                ),
+                if (loading)
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    sliver: SliverToBoxAdapter(
+                      child: Semantics(
+                        label: 'Loading chats',
+                        child: ExcludeSemantics(
+                          child: NotionSkeleton(
+                            child: Column(
+                              children: List.filled(
+                                _skeletonRows,
+                                const NotionSkeletonRow(),
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              if (!loading && count == 0)
-                SliverToBoxAdapter(
-                  child: NotionFadeThrough(
-                    alignment: AlignmentDirectional.topCenter,
-                    child: NotionEmptyState(
-                      key: ValueKey(emptyText),
-                      icon: Icons.chat_bubble_outline,
-                      title: emptyText,
+                if (!loading && count == 0)
+                  SliverToBoxAdapter(
+                    child: NotionFadeThrough(
+                      alignment: AlignmentDirectional.topCenter,
+                      child: NotionEmptyState(
+                        key: ValueKey(emptyText),
+                        icon: Icons.chat_bubble_outline,
+                        title: emptyText,
+                      ),
+                    ),
+                  ),
+                _SliverFadeOnChange(
+                  signal: (selectedView, selectedNetwork, loading),
+                  sliver: SliverPadding(
+                    padding: EdgeInsets.fromLTRB(20, 0, 20, dockClearance),
+                    sliver: SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final row = builder(context, index);
+                          // Same key as the row, so reordering keeps elements
+                          // (a GlobalKey keeps its element on its own).
+                          final key = row.key;
+                          return NotionListMotionItem(
+                            key: key is GlobalKey ? null : key,
+                            index: index,
+                            child: NotionEntrance(
+                              playKey: row.key,
+                              rise: NotionMotion.riseList,
+                              child: row,
+                            ),
+                          );
+                        },
+                        childCount: count,
+                        findChildIndexCallback: rowIndexOf ?? _indexOfRow,
+                        // The motion item adds the boundary and semantic
+                        // index itself; it must sit directly in the list.
+                        addRepaintBoundaries: false,
+                        addSemanticIndexes: false,
+                      ),
                     ),
                   ),
                 ),
-              _SliverFadeOnChange(
-                signal: (selectedView, selectedNetwork, loading),
-                sliver: SliverPadding(
-                  padding: EdgeInsets.fromLTRB(20, 0, 20, dockClearance),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final row = builder(context, index);
-                        // Same key as the row, so reordering keeps elements
-                        // (a GlobalKey keeps its element on its own).
-                        final key = row.key;
-                        return NotionEntrance(
-                          key: key is GlobalKey ? null : key,
-                          playKey: row.key,
-                          rise: NotionMotion.riseList,
-                          child: row,
-                        );
-                      },
-                      childCount: count,
-                      findChildIndexCallback: rowIndexOf ?? _indexOfRow,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         bottomNavigationBar: Padding(

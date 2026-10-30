@@ -216,6 +216,23 @@ void main() {
     expect(likes, 1);
     expect(selected, isNull);
     expect(find.byType(SelectableText), findsNothing);
+    // A finger rests on the second tap longer than the timeline selection's
+    // press timeout; the caption under the text reacts as well.
+    for (final target in [
+      find.text('Do zobaczenia'),
+      find.textContaining('Transcript ·'),
+    ]) {
+      await tester.pump(const Duration(milliseconds: 400));
+      final at = tester.getCenter(target);
+      await tester.tapAt(at);
+      await tester.pump(const Duration(milliseconds: 90));
+      final second = await tester.startGesture(at);
+      await tester.pump(const Duration(milliseconds: 160));
+      await second.up();
+      await tester.pumpAndSettle();
+    }
+    expect(likes, 3);
+    expect(selected ?? '', isEmpty);
     expect(tester.takeException(), isNull);
   });
 

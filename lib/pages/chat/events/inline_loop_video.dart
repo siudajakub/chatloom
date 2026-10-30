@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart'
     show ConversationMedia;
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
@@ -438,40 +439,43 @@ class _InlineLoopVideoState extends State<InlineLoopVideo>
     return Semantics(
       label: _sticker ? 'Sticker' : 'GIF',
       button: true,
-      child: NotionTapTarget(
-        onTap: _open,
-        child: SizedBox(
-          width: widget.width,
-          height: widget.height,
-          child: ClipRRect(
-            borderRadius: widget.borderRadius,
-            child: Hero(
-              tag: widget.event.eventId,
-              createRectTween: NotionMediaHero.rectTween,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _poster(context),
-                  if (playing)
-                    FittedBox(
-                      fit: fit,
-                      clipBehavior: Clip.hardEdge,
-                      child: SizedBox.fromSize(
-                        size: player.value.size.isEmpty
-                            ? Size(widget.width, widget.height)
-                            : player.value.size,
-                        child: VideoPlayer(player),
+      // A double tap reacts; a single tap opens the loop.
+      child: ConversationMessageChromeTap(
+        child: NotionTapTarget(
+          onTap: _open,
+          child: SizedBox(
+            width: widget.width,
+            height: widget.height,
+            child: ClipRRect(
+              borderRadius: widget.borderRadius,
+              child: Hero(
+                tag: widget.event.eventId,
+                createRectTween: NotionMediaHero.rectTween,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _poster(context),
+                    if (playing)
+                      FittedBox(
+                        fit: fit,
+                        clipBehavior: Clip.hardEdge,
+                        child: SizedBox.fromSize(
+                          size: player.value.size.isEmpty
+                              ? Size(widget.width, widget.height)
+                              : player.value.size,
+                          child: VideoPlayer(player),
+                        ),
                       ),
-                    ),
-                  if (uploading)
-                    Center(
-                      child: OutgoingUploadOverlay(
-                        progress: uploadProgressOf(widget.event),
-                      ),
-                    )
-                  else if (still && !_sticker)
-                    const _LoopStillMarks(),
-                ],
+                    if (uploading)
+                      Center(
+                        child: OutgoingUploadOverlay(
+                          progress: uploadProgressOf(widget.event),
+                        ),
+                      )
+                    else if (still && !_sticker)
+                      const _LoopStillMarks(),
+                  ],
+                ),
               ),
             ),
           ),

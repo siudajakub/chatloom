@@ -5,6 +5,7 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -56,37 +57,43 @@ class ReplyContent extends StatelessWidget {
     final thumbnail =
         media &&
         (display.hasThumbnail || display.messageType == MessageTypes.Image);
-    return ConversationReplyQuote(
-      text: personalPreviewLabel(display, i18n: MatrixLocals(L10n.of(context))),
-      fill: fill,
-      textColor: textColor,
-      outgoing: outgoing,
-      caption: caption,
-      leading: thumbnail
-          ? MxcImage(
-              event: display,
-              // The memory cache: remounting a quote (scrolling, rebuilds)
-              // does not read and decrypt the attachment again.
-              cacheKey: 'reply:${display.eventId}',
-              cacheName: display.room.id,
-              isThumbnail: true,
-              fit: BoxFit.cover,
-              width: NotionBubble.quoteThumbnail,
-              height: NotionBubble.quoteThumbnail,
-            )
-          : media
-          ? SizedBox.square(
-              dimension: NotionBubble.quoteThumbnail,
-              child: Icon(
-                Icons.videocam_outlined,
-                size: NotionSize.iconSm,
-                color: textColor,
-              ),
-            )
-          : null,
-      onTap: onTap,
-      onLongPress: onLongPress,
-      semanticLabel: L10n.of(context).showOriginalMessage,
+    // Part of the bubble: a double tap reacts, a single tap jumps.
+    return ConversationMessageChromeTap(
+      child: ConversationReplyQuote(
+        text: personalPreviewLabel(
+          display,
+          i18n: MatrixLocals(L10n.of(context)),
+        ),
+        fill: fill,
+        textColor: textColor,
+        outgoing: outgoing,
+        caption: caption,
+        leading: thumbnail
+            ? MxcImage(
+                event: display,
+                // The memory cache: remounting a quote (scrolling, rebuilds)
+                // does not read and decrypt the attachment again.
+                cacheKey: 'reply:${display.eventId}',
+                cacheName: display.room.id,
+                isThumbnail: true,
+                fit: BoxFit.cover,
+                width: NotionBubble.quoteThumbnail,
+                height: NotionBubble.quoteThumbnail,
+              )
+            : media
+            ? SizedBox.square(
+                dimension: NotionBubble.quoteThumbnail,
+                child: Icon(
+                  Icons.videocam_outlined,
+                  size: NotionSize.iconSm,
+                  color: textColor,
+                ),
+              )
+            : null,
+        onTap: onTap,
+        onLongPress: onLongPress,
+        semanticLabel: L10n.of(context).showOriginalMessage,
+      ),
     );
   }
 }

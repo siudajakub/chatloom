@@ -63,31 +63,41 @@ class SettingsChatView extends StatelessWidget {
             setting: AppSettings.inboxSwipeActions,
             onChanged: (_) => controller.updateState(),
           ),
-          if (AppSettings.inboxSwipeActions.value) ...[
-            for (final (setting, label, fallback) in [
-              (
-                AppSettings.inboxSwipeLeft,
-                'Swipe left',
-                InboxSwipeChoice.archive,
-              ),
-              (
-                AppSettings.inboxSwipeRight,
-                'Swipe right',
-                InboxSwipeChoice.read,
-              ),
-            ])
-              NotionPickerRow<InboxSwipeChoice>(
-                key: Key('settings_${setting.name}'),
-                label: label,
-                value: InboxSwipeChoice.parse(setting.value, fallback),
-                options: [
-                  for (final choice in InboxSwipeChoice.values)
-                    NotionChoice(choice, choice.label),
-                ],
-                onChanged: (value) =>
-                    _saveSetting(context, () => setting.setItem(value.name)),
-              ),
-          ],
+          // The directions grow in and out with the switch.
+          NotionSizeReveal(
+            visible: AppSettings.inboxSwipeActions.value,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final (setting, label, fallback) in [
+                  (
+                    AppSettings.inboxSwipeLeft,
+                    'Swipe left',
+                    InboxSwipeChoice.archive,
+                  ),
+                  (
+                    AppSettings.inboxSwipeRight,
+                    'Swipe right',
+                    InboxSwipeChoice.read,
+                  ),
+                ])
+                  NotionPickerRow<InboxSwipeChoice>(
+                    key: Key('settings_${setting.name}'),
+                    label: label,
+                    value: InboxSwipeChoice.parse(setting.value, fallback),
+                    options: [
+                      for (final choice in InboxSwipeChoice.values)
+                        NotionChoice(choice, choice.label),
+                    ],
+                    onChanged: (value) => _saveSetting(
+                      context,
+                      () => setting.setItem(value.name),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           NotionPickerRow<String>(
             key: const Key('settings_emoji_suggestion_language'),
             label: 'Emoji suggestion language',

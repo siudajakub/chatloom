@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -82,8 +83,12 @@ class ConversationMessagePress {
   final bool reactionsOnly;
 }
 
-/// Chrome that opens on a single tap while leaving double taps to the message.
-/// Unlike playback buttons, its tap may wait for the reaction gesture to fail.
+/// Message content that opens on a single tap while leaving double taps to
+/// the message: media, a round's circle, a quote, a link preview. While quick
+/// reactions are on, a tap here waits out [kDoubleTapTimeout] first and a
+/// double tap reacts instead of tapping twice. Wrap the tap target, not real
+/// controls (play, speed, menus, cancel): those stay instant. Links in text
+/// share their taps without it.
 class ConversationMessageChromeTap extends SingleChildRenderObjectWidget {
   const ConversationMessageChromeTap({super.key, required super.child});
 
@@ -92,7 +97,17 @@ class ConversationMessageChromeTap extends SingleChildRenderObjectWidget {
       _MessageChromeTapRegion();
 }
 
-class _MessageChromeTapRegion extends RenderProxyBox {}
+class _MessageChromeTapRegion extends RenderProxyBox {
+  // Counts as hit wherever its content takes the touch, also through a
+  // non-opaque MouseRegion (NotionTapTarget, which reports no hit), so the
+  // message around it (double tap, long-press, swipe) gets the pointer too.
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    final before = result.path.length;
+    return super.hitTestChildren(result, position: position) ||
+        result.path.length > before;
+  }
+}
 
 /// Touch gestures of one message surface, the single owner of how a bubble
 /// reacts to a finger (Telegram/Messenger):
@@ -100,10 +115,12 @@ class _MessageChromeTapRegion extends RenderProxyBox {}
 /// * horizontal swipe → [onReply] on every message kind. Controls inside
 ///   the bubble that drag horizontally themselves (an active voice note's
 ///   waveform, a code block) win the gesture arena where they are touched;
-/// * double tap → [onLike] (the network's first quick reaction). Only on the
-///   bubble's chrome and plain text: a double tap that lands on a button,
-///   link, slider or media tap target is left to it, so single taps there
-///   are never delayed;
+/// * double tap → [onLike] (the network's first quick reaction) on the
+///   bubble's chrome, text, links and [ConversationMessageChromeTap]
+///   content, whose single taps wait for the double-tap window. A double tap
+///   on a control (button, slider, menu) is left to it, so its taps are
+///   never delayed. A still second tap wins over the timeline's text
+///   selection, which would otherwise select a word under it;
 /// * long-press (also a secondary click and the "Message actions"
 ///   accessibility action) → [onLongPress] with a [ConversationMessagePress];
 ///   while held, the bubble sinks slightly.
@@ -299,10 +316,25 @@ class _ConversationMessageGesturesState
   bool _doubleTapAllowed(PointerDownEvent event) =>
       _pointerAllowed(event) && !_onInteractiveChild(event.position);
 
-  /// Whether [position] lands on something inside the surface that handles
-  /// pointers itself: a gesture detector or button, a link span, a control
-  /// with a click cursor (sliders, ink). Plain text, captions and the
-  /// bubble's padding are chrome.
+  /// Whether [position] is just off the surface: its time or name, the gap
+  /// to the next bubble.
+  bool _nearSurface(Offset position) {
+    final box = _boundary.box;
+    if (box == null || !box.attached || !box.hasSize) return false;
+    final rect = MatrixUtils.transformRect(
+      box.getTransformTo(null),
+      Offset.zero & box.size,
+    );
+    return rect
+        .inflate(_MessageDoubleTapRecognizer.offSurfaceReach)
+        .contains(position);
+  }
+
+  /// Whether [position] lands on a control inside the surface that keeps
+  /// its own taps: a gesture detector or button, a control with a click
+  /// cursor (sliders, ink). Plain text, links in it, captions, the bubble's
+  /// padding and [ConversationMessageChromeTap] content share their taps
+  /// with the double tap.
   bool _onInteractiveChild(Offset position) {
     final root = _boundary.box;
     if (root == null || !root.attached || !root.hasSize) return false;
@@ -322,7 +354,6 @@ class _ConversationMessageGesturesState
           target.cursor == SystemMouseCursors.click) {
         return true;
       }
-      if (target is TextSpan && target.recognizer != null) return true;
     }
     return false;
   }
@@ -339,6 +370,7 @@ class _ConversationMessageGesturesState
       }
     }
     if (event.kind != PointerDeviceKind.touch) return;
+    _OffSurfaceTap.touched(event.pointer);
     _pointers.add(event.pointer);
     if (_pointers.length > 1) {
       _cancel();
@@ -781,7 +813,10 @@ class _ConversationMessageGesturesState
                     GestureRecognizerFactoryWithHandlers<
                       _MessageDoubleTapRecognizer
                     >(
-                      () => _MessageDoubleTapRecognizer(_doubleTapAllowed),
+                      () => _MessageDoubleTapRecognizer(
+                        _doubleTapAllowed,
+                        nearSurface: _nearSurface,
+                      ),
                       (recognizer) => recognizer
                         ..onDoubleTapDown = _doubleTapDown
                         ..onDoubleTap = _doubleTap,
@@ -955,13 +990,291 @@ class _MessageHorizontalDragRecognizer extends HorizontalDragGestureRecognizer {
       super.isPointerAllowed(event);
 }
 
-class _MessageDoubleTapRecognizer extends DoubleTapGestureRecognizer {
-  _MessageDoubleTapRecognizer(this.allowed)
-    : super(supportedDevices: {PointerDeviceKind.touch});
+/// Double tap on a message inside the timeline's [SelectionArea].
+///
+/// Like [DoubleTapGestureRecognizer], the first tap holds its arena, so a
+/// shared tap target under the finger ([ConversationMessageChromeTap], a
+/// link) runs its single tap only once no second tap came within
+/// [kDoubleTapTimeout] of the first lifting (Android measures the window from
+/// that lift to the next touch, too). Unlike it:
+///
+/// * a first tap that landed just off the bubble ([offSurfaceReach]: its
+///   time, the gap to the next bubble) pairs with a second tap on it. The
+///   selection area's tap recognizer took that first tap and counts taps
+///   itself: it would select a word under the second one;
+/// * a second tap that stays still claims its arena after [claimDelay],
+///   before the selection area claims a still second tap ([kPressTimeout]);
+///   a finger that moves first is left to scrolls and swipes;
+/// * further quick taps at the same spot are absorbed until the window
+///   passes, so a triple tap reacts once and opens nothing.
+class _MessageDoubleTapRecognizer extends GestureRecognizer {
+  _MessageDoubleTapRecognizer(this.allowed, {required this.nearSurface})
+    : super(
+        supportedDevices: {PointerDeviceKind.touch},
+        allowedButtonsFilter: (buttons) => buttons == kPrimaryButton,
+      ) {
+    _OffSurfaceTap.listen();
+  }
 
   final bool Function(PointerDownEvent) allowed;
 
+  /// Whether a global position is just off the message surface.
+  final bool Function(Offset position) nearSurface;
+  GestureTapDownCallback? onDoubleTapDown;
+  VoidCallback? onDoubleTap;
+
+  /// How long a later tap of a series stays still before it is claimed.
+  static const claimDelay = Duration(milliseconds: 50);
+
+  /// How far outside the surface a first tap may land and still pair.
+  static const offSurfaceReach = 24.0;
+
+  /// The finger down now, if this recognizer tracks it.
+  _SeriesTap? _down;
+
+  /// The first tap after it lifted: its arena is held until the series ends.
+  _SeriesTap? _first;
+
+  /// Completed taps in the current series; 0 when idle.
+  int _taps = 0;
+  bool _fired = false;
+  Offset? _origin;
+  bool _minTimeElapsed = false;
+  Timer? _windowTimer;
+  Timer? _minTimer;
+  Timer? _claimTimer;
+
   @override
   bool isPointerAllowed(PointerDownEvent event) =>
-      allowed(event) && super.isPointerAllowed(event);
+      _down == null &&
+      onDoubleTap != null &&
+      super.isPointerAllowed(event) &&
+      allowed(event);
+
+  @override
+  void handleNonAllowedPointer(PointerDownEvent event) {
+    // Another finger, or a tap on a control: the series is over, and a held
+    // first tap resolves at once.
+    if (_down != null || _taps > 0) _abandon();
+  }
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    if (_taps > 0 &&
+        (!_minTimeElapsed ||
+            (event.position - _origin!).distance > kDoubleTapSlop)) {
+      // Elsewhere, or one touch reported twice: a new series.
+      _resetSeries();
+    }
+    if (_taps == 0 && _pairsWithOffSurfaceTap(event)) {
+      // That first tap was the selection's, not held here: no arena to win.
+      _taps = 1;
+      _origin = event.position;
+      _minTimeElapsed = true;
+    }
+    _windowTimer?.cancel();
+    _windowTimer = null;
+    final tap = _SeriesTap(
+      event,
+      GestureBinding.instance.gestureArena.add(event.pointer, this),
+    );
+    _down = tap;
+    GestureBinding.instance.pointerRouter.addRoute(
+      event.pointer,
+      _handleEvent,
+      event.transform,
+    );
+    if (_taps == 0) {
+      _origin = event.position;
+      _minTimeElapsed = false;
+      _minTimer?.cancel();
+      _minTimer = Timer(kDoubleTapMinTime, () => _minTimeElapsed = true);
+      return;
+    }
+    if (!_fired) {
+      final details = TapDownDetails(
+        globalPosition: event.position,
+        localPosition: event.localPosition,
+        kind: getKindForPointer(event.pointer),
+      );
+      invokeCallback<void>(
+        'onDoubleTapDown',
+        () => onDoubleTapDown?.call(details),
+      );
+    }
+    _claimTimer = Timer(claimDelay, () {
+      _claimTimer = null;
+      _down?.entry.resolve(GestureDisposition.accepted);
+    });
+  }
+
+  bool _pairsWithOffSurfaceTap(PointerDownEvent event) {
+    final previous = _OffSurfaceTap.last;
+    if (previous == null) return false;
+    final gap = event.timeStamp - previous.up;
+    return gap >= Duration.zero &&
+        gap <= kDoubleTapTimeout &&
+        event.timeStamp - previous.down >= kDoubleTapMinTime &&
+        (event.position - previous.position).distance <= kDoubleTapSlop &&
+        nearSurface(previous.position);
+  }
+
+  void _handleEvent(PointerEvent event) {
+    final tap = _down;
+    if (tap == null || event.pointer != tap.pointer) return;
+    if (event is PointerMoveEvent) {
+      if ((event.position - tap.origin).distance > kDoubleTapTouchSlop) {
+        _abandon();
+      }
+    } else if (event is PointerUpEvent) {
+      _lift(tap);
+    } else if (event is PointerCancelEvent) {
+      _abandon();
+    }
+  }
+
+  void _lift(_SeriesTap tap) {
+    _stopTracking(tap);
+    _down = null;
+    _claimTimer?.cancel();
+    _claimTimer = null;
+    _windowTimer = Timer(kDoubleTapTimeout, _resetSeries);
+    if (_taps++ == 0) {
+      // Before the arena sweeps at this lift: a tap target under the finger
+      // waits for the series.
+      GestureBinding.instance.gestureArena.hold(tap.pointer);
+      _first = tap;
+      return;
+    }
+    final first = _first;
+    _first = null;
+    first?.entry.resolve(GestureDisposition.accepted);
+    tap.entry.resolve(GestureDisposition.accepted);
+    if (_fired) return;
+    _fired = true;
+    if (onDoubleTap != null) invokeCallback<void>('onDoubleTap', onDoubleTap!);
+  }
+
+  @override
+  void acceptGesture(int pointer) {}
+
+  @override
+  void rejectGesture(int pointer) {
+    if (_down?.pointer == pointer) {
+      _abandon();
+    } else if (_first?.pointer == pointer) {
+      _first = null;
+      _resetSeries();
+    }
+  }
+
+  /// Gives up the finger down (if any) and ends the series.
+  void _abandon() {
+    final tap = _down;
+    _down = null;
+    _claimTimer?.cancel();
+    _claimTimer = null;
+    if (tap != null) {
+      _stopTracking(tap);
+      tap.entry.resolve(GestureDisposition.rejected);
+    }
+    _resetSeries();
+  }
+
+  /// Ends the series. A first tap still waiting goes back to the arena, so
+  /// its tap target gets the single tap now.
+  void _resetSeries() {
+    _windowTimer?.cancel();
+    _windowTimer = null;
+    _minTimer?.cancel();
+    _minTimer = null;
+    _taps = 0;
+    _fired = false;
+    _origin = null;
+    final first = _first;
+    _first = null;
+    if (first == null) return;
+    first.entry.resolve(GestureDisposition.rejected);
+    GestureBinding.instance.gestureArena.release(first.pointer);
+  }
+
+  void _stopTracking(_SeriesTap tap) {
+    if (!tap.tracking) return;
+    tap.tracking = false;
+    GestureBinding.instance.pointerRouter.removeRoute(
+      tap.pointer,
+      _handleEvent,
+    );
+  }
+
+  @override
+  void dispose() {
+    _abandon();
+    super.dispose();
+  }
+
+  @override
+  String get debugDescription => 'message double tap';
+}
+
+/// The last touch tap that no message surface took: the time or name next to
+/// a bubble, the gap between bubbles. The timeline selection counts it, so a
+/// bubble pairs it with a tap on itself ([_MessageDoubleTapRecognizer]).
+/// Event timestamps, not timers: nothing stays scheduled.
+abstract final class _OffSurfaceTap {
+  static bool _listening = false;
+  static int? _surfacePointer;
+  static int? _pointer;
+  static Offset _position = Offset.zero;
+  static Duration _down = Duration.zero;
+  static bool _still = false;
+
+  /// Valid for the next touch only.
+  static ({Offset position, Duration down, Duration up})? last;
+
+  static void listen() {
+    if (_listening) return;
+    _listening = true;
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_route);
+  }
+
+  /// A message surface saw [pointer] go down (before the global route).
+  static void touched(int pointer) => _surfacePointer = pointer;
+
+  static void _route(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.touch) return;
+    if (event is PointerDownEvent) {
+      last = null;
+      _pointer = event.pointer == _surfacePointer ? null : event.pointer;
+      _position = event.position;
+      _down = event.timeStamp;
+      _still = true;
+    } else if (event.pointer != _pointer) {
+      return;
+    } else if (event is PointerMoveEvent) {
+      if ((event.position - _position).distance > kTouchSlop) _still = false;
+    } else if (event is PointerUpEvent) {
+      _pointer = null;
+      // Test pointers without a timestamp never pair.
+      if (_still &&
+          event.timeStamp > Duration.zero &&
+          event.timeStamp - _down < kLongPressTimeout) {
+        last = (position: _position, down: _down, up: event.timeStamp);
+      }
+    } else if (event is PointerCancelEvent) {
+      _pointer = null;
+    }
+  }
+}
+
+/// One tap of a double-tap series.
+class _SeriesTap {
+  _SeriesTap(PointerDownEvent event, this.entry)
+    : pointer = event.pointer,
+      origin = event.position;
+
+  final int pointer;
+  final Offset origin;
+  final GestureArenaEntry entry;
+  bool tracking = true;
 }

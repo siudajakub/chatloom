@@ -15,6 +15,7 @@ import 'package:chatloom/personal/media/caption_followup.dart';
 import 'package:chatloom/personal/media/editor/media_edit_plan.dart';
 import 'package:chatloom/personal/media/editor/photo_editor_page.dart';
 import 'package:chatloom/personal/media/editor/video_editor_page.dart';
+import 'package:chatloom/personal/media/gallery_batch.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
@@ -303,6 +304,10 @@ class SendFileDialogState extends State<SendFileDialog> {
   /// One transaction per item; removing an item removes its own.
   final List<String> _transactionIds = [];
 
+  /// The album the picked photos and videos form ([MediaAlbumBatch]); kept
+  /// when "Send again" sends the rest.
+  final String _albumId = const Uuid().v4();
+
   /// Videos up to this size are sent as they are.
   static const int minSizeToCompress = 20 * 1000;
 
@@ -575,6 +580,12 @@ class SendFileDialogState extends State<SendFileDialog> {
       // drops or limits captions gets it as a text right after the media.
       final split = _captionNeedsSplit(label);
       Future<String>? lastAccepted;
+      // Photos and videos picked together go out as separate messages (no
+      // bridge accepts one album message, see MediaAlbumBatch) and stay one
+      // album in ChatLoom.
+      final albumCount = widget.sendAsFiles
+          ? 0
+          : _items.where((item) => item.kind != _Kind.other).length;
 
       for (var i = _accepted; i < _items.length; i++) {
         if (!mounted) return;
@@ -651,6 +662,18 @@ class SendFileDialogState extends State<SendFileDialog> {
         }
         if (!mounted) return;
         _to.composeContext?.validate();
+        final albumIndex = albumCount > 1 && item.kind != _Kind.other
+            ? _items.take(i).where((other) => other.kind != _Kind.other).length
+            : null;
+        final extra = <String, Object?>{
+          if (captioned) 'body': label,
+          if (albumIndex != null)
+            ...MediaAlbumBatch.content(
+              id: _albumId,
+              index: albumIndex,
+              count: albumCount,
+            ),
+        };
         final ticket = await OutgoingMedia.send(
           _to.room,
           file,
@@ -662,7 +685,7 @@ class SendFileDialogState extends State<SendFileDialog> {
               !widget.sendAsFiles && file is MatrixImageFile
               ? _profile.photoMaxSide
               : null,
-          extraContent: captioned ? {'body': label} : null,
+          extraContent: extra.isEmpty ? null : extra,
           threadRootEventId: widget.threadRootEventId,
           threadLastEventId: widget.threadLastEventId,
           prepare: prepare,

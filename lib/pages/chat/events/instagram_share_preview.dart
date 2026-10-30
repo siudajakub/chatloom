@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/events/image_bubble.dart';
 import 'package:chatloom/pages/chat/events/video_player.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
@@ -209,13 +210,15 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
           ),
         ),
       if (_assets.isNotEmpty)
-        NotionTapTarget(
-          onTap: () =>
-              showImageViewer(context, _assets.first, mediaEvents: _assets),
-          child: AbsorbPointer(
-            child: _assets.first.messageType == MessageTypes.Video
-                ? EventVideoPlayer(_assets.first)
-                : ImageBubble(_assets.first),
+        ConversationMessageChromeTap(
+          child: NotionTapTarget(
+            onTap: () =>
+                showImageViewer(context, _assets.first, mediaEvents: _assets),
+            child: AbsorbPointer(
+              child: _assets.first.messageType == MessageTypes.Video
+                  ? EventVideoPlayer(_assets.first)
+                  : ImageBubble(_assets.first),
+            ),
           ),
         ),
       if (_assets.length > 1)

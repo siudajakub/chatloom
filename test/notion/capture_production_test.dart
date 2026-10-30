@@ -139,21 +139,22 @@ Widget _inbox({bool empty = false, int extraPins = 0}) {
           : [
               NotionPinnedShortcut(
                 name: 'Anna',
-                avatar: _avatar('Anna', 28),
+                avatar: _avatar('Anna', notionPinnedAvatarSize),
                 onTap: _noop,
                 order: 0,
               ),
               NotionPinnedShortcut(
                 name: 'Team',
-                avatar: _avatar('Team', 28),
+                avatar: _avatar('Team', notionPinnedAvatarSize),
                 onTap: _noop,
                 order: 1,
+                unreadCount: 3,
                 isGroup: true,
               ),
               for (var i = 0; i < extraPins; i++)
                 NotionPinnedShortcut(
                   name: 'Pinned $i',
-                  avatar: _avatar('Pinned $i', 28),
+                  avatar: _avatar('Pinned $i', notionPinnedAvatarSize),
                   onTap: _noop,
                   order: i + 2,
                 ),

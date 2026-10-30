@@ -26,6 +26,7 @@ export 'notion_glass_header.dart';
 export 'notion_lazy_switcher.dart';
 export 'notion_hover_toolbar.dart';
 export 'notion_link_preview.dart';
+export 'notion_list_motion.dart';
 export 'notion_loops.dart';
 export 'notion_media_editor.dart';
 export 'notion_media_viewer.dart';

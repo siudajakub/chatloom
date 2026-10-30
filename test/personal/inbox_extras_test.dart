@@ -197,7 +197,9 @@ void main() {
       );
     });
 
-    testWidgets('pinned cover follows the light theme (UI-14)', (tester) async {
+    testWidgets('the pinned bubble ring follows the light theme (UI-14)', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           theme: NotionTheme.build(Brightness.light),
@@ -205,13 +207,18 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final context = tester.element(find.text('Anna'));
-      final cover = context.notion.colors.cover;
-      expect(cover, isNot(NotionTokens.cover));
+      final border = tester.element(find.text('Anna')).notion.colors.border;
+      expect(border, isNot(NotionTokens.border));
       expect(
         tester
-            .widgetList<Container>(find.byType(Container))
-            .any((c) => c.color == cover),
+            .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+            .map((box) => box.decoration)
+            .whereType<BoxDecoration>()
+            .any(
+              (decoration) =>
+                  decoration.shape == BoxShape.circle &&
+                  (decoration.border as Border?)?.top.color == border,
+            ),
         isTrue,
       );
     });

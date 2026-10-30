@@ -8,6 +8,7 @@ import 'dart:math';
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
 import 'package:chatloom/utils/url_launcher.dart';
@@ -98,55 +99,60 @@ class ImageBubble extends StatelessWidget {
           mainAxisSize: .min,
           spacing: 8,
           children: [
-            Material(
-              color: Colors.transparent,
-              clipBehavior: Clip.hardEdge,
-              shape: RoundedRectangleBorder(
-                borderRadius: borderRadius,
-                side: BorderSide(
-                  color: sticker ? Colors.transparent : theme.dividerColor,
+            // A double tap on the photo reacts; a single tap opens it.
+            ConversationMessageChromeTap(
+              child: Material(
+                color: Colors.transparent,
+                clipBehavior: Clip.hardEdge,
+                shape: RoundedRectangleBorder(
+                  borderRadius: borderRadius,
+                  side: BorderSide(
+                    color: sticker ? Colors.transparent : theme.dividerColor,
+                  ),
                 ),
-              ),
-              child: InkWell(
-                onTap: onTap,
-                borderRadius: borderRadius,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Hero(
-                      tag: event.eventId,
-                      // Straight flight, as the viewer route uses.
-                      createRectTween: NotionMediaHero.rectTween,
-                      child: AppSettings.showThumbnailsInTimeline.value
-                          ? MxcImage(
-                              cacheKey: event.transactionId ?? event.eventId,
-                              cacheName: event.room.id,
-                              event: event,
-                              width: width,
-                              height: height,
-                              fit: fit,
-                              animated: animated,
-                              isThumbnail: thumbnailOnly,
-                              placeholder: sticker
-                                  ? null
-                                  : (_) => _ImageBubblePlaceholder(
-                                      event: event,
-                                      width: width,
-                                      height: height,
-                                      fit: fit,
-                                    ),
-                            )
-                          : _ImageBubblePlaceholder(
-                              event: event,
-                              width: width,
-                              height: height,
-                              fit: fit,
-                            ),
-                    ),
-                    // Telegram's upload disc while an own photo uploads.
-                    if (isOutgoingUpload(event))
-                      OutgoingUploadOverlay(progress: uploadProgressOf(event)),
-                  ],
+                child: InkWell(
+                  onTap: onTap,
+                  borderRadius: borderRadius,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Hero(
+                        tag: event.eventId,
+                        // Straight flight, as the viewer route uses.
+                        createRectTween: NotionMediaHero.rectTween,
+                        child: AppSettings.showThumbnailsInTimeline.value
+                            ? MxcImage(
+                                cacheKey: event.transactionId ?? event.eventId,
+                                cacheName: event.room.id,
+                                event: event,
+                                width: width,
+                                height: height,
+                                fit: fit,
+                                animated: animated,
+                                isThumbnail: thumbnailOnly,
+                                placeholder: sticker
+                                    ? null
+                                    : (_) => _ImageBubblePlaceholder(
+                                        event: event,
+                                        width: width,
+                                        height: height,
+                                        fit: fit,
+                                      ),
+                              )
+                            : _ImageBubblePlaceholder(
+                                event: event,
+                                width: width,
+                                height: height,
+                                fit: fit,
+                              ),
+                      ),
+                      // Telegram's upload disc while an own photo uploads.
+                      if (isOutgoingUpload(event))
+                        OutgoingUploadOverlay(
+                          progress: uploadProgressOf(event),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -6,6 +6,7 @@
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
@@ -87,99 +88,106 @@ class EventVideoPlayer extends StatelessWidget {
           mainAxisSize: .min,
           spacing: 8,
           children: [
-            Material(
-              color: context.notion.colors.surface,
-              borderRadius: frameRadius,
-              child: InkWell(
-                onTap: uploading
-                    ? null
-                    : () => supportsVideoPlayer
-                          ? showImageViewer(context, event, timeline: timeline)
-                          : event.saveFile(context),
+            // A double tap on the frame reacts; a single tap opens it.
+            ConversationMessageChromeTap(
+              child: Material(
+                color: context.notion.colors.surface,
                 borderRadius: frameRadius,
-                child: SizedBox(
-                  width: width,
-                  height: height,
-                  child: Hero(
-                    tag: event.eventId,
-                    // Straight flight, as the viewer route uses.
-                    createRectTween: NotionMediaHero.rectTween,
-                    child: Stack(
-                      children: [
-                        if (event.hasThumbnail &&
-                            AppSettings.showThumbnailsInTimeline.value)
-                          MxcImage(
-                            event: event,
-                            cacheKey: event.transactionId ?? event.eventId,
-                            cacheName: event.room.id,
-                            isThumbnail: true,
-                            width: width,
-                            height: height,
-                            fit: BoxFit.cover,
-                            placeholder: (context) => BlurHash(
+                child: InkWell(
+                  onTap: uploading
+                      ? null
+                      : () => supportsVideoPlayer
+                            ? showImageViewer(
+                                context,
+                                event,
+                                timeline: timeline,
+                              )
+                            : event.saveFile(context),
+                  borderRadius: frameRadius,
+                  child: SizedBox(
+                    width: width,
+                    height: height,
+                    child: Hero(
+                      tag: event.eventId,
+                      // Straight flight, as the viewer route uses.
+                      createRectTween: NotionMediaHero.rectTween,
+                      child: Stack(
+                        children: [
+                          if (event.hasThumbnail &&
+                              AppSettings.showThumbnailsInTimeline.value)
+                            MxcImage(
+                              event: event,
+                              cacheKey: event.transactionId ?? event.eventId,
+                              cacheName: event.room.id,
+                              isThumbnail: true,
+                              width: width,
+                              height: height,
+                              fit: BoxFit.cover,
+                              placeholder: (context) => BlurHash(
+                                blurhash: blurHash,
+                                width: width,
+                                height: height,
+                                fit: BoxFit.cover,
+                              ),
+                            )
+                          else
+                            BlurHash(
                               blurhash: blurHash,
                               width: width,
                               height: height,
                               fit: BoxFit.cover,
                             ),
-                          )
-                        else
-                          BlurHash(
-                            blurhash: blurHash,
-                            width: width,
-                            height: height,
-                            fit: BoxFit.cover,
+                          Center(
+                            child: uploading
+                                ? OutgoingUploadOverlay(
+                                    progress: uploadProgressOf(event),
+                                  )
+                                : DecoratedBox(
+                                    decoration: const ShapeDecoration(
+                                      color: NotionMediaColors.scrim,
+                                      shape: CircleBorder(),
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(
+                                        NotionSpace.sm,
+                                      ),
+                                      child: Icon(
+                                        supportsVideoPlayer
+                                            ? Icons.play_arrow_outlined
+                                            : Icons.file_download_outlined,
+                                        color: NotionMediaColors.onScrim,
+                                        size: NotionSize.iconLg,
+                                      ),
+                                    ),
+                                  ),
                           ),
-                        Center(
-                          child: uploading
-                              ? OutgoingUploadOverlay(
-                                  progress: uploadProgressOf(event),
-                                )
-                              : DecoratedBox(
-                                  decoration: const ShapeDecoration(
-                                    color: NotionMediaColors.scrim,
-                                    shape: CircleBorder(),
+                          if (duration != null)
+                            Positioned(
+                              bottom: NotionSpace.xs,
+                              left: NotionSpace.md,
+                              child: DecoratedBox(
+                                decoration: const BoxDecoration(
+                                  color: NotionMediaColors.scrim,
+                                  borderRadius: NotionRadius.pillAll,
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: NotionSpace.xs,
+                                    vertical: NotionSpace.xxs,
                                   ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(
-                                      NotionSpace.sm,
+                                  child: Text(
+                                    NotionMediaPlaybackControls.formatTime(
+                                      duration,
                                     ),
-                                    child: Icon(
-                                      supportsVideoPlayer
-                                          ? Icons.play_arrow_outlined
-                                          : Icons.file_download_outlined,
+                                    style: NotionType.caption.copyWith(
                                       color: NotionMediaColors.onScrim,
-                                      size: NotionSize.iconLg,
                                     ),
-                                  ),
-                                ),
-                        ),
-                        if (duration != null)
-                          Positioned(
-                            bottom: NotionSpace.xs,
-                            left: NotionSpace.md,
-                            child: DecoratedBox(
-                              decoration: const BoxDecoration(
-                                color: NotionMediaColors.scrim,
-                                borderRadius: NotionRadius.pillAll,
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: NotionSpace.xs,
-                                  vertical: NotionSpace.xxs,
-                                ),
-                                child: Text(
-                                  NotionMediaPlaybackControls.formatTime(
-                                    duration,
-                                  ),
-                                  style: NotionType.caption.copyWith(
-                                    color: NotionMediaColors.onScrim,
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),

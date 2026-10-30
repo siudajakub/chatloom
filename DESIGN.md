@@ -456,7 +456,8 @@ decide; nothing buzzes by default.
 | `NotionPop(child:, trigger:, visible:, bounce:)` | badges, reaction chips, dots: spring in, pulse on `trigger`, pop out | `NotionPop(trigger: count, child: badge)` |
 | `NotionReactionBar(entrance:)`, `NotionReactionBurst(animation:)` | reward motion of reactions, driven by a route or controller animation: the bar springs out of the bubble corner (`barFrom` → 1, bouncy) and its emoji pop in staggered; the burst pops at the finger and floats away | `NotionReactionBar(reactions: r, entrance: route.animation, onSelected: react)` |
 | `NotionShake(trigger:, child:)` | rejected input (wrong PIN) | `NotionShake(trigger: errors, child: field)` |
-| `NotionRowHighlight(trigger:, child:)` | one-shot `selected` flash of a row that moved or changed (inbox reorder is not animated) | `NotionRowHighlight(trigger: room.lastEventId, child: row)` |
+| `NotionRowHighlight(trigger:, child:)` | one-shot `selected` flash of a row that moved or changed (the move itself is `NotionListMotion`) | `NotionRowHighlight(trigger: room.lastEventId, child: row)` |
+| `NotionListMotion(order:, epoch:, background:, child:)` + `NotionListMotionItem(index:, child:)` | a lazy list whose order changes (inbox, search results): rows that moved glide from their old place on `snappy` (FLIP: paint offset only, no relayout, velocity kept when the list changes again), new rows fade in `short`, rows below a removed row close the gap; a moving row paints `background` behind itself so it slides under the rows it passes. Scrolling never animates; a new `epoch` (view, network, end of load), reduced motion or tickers off take the new layout as is. Items sit directly in the delegate (`addRepaintBoundaries: false, addSemanticIndexes: false`; the item adds both), so taps follow the drawn row. Non-visual at rest, no golden | `NotionListMotion(order: ids, epoch: (view, network), background: page, child: ListView.builder(addRepaintBoundaries: false, addSemanticIndexes: false, itemBuilder: (c, i) => NotionListMotionItem(key: ValueKey(ids[i]), index: i, child: Row(ids[i]))))` |
 | `NotionSkeleton(enabled:, child:)`, `.sliver`, `NotionSkeletonRow()`, `NotionSkeleton.keep/ignore/unite` | loading state with the final layout; cross-fades to content | `NotionSkeleton(enabled: loading, child: Column(children: [for (var i = 0; i < 8; i++) const NotionSkeletonRow()]))` |
 | `NotionDelayedSpinner(maxSpin:)`, `NotionDelayedReveal(child:)` | loaders that only show after `loaderGrace`; the spinner freezes on its last frame after `maxSpin` (`loopCap`) | `if (busy) const NotionDelayedSpinner()` |
 | `NotionShimmerLines(color:, lines:, maxDuration:, onRest:)` | text that is on its way inside a bubble (transcripts); one `CustomPaint` behind a `RepaintBoundary`, bubble foreground colour, static under reduced motion and after `maxDuration` (`onRest` lets the owner explain a long wait) | `NotionShimmerLines(color: bubbleText, lines: 2)` |
@@ -505,6 +506,7 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
 | `AnimatedSwitcher` with the default fade for icons | `NotionMorphSwitcher` |
 | a hard cut between filter/tab states | `NotionFadeThrough` |
 | `if (x) widget` popping in | `NotionSizeReveal(visible: x)` or `NotionPop(visible: x)` |
+| rows jumping to their new places when a list reorders | `NotionListMotion` + `NotionListMotionItem` |
 | `x ? a : b` cutting between states that must stay mounted (focus, recorder) | `NotionReappear(trigger: x, child: x ? a : b)` |
 | a list row that vanishes after its swipe action | `NotionSwipeActionSide(dismisses: true)` |
 | `showDialog`, `showGeneralDialog(transitionDuration: Duration.zero)` | `showNotionCustomDialog`, `showNotionPopover` |
@@ -524,8 +526,8 @@ back (the sheet closes with its own motion, the `PopScope` callback runs).
 2. Lists: entrances play on a page's first appearance (≤ 10 items, inside a
    `NotionEntranceScope`) or for the one newest message. Scroll-built items
    never animate. No per-item controllers beyond that: `NotionPressable`,
-   `NotionRowHighlight`, `NotionSizeReveal` and a non-playing
-   `NotionEntrance` create theirs on first use; in rows use
+   `NotionRowHighlight`, `NotionSizeReveal`, `NotionListMotionItem` and a
+   non-playing `NotionEntrance` create theirs on first use; in rows use
    `NotionLazySwitcher` instead of `AnimatedSwitcher`-based switchers. The
    conversation timeline has no first-screen entrance at all: its rows render
    during the page push (Telegram), a list that replaces its loading

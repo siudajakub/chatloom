@@ -9,6 +9,7 @@ import 'package:chatloom/pages/chat/conversation_grouping.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
+import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
 import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/personal/bridge_notices.dart';
@@ -17,6 +18,7 @@ import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/instagram_share.dart';
+import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -224,6 +226,7 @@ class Message extends StatelessWidget {
           MessageTypes.Image,
           MessageTypes.Video,
           MessageTypes.Sticker,
+          ...GalleryContent.msgTypes,
         }.contains(event.messageType) &&
         !event.redacted;
     final sharedPost =
@@ -258,9 +261,14 @@ class Message extends StatelessWidget {
                 notionNetworkLabel(PersonalClient.networkOf(event.room)),
           )
         : MessageDelivery.none;
-    // Ticks of an own message the server has: ✓ sent, ✓✓ delivered to the
-    // network, ✓✓ in the accent once read (delivery-ticks lane).
-    final ticks = own && delivery.kind == MessageDeliveryKind.none
+    // Ticks of an own message: Telegram's clock while it is sending, ✓ sent,
+    // ✓✓ delivered to the network, ✓✓ in the accent once read
+    // (delivery-ticks lane). The slot stays from the clock on, so the ✓
+    // grows in place when the server has the message.
+    final ticks =
+        own &&
+            (delivery.kind == MessageDeliveryKind.none ||
+                delivery.kind == MessageDeliveryKind.sending)
         ? messageDeliveryProgress(event, timeline)
         : DeliveryProgress.none;
     final displayPrefs = NotionDisplayPreferences.of(context);
@@ -292,8 +300,9 @@ class Message extends StatelessWidget {
                   color: theme.colorScheme.error,
                   semanticLabel: delivery.label,
                 ),
-              // Telegram's clock; the circle itself shows the upload.
-              if (delivery.kind == MessageDeliveryKind.sending)
+              // Telegram's clock (in the tick slot when ticks show); the
+              // circle itself shows the upload.
+              if (delivery.kind == MessageDeliveryKind.sending && !showsTicks)
                 const NotionDelayedReveal(
                   child: Icon(
                     Icons.schedule,
@@ -316,6 +325,28 @@ class Message extends StatelessWidget {
     final hasStatus = timeVisible || sending;
     // Photos, videos, voice and files fill a ring with their upload.
     final upload = sending && isOutgoingUpload(event);
+    Widget sendingLabel({required bool clock}) => NotionDelayedReveal(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        spacing: 4,
+        children: [
+          Text(
+            L10n.of(context).sending,
+            style: TextStyle(fontSize: 11, color: statusColor),
+          ),
+          // Telegram's clock for text; an upload fills its ring.
+          if (upload)
+            OutgoingUploadIndicator(
+              progress: uploadProgressOf(event),
+              size: 11,
+              strokeWidth: 1.5,
+              color: statusColor,
+            )
+          else if (clock)
+            Icon(Icons.schedule, size: 11, color: statusColor),
+        ],
+      ),
+    );
     final status = Wrap(
       spacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -331,40 +362,39 @@ class Message extends StatelessWidget {
             style: TextStyle(fontSize: 11, color: statusColor),
           ),
         if (ticksShown)
-          MessageDeliveryTicks(
-            event: event,
-            timeline: timeline,
-            progress: ticks,
-            color: statusColor,
-            readColor: NotionContrast.readable(
-              pageBackground,
-              context.notion.colors.accent,
-              minimum: 3,
-            ),
-          ),
-        if (sending)
-          NotionDelayedReveal(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              spacing: 4,
-              children: [
-                Text(
-                  L10n.of(context).sending,
-                  style: TextStyle(fontSize: 11, color: statusColor),
+          // One shape from sending to read: the clock turns into the ✓ and
+          // "Sending…" folds away sideways instead of cutting out.
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              MessageDeliveryTicks(
+                event: event,
+                timeline: timeline,
+                progress: ticks,
+                clock: !upload,
+                color: statusColor,
+                readColor: NotionContrast.readable(
+                  pageBackground,
+                  context.notion.colors.accent,
+                  minimum: 3,
                 ),
-                // Telegram's clock for text; an upload fills its ring.
-                if (upload)
-                  OutgoingUploadIndicator(
-                    progress: uploadProgressOf(event),
-                    size: 11,
-                    strokeWidth: 1.5,
-                    color: statusColor,
-                  )
-                else
-                  Icon(Icons.schedule, size: 11, color: statusColor),
-              ],
-            ),
-          ),
+              ),
+              NotionSizeReveal(
+                visible: sending,
+                axis: Axis.horizontal,
+                alignment: AlignmentDirectional.centerStart,
+                duration: NotionMotion.short,
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.only(
+                    start: NotionSpace.xxs,
+                  ),
+                  child: sendingLabel(clock: false),
+                ),
+              ),
+            ],
+          )
+        else if (sending)
+          sendingLabel(clock: true),
       ],
     );
     final messageContent = MessageContent(
@@ -585,7 +615,12 @@ class Message extends StatelessWidget {
                       : Alignment.centerLeft,
                   child: surface,
                 ),
-                body: content,
+                // An edit or a deletion glides the bubble to its new size
+                // (decryption and history never do).
+                body: ConversationContentMorph(
+                  revision: (event.redacted, edited ? display.body : null),
+                  child: content,
+                ),
               ),
               // The "N unread messages" divider is drawn by the list above
               // the first unread row (ConversationUnreadDivider).

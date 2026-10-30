@@ -16,6 +16,7 @@
 /// video note → "Video message"; GIF → "GIF"; other video → "Video" /
 /// "Video: caption"; voice → "Voice message"; other audio → "Audio"; file →
 /// "File" / "File: caption"; location → "Location"; poll → "Poll: question";
+/// gallery (MSC4274) → "Album" / "Album: caption";
 /// emote → "* text"; text/notice → the plain body. "You: " prefixes every
 /// type for own messages (account or own bridge ghost, see
 /// [OwnSenderResolver]); other senders get "`<name>`: " in groups and no prefix
@@ -24,6 +25,7 @@
 library;
 
 import 'package:chatloom/personal/bridge_notices.dart';
+import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:matrix/matrix.dart';
@@ -110,6 +112,11 @@ String? _label(Event event) {
       return _withCaption('File', event);
     case MessageTypes.Location:
       return 'Location';
+    // MSC4274 gallery: the body is the caption itself (no filename).
+    case GalleryContent.unstableMsgType:
+    case GalleryContent.stableMsgType:
+      final caption = GalleryContent.of(event)?.caption;
+      return caption == null ? 'Album' : 'Album: ${_oneLine(caption)}';
     case MessageTypes.Emote:
       return '* ${_body(event)}';
     case MessageTypes.Notice:
