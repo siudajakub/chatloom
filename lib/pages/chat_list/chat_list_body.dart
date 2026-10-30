@@ -3,11 +3,11 @@
 import 'package:chatloom/pages/chat_list/chat_list.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/pages/chat_list/inbox_health_status.dart';
+import 'package:chatloom/pages/chat_list/inbox_pins.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
-import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -31,24 +31,23 @@ class ChatListViewBody extends StatelessWidget {
       builder: (context, _) {
         final projection = inbox.projection;
         final rooms = controller.filterRooms();
+        // Network marks on avatars only while every network is listed and
+        // there is more than one (UX-17, FT-12).
+        final showNetworks =
+            controller.selectedNetwork == null &&
+            controller.availableNetworks.length > 1;
         final pins =
             (controller.personalFilter == InboxFilter.inbox ? rooms : <Room>[])
                 .where((room) => projection.metadataFor(room).isPinned)
                 .map(
-                  (room) => NotionPinnedShortcut(
-                    name: projection.displayName(room),
-                    avatar: notionInboxAvatar(
-                      controller.personal,
-                      projection,
-                      room,
-                      size: 28,
-                    ),
+                  (room) => inboxPinnedShortcut(
+                    controller.personal,
+                    projection,
+                    room,
                     onTap: () => controller.onChatTap(room),
                     onLongPress: () =>
                         controller.chatContextAction(room, context),
-                    order: projection.metadataFor(room).pinOrder!,
-                    isGroup: !room.isDirectChatForDisplay,
-                    id: projection.entityFor(room),
+                    showNetworks: showNetworks,
                   ),
                 )
                 .toList();
@@ -56,16 +55,12 @@ class ChatListViewBody extends StatelessWidget {
           for (final (index, room) in rooms.indexed) room.id: index,
         };
         controller.rowMemo.retain(rooms.length);
-        // Network marks on avatars only while every network is listed and
-        // there is more than one (UX-17, FT-12).
-        final showNetworks =
-            controller.selectedNetwork == null &&
-            controller.availableNetworks.length > 1;
         return NotionInboxPage(
           unreadCount: controller.unreadViewCount(),
           requestCount: controller.requestViewCount(),
           scrollController: controller.scrollController,
           rowCount: rooms.length,
+          rowOrder: [for (final room in rooms) room.id],
           rowBuilder: (context, index) {
             final room = rooms[index];
             final entity = projection.entityFor(room);
