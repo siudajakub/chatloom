@@ -533,7 +533,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(scaleOf('Team'), 1);
 
-      // A third pin opens a new page: the carousel slides to it.
+      // A third pin joins the grid, on screen at once.
       await tester.pumpWidget(
         pins([pin('Anna', 0), pin('Team', 1), pin('Mia', 2)]),
       );

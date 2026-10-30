@@ -175,6 +175,50 @@ void main() {
     semantics.dispose();
   });
 
+  testWidgets('a chat that moves to the top glides; the rest slide down', (
+    tester,
+  ) async {
+    Widget inbox(List<String> names, {bool reduced = false}) => _host(
+      _page(
+        rows: [
+          for (final name in names)
+            NotionInboxRow(
+              key: ValueKey(name),
+              avatar: const SizedBox.shrink(),
+              name: name,
+              preview: 'Preview',
+              time: '09:12',
+              onTap: () {},
+            ),
+        ],
+      ),
+      reduced: reduced,
+    );
+    double y(String name) => tester.getTopLeft(find.text(name)).dy;
+
+    await tester.pumpWidget(inbox(['Ada', 'Bo', 'Cy']));
+    await tester.pumpAndSettle();
+    final slots = [y('Ada'), y('Bo'), y('Cy')];
+
+    // Cy gets a message and moves to the top.
+    await tester.pumpWidget(inbox(['Cy', 'Ada', 'Bo']));
+    expect(y('Cy'), slots[2], reason: 'no jump on the frame of the change');
+    expect(y('Ada'), slots[0]);
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(y('Cy'), inExclusiveRange(slots[0], slots[2]));
+    expect(y('Ada'), inExclusiveRange(slots[0], slots[1]));
+    await tester.pumpAndSettle();
+    expect([y('Cy'), y('Ada'), y('Bo')], slots);
+    expect(tester.takeException(), isNull);
+
+    // Reduced motion: the new order at once.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(inbox(['Ada', 'Bo', 'Cy'], reduced: true));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(inbox(['Cy', 'Ada', 'Bo'], reduced: true));
+    expect([y('Cy'), y('Ada'), y('Bo')], slots);
+  });
+
   testWidgets('an empty view uses the animated empty state', (tester) async {
     await tester.pumpWidget(_host(_page(empty: 'No chats in Groups.')));
     await tester.pumpAndSettle();
@@ -259,12 +303,11 @@ void main() {
               routes: [
                 GoRoute(
                   path: 'detail',
-                  pageBuilder: (context, state) =>
-                      AppRoutes.defaultPageBuilder(
-                        context,
-                        state,
-                        const Scaffold(body: Text('Detail pane')),
-                      ),
+                  pageBuilder: (context, state) => AppRoutes.defaultPageBuilder(
+                    context,
+                    state,
+                    const Scaffold(body: Text('Detail pane')),
+                  ),
                 ),
               ],
             ),
@@ -275,7 +318,10 @@ void main() {
     addTearDown(router.dispose);
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
     await tester.pumpAndSettle();
-    expect(ChatLoomThemes.isColumnMode(tester.element(find.text('Main'))), true);
+    expect(
+      ChatLoomThemes.isColumnMode(tester.element(find.text('Main'))),
+      true,
+    );
     // The layout's own fade: the one that keeps semantics while it runs.
     FadeTransition pane() => tester
         .widgetList<FadeTransition>(

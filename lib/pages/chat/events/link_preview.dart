@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/url_launcher.dart';
 import 'package:chatloom/widgets/blur_hash.dart';
@@ -153,31 +154,34 @@ class LinkPreviewAttachment extends StatelessWidget {
 
     final showImage =
         image != null && AppSettings.showThumbnailsInTimeline.value;
-    return NotionLinkPreviewCard(
-      title: preview.title,
-      description: preview.description,
-      site: preview.site,
-      fill: fill,
-      textColor: textColor,
-      mutedColor: textColor.withValues(alpha: .72),
-      imageAspectRatio: aspect,
-      semanticLabel: 'Link preview: ${preview.title ?? preview.site}',
-      image: showImage
-          ? MxcImage(
-              uri: image,
-              encryption: preview.imageEncryption,
-              client: event.room.client,
-              cacheKey: 'linkpreview:$image',
-              cacheName: event.room.id,
-              isThumbnail: preview.imageEncryption == null,
-              width: width,
-              height: height,
-              fit: BoxFit.cover,
-              placeholder: placeholder,
-              usePlaceholderOnError: true,
-            )
-          : null,
-      onTap: () => UrlLauncher(context, preview.url).launchUrl(),
+    // A double tap on the card reacts; a single tap opens the link.
+    return ConversationMessageChromeTap(
+      child: NotionLinkPreviewCard(
+        title: preview.title,
+        description: preview.description,
+        site: preview.site,
+        fill: fill,
+        textColor: textColor,
+        mutedColor: textColor.withValues(alpha: .72),
+        imageAspectRatio: aspect,
+        semanticLabel: 'Link preview: ${preview.title ?? preview.site}',
+        image: showImage
+            ? MxcImage(
+                uri: image,
+                encryption: preview.imageEncryption,
+                client: event.room.client,
+                cacheKey: 'linkpreview:$image',
+                cacheName: event.room.id,
+                isThumbnail: preview.imageEncryption == null,
+                width: width,
+                height: height,
+                fit: BoxFit.cover,
+                placeholder: placeholder,
+                usePlaceholderOnError: true,
+              )
+            : null,
+        onTap: () => UrlLauncher(context, preview.url).launchUrl(),
+      ),
     );
   }
 }

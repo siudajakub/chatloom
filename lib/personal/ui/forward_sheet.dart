@@ -278,6 +278,14 @@ Future<void> showForwardSheet(
 /// the same transaction, so a retry never delivers twice.
 final _attempts = Expando<Map<Object, String>>();
 
+/// Test seam: what the sheet's Send does for [room].
+@visibleForTesting
+Future<String?> debugSendForwardItems(
+  BuildContext context,
+  Room room,
+  List<ShareItem> items,
+) => _sendItems(context, room, items);
+
 Future<String?> _sendItems(
   BuildContext context,
   Room room,
@@ -304,6 +312,11 @@ Future<String?> _sendItems(
       if (id == null) {
         return 'Not sent. Check your connection and try again.';
       }
+    }
+    // Only now: Try again after a later item failed resends the earlier
+    // ones with their own transaction, which the server does not repeat
+    // (a forwarded gallery is several messages).
+    for (final item in items) {
       attempts.remove(item);
     }
   } catch (error) {

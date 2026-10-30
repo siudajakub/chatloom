@@ -2,6 +2,7 @@
 import 'dart:math' as math;
 
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/events/outgoing_upload_progress.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/foundation.dart';
@@ -201,15 +202,19 @@ class RoundVideoView extends StatelessWidget {
               clipBehavior: Clip.none,
               alignment: Alignment.center,
               children: [
+                // A double tap on the circle (or its play button) reacts;
+                // a single tap plays or pauses.
                 Positioned.fill(
-                  child: ClipOval(
-                    child: ColoredBox(
-                      color: placeholderColor,
-                      child: NotionTapTarget(
-                        behavior: HitTestBehavior.opaque,
-                        excludeFromSemantics: true,
-                        onTap: tapEnabled ? onToggle : null,
-                        child: SizedBox.expand(child: content),
+                  child: ConversationMessageChromeTap(
+                    child: ClipOval(
+                      child: ColoredBox(
+                        color: placeholderColor,
+                        child: NotionTapTarget(
+                          behavior: HitTestBehavior.opaque,
+                          excludeFromSemantics: true,
+                          onTap: tapEnabled ? onToggle : null,
+                          child: SizedBox.expand(child: content),
+                        ),
                       ),
                     ),
                   ),
@@ -301,14 +306,16 @@ class RoundVideoView extends StatelessWidget {
                     ),
                   )
                 else if (!loading && !blocked)
-                  IconButton(
-                    tooltip: error != null
-                        ? 'Retry playback'
-                        : 'Play round video',
-                    onPressed: pending ? null : onToggle,
-                    style: glyphStyle,
-                    icon: Icon(
-                      error != null ? Icons.refresh : Icons.play_arrow,
+                  ConversationMessageChromeTap(
+                    child: IconButton(
+                      tooltip: error != null
+                          ? 'Retry playback'
+                          : 'Play round video',
+                      onPressed: pending ? null : onToggle,
+                      style: glyphStyle,
+                      icon: Icon(
+                        error != null ? Icons.refresh : Icons.play_arrow,
+                      ),
                     ),
                   ),
                 if (!blocked)

@@ -74,22 +74,31 @@ class SettingsSecurityView extends StatelessWidget {
                   ? controller.setAppLockAction()
                   : controller.disableAppLockAction(),
             ),
-            if (AppLock.of(context).isActive) ...[
-              FutureBuilder<bool>(
-                future: LocalAuthentication().canCheckBiometrics,
-                builder: (context, snapshot) => snapshot.data != true
-                    ? const SizedBox.shrink()
-                    : NotionSettingsToggle(
+            // The lock's options grow in and out with the switch.
+            NotionSizeReveal(
+              visible: AppLock.of(context).isActive,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  FutureBuilder<bool>(
+                    future: LocalAuthentication().canCheckBiometrics,
+                    builder: (context, snapshot) => NotionSizeReveal(
+                      visible: snapshot.data == true,
+                      child: NotionSettingsToggle(
                         value: AppLock.of(context).useBiometrics,
                         title: L10n.of(context).unlockWithBiometrics,
                         onChanged: (_) => controller.toggleBiometrics(),
                       ),
+                    ),
+                  ),
+                  NotionListRow(
+                    title: 'Change PIN',
+                    onTap: controller.setAppLockAction,
+                  ),
+                ],
               ),
-              NotionListRow(
-                title: 'Change PIN',
-                onTap: controller.setAppLockAction,
-              ),
-            ],
+            ),
           ],
           const NotionSettingsSection('Encryption'),
           NotionListRow(

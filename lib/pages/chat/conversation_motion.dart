@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/gestures.dart' show kLongPressTimeout, kTouchSlop;
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 /// Motion policy shared by conversation components. Delegates to the single
@@ -15,6 +18,12 @@ abstract final class ConversationMotion {
 
   /// Start scale of an arriving bubble; it grows from its tail corner.
   static const double arrivalFrom = .92;
+
+  /// Length of a deleted message's exit (fade, shrink, slot closing).
+  static const Duration departure = NotionMotion.medium;
+
+  /// Length of an edited or deleted bubble's size change.
+  static const Duration contentMorph = NotionMotion.medium;
 
   /// How long the message a jump landed on stays highlighted before it
   /// fades (Telegram holds 1 s; with the rise and fade about 1.5 s).
@@ -32,7 +41,7 @@ abstract final class ConversationMotion {
       reduced(context) ? const Duration(microseconds: 1) : duration;
 }
 
-enum _EntranceMode { rest, arrive }
+enum _EntranceMode { rest, arrive, leave }
 
 /// Entrance of one timeline row.
 ///
@@ -48,6 +57,10 @@ enum _EntranceMode { rest, arrive }
 /// Transform/opacity plus one size factor; settles to identity (no layers at
 /// rest), instant under reduced motion. The widget tree never changes shape,
 /// so the row's state (media, gestures) survives the animation.
+///
+/// [leave] plays the opposite for a message the user deletes: the bubble
+/// fades and shrinks into its centre while its slot closes, so the rows
+/// around glide together before the list drops the row (Telegram).
 class ConversationMessageEntrance extends StatefulWidget {
   const ConversationMessageEntrance({
     super.key,
@@ -61,6 +74,37 @@ class ConversationMessageEntrance extends StatefulWidget {
   final Object identity;
   final bool animate;
   final bool outgoing;
+
+  /// Mounted rows by [identity] (a message may show in two lists).
+  static final Map<Object, Set<_ConversationMessageEntranceState>> _rows = {};
+
+  /// Plays the exit of the rows showing any of [identities] (event and
+  /// transaction ID). Null when nothing is on screen to animate or motion is
+  /// reduced, so the caller can remove the message synchronously.
+  static Future<void>? leave(Iterable<Object?> identities) {
+    final exits = [
+      for (final state in _statesOf(identities))
+        if (state.mounted && !ConversationMotion.reduced(state.context))
+          state._leave(),
+    ];
+    if (exits.isEmpty) return null;
+    return Future.wait(exits).then((_) {});
+  }
+
+  /// Puts rows that [leave] collapsed back at rest (the deletion failed and
+  /// the message stays).
+  static void restore(Iterable<Object?> identities) {
+    for (final state in _statesOf(identities)) {
+      state._restore();
+    }
+  }
+
+  static Set<_ConversationMessageEntranceState> _statesOf(
+    Iterable<Object?> identities,
+  ) => {
+    for (final id in identities)
+      if (id != null) ...?_rows[id],
+  };
 
   @override
   State<ConversationMessageEntrance> createState() =>
@@ -79,11 +123,52 @@ class _ConversationMessageEntranceState
   );
   _EntranceMode _mode = _EntranceMode.rest;
   bool _initialized = false;
+  Completer<void>? _left;
+
+  static const _leaveFade = Interval(0, .6, curve: NotionMotion.standard);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _register(widget.identity);
+  }
+
+  void _register(Object identity) =>
+      (ConversationMessageEntrance._rows[identity] ??= {}).add(this);
+
+  void _unregister(Object identity) {
+    final states = ConversationMessageEntrance._rows[identity];
+    states?.remove(this);
+    if (states != null && states.isEmpty) {
+      ConversationMessageEntrance._rows.remove(identity);
+    }
+  }
+
+  Future<void> _leave() {
+    final pending = _left;
+    if (pending != null) return pending.future;
+    final left = _left = Completer<void>();
+    setState(() => _mode = _EntranceMode.leave);
+    _controller
+        .animateBack(0, duration: ConversationMotion.departure)
+        .whenCompleteOrCancel(() {
+          if (!left.isCompleted) left.complete();
+        });
+    return left.future;
+  }
+
+  void _restore() {
+    if (_mode != _EntranceMode.leave) return;
+    _finishLeave();
+    setState(() => _mode = _EntranceMode.rest);
+    _controller.value = 1;
+  }
+
+  void _finishLeave() {
+    final left = _left;
+    _left = null;
+    if (left != null && !left.isCompleted) left.complete();
   }
 
   @override
@@ -92,7 +177,8 @@ class _ConversationMessageEntranceState
     if (!_initialized) {
       _initialized = true;
       _start();
-    } else if (ConversationMotion.reduced(context)) {
+    } else if (_mode != _EntranceMode.leave &&
+        ConversationMotion.reduced(context)) {
       _controller.value = 1;
     }
   }
@@ -100,7 +186,12 @@ class _ConversationMessageEntranceState
   @override
   void didUpdateWidget(ConversationMessageEntrance oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.identity != widget.identity) _start();
+    if (oldWidget.identity != widget.identity) {
+      _unregister(oldWidget.identity);
+      _register(widget.identity);
+      _finishLeave();
+      _start();
+    }
   }
 
   void _start() {
@@ -115,12 +206,18 @@ class _ConversationMessageEntranceState
 
   @override
   void didChangeAccessibilityFeatures() {
-    if (mounted && ConversationMotion.reduced(context)) _controller.value = 1;
+    if (mounted &&
+        _mode != _EntranceMode.leave &&
+        ConversationMotion.reduced(context)) {
+      _controller.value = 1;
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _unregister(widget.identity);
+    _finishLeave();
     _controller.dispose();
     super.dispose();
   }
@@ -140,6 +237,22 @@ class _ConversationMessageEntranceState
         var height = 1.0;
         var opacity = 1.0;
         var scale = 1.0;
+        if (_mode == _EntranceMode.leave) {
+          // Leaving: the bubble fades and shrinks into its centre while
+          // the slot closes around it.
+          final p = NotionMotion.standard.transform(1 - t);
+          return Align(
+            heightFactor: (1 - p).clamp(0.0, 1.0),
+            widthFactor: 1,
+            child: Opacity(
+              opacity: (1 - _leaveFade.transform(1 - t)).clamp(0.0, 1.0),
+              child: Transform.scale(
+                scale: 1 - (1 - ConversationMotion.arrivalFrom) * p,
+                child: child,
+              ),
+            ),
+          );
+        }
         if (t < 1 && _mode == _EntranceMode.arrive) {
           height = NotionMotion.emphasized.transform(t);
           opacity = _arriveFade.transform(t);
@@ -535,5 +648,185 @@ class _ConversationRevealState extends State<ConversationReveal> {
         child: _last ?? const SizedBox.shrink(),
       ),
     );
+  }
+}
+
+/// A bubble whose content changes in place (an edit, a deletion that leaves
+/// "Message deleted" behind): when [revision] changes after the first
+/// build, the box glides from its old size to the new one
+/// ([ConversationMotion.contentMorph], clipped while it moves) and the new
+/// content fades up, instead of the bubble snapping. The first build,
+/// rebuilds with the same [revision] and rows built while scrolling never
+/// animate; no controller exists until the first change. Instant under
+/// reduced motion.
+class ConversationContentMorph extends StatefulWidget {
+  const ConversationContentMorph({
+    super.key,
+    required this.revision,
+    required this.child,
+  });
+
+  /// What the content shows (deleted, edited text); a change morphs.
+  final Object? revision;
+  final Widget child;
+
+  @override
+  State<ConversationContentMorph> createState() =>
+      _ConversationContentMorphState();
+}
+
+class _ConversationContentMorphState extends State<ConversationContentMorph>
+    with SingleTickerProviderStateMixin {
+  static final _fadeIn = Tween<double>(begin: .25, end: 1).chain(
+    CurveTween(curve: const Interval(0, .6, curve: NotionMotion.standard)),
+  );
+
+  AnimationController? _controller;
+  Animation<double>? _fade;
+  Size? _from;
+
+  @override
+  void didUpdateWidget(ConversationContentMorph oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.revision == widget.revision) return;
+    final box = context.findRenderObject();
+    if (ConversationMotion.reduced(context) ||
+        box is! RenderBox ||
+        !box.hasSize) {
+      _controller?.value = 1;
+      _from = null;
+      return;
+    }
+    _from = box.size;
+    final controller = _controller ??= AnimationController(
+      vsync: this,
+      duration: ConversationMotion.contentMorph,
+    );
+    _fade ??= controller.drive(_fadeIn);
+    controller.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _ContentMorphBox(
+    from: _from,
+    animation: _controller ?? kAlwaysCompleteAnimation,
+    child: FadeTransition(
+      opacity: _fade ?? kAlwaysCompleteAnimation,
+      child: widget.child,
+    ),
+  );
+}
+
+class _ContentMorphBox extends SingleChildRenderObjectWidget {
+  const _ContentMorphBox({
+    required this.from,
+    required this.animation,
+    super.child,
+  });
+
+  final Size? from;
+  final Animation<double> animation;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderContentMorph(from: from, animation: animation);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderContentMorph renderObject,
+  ) => renderObject
+    ..from = from
+    ..animation = animation;
+}
+
+/// Lays its child out at its own size but reports a size between [from] and
+/// that while [animation] runs, clipping the child to it. At rest (or
+/// without [from]) a plain proxy.
+class _RenderContentMorph extends RenderProxyBox {
+  _RenderContentMorph({
+    required Size? from,
+    required Animation<double> animation,
+  }) : _from = from,
+       _animation = animation;
+
+  Size? _from;
+  set from(Size? value) {
+    if (value == _from) return;
+    _from = value;
+    markNeedsLayout();
+  }
+
+  Animation<double> _animation;
+  set animation(Animation<double> value) {
+    if (identical(value, _animation)) return;
+    if (attached) _animation.removeListener(markNeedsLayout);
+    _animation = value;
+    if (attached) _animation.addListener(markNeedsLayout);
+    markNeedsLayout();
+  }
+
+  final LayerHandle<ClipRectLayer> _clip = LayerHandle<ClipRectLayer>();
+
+  bool get _morphing => _from != null && _animation.value < 1;
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _animation.addListener(markNeedsLayout);
+  }
+
+  @override
+  void detach() {
+    _animation.removeListener(markNeedsLayout);
+    super.detach();
+  }
+
+  @override
+  void performLayout() {
+    final child = this.child;
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+    child.layout(constraints, parentUsesSize: true);
+    if (!_morphing) {
+      size = child.size;
+      return;
+    }
+    final t = NotionMotion.emphasized.transform(
+      _animation.value.clamp(0.0, 1.0),
+    );
+    size = constraints.constrain(Size.lerp(_from, child.size, t)!);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final child = this.child;
+    if (child == null) return;
+    if (!_morphing || size == child.size) {
+      _clip.layer = null;
+      context.paintChild(child, offset);
+      return;
+    }
+    _clip.layer = context.pushClipRect(
+      needsCompositing,
+      offset,
+      Offset.zero & size,
+      (context, offset) => context.paintChild(child, offset),
+      oldLayer: _clip.layer,
+    );
+  }
+
+  @override
+  void dispose() {
+    _clip.layer = null;
+    super.dispose();
   }
 }

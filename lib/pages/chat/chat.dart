@@ -41,6 +41,7 @@ import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
+import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/network_rejections.dart';
 import 'package:chatloom/personal/performance_probe.dart';
@@ -1297,6 +1298,9 @@ class ChatController extends State<ChatPageWithRoom>
         }.contains(firstEvent.type)) {
       newBelow.value++;
     }
+    // A page of newer history (scrolling down a jumped timeline) is not an
+    // arrival: its rows never animate.
+    if (timeline?.isRequestingFuture ?? false) return;
     final eventId = firstEvent?.transactionId ?? firstEvent?.eventId;
     animateInEventId = eventId;
     await Future.delayed(ChatLoomThemes.animationDuration);
@@ -2410,7 +2414,12 @@ class ChatController extends State<ChatPageWithRoom>
     }
     await showForwardSheet(
       context,
-      items: [ContentShareItem(forward.content.copy())],
+      items: [
+        for (final content in GalleryContent.forwardContents(
+          forward.content.copy(),
+        ))
+          ContentShareItem(content),
+      ],
     );
   }
 

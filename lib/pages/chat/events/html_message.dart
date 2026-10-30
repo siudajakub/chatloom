@@ -5,6 +5,7 @@
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/code_highlight_theme.dart';
 import 'package:chatloom/utils/event_checkbox_extension.dart';
@@ -683,11 +684,15 @@ class _HtmlMessageState extends State<HtmlMessage> {
     final span = _cachedSpan(context);
     final style = TextStyle(fontSize: fontSize, color: textColor);
 
+    // Links, mentions and spoilers in the text share their taps with the
+    // message's double tap; "Show more" below stays a control.
     if (maxLines == null) {
-      return Text.rich(
-        span,
-        style: style,
-        selectionColor: textColor.withAlpha(128),
+      return ConversationMessageChromeTap(
+        child: Text.rich(
+          span,
+          style: style,
+          selectionColor: textColor.withAlpha(128),
+        ),
       );
     }
 
@@ -698,10 +703,12 @@ class _HtmlMessageState extends State<HtmlMessage> {
         lineCount > maxLines || plainText.length > maxLines * 50;
 
     if (!likelyOverflows) {
-      return Text.rich(
-        span,
-        style: style,
-        selectionColor: textColor.withAlpha(128),
+      return ConversationMessageChromeTap(
+        child: Text.rich(
+          span,
+          style: style,
+          selectionColor: textColor.withAlpha(128),
+        ),
       );
     }
 
@@ -750,12 +757,16 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
         // Reduced motion snaps (UI-22).
         NotionAnimatedSize(
           alignment: AlignmentDirectional.topStart,
-          child: Text.rich(
-            widget.span,
-            style: widget.style,
-            maxLines: _expanded ? null : widget.maxLines,
-            overflow: _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
-            selectionColor: widget.textColor.withAlpha(128),
+          child: ConversationMessageChromeTap(
+            child: Text.rich(
+              widget.span,
+              style: widget.style,
+              maxLines: _expanded ? null : widget.maxLines,
+              overflow: _expanded
+                  ? TextOverflow.visible
+                  : TextOverflow.ellipsis,
+              selectionColor: widget.textColor.withAlpha(128),
+            ),
           ),
         ),
         // Not centred: a Center would stretch the bubble to its max width.

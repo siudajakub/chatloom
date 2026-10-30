@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -170,10 +171,18 @@ abstract final class MessageDeletions {
     required ScaffoldMessengerState? messenger,
     required VoidCallback retry,
   }) async {
+    // The bubble shrinks away and its neighbours close the gap first; with
+    // nothing on screen (or reduced motion) it goes at once.
+    final exit = ConversationMessageEntrance.leave([
+      event.eventId,
+      event.transactionId,
+    ]);
+    if (exit != null) await exit;
     _hide(event);
     refresh();
     void failed(Object error) {
       _unhide(event);
+      ConversationMessageEntrance.restore([event.eventId, event.transactionId]);
       refresh();
       messenger?.showSnackBar(
         SnackBar(

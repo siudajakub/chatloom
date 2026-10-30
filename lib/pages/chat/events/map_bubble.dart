@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:material_ui/material_ui.dart';
@@ -90,11 +91,14 @@ class MapBubble extends StatelessWidget {
                 ),
               ),
             ),
-            Material(
-              color: Colors.transparent,
-              child: Tooltip(
-                message: L10n.of(context).openInMaps,
-                child: InkWell(onTap: onTap, child: SizedBox.expand()),
+            // A double tap reacts; a single tap opens the map.
+            ConversationMessageChromeTap(
+              child: Material(
+                color: Colors.transparent,
+                child: Tooltip(
+                  message: L10n.of(context).openInMaps,
+                  child: InkWell(onTap: onTap, child: SizedBox.expand()),
+                ),
               ),
             ),
           ],

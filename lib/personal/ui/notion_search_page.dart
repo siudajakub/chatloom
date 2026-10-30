@@ -603,25 +603,37 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       for (final (index, item) in items.indexed) item.key: index,
     };
     final padding = MediaQuery.paddingOf(context);
-    return ListView.builder(
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      padding: EdgeInsets.fromLTRB(
-        NotionSpace.inset,
-        padding.top + NotionSpace.xs,
-        NotionSpace.inset,
-        padding.bottom + NotionSpace.xxl,
+    // Results that stay glide to their new places as the query or a slower
+    // source (contacts, a bridge) changes the list; new ones fade in.
+    return NotionListMotion(
+      order: [for (final item in items) item.key],
+      background: Theme.of(context).scaffoldBackgroundColor,
+      child: ListView.builder(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.fromLTRB(
+          NotionSpace.inset,
+          padding.top + NotionSpace.xs,
+          NotionSpace.inset,
+          padding.bottom + NotionSpace.xxl,
+        ),
+        itemCount: items.length,
+        findChildIndexCallback: (key) => keys[key],
+        // The motion item adds both itself.
+        addRepaintBoundaries: false,
+        addSemanticIndexes: false,
+        itemBuilder: (context, index) {
+          final item = items[index];
+          return NotionListMotionItem(
+            key: item.key,
+            index: index,
+            child: NotionEntrance(
+              playKey: item.key,
+              rise: NotionMotion.riseList,
+              child: item.build(context),
+            ),
+          );
+        },
       ),
-      itemCount: items.length,
-      findChildIndexCallback: (key) => keys[key],
-      itemBuilder: (context, index) {
-        final item = items[index];
-        return NotionEntrance(
-          key: item.key,
-          playKey: item.key,
-          rise: NotionMotion.riseList,
-          child: item.build(context),
-        );
-      },
     );
   }
 

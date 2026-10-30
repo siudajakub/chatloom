@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/config/app_config.dart';
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/events/file_send_status_indicator.dart';
 import 'package:chatloom/pages/chat/events/outgoing_upload_progress.dart';
 import 'package:chatloom/personal/media/open_file.dart';
@@ -47,70 +48,73 @@ class MessageDownloadContent extends StatelessWidget {
       crossAxisAlignment: .start,
       spacing: 8,
       children: [
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(NotionTokens.radius),
-            // Telegram: a tap downloads (ring in the bubble, a second tap
-            // cancels) and opens the file in its default app; Save stays in
-            // the message menu.
-            onTap: () => event.openFile(context),
-            child: Container(
-              // Hugs the file name, up to the media width.
-              constraints: const BoxConstraints(
-                maxWidth: NotionBubble.mediaMaxWidth,
-              ),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(NotionTokens.radius),
-                border: Border.all(
-                  color: Theme.of(context).colorScheme.outlineVariant,
+        // A double tap on the file reacts; a single tap downloads it.
+        ConversationMessageChromeTap(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(NotionTokens.radius),
+              // Telegram: a tap downloads (ring in the bubble, a second tap
+              // cancels) and opens the file in its default app; Save stays in
+              // the message menu.
+              onTap: () => event.openFile(context),
+              child: Container(
+                // Hugs the file name, up to the media width.
+                constraints: const BoxConstraints(
+                  maxWidth: NotionBubble.mediaMaxWidth,
                 ),
-              ),
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                mainAxisSize: .min,
-                spacing: 16,
-                children: [
-                  if (uploading)
-                    FileSendStatusIndicator(
-                      fileSendingStatus:
-                          event.fileSendingStatus ??
-                          FileSendingStatus.uploading,
-                      progress: uploadProgressOf(event),
-                    )
-                  else
-                    FileOpenStatusIcon(
-                      eventId: event.eventId,
-                      idle: Icon(
-                        Icons.insert_drive_file_outlined,
-                        color: textColor,
-                        size: 28,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(NotionTokens.radius),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
+                ),
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  mainAxisSize: .min,
+                  spacing: 16,
+                  children: [
+                    if (uploading)
+                      FileSendStatusIndicator(
+                        fileSendingStatus:
+                            event.fileSendingStatus ??
+                            FileSendingStatus.uploading,
+                        progress: uploadProgressOf(event),
+                      )
+                    else
+                      FileOpenStatusIcon(
+                        eventId: event.eventId,
+                        idle: Icon(
+                          Icons.insert_drive_file_outlined,
+                          color: textColor,
+                          size: 28,
+                        ),
+                      ),
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: .start,
+                        mainAxisSize: .min,
+                        children: [
+                          Text(
+                            filename,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: textColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          Text(
+                            '$sizeString · $filetype',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: textColor, fontSize: 10),
+                          ),
+                        ],
                       ),
                     ),
-                  Flexible(
-                    child: Column(
-                      crossAxisAlignment: .start,
-                      mainAxisSize: .min,
-                      children: [
-                        Text(
-                          filename,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: textColor,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        Text(
-                          '$sizeString · $filetype',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: textColor, fontSize: 10),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -565,11 +566,14 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
             Flexible(
               child: Padding(
                 padding: const EdgeInsetsDirectional.only(start: _textInset),
-                child: Tooltip(
-                  message: cost == null
-                      ? caption
-                      : 'Estimated cost: \$${cost.toStringAsFixed(4)}',
-                  child: _caption(caption, foreground),
+                // The caption is text: a double tap on it reacts, too.
+                child: ConversationMessageChromeTap(
+                  child: Tooltip(
+                    message: cost == null
+                        ? caption
+                        : 'Estimated cost: \$${cost.toStringAsFixed(4)}',
+                    child: _caption(caption, foreground),
+                  ),
                 ),
               ),
             ),
