@@ -59,6 +59,11 @@ class MxcImage extends StatefulWidget {
   final bool isThumbnail;
   final bool animated;
   final Duration retryDuration;
+
+  /// When set, a terminal failure (not found, undecodable) is asked again
+  /// after this delay (doubling), and on app resume: for media that may
+  /// appear later, like bridged avatars.
+  final Duration? retryFailedAfter;
   final Duration animationDuration;
   final Curve animationCurve;
   final ThumbnailMethod thumbnailMethod;
@@ -166,6 +171,7 @@ class MxcImage extends StatefulWidget {
     this.animated = false,
     this.animationDuration = ChatLoomThemes.animationDuration,
     this.retryDuration = const Duration(seconds: 2),
+    this.retryFailedAfter,
     this.animationCurve = ChatLoomThemes.animationCurve,
     this.thumbnailMethod = ThumbnailMethod.scale,
     this.cacheKey,
@@ -295,6 +301,17 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     if (!mounted || generation != _generation) return;
     _report(MxcImageLoad.failed);
     setState(() => _failed = true);
+    final after = widget.retryFailedAfter;
+    if (after == null || !_active) return;
+    // Bridged media (Instagram avatars through direct media) can 404 for a
+    // while; keep the fallback but ask again later, backing off.
+    final delay = after * (1 << min(_failures++, 4));
+    _retryTimer?.cancel();
+    _retryTimer = Timer(delay, () {
+      if (!mounted || generation != _generation) return;
+      _failed = false;
+      unawaited(_tryLoad());
+    });
   }
 
   /// Accepts [data] as a Lottie sticker (TGS or Lottie JSON), parsing it once
@@ -583,6 +600,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     _retryTimer?.cancel();
     if (state == AppLifecycleState.resumed) {
       _failures = 0;
+      if (widget.retryFailedAfter != null) _failed = false;
       unawaited(_tryLoad());
     }
   }
