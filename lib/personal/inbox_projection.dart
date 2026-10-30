@@ -143,7 +143,9 @@ class InboxProjection {
     if (room == null || room.membership != Membership.join) {
       return PersonMemberState.inactive;
     }
-    return mergeable(room) ? PersonMemberState.active : PersonMemberState.unsafe;
+    return mergeable(room)
+        ? PersonMemberState.active
+        : PersonMemberState.unsafe;
   }
 
   List<PersonGroup> get _validGroups => resolution.valid;
@@ -184,7 +186,9 @@ class InboxProjection {
 
   /// Private preferences of the person [groupId] (routing, name source).
   PersonPreferences preferencesFor(String groupId) =>
-      PersonPreferences.fromJson(personal.values[personPreferencesKey(groupId)]);
+      PersonPreferences.fromJson(
+        personal.values[personPreferencesKey(groupId)],
+      );
 
   /// The one name of a merged person everywhere: the private nickname, else
   /// the current name of the chosen source chat, else the saved name.
@@ -196,7 +200,9 @@ class InboxProjection {
     if (override?.trim().isNotEmpty == true) return override!;
     final source = preferencesFor(group.id).nameRoomId;
     if (source != null && group.members.any((m) => m.roomId == source)) {
-      final name = personal.client.getRoomById(source)?.getLocalizedDisplayname();
+      final name = personal.client
+          .getRoomById(source)
+          ?.getLocalizedDisplayname();
       if (name != null && name.trim().isNotEmpty) return name;
     }
     return group.name;
@@ -208,6 +214,20 @@ class InboxProjection {
   }
 
   String metadataKey(Room room) => 'org:${entityFor(room)}';
+
+  /// Private synced key of "Move down" on an unanswered chat: the time of
+  /// the newest message it covered.
+  static String movedDownKey(String entity) => 'unanswered-moved:$entity';
+
+  /// Whether the user moved [entity] down while [latest] was its newest
+  /// message; a newer message from the other side raises it again.
+  bool movedDown(String entity, Event? latest) {
+    final until = personal.values[movedDownKey(entity)]?['until'];
+    return latest != null &&
+        until is int &&
+        latest.originServerTs.millisecondsSinceEpoch <= until;
+  }
+
   ConversationMetadata metadataFor(Room room) =>
       metadataForEntity(entityFor(room));
   ConversationMetadata metadataForEntity(String entity) => _snapshot
@@ -349,6 +369,18 @@ class InboxProjection {
     );
   }
 
+  /// The inbox record of [room]'s row (its merged person, if any).
+  InboxRecord recordFor(Room room) {
+    final group = groupFor(room);
+    final sources = group == null ? [room] : activeSourcesOf(group);
+    return _record(
+      room,
+      entityFor(room),
+      group,
+      sources.isEmpty ? [room] : sources,
+    ).$1;
+  }
+
   /// Snapshot only: drops cached metadata so the next read sees fresh state.
   void forgetEntity(String entity) {
     _metadata.remove(entity);
@@ -425,6 +457,12 @@ class InboxProjection {
             for (final source in sourceRooms) ..._legacyLabels(source.id),
           };
     final kinds = sourceRooms.map(classifier.classify).toList();
+    final unanswered =
+        latest != null &&
+        latest.type == EventTypes.Message &&
+        !latest.redacted &&
+        !OwnSenderResolver.of(personal.client).isOwnEvent(latest) &&
+        sourceRooms.any((r) => r.canSendDefaultMessages);
     final record = InboxRecord(
       representativeRoomId: representative.id,
       entityId: entity,
@@ -447,12 +485,13 @@ class InboxProjection {
                     .isNotEmpty ||
                 personal.conflicts.containsKey('draft:${r.id}'),
           ),
-      unanswered:
-          latest != null &&
-          latest.type == EventTypes.Message &&
-          !latest.redacted &&
-          !OwnSenderResolver.of(personal.client).isOwnEvent(latest) &&
-          sourceRooms.any((r) => r.canSendDefaultMessages),
+      unanswered: unanswered,
+      awaitingReply:
+          unanswered &&
+          (group != null || !kinds.single.isGroup) &&
+          !(group == null && kinds.single.messageRequest) &&
+          !metadata.muted &&
+          !movedDown(entity, latest),
       lastActivity: latest?.originServerTs,
     );
     return (record, representative);

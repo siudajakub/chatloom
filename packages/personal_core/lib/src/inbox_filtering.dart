@@ -37,6 +37,11 @@ class InboxRecord {
   final int unreadCount;
   final bool hasDraft;
   final bool unanswered;
+
+  /// An unanswered one-to-one chat the user has not moved down: it sorts
+  /// above every other unpinned chat until they reply, or until a newer
+  /// message arrives after they moved it down.
+  final bool awaitingReply;
   final DateTime? lastActivity;
   final ConversationMetadata metadata;
   InboxRecord({
@@ -54,6 +59,7 @@ class InboxRecord {
     this.unreadCount = 0,
     this.hasDraft = false,
     this.unanswered = false,
+    this.awaitingReply = false,
     this.lastActivity,
   }) : networks = Set.unmodifiable(networks),
        labelKeys = Set.unmodifiable(labelKeys);
@@ -130,6 +136,8 @@ List<InboxRecord> projectInbox(
     if (a.metadata.isPinned) {
       final pin = a.metadata.pinOrder!.compareTo(b.metadata.pinOrder!);
       if (pin != 0) return pin;
+    } else if (a.awaitingReply != b.awaitingReply) {
+      return a.awaitingReply ? -1 : 1;
     }
     final time = (b.lastActivity ?? DateTime.fromMillisecondsSinceEpoch(0))
         .compareTo(a.lastActivity ?? DateTime.fromMillisecondsSinceEpoch(0));

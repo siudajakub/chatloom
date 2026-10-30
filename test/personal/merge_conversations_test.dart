@@ -444,11 +444,23 @@ void main() {
     expect(labels(whatsapp), [
       'Mark as unread',
       'Pin',
+      'Move down',
       'Mute…',
       'Archive',
       'Merge…',
       'Ignore chat',
     ]);
+    // Moved down: the chat keeps its usual place until a newer message.
+    final latest = whatsapp.lastEvent!.originServerTs.millisecondsSinceEpoch;
+    personal.values[InboxProjection.movedDownKey(whatsapp.id)] = {
+      'until': latest,
+    };
+    expect(labels(whatsapp), isNot(contains('Move down')));
+    personal.values[InboxProjection.movedDownKey(whatsapp.id)] = {
+      'until': latest - 1,
+    };
+    expect(labels(whatsapp), contains('Move down'));
+    personal.values.remove(InboxProjection.movedDownKey(whatsapp.id));
     personal.values['person:p'] = PersonGroup(
       id: 'p',
       name: 'Fictional person',
@@ -458,6 +470,7 @@ void main() {
     expect(labels(telegram), [
       'Mark as unread',
       'Pin',
+      'Move down',
       'Mute…',
       'Archive',
       'Unmerge',
@@ -691,16 +704,11 @@ void main() {
 
   test('a source that became a group chat still never merges', () {
     save('p', [whatsapp, telegram]);
-    _state(
-      telegram,
-      'm.bridge',
-      {
-        'bridgebot': _bot,
-        'protocol': {'id': 'telegram'},
-        'com.beeper.room_type.v2': 'group',
-      },
-      key: 'later',
-    );
+    _state(telegram, 'm.bridge', {
+      'bridgebot': _bot,
+      'protocol': {'id': 'telegram'},
+      'com.beeper.room_type.v2': 'group',
+    }, key: 'later');
     final projection = InboxProjection(personal);
     expect(projection.groupFor(whatsapp), isNull);
     expect(projection.groupFor(telegram), isNull);
@@ -884,7 +892,10 @@ void main() {
       PersonalNotificationMode.all,
     );
     projection = InboxProjection(personal);
-    expect(projection.notificationModeFor(telegram), PersonalNotificationMode.all);
+    expect(
+      projection.notificationModeFor(telegram),
+      PersonalNotificationMode.all,
+    );
     expect(
       projection.notificationModeFor(whatsapp),
       PersonalNotificationMode.muted,
@@ -896,10 +907,10 @@ void main() {
     _state(signal, EventTypes.RoomName, {'name': 'Anna Maria Nowak'});
     var suggestions = personMergeSuggestions(personal);
     expect(suggestions, hasLength(1));
-    expect({
-      suggestions.single.first.entityId,
-      suggestions.single.second.entityId,
-    }, {whatsapp.id, signal.id});
+    expect(
+      {suggestions.single.first.entityId, suggestions.single.second.entityId},
+      {whatsapp.id, signal.id},
+    );
     expect(personMergeSuggestions(personal, anchor: telegram), isEmpty);
     await dismissMergeSuggestion(personal, suggestions.single);
     expect(personMergeSuggestions(personal), isEmpty);

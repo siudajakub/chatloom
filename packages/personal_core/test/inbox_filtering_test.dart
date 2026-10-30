@@ -12,6 +12,7 @@ InboxRecord fixture(
   bool unread = false,
   bool draft = false,
   bool unanswered = false,
+  bool awaiting = false,
   Iterable<String> labels = const [],
   String name = 'Synthetic person',
   String network = 'WhatsApp',
@@ -32,6 +33,7 @@ InboxRecord fixture(
   unread: unread,
   hasDraft: draft,
   unanswered: unanswered,
+  awaitingReply: awaiting,
   lastActivity: activity ?? now,
 );
 
@@ -156,6 +158,40 @@ void main() {
       projectInbox(items, filter: InboxFilter.unanswered).single.entityId,
       'incoming',
     );
+  });
+  test('chats awaiting a reply sort above newer ones, below pins', () {
+    final items = [
+      fixture('newest', activity: now),
+      fixture(
+        'older-waiting',
+        unanswered: true,
+        awaiting: true,
+        activity: now.subtract(const Duration(days: 2)),
+      ),
+      fixture(
+        'moved-down',
+        unanswered: true,
+        activity: now.subtract(const Duration(days: 1)),
+      ),
+      fixture(
+        'old-waiting',
+        unanswered: true,
+        awaiting: true,
+        activity: now.subtract(const Duration(days: 3)),
+      ),
+      fixture(
+        'pinned',
+        pin: 0,
+        activity: now.subtract(const Duration(days: 9)),
+      ),
+    ];
+    expect(projectInbox(items).map((r) => r.entityId), [
+      'pinned',
+      'older-waiting',
+      'old-waiting',
+      'newest',
+      'moved-down',
+    ]);
   });
   test('people and groups never duplicate one another', () {
     final items = [fixture('person'), fixture('network-group', group: true)];
