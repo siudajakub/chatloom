@@ -453,6 +453,8 @@ class SendFileDialogState extends State<SendFileDialog> {
         context,
         path: item.file.path,
         heroTag: _heroTag(index),
+        // Sent as a file, the edit is not compressed afterwards.
+        keepQuality: widget.sendAsFiles,
       );
       if (result == null) return;
       if (!mounted || _locked || !identical(_items[index], item)) {
