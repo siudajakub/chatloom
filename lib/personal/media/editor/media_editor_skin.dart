@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:ui' show ImageFilter;
+
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:pro_image_editor/features/tune_editor/utils/tune_presets.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
+
+import 'paint_canvas_overlay.dart';
+import 'paint_session.dart';
 
 /// The Notion skin of `pro_image_editor`: every bar and panel of the
 /// package is replaced by the primitives of `notion_media_editor.dart`; the
@@ -41,21 +45,38 @@ abstract final class MediaEditorSkin {
   ];
 
   /// Censor tools of the Blur panel: an area dragged over the photo.
-  static const censorTools = [
-    NotionEditorChoice(
+  /// Pixelate needs shader image filters; where the backend has none the
+  /// package draws a pixelate area as nothing, so it is not offered.
+  static List<NotionEditorChoice<PaintMode>> get censorTools => [
+    const NotionEditorChoice(
       value: PaintMode.blur,
       label: 'Blur',
       icon: Icons.blur_on_rounded,
     ),
-    NotionEditorChoice(
-      value: PaintMode.pixelate,
-      label: 'Pixelate',
-      icon: Icons.grid_on_rounded,
-    ),
-    NotionEditorChoice(
+    if (ImageFilter.isShaderFilterSupported)
+      const NotionEditorChoice(
+        value: PaintMode.pixelate,
+        label: 'Pixelate',
+        icon: Icons.grid_on_rounded,
+      ),
+    const NotionEditorChoice(
       value: PaintMode.eraser,
       label: 'Eraser',
       icon: Icons.auto_fix_normal_rounded,
+    ),
+  ];
+
+  /// The outline of the next censor area.
+  static const censorShapes = [
+    NotionEditorChoice(
+      value: CensorShape.box,
+      label: 'Box',
+      icon: Icons.crop_square_rounded,
+    ),
+    NotionEditorChoice(
+      value: CensorShape.oval,
+      label: 'Oval',
+      icon: Icons.circle_outlined,
     ),
   ];
 
@@ -113,7 +134,8 @@ abstract final class MediaEditorSkin {
 
   /// Shared configuration: the Notion theme on the media stage, the skinned
   /// sub-editors and the export overlay. [mainEditor], [paintEditor] and the
-  /// rest are filled in by the photo and video editors.
+  /// rest are filled in by the photo and video editors; [paintSession] backs
+  /// the Draw and Blur tools (shape, strength, the canvas overlay).
   static ProImageEditorConfigs configs(
     BuildContext context, {
     required String heroTag,
@@ -121,7 +143,7 @@ abstract final class MediaEditorSkin {
     PaintEditorConfigs paintEditor = const PaintEditorConfigs(),
     ImageGenerationConfigs imageGeneration = const ImageGenerationConfigs(),
     VideoEditorConfigs videoEditor = const VideoEditorConfigs(),
-    ValueListenable<bool> censoring = const _Never(),
+    PhotoPaintSession? paintSession,
     required Widget Function(String message) loading,
   }) {
     final theme = Theme.of(context);
@@ -142,6 +164,11 @@ abstract final class MediaEditorSkin {
         ),
       ),
       paintEditor: paintEditor.copyWith(
+        // The canvas overlay shares the canvas's coordinates only unzoomed.
+        enableZoom: false,
+        // Whole shapes: the partial eraser cuts holes that censor areas
+        // never draw (see `PaintCanvasOverlay`, which erases instead).
+        eraserMode: EraserMode.object,
         style: PaintEditorStyle(
           background: stage,
           appBarBackground: clear,
@@ -150,17 +177,22 @@ abstract final class MediaEditorSkin {
           initialStrokeWidth: 6,
           uiOverlayStyle: overlay,
         ),
-        censorConfigs: const CensorConfigs(
-          enableRoundArea: true,
-          blurSigmaX: 18,
-          blurSigmaY: 18,
-          pixelBlockSize: 18,
+        // Rectangles: an oval area carries a mask of its own
+        // (`censorOvalMask`). The strengths are the defaults for an area
+        // drawn without one (`PhotoPaintSession` always sets one).
+        censorConfigs: CensorConfigs(
+          blurSigmaX: CensorStrength.blurSigma(CensorStrength.initial),
+          blurSigmaY: CensorStrength.blurSigma(CensorStrength.initial),
+          pixelBlockSize: CensorStrength.pixelBlockSize(
+            CensorStrength.initial,
+            MediaQuery.devicePixelRatioOf(context),
+          ),
         ),
         widgets: PaintEditorWidgets(
           appBar: (paint, stream) => topBar(
             stream: stream,
             builder: () => NotionEditorTopBar(
-              title: censoring.value ? 'Blur' : 'Draw',
+              title: paintSession?.censor ?? false ? 'Blur' : 'Draw',
               closeIcon: Icons.arrow_back_rounded,
               closeLabel: 'Back',
               onClose: paint.close,
@@ -173,9 +205,17 @@ abstract final class MediaEditorSkin {
           ),
           bottomBar: (paint, stream) => ReactiveWidget(
             stream: stream,
-            builder: (_) =>
-                _PaintPanel(paint: paint, censor: censoring.value),
+            builder: (_) => _PaintPanel(paint: paint, session: paintSession),
           ),
+          bodyItems: paintSession == null
+              ? null
+              : (paint, stream) => [
+                  ReactiveWidget(
+                    stream: stream,
+                    builder: (_) =>
+                        PaintCanvasOverlay(paint: paint, session: paintSession),
+                  ),
+                ],
           colorPicker: (paint, stream, color, setColor) => null,
         ),
       ),
@@ -320,19 +360,6 @@ abstract final class MediaEditorSkin {
   }
 }
 
-class _Never implements ValueListenable<bool> {
-  const _Never();
-
-  @override
-  bool get value => false;
-
-  @override
-  void addListener(VoidCallback listener) {}
-
-  @override
-  void removeListener(VoidCallback listener) {}
-}
-
 /// The panel and dock sit at the bottom of the stage with the safe area
 /// below them; they fade out while a stroke is drawn so the photo is free.
 class _BottomChrome extends StatelessWidget {
@@ -389,22 +416,15 @@ class _CropPanelState extends State<_CropPanel> {
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              NotionGlassPill(
+          child: _PillRow(
+            pills: [
+              (
                 icon: Icons.rotate_90_degrees_ccw_rounded,
                 label: 'Rotate',
                 onPressed: crop.rotate,
               ),
-              const SizedBox(width: NotionSpace.xs),
-              NotionGlassPill(
-                icon: Icons.flip_rounded,
-                label: 'Flip',
-                onPressed: crop.flip,
-              ),
-              const SizedBox(width: NotionSpace.xs),
-              NotionGlassPill(
+              (icon: Icons.flip_rounded, label: 'Flip', onPressed: crop.flip),
+              (
                 icon: Icons.restart_alt_rounded,
                 label: 'Reset',
                 onPressed: crop.canUndo
@@ -422,13 +442,67 @@ class _CropPanelState extends State<_CropPanel> {
   );
 }
 
+typedef _Pill = ({IconData icon, String label, VoidCallback? onPressed});
+
+/// A centred row of glass pills. When their labels do not fit the width (a
+/// 360-dp phone with large text), they show only their icons and the label
+/// becomes the tooltip, instead of the last pill being cut off.
+class _PillRow extends StatelessWidget {
+  final List<_Pill> pills;
+
+  const _PillRow({required this.pills});
+
+  /// The row's width with labels, after `NotionGlassPill`'s own padding.
+  double _labelledWidth(BuildContext context) {
+    final painter = TextPainter(
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    );
+    var width = NotionSpace.xs * (pills.length - 1);
+    for (final pill in pills) {
+      painter.text = TextSpan(text: pill.label, style: NotionType.callout);
+      painter.layout();
+      width +=
+          2 * NotionSpace.md +
+          NotionSize.iconLg +
+          NotionSpace.xs +
+          painter.width +
+          2 * NotionSize.border;
+    }
+    painter.dispose();
+    return width;
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final iconsOnly = _labelledWidth(context) > constraints.maxWidth;
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          for (final (i, pill) in pills.indexed) ...[
+            if (i > 0) const SizedBox(width: NotionSpace.xs),
+            NotionGlassPill(
+              icon: pill.icon,
+              label: iconsOnly ? null : pill.label,
+              tooltip: iconsOnly ? pill.label : null,
+              onPressed: pill.onPressed,
+            ),
+          ],
+        ],
+      );
+    },
+  );
+}
+
 class _PaintPanel extends StatefulWidget {
   final PaintEditorState paint;
 
-  /// Opened from Blur: censor tools instead of brushes.
-  final bool censor;
+  /// Null outside the photo editor: Draw without censor tools.
+  final PhotoPaintSession? session;
 
-  const _PaintPanel({required this.paint, required this.censor});
+  const _PaintPanel({required this.paint, required this.session});
 
   @override
   State<_PaintPanel> createState() => _PaintPanelState();
@@ -439,11 +513,40 @@ class _PaintPanel extends StatefulWidget {
 class _PaintPanelState extends State<_PaintPanel> {
   PaintEditorState get paint => widget.paint;
 
+  void _select(PaintMode mode) {
+    NotionHaptics.selection();
+    setState(() => paint.setMode(mode));
+    // Blur and pixelate measure strength differently; the next area takes
+    // the slider's value in the new mode's units.
+    paint.paintCtrl.setCensorStrength(_strength(mode));
+  }
+
+  double? _strength(PaintMode mode) => CensorStrength.of(
+    mode,
+    widget.session?.strength ?? CensorStrength.initial,
+    MediaQuery.devicePixelRatioOf(context),
+  );
+
   @override
   Widget build(BuildContext context) {
-    final censor = widget.censor;
+    final session = widget.session;
+    final censor = session?.censor ?? false;
     final mode = paint.paintMode;
-    final drawsShape = mode != PaintMode.eraser;
+    final erasing = mode == PaintMode.eraser;
+    final notion = context.notion;
+    Widget hint(String text) => Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: NotionSpace.md,
+        vertical: NotionSpace.xs,
+      ),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: notion.typography.footnote.copyWith(
+          color: notion.colors.textSecondary,
+        ),
+      ),
+    );
     return _BottomChrome(
       hidden: paint.isActive,
       child: NotionEditorPanel(
@@ -453,47 +556,58 @@ class _PaintPanelState extends State<_PaintPanel> {
                 ? MediaEditorSkin.censorTools
                 : MediaEditorSkin.drawTools,
             selected: mode,
-            onSelected: (mode) {
-              NotionHaptics.selection();
-              setState(() => paint.setMode(mode));
-            },
+            onSelected: _select,
           ),
-          if (censor)
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: NotionSpace.md,
-                vertical: NotionSpace.xs,
+          if (censor && session != null)
+            if (erasing)
+              hint('Tap or drag across an area to remove it.')
+            else ...[
+              NotionEditorChoices<CensorShape>(
+                options: MediaEditorSkin.censorShapes,
+                selected: session.shape,
+                onSelected: (shape) {
+                  NotionHaptics.selection();
+                  setState(() => session.shape = shape);
+                },
               ),
-              child: Text(
-                mode == PaintMode.eraser
-                    ? 'Tap a blurred area to remove it.'
-                    : 'Drag over what you want to hide.',
-                textAlign: TextAlign.center,
-                style: context.notion.typography.footnote.copyWith(
-                  color: context.notion.colors.textSecondary,
-                ),
+              NotionEditorSlider(
+                label: 'Strength',
+                value: session.strength,
+                valueLabel: '${(session.strength * 100).round()}',
+                // While dragging only this panel and the next area's
+                // strength change; the area just drawn takes the value on
+                // release, as one undoable step (rebuilding the canvas on
+                // every tick would redraw every blur area each frame).
+                onChanged: (value) {
+                  setState(() => session.strength = value);
+                  paint.paintCtrl.setCensorStrength(_strength(mode));
+                },
+                onChangeEnd: (_) => setLastAreaStrength(paint, _strength(mode)),
               ),
-            )
+            ]
           else ...[
             NotionEditorSwatches(
-              selected: drawsShape ? paint.paintCtrl.color : null,
+              selected: erasing ? null : paint.paintCtrl.color,
               onSelected: (color) {
                 setState(() {
                   paint.paintCtrl.setColor(color);
-                  if (!drawsShape) paint.setMode(PaintMode.freeStyle);
+                  if (erasing) paint.setMode(PaintMode.freeStyle);
                 });
                 paint.uiPickerStream.add(null);
               },
             ),
-            NotionEditorSlider(
-              label: 'Size',
-              value: paint.strokeWidth,
-              min: 2,
-              max: 24,
-              valueLabel: '${paint.strokeWidth.round()}',
-              onChanged: (value) =>
-                  setState(() => paint.setStrokeWidth(value)),
-            ),
+            if (erasing)
+              hint('Tap or drag across a drawing to remove it.')
+            else
+              NotionEditorSlider(
+                label: 'Size',
+                value: paint.strokeWidth,
+                min: 2,
+                max: 24,
+                valueLabel: '${paint.strokeWidth.round()}',
+                onChanged: (value) =>
+                    setState(() => paint.setStrokeWidth(value)),
+              ),
           ],
         ],
       ),

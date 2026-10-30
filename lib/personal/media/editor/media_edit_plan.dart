@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:flutter/foundation.dart';
 
 /// Pure decisions of the media editor (`photo_editor_page.dart`,
@@ -33,6 +35,40 @@ const double editedPhotoMaxSide = 4096;
 /// The shortest clip the trim handles allow.
 const Duration minTrimLength = Duration(seconds: 1);
 
+/// The step `pro_image_editor`'s trim bar reports while a handle moves: it
+/// rounds the span down to whole seconds (only the drag's end is exact).
+const Duration trimBarStep = Duration(seconds: 1);
+
+/// The longest side the video editor's stage works at. The editor paints a
+/// transparent PNG of this size behind the video (and decodes another one
+/// in Crop): a 4K source at full size costs ~33 MB per image. The crop it
+/// reports is scaled back to the source ([VideoCrop.toSource]).
+const double videoStageMaxSide = 1920;
+
+/// The stage size for a video shown at [resolution] (rotation applied):
+/// the same aspect, the long side at most [videoStageMaxSide].
+Size videoStageSize(Size resolution) {
+  final longSide = resolution.longestSide;
+  if (longSide <= videoStageMaxSide) return resolution;
+  final scale = videoStageMaxSide / longSide;
+  return Size(
+    math.max(1, (resolution.width * scale).roundToDouble()),
+    math.max(1, (resolution.height * scale).roundToDouble()),
+  );
+}
+
+/// An edit that must re-encode is rendered straight at the HD send
+/// profile's ceiling (1080p30), so an HD send can keep it as it is
+/// ([VideoPlan] skips a 1080p30 MP4 under 6.5 Mbit/s): one encode instead
+/// of two, and an encode every phone supports (a 4K60 H.264 encode is not).
+const int editedVideoMaxSide = MediaQuality.videoHdMaxSide;
+const int editedVideoMaxFps = MediaQuality.videoMaxFps;
+
+/// Above the HD target (5 Mbit/s) so the standard profile's own encode
+/// still starts from a clean picture, under the HD skip (6.5 Mbit/s with
+/// the audio).
+const int editedVideoBitrate = 5500 * 1000;
+
 /// `photo.jpg` edited as PNG becomes `photo.png`; a name without an
 /// extension gains one.
 String editedFileName(String original, String extension) {
@@ -64,6 +100,25 @@ class VideoCrop {
   Size get outputSize => quarterTurns.isOdd
       ? Size(height.toDouble(), width.toDouble())
       : Size(width.toDouble(), height.toDouble());
+
+  /// This crop, made on a stage [factor] times smaller than [source] (see
+  /// [videoStageSize]), in the source's pixels and inside its frame.
+  VideoCrop toSource(double factor, Size source) {
+    if (factor == 1) return this;
+    final sourceWidth = math.max(1, source.width.round());
+    final sourceHeight = math.max(1, source.height.round());
+    final left = (x * factor).round().clamp(0, sourceWidth - 1);
+    final top = (y * factor).round().clamp(0, sourceHeight - 1);
+    return VideoCrop(
+      x: left,
+      y: top,
+      width: (width * factor).round().clamp(1, sourceWidth - left),
+      height: (height * factor).round().clamp(1, sourceHeight - top),
+      quarterTurns: quarterTurns,
+      flipX: flipX,
+      flipY: flipY,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -123,7 +178,130 @@ class VideoEditPlan {
   /// so an untrimmed side is never cut a frame short.
   Duration? get renderStart => keptStart > Duration.zero ? keptStart : null;
   Duration? get renderEnd => keptEnd < duration ? keptEnd : null;
+
+  /// Whether the render has to decode and encode the picture: a crop does,
+  /// and so does a later start (Media3 cannot start a copy between key
+  /// frames). Only the end trimmed, or only the sound removed, the samples
+  /// can be copied as they are.
+  bool get reencodes => cropped || renderStart != null;
 }
+
+/// How an edit is rendered, before the send pipeline compresses it by the
+/// chosen profile like any picked video.
+@immutable
+class VideoRenderTarget {
+  /// The uniform scale of the (cropped) frame; null keeps its size.
+  final double? scale;
+
+  /// The video bitrate; null leaves it to the encoder, or lets Media3 copy
+  /// the samples when nothing has to be re-encoded.
+  final int? bitrate;
+
+  /// Frames above this rate are dropped; null keeps the source's rate.
+  final int? maxFrameRate;
+
+  /// The size the result is shown at (crop, rotation and scale applied).
+  final Size outputSize;
+
+  const VideoRenderTarget({
+    required this.outputSize,
+    this.scale,
+    this.bitrate,
+    this.maxFrameRate,
+  });
+
+  /// [source] is the shown resolution (rotation applied), [sourceBitrate]
+  /// in bit/s (0 when unknown). [keepQuality]: the video goes out as a file,
+  /// so a re-encode keeps the source's size and bitrate; above 1080p it
+  /// drops to 30 fps (a 4K60 H.264 encode is what many phones reject).
+  factory VideoRenderTarget.of(
+    VideoEditPlan plan, {
+    required Size source,
+    required int sourceBitrate,
+    bool keepQuality = false,
+  }) {
+    final frame = plan.crop?.outputSize ?? source;
+    // Copied, not encoded: the send profile's own encode is the only one.
+    if (!plan.reencodes) return VideoRenderTarget(outputSize: frame);
+    if (keepQuality) {
+      return VideoRenderTarget(
+        outputSize: frame,
+        bitrate: sourceBitrate > 0 ? sourceBitrate : null,
+        maxFrameRate: frame.longestSide > editedVideoMaxSide
+            ? editedVideoMaxFps
+            : null,
+      );
+    }
+    return VideoRenderTarget.hd(
+      plan,
+      source: source,
+      sourceBitrate: sourceBitrate,
+    );
+  }
+
+  /// The HD send profile's ceiling: 1080p30 at most [editedVideoBitrate].
+  /// Also the second try when the device's encoder rejects a full-quality
+  /// render.
+  factory VideoRenderTarget.hd(
+    VideoEditPlan plan, {
+    required Size source,
+    required int sourceBitrate,
+  }) {
+    final frame = plan.crop?.outputSize ?? source;
+    final longSide = frame.longestSide;
+    final scale = longSide > editedVideoMaxSide
+        ? editedVideoMaxSide / longSide
+        : null;
+    return VideoRenderTarget(
+      outputSize: scale == null ? frame : frame * scale,
+      scale: scale,
+      bitrate: sourceBitrate > 0
+          ? math.min(sourceBitrate, editedVideoBitrate)
+          : editedVideoBitrate,
+      maxFrameRate: editedVideoMaxFps,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is VideoRenderTarget &&
+      other.scale == scale &&
+      other.bitrate == bitrate &&
+      other.maxFrameRate == maxFrameRate &&
+      other.outputSize == outputSize;
+
+  @override
+  int get hashCode => Object.hash(scale, bitrate, maxFrameRate, outputSize);
+}
+
+/// [message] without file paths, URIs or media file names: a source's
+/// file name can carry a contact's or a chat's name, and native errors
+/// quote the paths they failed on. A path is any word with a `/` (absolute
+/// or relative) and runs to the next `:`, `,`, quote or bracket, spaces
+/// included (file names have them); a bare name with a media extension
+/// takes its whole segment, since where a spaced name starts is unknown.
+/// MIME types (`video/avc`, `audio/mp4a-latm`) stay.
+String redactMediaPaths(String message) => message
+    .replaceAll(_uri, '<path>')
+    .replaceAll(_pathWord, '<path>')
+    .replaceAllMapped(_mediaName, (match) => '${match[1]}<path>');
+
+final _uri = RegExp(r'''[a-zA-Z][a-zA-Z0-9+.-]*://[^\n,;'"()\[\]]*''');
+
+/// A word with a slash, from where the word starts, unless it is a MIME
+/// type.
+final _pathWord = RegExp(
+  r'''(?<![^\s'"(\[=,:;])'''
+  r'''(?!(?:video|audio|image|application|text)/[\w.+-]+(?![^\s,;:'"()\[\]]))'''
+  r'''[^\s'"()\[\],;:]*/[^\n,;:'"()\[\]]*''',
+);
+
+final _mediaName = RegExp(
+  r'''(\s*)[^\n:,;'"()\[\]]*?\.'''
+  r'''(?:mp4|m4v|mov|3gp|3g2|mkv|webm|avi|jpe?g|png|gif|webp|heic|heif|'''
+  r'''mp3|m4a|aac|ogg|oga|opus|wav|flac|amr)(?!\w)''',
+  caseSensitive: false,
+);
 
 /// `0:07`, `1:05`, `1:02:03`, from whole seconds (rounded down, so a 59.6 s
 /// clip never reads one minute).
@@ -144,17 +322,28 @@ String formatClipLength(Duration duration) {
 class TrimEdgeTracker {
   final Duration duration;
   final Duration minLength;
+
+  /// The resolution of the reported span: a bound is touched within one
+  /// step of it. [trimBarStep] for the package's trim bar, whose readout
+  /// never reaches a clip end that falls between whole seconds.
+  final Duration step;
   bool _atStart = false, _atEnd = false, _atMin = false;
 
-  TrimEdgeTracker({required this.duration, this.minLength = minTrimLength});
+  TrimEdgeTracker({
+    required this.duration,
+    this.minLength = minTrimLength,
+    this.step = const Duration(milliseconds: 60),
+  });
 
-  static const Duration _slack = Duration(milliseconds: 60);
+  bool _isAtStart(Duration start) => start < step;
+  bool _isAtEnd(Duration end) => end > duration - step;
+  bool _isAtMin(Duration start, Duration end) => end - start < minLength + step;
 
   /// Whether this update newly touched a bound.
   bool update(Duration start, Duration end) {
-    final atStart = start <= _slack;
-    final atEnd = end >= duration - _slack;
-    final atMin = end - start <= minLength + _slack;
+    final atStart = _isAtStart(start);
+    final atEnd = _isAtEnd(end);
+    final atMin = _isAtMin(start, end);
     final hit =
         (atStart && !_atStart) || (atEnd && !_atEnd) || (atMin && !_atMin);
     _atStart = atStart;
@@ -165,8 +354,8 @@ class TrimEdgeTracker {
 
   /// A new drag starts from the bounds the span already touches.
   void reset(Duration start, Duration end) {
-    _atStart = start <= _slack;
-    _atEnd = end >= duration - _slack;
-    _atMin = end - start <= minLength + _slack;
+    _atStart = _isAtStart(start);
+    _atEnd = _isAtEnd(end);
+    _atMin = _isAtMin(start, end);
   }
 }
