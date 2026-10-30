@@ -111,7 +111,8 @@ void main() {
       ),
       isTrue,
     );
-    await tester.pump();
+    // The old chip pops out at once (gone once its pop-out is over).
+    await tester.pumpAndSettle();
     // Sent, never refused; the old chip is gone before the bridge's
     // redaction arrives, and the client did not redact it itself.
     expect(f.room.sentEmoji, ['❤️']);
@@ -173,8 +174,9 @@ void main() {
       f.timeline,
       '❤️',
     );
-    await tester.pump();
-    // Hidden while the new one is on its way (optimistic).
+    await tester.pumpAndSettle();
+    // Hidden while the new one is on its way (optimistic; after the old
+    // chip's pop-out).
     final manager = ConversationMessageActions.coordinator(f.event);
     expect(manager.isReplaced(r'$thumbs'), isTrue);
     expect(find.text('👍'), findsNothing);

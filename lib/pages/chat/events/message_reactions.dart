@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:math' as math;
+
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/avatar.dart';
@@ -13,7 +15,9 @@ import 'package:matrix/matrix.dart';
 
 /// The reactions under a bubble: one pill per emoji (Messenger's compact
 /// chips, no square frame), most given first. Tap toggles your own
-/// reaction, long-press lists who reacted.
+/// reaction, long-press lists who reacted. A new chip springs in; a chip
+/// whose last reaction was taken back pops out where it was, then the row
+/// closes up.
 class MessageReactions extends StatefulWidget {
   final Event event;
   final Timeline timeline;
@@ -39,7 +43,8 @@ class MessageReactions extends StatefulWidget {
   State<MessageReactions> createState() => _MessageReactionsState();
 }
 
-class _MessageReactionsState extends State<MessageReactions> {
+class _MessageReactionsState extends State<MessageReactions>
+    with SingleTickerProviderStateMixin {
   /// Chips present when this row was first built. Later chips are new
   /// reactions and pop in; the first set pops only when it is fresh (the
   /// first reaction on a visible message), never for scrolled-in history.
@@ -54,6 +59,16 @@ class _MessageReactionsState extends State<MessageReactions> {
   /// Own reactions hidden because a newer one replaces them (BR-01).
   Set<String> _replaced = const {};
 
+  /// Chips of the last build, in order, to notice one that went away.
+  List<_ReactionEntry> _lastShown = const [];
+
+  /// Removed chips still popping out, with the place they had.
+  final Map<String, (int, _ReactionEntry)> _leaving = {};
+
+  /// Times the pop-out; created on the first removal only, so rows that
+  /// never lose a reaction cost no ticker.
+  AnimationController? _leaveClock;
+
   Event get event => widget.event;
   Timeline get timeline => widget.timeline;
   bool get strict => widget.strict;
@@ -67,7 +82,11 @@ class _MessageReactionsState extends State<MessageReactions> {
   @override
   void didUpdateWidget(MessageReactions oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.event.eventId != widget.event.eventId) _initial = null;
+    if (oldWidget.event.eventId != widget.event.eventId) {
+      _initial = null;
+      _lastShown = const [];
+      _leaving.clear();
+    }
     if (!identical(oldWidget.event.room.client, widget.event.room.client)) {
       _listen();
     } else {
@@ -116,7 +135,40 @@ class _MessageReactionsState extends State<MessageReactions> {
   @override
   void dispose() {
     _manager?.removeListener(_changed);
+    _leaveClock?.dispose();
     super.dispose();
+  }
+
+  /// Notes chips that disappeared since the last build and starts their
+  /// pop-out (none under reduced motion); a chip that comes back stops
+  /// leaving.
+  void _trackLeaving(List<_ReactionEntry> shown) {
+    final keys = {for (final r in shown) r.key};
+    _leaving.removeWhere((key, _) => keys.contains(key));
+    if (NotionMotion.reduced(context)) {
+      _leaving.clear();
+    } else {
+      var removed = false;
+      for (var i = 0; i < _lastShown.length; i++) {
+        final entry = _lastShown[i];
+        if (keys.contains(entry.key) || _leaving.containsKey(entry.key)) {
+          continue;
+        }
+        _leaving[entry.key] = (i, entry);
+        removed = true;
+      }
+      if (removed) {
+        final clock = _leaveClock ??=
+            AnimationController(vsync: this, duration: NotionMotion.short)
+              ..addStatusListener((status) {
+                if (status == AnimationStatus.completed && mounted) {
+                  setState(_leaving.clear);
+                }
+              });
+        clock.forward(from: 0);
+      }
+    }
+    _lastShown = shown;
   }
 
   @override
@@ -164,16 +216,25 @@ class _MessageReactionsState extends State<MessageReactions> {
       return byCount != 0 ? byCount : a.order.compareTo(b.order);
     });
     _reconciler.didBuild(context, event, timeline);
+    _trackLeaving(reactionList);
+    // Leaving chips keep their old place while they pop out.
+    final chips = [for (final r in reactionList) (r, true)];
+    final leaving = _leaving.values.toList()
+      ..sort((a, b) => a.$1.compareTo(b.$1));
+    for (final (index, entry) in leaving) {
+      chips.insert(math.min(index, chips.length), (entry, false));
+    }
     final ownMessage = event.senderId == event.room.client.userID;
     return Wrap(
       spacing: NotionSpace.xxs,
       runSpacing: NotionSpace.xxs,
       alignment: ownMessage ? WrapAlignment.end : WrapAlignment.start,
       children: [
-        for (final r in reactionList)
+        for (final (r, visible) in chips)
           NotionReactionChip(
             key: ValueKey(r.key),
             popIn: !initial.contains(r.key),
+            visible: visible,
             emoji: _ReactionGlyph(r.key),
             count: r.count,
             own: r.reacted,
@@ -181,18 +242,22 @@ class _MessageReactionsState extends State<MessageReactions> {
             pending: _pending.contains(r.key),
             semanticLabel:
                 '${r.key}, ${r.count} reactions${_pending.contains(r.key) ? ', waiting for source confirmation' : ''}',
-            onTap: () => ConversationMessageActions.react(
-              context,
-              event,
-              timeline,
-              r.key,
-              toggle: true,
-              strict: strict,
-            ),
-            onLongPress: () {
-              NotionHaptics.longPress();
-              _showReactors(context, client: client, entry: r);
-            },
+            onTap: !visible
+                ? null
+                : () => ConversationMessageActions.react(
+                    context,
+                    event,
+                    timeline,
+                    r.key,
+                    toggle: true,
+                    strict: strict,
+                  ),
+            onLongPress: !visible
+                ? null
+                : () {
+                    NotionHaptics.longPress();
+                    _showReactors(context, client: client, entry: r);
+                  },
           ),
       ],
     );

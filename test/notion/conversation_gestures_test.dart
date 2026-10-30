@@ -298,7 +298,7 @@ void main() {
     },
   );
 
-  testWidgets('links and ink inside text keep their taps from double tap', (
+  testWidgets('links in text share the double tap and open after its window', (
     tester,
   ) async {
     var likes = 0;
@@ -321,24 +321,29 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Fictional link', findRichText: true));
-    await tester.pump();
     final linkRect = tester.getRect(
       find.text('Fictional link', findRichText: true),
     );
     final onLink = linkRect.centerRight - const Offset(8, 0);
     await tester.tapAt(onLink);
+    await tester.pump();
+    expect(opened, 0);
+    await tester.pump(kDoubleTapTimeout);
+    expect(opened, 1);
+    await tester.tapAt(onLink);
     await tester.pump(const Duration(milliseconds: 80));
     await tester.tapAt(onLink);
     await tester.pumpAndSettle();
-    expect(likes, 0);
-    expect(opened, greaterThanOrEqualTo(2));
+    expect(likes, 1);
+    expect(opened, 1);
+    await tester.pump(const Duration(milliseconds: 400));
     final onWord = linkRect.centerLeft + const Offset(8, 0);
     await tester.tapAt(onWord);
     await tester.pump(const Duration(milliseconds: 80));
     await tester.tapAt(onWord);
     await tester.pumpAndSettle();
-    expect(likes, 1);
+    expect(likes, 2);
+    expect(opened, 1);
   });
 
   testWidgets(
