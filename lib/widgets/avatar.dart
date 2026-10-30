@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/personal/media/avatar_cache.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:chatloom/widgets/presence_builder.dart';
@@ -47,6 +48,10 @@ class Avatar extends StatelessWidget {
     final borderRadius =
         this.borderRadius ?? BorderRadius.circular(NotionTokens.avatarRadius);
     final presenceUserId = this.presenceUserId;
+    // One memory entry per disk bucket: rows of different sizes share it.
+    final bucket = AvatarCache.bucketFor(
+      size * MediaQuery.devicePixelRatioOf(context),
+    );
     final container = Stack(
       children: [
         SizedBox(
@@ -68,8 +73,10 @@ class Avatar extends StatelessWidget {
               client: client,
               borderRadius: borderRadius,
               key: ValueKey(mxContent.toString()),
-              cacheKey: '${mxContent}_$size',
+              cacheKey: '${mxContent}_avatar$bucket',
               uri: mxContent,
+              loadBytes: AvatarCache.loadAvatar,
+              retryFailedAfter: const Duration(seconds: 30),
               fit: BoxFit.cover,
               width: size,
               height: size,
