@@ -110,15 +110,6 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
       pinned ? unpinLabel : pinLabel,
       enabled: joined && NotionMetadataActions.canEdit(owner, entity),
     ),
-    // An unanswered chat sorts on top until the user replies; this lets it
-    // take its usual place until the next message arrives.
-    if (!pinned && projection.recordFor(room).awaitingReply)
-      ChatMenuItem(
-        ChatMenuAction.moveDown,
-        Icons.low_priority,
-        'Move down',
-        enabled: joined && owner.ready,
-      ),
     metadata.muted
         ? ChatMenuItem(
             ChatMenuAction.unmute,

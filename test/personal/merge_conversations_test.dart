@@ -444,23 +444,11 @@ void main() {
     expect(labels(whatsapp), [
       'Mark as unread',
       'Pin',
-      'Move down',
       'Mute…',
       'Archive',
       'Merge…',
       'Ignore chat',
     ]);
-    // Moved down: the chat keeps its usual place until a newer message.
-    final latest = whatsapp.lastEvent!.originServerTs.millisecondsSinceEpoch;
-    personal.values[InboxProjection.movedDownKey(whatsapp.id)] = {
-      'until': latest,
-    };
-    expect(labels(whatsapp), isNot(contains('Move down')));
-    personal.values[InboxProjection.movedDownKey(whatsapp.id)] = {
-      'until': latest - 1,
-    };
-    expect(labels(whatsapp), contains('Move down'));
-    personal.values.remove(InboxProjection.movedDownKey(whatsapp.id));
     personal.values['person:p'] = PersonGroup(
       id: 'p',
       name: 'Fictional person',
@@ -470,7 +458,6 @@ void main() {
     expect(labels(telegram), [
       'Mark as unread',
       'Pin',
-      'Move down',
       'Mute…',
       'Archive',
       'Unmerge',
