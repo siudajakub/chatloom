@@ -55,7 +55,6 @@
  "lib/personal/ui/notion_inbox_dock.dart::edge-insets": 2,
  "lib/personal/ui/notion_inbox_dock.dart::font-size": 3,
  "lib/personal/ui/notion_inbox_page.dart::edge-insets": 4,
- "lib/personal/ui/notion_inbox_pins.dart::edge-insets": 1,
  "lib/personal/ui/notion_inbox_row.dart::edge-insets": 1,
  "lib/personal/ui/notion_network_selector.dart::edge-insets": 1,
  "lib/personal/ui/notion_network_selector.dart::radius": 1,
