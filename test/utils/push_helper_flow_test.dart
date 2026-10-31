@@ -329,8 +329,16 @@ void main() {
     expect(shown.title, 'Synthetic-peer');
     expect(shown.body, 'Synthetic preview text');
     final android = shown.details!.android!;
-    expect(android.channelId, 'fluffychat_push');
+    expect(android.channelId, 'chatloom_messages_v2');
     expect(android.channelName, 'Messages');
+    // The channel's short buzz and own sound, also for Android 7.
+    expect(android.vibrationPattern, [0, 120]);
+    expect(android.enableVibration, isTrue);
+    expect(android.playSound, isTrue);
+    expect(
+      (android.sound! as RawResourceAndroidNotificationSound).sound,
+      'chatloom_message',
+    );
     expect(android.visibility, NotificationVisibility.private);
     // Incognito reads privately (CS-32): same action as without it.
     expect(android.actions!.map((a) => a.id), ['reply', 'markAsRead']);
@@ -939,6 +947,9 @@ void main() {
       expect(android.channelId, PersonalNotificationChannels.serviceId);
       expect(android.importance, Importance.low);
       expect(android.priority, Priority.low);
+      expect(android.playSound, isFalse);
+      expect(android.enableVibration, isFalse);
+      expect(android.vibrationPattern, isNull);
     });
 
     test('a bot reply the user is waiting for alerts normally', () async {

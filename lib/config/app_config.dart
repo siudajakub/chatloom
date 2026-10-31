@@ -14,7 +14,17 @@ abstract class AppConfig {
   static const String inviteLinkPrefix = 'https://matrix.to/#/';
   static const String deepLinkPrefix = 'pl.personal.chat://chat/';
   static const String schemePrefix = 'matrix:';
-  static const String pushNotificationsChannelId = 'fluffychat_push';
+
+  /// Message notifications. Android fixes a channel's sound and vibration
+  /// when it is created, so a new sound or pattern needs a new id; never
+  /// reuse an old one (see `PersonalNotificationChannels.ensure`).
+  static const String pushNotificationsChannelId = 'chatloom_messages_v2';
+
+  /// Earlier message channel ids, deleted once their settings are carried
+  /// over to [pushNotificationsChannelId].
+  static const List<String> legacyPushNotificationsChannelIds = [
+    'fluffychat_push',
+  ];
 
   /// Dedicated channel so reminder alerts never rename the message channel.
   static const String personalRemindersChannelId = 'personal_reminders';

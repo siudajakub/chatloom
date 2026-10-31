@@ -232,12 +232,33 @@ void main() {
   });
 
   test('messages and reminders use separate English channels', () {
-    expect(PersonalNotificationChannels.messagesId, 'fluffychat_push');
+    // A new id: Android fixes sound and vibration per channel.
+    expect(PersonalNotificationChannels.messagesId, 'chatloom_messages_v2');
     expect(
       PersonalNotificationChannels.messagesId,
       AppConfig.pushNotificationsChannelId,
     );
+    expect(PersonalNotificationChannels.legacyMessagesIds, ['fluffychat_push']);
+    expect(
+      PersonalNotificationChannels.legacyMessagesIds,
+      isNot(contains(PersonalNotificationChannels.messagesId)),
+    );
     expect(PersonalNotificationChannels.messages.name, 'Messages');
+    // One short buzz and ChatLoom's own sound.
+    final messages = PersonalNotificationChannels.messages;
+    expect(messages.enableVibration, isTrue);
+    expect(messages.vibrationPattern, [0, 120]);
+    expect(messages.playSound, isTrue);
+    expect(messages.sound, isA<RawResourceAndroidNotificationSound>());
+    expect(messages.sound!.sound, 'chatloom_message');
+    expect(
+      File('android/app/src/main/res/raw/chatloom_message.ogg').existsSync(),
+      isTrue,
+    );
+    expect(
+      File('android/app/src/main/res/raw/keep.xml').readAsStringSync(),
+      contains('@raw/chatloom_message'),
+    );
     expect(PersonalNotificationChannels.remindersId, 'personal_reminders');
     expect(
       PersonalNotificationChannels.remindersId,
@@ -280,4 +301,177 @@ void main() {
       );
     }
   });
+
+  group('message channel migration', () {
+    setUp(PersonalNotificationChannels.debugReset);
+    tearDown(PersonalNotificationChannels.debugReset);
+
+    AndroidNotificationChannel legacy({
+      Importance importance = Importance.high,
+      bool playSound = true,
+      bool enableVibration = true,
+    }) => AndroidNotificationChannel(
+      'fluffychat_push',
+      'Messages',
+      importance: importance,
+      playSound: playSound,
+      enableVibration: enableVibration,
+    );
+
+    test('creates the new channel with the buzz and sound, deletes the old '
+        'one, and is idempotent', () async {
+      final android = _FakeAndroidNotifications([legacy()]);
+      final plugin = _FakeNotifications(android);
+      await PersonalNotificationChannels.ensure(plugin);
+      final created =
+          android.channels[PersonalNotificationChannels.messagesId]!;
+      expect(created.importance, Importance.high);
+      expect(created.vibrationPattern, [0, 120]);
+      expect(created.enableVibration, isTrue);
+      expect(created.playSound, isTrue);
+      expect(
+        (created.sound! as RawResourceAndroidNotificationSound).sound,
+        'chatloom_message',
+      );
+      expect(android.channels.keys, isNot(contains('fluffychat_push')));
+      expect(android.deleted, ['fluffychat_push']);
+      expect(
+        android.channels.keys,
+        containsAll([
+          PersonalNotificationChannels.remindersId,
+          PersonalNotificationChannels.serviceId,
+        ]),
+      );
+
+      // Same isolate: nothing more to do.
+      await PersonalNotificationChannels.ensure(plugin);
+      expect(android.created, hasLength(3));
+      // Another isolate (the push isolate) after the migration: the old
+      // channel is gone, the new one is created again unchanged and nothing
+      // is deleted.
+      PersonalNotificationChannels.debugReset();
+      await PersonalNotificationChannels.ensure(plugin);
+      expect(android.deleted, ['fluffychat_push']);
+      expect(
+        android
+            .channels[PersonalNotificationChannels.messagesId]!
+            .vibrationPattern,
+        [0, 120],
+      );
+    });
+
+    test('carries over what the user turned down on the old channel', () async {
+      final android = _FakeAndroidNotifications([
+        legacy(
+          importance: Importance.low,
+          playSound: false,
+          enableVibration: false,
+        ),
+      ]);
+      await PersonalNotificationChannels.ensure(_FakeNotifications(android));
+      final created =
+          android.channels[PersonalNotificationChannels.messagesId]!;
+      expect(created.importance, Importance.low);
+      expect(created.playSound, isFalse);
+      expect(created.sound, isNull);
+      expect(created.enableVibration, isFalse);
+      expect(created.vibrationPattern, isNull);
+      expect(android.deleted, ['fluffychat_push']);
+
+      final blocked = _FakeAndroidNotifications([
+        legacy(importance: Importance.none),
+      ]);
+      PersonalNotificationChannels.debugReset();
+      await PersonalNotificationChannels.ensure(_FakeNotifications(blocked));
+      expect(
+        blocked.channels[PersonalNotificationChannels.messagesId]!.importance,
+        Importance.none,
+      );
+    });
+
+    test(
+      'a fresh install creates the new channel and deletes nothing',
+      () async {
+        final android = _FakeAndroidNotifications([]);
+        await PersonalNotificationChannels.ensure(_FakeNotifications(android));
+        expect(
+          android.channels[PersonalNotificationChannels.messagesId]!.importance,
+          Importance.high,
+        );
+        expect(android.deleted, isEmpty);
+      },
+    );
+
+    test('an unreadable channel list creates the channels and retries the '
+        'migration on the next call', () async {
+      final android = _FakeAndroidNotifications([legacy()])..failRead = true;
+      final plugin = _FakeNotifications(android);
+      await PersonalNotificationChannels.ensure(plugin);
+      expect(android.channels.keys, contains('fluffychat_push'));
+      expect(
+        android.channels.keys,
+        contains(PersonalNotificationChannels.messagesId),
+      );
+      android.failRead = false;
+      await PersonalNotificationChannels.ensure(plugin);
+      expect(android.deleted, ['fluffychat_push']);
+    });
+
+    test('other platforms do nothing', () async {
+      await PersonalNotificationChannels.ensure(_FakeNotifications(null));
+    });
+  });
+}
+
+class _FakeAndroidNotifications
+    implements AndroidFlutterLocalNotificationsPlugin {
+  _FakeAndroidNotifications(List<AndroidNotificationChannel> initial) {
+    for (final channel in initial) {
+      channels[channel.id] = channel;
+    }
+  }
+
+  final channels = <String, AndroidNotificationChannel>{};
+  final created = <AndroidNotificationChannel>[];
+  final deleted = <String>[];
+  bool failRead = false;
+
+  @override
+  Future<List<AndroidNotificationChannel>?> getNotificationChannels() async {
+    if (failRead) throw StateError('unreadable');
+    return channels.values.toList();
+  }
+
+  @override
+  Future<void> createNotificationChannel(
+    AndroidNotificationChannel notificationChannel,
+  ) async {
+    created.add(notificationChannel);
+    channels[notificationChannel.id] = notificationChannel;
+  }
+
+  @override
+  Future<void> deleteNotificationChannel({required String channelId}) async {
+    deleted.add(channelId);
+    channels.remove(channelId);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Unexpected notification operation');
+}
+
+class _FakeNotifications implements FlutterLocalNotificationsPlugin {
+  _FakeNotifications(this.android);
+
+  final _FakeAndroidNotifications? android;
+
+  @override
+  T? resolvePlatformSpecificImplementation<
+    T extends FlutterLocalNotificationsPlatform
+  >() => android as T?;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Unexpected notification operation');
 }

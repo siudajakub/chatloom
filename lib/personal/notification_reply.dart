@@ -436,6 +436,8 @@ Future<void> showNotificationReplyResult({
           channelDescription: PersonalNotificationChannels.messagesDescription,
           importance: Importance.high,
           priority: Priority.high,
+          sound: PersonalNotificationChannels.messageSound,
+          vibrationPattern: PersonalNotificationChannels.messageVibration,
           visibility: NotificationVisibility.private,
           category: AndroidNotificationCategory.error,
           groupKey: clientName,

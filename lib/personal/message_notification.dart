@@ -66,6 +66,7 @@ const messagePublicTitle = 'New message';
 /// Separate Android channels so users can tune messages and reminders apart.
 abstract final class PersonalNotificationChannels {
   static const messagesId = AppConfig.pushNotificationsChannelId;
+  static const legacyMessagesIds = AppConfig.legacyPushNotificationsChannelIds;
   static const messagesName = 'Messages';
   static const messagesDescription = 'New messages in your chats';
   static const remindersId = AppConfig.personalRemindersChannelId;
@@ -79,12 +80,50 @@ abstract final class PersonalNotificationChannels {
   static const serviceDescription =
       'Quiet messages from network bots, such as sign-in prompts';
 
-  static const messages = AndroidNotificationChannel(
+  /// ChatLoom's own short two-note blip (`res/raw/chatloom_message.ogg`,
+  /// made by `scripts/brand/make-notification-sound.py`; kept from resource
+  /// shrinking by `res/raw/keep.xml`).
+  static const messageSound = RawResourceAndroidNotificationSound(
+    'chatloom_message',
+  );
+
+  /// One short, crisp buzz (Messenger-like): no delay, 120 ms on.
+  static final messageVibration = Int64List.fromList(const [0, 120]);
+
+  static final messages = AndroidNotificationChannel(
     messagesId,
     messagesName,
     description: messagesDescription,
     importance: Importance.high,
+    playSound: true,
+    sound: messageSound,
+    enableVibration: true,
+    vibrationPattern: messageVibration,
   );
+
+  /// [messages] carrying over what the user turned down on a [legacy]
+  /// message channel: a lower importance (silent, off), no sound or no
+  /// vibration. Android only lets the app set these when it creates a
+  /// channel, so they are copied before the old channel is deleted.
+  static AndroidNotificationChannel messagesFrom(
+    AndroidNotificationChannel? legacy,
+  ) {
+    if (legacy == null) return messages;
+    final lowered =
+        legacy.importance != Importance.unspecified &&
+        legacy.importance.value < messages.importance.value;
+    return AndroidNotificationChannel(
+      messagesId,
+      messagesName,
+      description: messagesDescription,
+      importance: lowered ? legacy.importance : messages.importance,
+      playSound: legacy.playSound,
+      sound: legacy.playSound ? messageSound : null,
+      enableVibration: legacy.enableVibration,
+      vibrationPattern: legacy.enableVibration ? messageVibration : null,
+    );
+  }
+
   static const reminders = AndroidNotificationChannel(
     remindersId,
     remindersName,
@@ -102,9 +141,16 @@ abstract final class PersonalNotificationChannels {
 
   static bool _ensured = false;
 
+  /// Forgets that the channels were ensured in this isolate.
+  @visibleForTesting
+  static void debugReset() => _ensured = false;
+
   /// Creates the channels, or renames them in place (Android keeps the
-  /// user's importance and sound choices). Retried until it succeeds once per
-  /// isolate; never throws.
+  /// user's importance and sound choices), and migrates the old message
+  /// channel: its user-lowered settings move to [messages], then it is
+  /// deleted. Retried until it succeeds once per isolate (UI and push
+  /// isolate alike); never throws. Idempotent: a missing legacy channel is
+  /// simply skipped.
   static Future<void> ensure(FlutterLocalNotificationsPlugin plugin) async {
     if (_ensured) return;
     try {
@@ -113,12 +159,27 @@ abstract final class PersonalNotificationChannels {
             AndroidFlutterLocalNotificationsPlugin
           >();
       if (android == null) return;
-      await android.createNotificationChannel(messages);
+      List<AndroidNotificationChannel>? existing;
+      try {
+        existing = await android.getNotificationChannels();
+      } catch (_) {
+        // Unknown: create the channels, migrate on the next call.
+      }
+      final legacy = existing
+          ?.where((channel) => legacyMessagesIds.contains(channel.id))
+          .toList();
+      await android.createNotificationChannel(
+        messagesFrom(legacy?.firstOrNull),
+      );
       await android.createNotificationChannel(reminders);
       await android.createNotificationChannel(service);
+      if (legacy == null) return;
+      for (final channel in legacy) {
+        await android.deleteNotificationChannel(channelId: channel.id);
+      }
       _ensured = true;
     } catch (_) {
-      // The channel is also created with these names by the first show().
+      // The channel is also created with these settings by the first show().
     }
   }
 }

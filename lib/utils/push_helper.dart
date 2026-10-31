@@ -821,6 +821,14 @@ AndroidNotificationDetails _messageDetails({
       : PersonalNotificationChannels.messagesDescription,
   importance: quiet ? Importance.low : Importance.high,
   priority: quiet ? Priority.low : Priority.high,
+  // Same sound and buzz as the channel: Android 7 reads them per
+  // notification, and the plugin creates a missing channel from them.
+  playSound: !quiet,
+  sound: quiet ? null : PersonalNotificationChannels.messageSound,
+  enableVibration: !quiet,
+  vibrationPattern: quiet
+      ? null
+      : PersonalNotificationChannels.messageVibration,
   visibility: NotificationVisibility.private,
   category: AndroidNotificationCategory.message,
   groupKey: clientName,
@@ -1335,6 +1343,11 @@ Future<void> updateSummaryNotification({
           PersonalNotificationChannels.messagesId,
           PersonalNotificationChannels.messagesName,
           channelDescription: PersonalNotificationChannels.messagesDescription,
+          // Channel settings only (if the plugin has to create it); the
+          // summary itself never alerts.
+          importance: Importance.high,
+          sound: PersonalNotificationChannels.messageSound,
+          vibrationPattern: PersonalNotificationChannels.messageVibration,
           groupKey: clientName,
           setAsGroupSummary: true,
           groupAlertBehavior: GroupAlertBehavior.children,

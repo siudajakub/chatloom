@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release builds shrink resources. The message channel looks its sound up
+     by name (RawResourceAndroidNotificationSound('chatloom_message')), which
+     the shrinker cannot see, so keep it explicitly. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/chatloom_message" />
