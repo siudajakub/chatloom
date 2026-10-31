@@ -23,6 +23,7 @@ export 'notion_emoji_picker.dart';
 export 'notion_entrance.dart';
 export 'notion_glass.dart';
 export 'notion_glass_header.dart';
+export 'notion_layout_flip.dart';
 export 'notion_lazy_switcher.dart';
 export 'notion_hover_toolbar.dart';
 export 'notion_link_preview.dart';
@@ -44,6 +45,7 @@ export 'notion_status_line.dart';
 export 'notion_status_pill.dart';
 export 'notion_swipe_action.dart';
 export 'notion_switchers.dart';
+export 'notion_synced_transcript.dart';
 export 'notion_tokens.dart';
 export 'notion_wallpapers.dart';
 
