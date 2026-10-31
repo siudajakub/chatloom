@@ -20,6 +20,7 @@ import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
+import 'package:chatloom/personal/voice_playback.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/foreground_service_controller.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
@@ -1201,10 +1202,38 @@ class TelegramRoundService extends ChangeNotifier
   Future<void> explicitlyReportPlayed(Event event) =>
       _reportPlayed(event, true);
 
+  /// True when an incoming Telegram voice note can be marked listened on
+  /// Telegram (the "Mark listened" action); false once it was sent.
+  bool canMarkVoiceListened(Event event) =>
+      !event.redacted &&
+      !_reported.contains('${event.room.id}:${event.eventId}') &&
+      event.senderId != client.userID &&
+      event.room.client == client &&
+      event.eventId.startsWith(r'$') &&
+      VoicePlayback.isVoice(event) &&
+      !RoundMediaPolicy.fromContent(event.content).isTimeLimited &&
+      TelegramRoomBinding.of(event.room)
+              ?.capabilities(event.room)
+              .extension
+              .operation('playback_receipts')
+              .allowed ==
+          true;
+
+  /// Marks a voice note listened on Telegram, only on the user's explicit
+  /// tap (never on playback or reading its transcript). Throws when the
+  /// receipt was not sent.
+  Future<void> markVoiceListened(Event event) =>
+      _reportPlayed(event, true, eligible: canMarkVoiceListened);
+
   /// Sends one playback receipt. Automatic reports end silently when a gate
   /// closes; an explicit one (the user tapped "Send playback receipt")
   /// throws instead, so the UI can say it was not sent (CC-20).
-  Future<void> _reportPlayed(Event event, bool explicit) async {
+  Future<void> _reportPlayed(
+    Event event,
+    bool explicit, {
+    bool Function(Event event)? eligible,
+  }) async {
+    final allowed = eligible ?? canExplicitlyReport;
     void notSent() {
       if (explicit) throw StateError('Playback receipt not sent');
     }
@@ -1213,7 +1242,7 @@ class TelegramRoundService extends ChangeNotifier
     final account = client.userID, device = client.deviceID;
     final surfaceGeneration = PersonalPrivacy.surfaceGeneration;
     if ((await mediaState(event))?['expired'] == true) return notSent();
-    if (!canExplicitlyReport(event) ||
+    if (!allowed(event) ||
         intentAge.elapsed >= const Duration(seconds: 20) ||
         client.userID != account ||
         client.deviceID != device ||
@@ -1261,7 +1290,7 @@ class TelegramRoundService extends ChangeNotifier
             PersonalPrivacy.surfaceUnlocked &&
             PersonalPrivacy.surfaceForeground &&
             !event.redacted &&
-            canExplicitlyReport(event),
+            allowed(event),
         action: () => event.room.sendEvent(
           content,
           type: telegramMediaPlayedEventType,

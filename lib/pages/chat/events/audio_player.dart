@@ -12,6 +12,7 @@ import 'package:chatloom/personal/media/media_inflight.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
+import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/personal/voice_playback.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -653,6 +654,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
             builder: (context, _, _) => _buildTransport(context),
           ),
         ),
+        _MarkListenedButton(event: widget.event),
         TranscriptPanel(event: widget.event, foregroundColor: widget.color),
         if (fileDescription != null)
           Padding(
@@ -672,6 +674,62 @@ class AudioPlayerState extends State<AudioPlayerWidget>
             ),
           ),
       ],
+    );
+  }
+}
+
+/// Marks an incoming Telegram voice note listened on Telegram, on tap only.
+/// Playing the note or reading its transcript never sends this; the button
+/// disappears once Telegram accepted it.
+class _MarkListenedButton extends StatefulWidget {
+  final Event event;
+
+  const _MarkListenedButton({required this.event});
+
+  @override
+  State<_MarkListenedButton> createState() => _MarkListenedButtonState();
+}
+
+class _MarkListenedButtonState extends State<_MarkListenedButton> {
+  bool _busy = false;
+
+  Future<void> _mark(TelegramRoundService service) async {
+    setState(() => _busy = true);
+    try {
+      await service.markVoiceListened(widget.event);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not mark as listened on Telegram.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = TelegramRoundService.of(widget.event.room.client);
+    return ListenableBuilder(
+      listenable: service,
+      builder: (context, _) {
+        final visible = service.canMarkVoiceListened(widget.event);
+        return NotionSizeReveal(
+          visible: visible,
+          child: Padding(
+            padding: const EdgeInsets.only(top: NotionSpace.xxs),
+            child: NotionButton.ghost(
+              label: 'Mark listened',
+              icon: Icons.hearing_outlined,
+              busy: _busy,
+              onPressed: _busy || !visible ? null : () => _mark(service),
+            ),
+          ),
+        );
+      },
     );
   }
 }

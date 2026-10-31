@@ -15,6 +15,7 @@ import 'round_video/round_send_route.dart';
 import 'round_video/telegram_media_protocol.dart';
 import 'round_video/telegram_room_binding.dart';
 import 'round_video/telegram_round_service.dart';
+import 'voice_playback.dart';
 
 final _roundReadCutoffKey = Object();
 final _committedRoundKey = Object();
@@ -227,15 +228,23 @@ abstract final class PersonalPrivacy {
         if (binding == null ||
             sourceEvent == null ||
             sourceEvent.redacted ||
-            RoundVideoDescriptor.fromContent(sourceEvent.content) == null ||
+            (RoundVideoDescriptor.fromContent(sourceEvent.content) == null &&
+                !(type == telegramMediaPlayedType &&
+                    VoicePlayback.isVoice(sourceEvent))) ||
             binding.identity.accountId != destination.identity.accountId) {
           throw const PrivacySuppressed();
         }
         final extension = destination.capabilities(room).extension;
         if (type == telegramMediaPlayedType) {
+          final mediaPolicy = RoundMediaPolicy.fromContent(sourceEvent.content);
+          // Marking a voice note listened transfers nothing: only limited
+          // (view-once) or malformed media stays excluded.
+          final playable = VoicePlayback.isVoice(sourceEvent)
+              ? !mediaPolicy.isTimeLimited && !mediaPolicy.malformed
+              : mediaPolicy.canPlay;
           if (sourceRoom != room ||
               !extension.operation('playback_receipts').allowed ||
-              !RoundMediaPolicy.fromContent(sourceEvent.content).canPlay) {
+              !playable) {
             throw const PrivacySuppressed();
           }
           authorizeMediaPlayed(content, policy.incognito);
