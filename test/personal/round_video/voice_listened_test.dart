@@ -3,14 +3,21 @@
 // incoming voice notes in a portal whose bridge declares playback receipts,
 // and the final privacy gate lets exactly that request through. Synthetic
 // room state; no live account.
+import 'dart:convert';
+
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/chat/events/audio_player.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/personal/voice_playback.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -44,8 +51,44 @@ class _Room extends Room {
   _Room(Client client)
     : super(id: _roomId, client: client, membership: Membership.join);
   final events = <String, Event>{};
+  final sent = <String>[];
   @override
   Future<Event?> getEventById(String eventID) async => events[eventID];
+  @override
+  Future<String?> sendEvent(
+    Map<String, dynamic> content, {
+    String type = EventTypes.Message,
+    String? txid,
+    Event? inReplyTo,
+    String? editEventId,
+    String? threadRootEventId,
+    String? threadLastEventId,
+    bool displayPendingEvent = true,
+    bool retryOnTransportFailure = true,
+  }) async {
+    sent.add(type);
+    return r'$fixture-receipt';
+  }
+}
+
+/// The account's encrypted private record, in memory.
+class _Storage implements VoicePlayedStorage {
+  Map<String, dynamic>? value;
+  int reads = 0, writes = 0;
+  bool failing = false;
+  @override
+  Future<Map<String, dynamic>?> read() async {
+    reads++;
+    if (failing) throw StateError('Encrypted storage is not open');
+    return value;
+  }
+
+  @override
+  Future<void> write(Map<String, dynamic> value) async {
+    writes++;
+    if (failing) throw StateError('Encrypted storage is not open');
+    this.value = jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
+  }
 }
 
 void _state(
@@ -138,9 +181,137 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     await AppSettings.init(loadWebConfigFile: false);
   });
+  final defaultStorage = TelegramRoundService.voiceMarksStorage;
   setUp(() {
     PersonalPrivacy.surfaceUnlocked = true;
     PersonalPrivacy.surfaceForeground = true;
+    // Memory only unless a test gives the account a store.
+    TelegramRoundService.voiceMarksStorage = (_) => null;
+  });
+  tearDown(() => TelegramRoundService.voiceMarksStorage = defaultStorage);
+
+  Future<void> settle() async {
+    for (var i = 0; i < 5; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
+  test(
+    'a mark survives a restart; the action stays hidden while loading',
+    () async {
+      final storage = _Storage();
+      TelegramRoundService.voiceMarksStorage = (_) => storage;
+      final room = _room();
+      final client = room.client;
+      final voice = _audio(room);
+      var service = TelegramRoundService.of(client);
+      expect(service.canMarkVoiceListened(voice), isFalse, reason: 'loading');
+      var notified = 0;
+      service.addListener(() => notified++);
+      await settle();
+      expect(notified, greaterThan(0));
+      expect(service.canMarkVoiceListened(voice), isTrue);
+
+      // The bridge's state is known (none yet): the tap sends the receipt.
+      service.debugSetMediaState(voice, null);
+      await service.markVoiceListened(voice);
+      expect(room.sent, [telegramMediaPlayedEventType]);
+      expect(service.canMarkVoiceListened(voice), isFalse);
+      await settle();
+      expect(storage.value, {
+        'marks': ['$_roomId:${voice.eventId}'],
+      });
+
+      // A new process: the stored mark keeps the action away.
+      await TelegramRoundService.closeFor(client);
+      service = TelegramRoundService.of(client);
+      addTearDown(() => TelegramRoundService.closeFor(client));
+      expect(service.canMarkVoiceListened(voice), isFalse);
+      await settle();
+      expect(service.canMarkVoiceListened(voice), isFalse);
+      expect(room.sent, hasLength(1));
+    },
+  );
+
+  test('a note the bridge reports listened offers no action', () async {
+    final room = _room();
+    final voice = _audio(room);
+    final service = TelegramRoundService.of(room.client);
+    addTearDown(() => TelegramRoundService.closeFor(room.client));
+    service.debugSetMediaState(voice, {'media_unread': true});
+    expect(service.canMarkVoiceListened(voice), isTrue);
+    service.debugSetMediaState(voice, {'media_unread': false});
+    expect(service.canMarkVoiceListened(voice), isFalse);
+  });
+
+  group('VoiceListenedMarks', () {
+    test('bounded, newest kept, written once loaded', () async {
+      final storage = _Storage()
+        ..value = {
+          'marks': [
+            for (var i = 0; i < VoiceListenedMarks.capacity; i++) 'r:$i',
+          ],
+        };
+      var ready = 0;
+      final marks = VoiceListenedMarks(storage, onReady: () => ready++);
+      // A mark while the stored ones load stays the newest.
+      marks.add('r:new');
+      expect(marks.ready, isFalse);
+      await settle();
+      expect(ready, 1);
+      expect(marks.ready, isTrue);
+      expect(marks.contains('r:new'), isTrue);
+      expect(marks.contains('r:0'), isFalse, reason: 'the oldest is dropped');
+      expect(marks.contains('r:1'), isTrue);
+      final stored = storage.value!['marks'] as List;
+      expect(stored, hasLength(VoiceListenedMarks.capacity));
+      expect(stored.last, 'r:new');
+      expect(storage.reads, 1);
+    });
+
+    test('an unreadable store keeps this session\'s marks only', () async {
+      final storage = _Storage()..failing = true;
+      final marks = VoiceListenedMarks(storage);
+      expect(marks.ready, isFalse);
+      await settle();
+      expect(marks.ready, isTrue);
+      marks.add('r:1');
+      await settle();
+      expect(marks.contains('r:1'), isTrue);
+    });
+  });
+
+  testWidgets('the action takes the bubble foreground on a private palette', (
+    tester,
+  ) async {
+    final room = _room();
+    final voice = _audio(room);
+    addTearDown(() => TelegramRoundService.closeFor(room.client));
+    TelegramRoundService.of(room.client).debugSetMediaState(voice, null);
+    // A light private bubble whose text is dark: the theme's light text on
+    // it would be unreadable.
+    const ink = Color(0xFF16213A);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: NotionTheme.build(Brightness.dark),
+        home: Scaffold(
+          body: Center(
+            child: MarkListenedButton(event: voice, color: ink),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final label = find.text('Mark listened');
+    expect(label, findsOneWidget);
+    final text = tester.widget<RichText>(
+      find.descendant(of: label, matching: find.byType(RichText)),
+    );
+    expect(text.text.style?.color, ink);
+    final icon = find.byIcon(Icons.hearing_outlined);
+    expect(IconTheme.of(tester.element(icon)).color, ink);
+    // Unmount before the service closes.
+    await tester.pumpWidget(const SizedBox());
   });
 
   test('only an incoming voice note with declared receipts offers it', () {

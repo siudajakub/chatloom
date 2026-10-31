@@ -195,6 +195,11 @@ class NotionButton extends StatelessWidget {
   /// Shows a progress indicator and disables the button.
   final bool busy;
 
+  /// Text, icon and busy ring of a ghost or secondary button on a surface
+  /// the theme does not colour, such as a message bubble: pass that
+  /// surface's contrast-checked foreground. Null keeps the theme's text.
+  final Color? foreground;
+
   const NotionButton({
     super.key,
     required this.label,
@@ -203,6 +208,7 @@ class NotionButton extends StatelessWidget {
     this.icon,
     this.expand = false,
     this.busy = false,
+    this.foreground,
   });
 
   const NotionButton.primary({
@@ -212,7 +218,8 @@ class NotionButton extends StatelessWidget {
     this.icon,
     this.expand = false,
     this.busy = false,
-  }) : variant = NotionButtonVariant.primary;
+  }) : variant = NotionButtonVariant.primary,
+       foreground = null;
 
   const NotionButton.ghost({
     super.key,
@@ -221,6 +228,7 @@ class NotionButton extends StatelessWidget {
     this.icon,
     this.expand = false,
     this.busy = false,
+    this.foreground,
   }) : variant = NotionButtonVariant.ghost;
 
   const NotionButton.destructive({
@@ -230,7 +238,8 @@ class NotionButton extends StatelessWidget {
     this.icon,
     this.expand = false,
     this.busy = false,
-  }) : variant = NotionButtonVariant.destructive;
+  }) : variant = NotionButtonVariant.destructive,
+       foreground = null;
 
   @override
   Widget build(BuildContext context) {
@@ -239,7 +248,7 @@ class NotionButton extends StatelessWidget {
     final foreground = switch (variant) {
       NotionButtonVariant.primary => context.notion.palette.onAccentFill,
       NotionButtonVariant.destructive => colors.danger,
-      _ => colors.text,
+      _ => this.foreground ?? colors.text,
     };
     final child = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis);
     final glyph = busy
@@ -274,6 +283,10 @@ class NotionButton extends StatelessWidget {
         icon: leading,
         label: child,
         style: OutlinedButton.styleFrom(
+          foregroundColor: this.foreground,
+          iconColor: this.foreground,
+          disabledForegroundColor: this.foreground?.withValues(alpha: .38),
+          disabledIconColor: this.foreground?.withValues(alpha: .38),
           padding: padding,
           minimumSize: minimumSize,
         ),
@@ -282,7 +295,14 @@ class NotionButton extends StatelessWidget {
         onPressed: pressed,
         icon: leading,
         label: child,
-        style: TextButton.styleFrom(padding: padding, minimumSize: minimumSize),
+        style: TextButton.styleFrom(
+          foregroundColor: this.foreground,
+          iconColor: this.foreground,
+          disabledForegroundColor: this.foreground?.withValues(alpha: .38),
+          disabledIconColor: this.foreground?.withValues(alpha: .38),
+          padding: padding,
+          minimumSize: minimumSize,
+        ),
       ),
       NotionButtonVariant.destructive => OutlinedButton.icon(
         onPressed: pressed,

@@ -200,6 +200,93 @@ class _PlayedAccount {
   }
 }
 
+/// Voice notes of one account that were marked listened on Telegram from
+/// this device ("Mark listened"), as `room:event` keys, bounded to the
+/// newest [capacity]. With a [storage] (the account's encrypted private
+/// store, device-local, never synced) the marks survive restarts, so the
+/// action does not come back. Nothing is known ([ready] is false) until the
+/// stored marks are read; [onReady] runs then.
+class VoiceListenedMarks {
+  VoiceListenedMarks(this.storage, {this.onReady}) : _ready = storage == null;
+
+  static const capacity = 1000;
+  final VoicePlayedStorage? storage;
+  final VoidCallback? onReady;
+
+  // A set literal keeps insertion order (oldest first).
+  final _keys = <String>{};
+  bool _ready;
+  bool _loading = false;
+  Future<void>? _writing;
+  bool _dirty = false;
+
+  /// Whether the stored marks were read. Starts reading on first use.
+  bool get ready {
+    if (!_ready && !_loading) _load();
+    return _ready;
+  }
+
+  bool contains(String key) => _keys.contains(key);
+
+  void add(String key) {
+    if (!_ready && !_loading) _load();
+    _keys
+      ..remove(key)
+      ..add(key);
+    while (_keys.length > capacity) {
+      _keys.remove(_keys.first);
+    }
+    _persist();
+  }
+
+  void _load() {
+    _loading = true;
+    unawaited(() async {
+      try {
+        final stored = (await storage!.read())?['marks'];
+        if (stored is List) {
+          final added = _keys.toList();
+          _keys
+            ..clear()
+            ..addAll(stored.whereType<String>())
+            // Marks made while loading stay the newest.
+            ..removeAll(added)
+            ..addAll(added);
+          while (_keys.length > capacity) {
+            _keys.remove(_keys.first);
+          }
+        }
+      } catch (_) {
+        // Storage unavailable: marks of this session only.
+      }
+      _ready = true;
+      if (_dirty) _persist();
+      onReady?.call();
+    }());
+  }
+
+  /// One write at a time; a mark during a write is written right after it.
+  void _persist() {
+    final storage = this.storage;
+    if (storage == null) return;
+    if (!_ready || _writing != null) {
+      _dirty = true;
+      return;
+    }
+    _writing = () async {
+      do {
+        _dirty = false;
+        try {
+          await storage.write({'marks': _keys.toList()});
+        } catch (_) {
+          break; // Kept in memory; the next mark tries again.
+        }
+      } while (_dirty);
+      _writing = null;
+    }();
+  }
+}
+
 /// Source references only: building a queue never downloads, decrypts,
 /// sends a receipt or consults another account, room or thread.
 abstract final class VoicePlaybackQueue {

@@ -21,6 +21,7 @@ import 'package:chatloom/personal/privacy_transport.dart';
 import 'package:chatloom/personal/storage/personal_store.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/voice_playback.dart';
+import 'package:chatloom/personal/voice_played_storage.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/foreground_service_controller.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
@@ -91,6 +92,23 @@ class TelegramRoundService extends ChangeNotifier
   bool capturing = false;
   final _reporting = <String>{};
   final _reported = <String>{};
+
+  /// Where an account keeps the voice notes it marked listened: its
+  /// encrypted private store on this device. Tests replace it.
+  @visibleForTesting
+  static VoicePlayedStorage? Function(Client client) voiceMarksStorage =
+      (client) => client.userID == null
+      ? null
+      : PersonalVoiceListenedStorage(PersonalClient.of(client));
+
+  /// Voice notes marked listened from this device, kept across restarts so
+  /// "Mark listened" does not return (bounded, per account).
+  late final _voiceMarks = VoiceListenedMarks(
+    voiceMarksStorage(client),
+    onReady: () {
+      if (!_closed) notifyListeners();
+    },
+  );
   final _states = <String, Map<String, dynamic>?>{};
   final _forwardTails = <String, Future<void>>{};
   String _stateKey(Event event) => '${event.room.id}:${event.eventId}';
@@ -323,6 +341,14 @@ class TelegramRoundService extends ChangeNotifier
 
   /// Test seams: an outbox without protected storage, and the send checks
   /// the outbox runs before and after the upload and at the final event.
+  /// Tests: the verified media state of [event] as if read from the store
+  /// (null: known to have none).
+  @visibleForTesting
+  void debugSetMediaState(Event event, Map<String, dynamic>? state) {
+    _states[_stateKey(event)] = state;
+    notifyListeners();
+  }
+
   @visibleForTesting
   void debugUseOutbox(ImmediateMediaOutbox outbox) {
     _outbox = outbox;
@@ -1203,27 +1229,52 @@ class TelegramRoundService extends ChangeNotifier
       _reportPlayed(event, true);
 
   /// True when an incoming Telegram voice note can be marked listened on
-  /// Telegram (the "Mark listened" action); false once it was sent.
-  bool canMarkVoiceListened(Event event) =>
-      !event.redacted &&
-      !_reported.contains('${event.room.id}:${event.eventId}') &&
-      event.senderId != client.userID &&
-      event.room.client == client &&
-      event.eventId.startsWith(r'$') &&
-      VoicePlayback.isVoice(event) &&
-      !RoundMediaPolicy.fromContent(event.content).isTimeLimited &&
-      TelegramRoomBinding.of(event.room)
-              ?.capabilities(event.room)
-              .extension
-              .operation('playback_receipts')
-              .allowed ==
-          true;
+  /// Telegram (the "Mark listened" action); false once it was sent from this
+  /// device (remembered across restarts), once the bridge's verified media
+  /// state says it is no longer unread, and while the remembered marks are
+  /// still loading (so the action never flashes).
+  bool canMarkVoiceListened(Event event) {
+    final key = '${event.room.id}:${event.eventId}';
+    return !event.redacted &&
+        !_reported.contains(key) &&
+        event.senderId != client.userID &&
+        event.room.client == client &&
+        event.eventId.startsWith(r'$') &&
+        VoicePlayback.isVoice(event) &&
+        !RoundMediaPolicy.fromContent(event.content).isTimeLimited &&
+        TelegramRoomBinding.of(event.room)
+                ?.capabilities(event.room)
+                .extension
+                .operation('playback_receipts')
+                .allowed ==
+            true &&
+        _states[key]?['media_unread'] != false &&
+        _voiceMarks.ready &&
+        !_voiceMarks.contains(key);
+  }
+
+  /// Reads the bridge's stored media state of a voice note once, so a note
+  /// listened elsewhere (Telegram reports it no longer unread) loses the
+  /// action after a restart too.
+  Future<void> loadVoiceState(Event event) async {
+    final key = _stateKey(event);
+    if (_states.containsKey(key) || !canMarkVoiceListened(event)) return;
+    try {
+      final state = await mediaState(event);
+      if (state?['media_unread'] == false && !_closed) notifyListeners();
+    } catch (_) {
+      // Unreadable protected storage keeps the action.
+    }
+  }
 
   /// Marks a voice note listened on Telegram, only on the user's explicit
   /// tap (never on playback or reading its transcript). Throws when the
   /// receipt was not sent.
-  Future<void> markVoiceListened(Event event) =>
-      _reportPlayed(event, true, eligible: canMarkVoiceListened);
+  Future<void> markVoiceListened(Event event) async {
+    await _reportPlayed(event, true, eligible: canMarkVoiceListened);
+    final key = '${event.room.id}:${event.eventId}';
+    if (_reported.contains(key)) _voiceMarks.add(key);
+  }
 
   /// Sends one playback receipt. Automatic reports end silently when a gate
   /// closes; an explicit one (the user tapped "Send playback receipt")
@@ -1561,9 +1612,11 @@ class TelegramRoundService extends ChangeNotifier
       return;
     }
     final source = await event.room.getEventById(sourceId);
+    // Rounds, and voice notes when the bridge reports their listened state.
     if (source == null ||
         source.redacted ||
-        RoundVideoDescriptor.fromContent(source.content) == null) {
+        (RoundVideoDescriptor.fromContent(source.content) == null &&
+            !VoicePlayback.isVoice(source))) {
       return;
     }
     await initialize();

@@ -19,3 +19,20 @@ class PersonalVoicePlayedStorage implements VoicePlayedStorage {
   Future<void> write(Map<String, dynamic> value) =>
       personal.writeLocalRecord(key, value);
 }
+
+/// Voice notes marked listened on Telegram ([VoiceListenedMarks]) in the
+/// account's encrypted private store: local to this device, not synced.
+class PersonalVoiceListenedStorage implements VoicePlayedStorage {
+  PersonalVoiceListenedStorage(this.personal);
+
+  final PersonalClient personal;
+
+  static const key = 'voiceListenedMarks';
+
+  @override
+  Future<Map<String, dynamic>?> read() => personal.readLocalRecord(key);
+
+  @override
+  Future<void> write(Map<String, dynamic> value) =>
+      personal.writeLocalRecord(key, value);
+}
