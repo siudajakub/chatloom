@@ -25,11 +25,19 @@ Future<String> checkTranscription(
     Cancellation(),
     (_, _) {},
   );
+  final timing = result.timing;
   return jsonEncode({
     'status': 'done',
-    'model': transcriptionModel,
+    'model': transcriber is OpenAiTranscriber
+        ? transcriber.model.name
+        : transcriptionModel,
     'durationSeconds': result.durationSeconds,
     'estimatedCostUsd': result.estimatedCostUsd,
     'transcriptCharacters': result.text.length,
+    // Counts only: whether the model's timestamps arrived and fit.
+    if (timing != null) ...{
+      'timedSegments': ((timing['segments'] as List?)?.length ?? 0) ~/ 4,
+      'timedWords': ((timing['words'] as List?)?.length ?? 0) ~/ 4,
+    },
   });
 }

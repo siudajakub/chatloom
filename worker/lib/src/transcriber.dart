@@ -5,8 +5,12 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'ports.dart';
+import 'transcript_timestamps.dart';
 
 const transcriptionMaxBytes = 25000000;
+
+/// The model name of the job contract (`TranscriptionJob.model`); the
+/// provider model actually called is [OpenAiTranscriber.model].
 const transcriptionModel = 'gpt-transcribe';
 const transcriptionPricePerMinute = 0.0045;
 
@@ -39,6 +43,10 @@ bool _noAudioStream(String stderr) =>
 
 class OpenAiTranscriber implements Transcriber {
   final String apiKey;
+
+  /// The provider model; with [TranscriptionModel.timestamps] the same
+  /// request also returns segment and word timestamps (`verbose_json`).
+  final TranscriptionModel model;
   final String temporaryRoot;
   final String ffmpeg;
   final String ffprobe;
@@ -51,6 +59,7 @@ class OpenAiTranscriber implements Transcriber {
   OpenAiTranscriber(
     this.apiKey, {
     required this.temporaryRoot,
+    this.model = TranscriptionModel.gptTranscribe,
     String? ffmpeg,
     String? ffprobe,
     this.processTimeout = const Duration(minutes: 10),
@@ -227,7 +236,7 @@ class OpenAiTranscriber implements Transcriber {
       // The media's only in-memory copy is released once it is on disk.
       await input.writeAsBytes(audio.takeBytes(), flush: true);
       final duration = await _probeDuration(input, cancel);
-      final cost = duration / 60 * transcriptionPricePerMinute;
+      final cost = duration / 60 * model.pricePerMinute;
       // Pre-upload gate: automatic-job limits throw here, before conversion
       // or any provider request; the finally block removes the plaintext.
       estimate(duration, cost);
@@ -279,13 +288,16 @@ class OpenAiTranscriber implements Transcriber {
             ..sort((a, b) => a.path.compareTo(b.path));
       if (chunks.isEmpty) throw const WorkerFailure('empty_audio');
       final texts = <String>[];
+      final stamps = <ChunkTimestamps?>[];
       for (final chunk in chunks) {
         cancel.check();
         if (await chunk.length() > transcriptionMaxBytes) {
           throw const WorkerFailure('audio_chunk_too_large');
         }
         try {
-          texts.add(await _upload(chunk, language, cancel));
+          final answer = await _upload(chunk, language, cancel);
+          texts.add(answer.text);
+          stamps.add(answer.timestamps);
         } on PaidRequestUnknown {
           rethrow;
         } on WorkerFailure catch (e) {
@@ -297,7 +309,16 @@ class OpenAiTranscriber implements Transcriber {
           rethrow;
         }
       }
-      return TranscriptionResult(texts.join('\n\n'), duration, cost);
+      return TranscriptionResult(
+        texts.join('\n\n'),
+        duration,
+        cost,
+        // Timestamps come with the text of the same requests, never from a
+        // second one; a transcript without them is still complete.
+        timing: model.timestamps
+            ? transcriptTimingRecord(texts, stamps, separator: '\n\n')
+            : null,
+      );
     } finally {
       if (await directory.exists()) await directory.delete(recursive: true);
     }
@@ -308,14 +329,16 @@ class OpenAiTranscriber implements Transcriber {
   /// opened). 500/504 and other 5xx, a timeout or a dropped connection after
   /// sending are paid uncertainty and never retried, so nothing is charged
   /// twice.
-  Future<String> _upload(
+  Future<({String text, ChunkTimestamps? timestamps})> _upload(
     File file,
     String? language,
     Cancellation cancel,
   ) async {
     for (var attempt = 1; ; attempt++) {
       final outcome = await _uploadOnce(file, language, cancel);
-      if (outcome.text case final text?) return text;
+      if (outcome.text case final text?) {
+        return (text: text, timestamps: outcome.timestamps);
+      }
       if (attempt >= transcriptionProviderAttempts) {
         throw WorkerFailure(outcome.failure!);
       }
@@ -332,11 +355,15 @@ class OpenAiTranscriber implements Transcriber {
     }
   }
 
-  Future<({String? text, String? failure, Duration? retryAfter})> _uploadOnce(
-    File file,
-    String? language,
-    Cancellation cancel,
-  ) async {
+  Future<
+    ({
+      String? text,
+      ChunkTimestamps? timestamps,
+      String? failure,
+      Duration? retryAfter,
+    })
+  >
+  _uploadOnce(File file, String? language, Cancellation cancel) async {
     final client = clientFactory();
     cancel.listen(client.close);
     try {
@@ -347,10 +374,24 @@ class OpenAiTranscriber implements Transcriber {
               Uri.parse('https://api.openai.com/v1/audio/transcriptions'),
             )
             ..headers['Authorization'] = 'Bearer $apiKey'
-            ..fields['model'] = transcriptionModel
-            ..fields['response_format'] = 'json';
-      if (language != null && language.isNotEmpty) {
-        request.fields['languages[]'] = language;
+            ..fields['model'] = model.name;
+      if (model.timestamps) {
+        // One request: text plus segment and word times (whisper-1). The
+        // multipart form repeats the array field, so the second value is
+        // its own part (a plain field part, no file name).
+        request.fields['response_format'] = 'verbose_json';
+        request.fields['timestamp_granularities[]'] = 'segment';
+        request.files.add(
+          http.MultipartFile.fromString('timestamp_granularities[]', 'word'),
+        );
+        if (language != null && language.isNotEmpty) {
+          request.fields['language'] = language;
+        }
+      } else {
+        request.fields['response_format'] = 'json';
+        if (language != null && language.isNotEmpty) {
+          request.fields['languages[]'] = language;
+        }
       }
       request.files.add(
         await http.MultipartFile.fromPath(
@@ -392,6 +433,7 @@ class OpenAiTranscriber implements Transcriber {
         );
         return (
           text: null,
+          timestamps: null,
           failure: code,
           retryAfter: seconds == null || seconds < 0
               ? null
@@ -403,14 +445,34 @@ class OpenAiTranscriber implements Transcriber {
       if (text is! String || text.trim().isEmpty) {
         throw const WorkerFailure('empty_transcript');
       }
-      return (text: text.trim(), failure: null, retryAfter: null);
+      final trimmed = text.trim();
+      ChunkTimestamps? timestamps;
+      if (model.timestamps && value is Map) {
+        try {
+          timestamps = chunkTimestamps(value, trimmed);
+        } catch (_) {
+          // Unexpected timestamp shapes never cost the paid text.
+          timestamps = null;
+        }
+      }
+      return (
+        text: trimmed,
+        timestamps: timestamps,
+        failure: null,
+        retryAfter: null,
+      );
     } on WorkerFailure {
       rethrow;
     } on SocketException catch (e) {
       cancel.check();
       // Refused connections and failed DNS lookups never reach the provider.
       if (_neverConnected(e)) {
-        return (text: null, failure: 'openai_unreachable', retryAfter: null);
+        return (
+          text: null,
+          timestamps: null,
+          failure: 'openai_unreachable',
+          retryAfter: null,
+        );
       }
       throw const PaidRequestUnknown();
     } catch (_) {

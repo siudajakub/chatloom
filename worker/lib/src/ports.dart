@@ -118,11 +118,16 @@ class TranscriptionResult {
   final String text;
   final double durationSeconds;
   final double estimatedCostUsd;
+
+  /// Segment/word timestamps of [text] (`TranscriptTiming.encode` record),
+  /// when the provider model returned them in the same request.
+  final Map<String, Object?>? timing;
   const TranscriptionResult(
     this.text,
     this.durationSeconds,
-    this.estimatedCostUsd,
-  );
+    this.estimatedCostUsd, {
+    this.timing,
+  });
 }
 
 abstract class FeatureTransport {

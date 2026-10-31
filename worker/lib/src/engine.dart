@@ -585,7 +585,9 @@ class WorkerEngine {
       ..removeWhere((key, _) => _internalJobKeys.contains(key))
       // The text was published with the job's done transition; echoing it
       // in every refusal duplicated it and could exceed the event limit.
-      ..remove('text'),
+      // Its timestamps likewise (apps keep them while a result has no text).
+      ..remove('text')
+      ..remove('timing'),
   );
   void _result(Map<String, dynamic> body, String cause) {
     final kind = '${body['kind']}.result';
@@ -1122,6 +1124,7 @@ class WorkerEngine {
     store.transaction(() {
       job['text'] = null; // Explicit tombstone clears text in replica merges.
       job.remove('pendingResult');
+      job.remove('timing'); // Erased with the text it times.
       job['state'] = 'cancelled';
       job['errorCode'] = 'source_redacted';
       job['revision'] = (job['revision'] as int) + 1;
@@ -1324,11 +1327,14 @@ class WorkerEngine {
         'text': result.text,
         'durationSeconds': result.durationSeconds,
         'estimatedCostUsd': result.estimatedCostUsd,
+        // Timestamps belong to this text only (absent: none).
+        'timing': ?result.timing,
       };
       latest
         ..remove('retries')
         ..remove('waitingKeysSince')
-        ..remove('providerAttemptAt');
+        ..remove('providerAttemptAt')
+        ..remove('timing');
       if (redacted == null) {
         latest['pendingResult'] = values;
         _parkOnSource(latest);
@@ -1521,10 +1527,12 @@ class WorkerEngine {
     final job = store.job(entry.id)!;
     final text = job['text'] as String;
     final duration = job['durationSeconds'];
+    final timing = job['timing'];
     return TranscriptionResult(
       text,
       duration is num ? duration.toDouble() : 0,
       0,
+      timing: timing is Map ? Map<String, Object?>.from(timing) : null,
     );
   }
 

@@ -501,6 +501,7 @@ class WorkerStore {
         final payload = Map<String, dynamic>.from(body['payload'] as Map)
           ..remove('pendingResult')
           ..remove('textParts')
+          ..remove('timing')
           ..addAll({
             'text': null,
             'state': 'cancelled',

@@ -91,6 +91,9 @@ class FakeTranscriber implements Transcriber {
   int calls = 0;
   bool paidUnknown = false;
   Completer<void>? hold;
+
+  /// Timestamps the provider returned with the text (whisper-1).
+  Map<String, Object?>? timing;
   @override
   Future<TranscriptionResult> transcribe(
     AudioSource audio,
@@ -103,7 +106,12 @@ class FakeTranscriber implements Transcriber {
     await hold?.future;
     cancel.check();
     if (paidUnknown) throw const PaidRequestUnknown();
-    return const TranscriptionResult('synthetic transcript', 60, 0.0045);
+    return TranscriptionResult(
+      'synthetic transcript',
+      60,
+      0.0045,
+      timing: timing,
+    );
   }
 }
 
@@ -606,6 +614,50 @@ void main() {
       expect(store.job('t')!['state'], 'done');
       expect(store.job('t')!['acceptedOpId'], 'retry');
       expect(transcriber.calls, 2);
+    },
+  );
+
+  test(
+    'timestamps travel with the done text, never with a refusal, and are erased with it',
+    () async {
+      final timing = TranscriptTiming.encode(
+        segments: const [
+          TranscriptSpan(
+            start: Duration.zero,
+            end: Duration(seconds: 2),
+            textStart: 0,
+            textEnd: 20,
+          ),
+        ],
+      )!;
+      transcriber.timing = timing;
+      await completeTranscript();
+      expect(store.job('t')!['timing'], timing);
+      final done = store.outbox.last;
+      expect(done['payload']['state'], 'done');
+      expect(done['payload']['timing'], timing);
+      expect(
+        TranscriptTiming.tryParse(
+          done['payload']['timing'],
+          done['payload']['text'] as String,
+        ),
+        isNotNull,
+      );
+      // A refused duplicate request echoes neither the text nor its times.
+      engine.accept(
+        op('stale', 'transcript.request', 't', transcriptBody(), revision: 0),
+      );
+      final refusal = store.outbox.last['payload'] as Map;
+      expect(refusal['state'], 'conflict');
+      expect(refusal.containsKey('timing'), isFalse);
+      // Deleting the source erases text and timestamps alike.
+      transport.redacted = true;
+      await engine.auditTranscriptSources(force: true);
+      expect(store.job('t')!['text'], isNull);
+      expect(store.job('t')!.containsKey('timing'), isFalse);
+      final tombstone = store.outbox.last['payload'] as Map;
+      expect(tombstone['text'], isNull);
+      expect(tombstone.containsKey('timing'), isFalse);
     },
   );
 

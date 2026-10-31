@@ -9,5 +9,6 @@
   "requireCodecSandbox": false,
   "allowConversationSends": false,
   "autoTranscription": false,
-  "autoTranscriptionMatrix": true
+  "autoTranscriptionMatrix": true,
+  "transcriptionModel": "gpt-transcribe"
 }

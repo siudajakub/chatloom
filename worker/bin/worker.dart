@@ -54,6 +54,7 @@ Future<void> main(List<String> arguments) async {
           credentials['openaiApiKey'] as String? ?? '',
           temporaryRoot: config.temporaryDirectory,
           requireCodecSandbox: config.requireCodecSandbox,
+          model: config.transcriptionModel,
         ),
       );
       stdout.writeln(result);
@@ -132,6 +133,7 @@ Future<void> main(List<String> arguments) async {
           credentials['openaiApiKey'] as String? ?? '',
           temporaryRoot: config.temporaryDirectory,
           requireCodecSandbox: config.requireCodecSandbox,
+          model: config.transcriptionModel,
         ),
         // Automatic transcription scans only explicitly configured local
         // sources, and only with the private operator switch (default off).

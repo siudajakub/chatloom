@@ -5,6 +5,7 @@ import 'package:path/path.dart' as path;
 import 'package:sqlite3/sqlite3.dart';
 import 'ports.dart';
 import 'reminder_relay.dart';
+import 'transcript_timestamps.dart';
 
 class WorkerConfig {
   final String stateDirectory;
@@ -26,6 +27,11 @@ class WorkerConfig {
 
   /// Lets the operator keep automatic work to local sources only.
   final bool autoTranscriptionMatrix;
+
+  /// The provider speech model (`transcriptionModel` in the config):
+  /// `gpt-transcribe` (default) or `whisper-1`, whose one request also
+  /// returns segment and word timestamps for the live transcript view.
+  final TranscriptionModel transcriptionModel;
   WorkerConfig({
     required this.stateDirectory,
     required this.temporaryDirectory,
@@ -39,6 +45,7 @@ class WorkerConfig {
     this.localSourceSocket,
     this.autoTranscription = false,
     this.autoTranscriptionMatrix = true,
+    this.transcriptionModel = TranscriptionModel.gptTranscribe,
   });
   factory WorkerConfig.read(String filename) {
     final value =
@@ -64,6 +71,15 @@ class WorkerConfig {
         !path.isAbsolute(credential)) {
       throw const WorkerFailure('absolute_paths_required');
     }
+    final modelName = value['transcriptionModel'];
+    final model = modelName == null
+        ? TranscriptionModel.gptTranscribe
+        : modelName is String
+        ? TranscriptionModel.byName(modelName)
+        : null;
+    if (model == null) {
+      throw const WorkerFailure('invalid_transcription_model');
+    }
     return WorkerConfig(
       stateDirectory: state,
       temporaryDirectory: temporary,
@@ -75,6 +91,7 @@ class WorkerConfig {
       autoTranscription: value['autoTranscription'] as bool? ?? false,
       autoTranscriptionMatrix:
           value['autoTranscriptionMatrix'] as bool? ?? true,
+      transcriptionModel: model,
       journalRoomId: value['journalRoomId'] as String? ?? '',
       trustedDeviceIds: (value['trustedDeviceIds'] as List? ?? [])
           .cast<String>(),
