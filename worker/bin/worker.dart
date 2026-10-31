@@ -16,6 +16,7 @@ import 'package:personal_worker/src/ports.dart';
 import 'package:personal_worker/src/runtime.dart';
 import 'package:personal_worker/src/store.dart';
 import 'package:personal_worker/src/transcriber.dart';
+import 'package:personal_worker/src/transcript_timestamps.dart';
 import 'package:personal_worker/src/reminder_relay.dart';
 import 'package:personal_worker/src/transcription_check.dart';
 import 'package:personal_worker/src/local_sources.dart';
@@ -25,7 +26,13 @@ Future<void> main(List<String> arguments) async {
   sanitizeLogs();
   RandomAccessFile? sessionLock;
   try {
-    if (arguments.length != 2 ||
+    // transcribe-check alone takes an optional job language (pl, en, hy).
+    final checkLanguage =
+        arguments.length == 3 && arguments[0] == 'transcribe-check'
+        ? arguments[2]
+        : null;
+    if ((arguments.length != 2 && checkLanguage == null) ||
+        (checkLanguage != null && !validTranscriptionLanguage(checkLanguage)) ||
         !{
           'run',
           'enroll',
@@ -35,7 +42,8 @@ Future<void> main(List<String> arguments) async {
           'transcribe-check',
         }.contains(arguments[0])) {
       stderr.writeln(
-        'Usage: worker <run|enroll|restore|check|native-check|transcribe-check> /absolute/config.json',
+        'Usage: worker <run|enroll|restore|check|native-check|transcribe-check> /absolute/config.json\n'
+        '       worker transcribe-check /absolute/config.json [pl|en|hy] < audio',
       );
       exitCode = 64;
       return;
@@ -50,12 +58,13 @@ Future<void> main(List<String> arguments) async {
       final credentials = readCredentials(config);
       final result = await checkTranscription(
         stdin,
-        OpenAiTranscriber(
-          credentials['openaiApiKey'] as String? ?? '',
+        SpeechTranscriber(
+          transcriptionApiKey(config, credentials),
           temporaryRoot: config.temporaryDirectory,
           requireCodecSandbox: config.requireCodecSandbox,
           model: config.transcriptionModel,
         ),
+        language: checkLanguage,
       );
       stdout.writeln(result);
       return;
@@ -126,11 +135,12 @@ Future<void> main(List<String> arguments) async {
           credentials['databaseCipher'] as String,
         ),
       );
+      final transcriptionKey = transcriptionApiKey(config, credentials);
       final engine = WorkerEngine(
         store,
         transport,
-        OpenAiTranscriber(
-          credentials['openaiApiKey'] as String? ?? '',
+        SpeechTranscriber(
+          transcriptionKey,
           temporaryRoot: config.temporaryDirectory,
           requireCodecSandbox: config.requireCodecSandbox,
           model: config.transcriptionModel,
@@ -159,12 +169,21 @@ Future<void> main(List<String> arguments) async {
       final reminderDelivery = ReminderHintDelivery(store, relay);
       try {
         await journal.start();
+        // Provider, model and whether a key is configured (never the key):
+        // the deployment's health check reads this line.
+        final transcription =
+            'transcription ${config.transcriptionModel.provider.name} '
+            '${config.transcriptionModel.name}, '
+            'key ${transcriptionKey.isEmpty ? 'missing' : 'present'}, '
+            'automatic ${config.autoTranscription ? 'on' : 'off'}';
         if (arguments[0] == 'check') {
+          stdout.writeln('Worker check: $transcription');
           stdout.writeln(
             'Encrypted private journal and verified session: PASS.',
           );
           return;
         }
+        stdout.writeln('Worker started: $transcription');
         engine.recover();
         // The SDK keeps the id of the sync filter it defined first; a changed
         // worker filter (no typing, receipts or presence) is defined once.
@@ -428,9 +447,14 @@ Future<void> enroll(WorkerConfig config) async {
       32,
       (_) => Random.secure().nextInt(256),
     ).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    // The key of the configured transcription provider.
+    final openRouter =
+        config.transcriptionModel.provider == TranscriptionProvider.openrouter;
     await writePrivateJson(config.credentialsPath, {
       'databaseCipher': cipher,
-      'openaiApiKey': secretInput('OpenAI API key (blank to add later)'),
+      openRouter ? 'openrouterApiKey' : 'openaiApiKey': secretInput(
+        '${openRouter ? 'OpenRouter' : 'OpenAI'} API key (blank to add later)',
+      ),
     });
   }
   final client = await openSession(config);

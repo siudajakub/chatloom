@@ -165,7 +165,8 @@ void main() {
   });
 
   group('config', () {
-    test('defaults to gpt-transcribe and accepts whisper-1 only', () async {
+    test('defaults to Grok through OpenRouter and accepts the OpenAI '
+        'models by name', () async {
       final directory = await Directory.systemTemp.createTemp('worker-config-');
       addTearDown(() => directory.delete(recursive: true));
       final file = File('${directory.path}/config.json');
@@ -176,6 +177,11 @@ void main() {
         'transcriptionModel': ?model,
       };
       file.writeAsStringSync(jsonEncode(config()));
+      expect(
+        WorkerConfig.read(file.path).transcriptionModel,
+        TranscriptionModel.grokStt,
+      );
+      file.writeAsStringSync(jsonEncode(config('gpt-transcribe')));
       expect(
         WorkerConfig.read(file.path).transcriptionModel,
         TranscriptionModel.gptTranscribe,
@@ -195,7 +201,7 @@ void main() {
     });
   });
 
-  group('OpenAiTranscriber', () {
+  group('SpeechTranscriber', () {
     final ffmpeg = Platform.environment['FFMPEG_PATH'] ?? 'ffmpeg';
     setUpAll(() {
       expect(
@@ -215,7 +221,7 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
       final bodies = <String>[];
       double? estimate;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: directory.path,
         model: model,

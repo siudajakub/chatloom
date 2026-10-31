@@ -142,6 +142,41 @@ class WorkerCredentialsTests(unittest.TestCase):
         self.primary.unlink()
         self.assert_refused()
 
+    def worker_only(self):
+        if self.preparer is not worker:
+            self.skipTest('the OpenRouter key is a worker credential')
+
+    def test_optional_openrouter_key_is_copied_privately(self):
+        self.worker_only()
+        key = self.source / 'openrouter_api_key'
+        self.write(key, b'sk-or-v1-synthetic\n')
+        self.prepare()
+        copied = self.runtime / 'openrouter_api_key'
+        self.assertEqual(copied.read_bytes(), key.read_bytes())
+        self.assertEqual(stat.S_IMODE(copied.stat().st_mode), 0o600)
+        self.assertEqual((self.runtime / self.primary.name).read_bytes(), self.primary.read_bytes())
+
+    def test_absent_openrouter_key_removes_an_earlier_copy(self):
+        self.worker_only()
+        key = self.source / 'openrouter_api_key'
+        self.write(key, b'sk-or-v1-synthetic')
+        self.prepare()
+        key.unlink()
+        self.prepare()
+        self.assertEqual(sorted(p.name for p in self.runtime.iterdir()), ['credentials.json'])
+
+    def test_openrouter_key_mode_symlink_and_size_are_rejected(self):
+        self.worker_only()
+        key = self.source / 'openrouter_api_key'
+        self.write(key, b'sk-or-v1-synthetic')
+        key.chmod(0o444)
+        self.assert_refused()
+        self.write(key, b'x' * 65537)
+        self.assert_refused()
+        key.unlink()
+        key.symlink_to(self.primary)
+        self.assert_refused()
+
     def test_failure_diagnostics_never_contain_inputs(self):
         with patch.dict(os.environ, {'CREDENTIALS_DIRECTORY': 'SECRET_CANARY'}):
             with self.assertRaises(SystemExit) as caught:

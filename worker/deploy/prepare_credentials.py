@@ -13,6 +13,8 @@ import sys
 
 MAXIMUM = 65536
 SERVICE = 'worker'
+# systemd credentials the worker may have besides credentials.json.
+OPTIONAL_WORKER_CREDENTIALS = ('openrouter_api_key',)
 
 
 class CredentialError(Exception):
@@ -82,8 +84,18 @@ def prepare(source, runtime):
                     if reminder != str(runtime / 'reminder-relay.json'):
                         raise CredentialError()
                     data['reminder-relay.json'] = source_bytes(source_fd, 'reminder-relay.json')
+            stale = []
+            if SERVICE == 'worker':
+                # Optional credentials (the OpenRouter transcription key): copied
+                # with the same checks when present; a removed credential also
+                # removes an earlier runtime copy.
+                for name in OPTIONAL_WORKER_CREDENTIALS:
+                    try:
+                        data[name] = source_bytes(source_fd, name, systemd_root_group)
+                    except FileNotFoundError:
+                        stale.append(name)
             # Validate every input and existing destination before any output.
-            for name in data:
+            for name in [*data, *stale]:
                 try:
                     info = os.stat(name, dir_fd=runtime_fd, follow_symlinks=False)
                 except FileNotFoundError:
@@ -108,6 +120,11 @@ def prepare(source, runtime):
                         os.unlink(temporary, dir_fd=runtime_fd)
                     except FileNotFoundError:
                         pass
+            for name in stale:
+                try:
+                    os.unlink(name, dir_fd=runtime_fd)
+                except FileNotFoundError:
+                    pass
         finally:
             os.close(runtime_fd)
     finally:

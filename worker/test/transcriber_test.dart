@@ -47,7 +47,7 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
       var calls = 0;
       double? estimate;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: directory.path,
         clientFactory: () => MockClient((request) async {
@@ -84,7 +84,7 @@ void main() {
     );
     addTearDown(() => directory.delete(recursive: true));
     var calls = 0;
-    final service = OpenAiTranscriber(
+    final service = SpeechTranscriber(
       'synthetic-key',
       temporaryRoot: directory.path,
       clientFactory: () => MockClient((_) async {
@@ -110,7 +110,7 @@ void main() {
     );
     addTearDown(() => directory.delete(recursive: true));
     var calls = 0;
-    final service = OpenAiTranscriber(
+    final service = SpeechTranscriber(
       'synthetic-key',
       temporaryRoot: directory.path,
       clientFactory: () => MockClient((_) async {
@@ -139,7 +139,7 @@ void main() {
       );
       addTearDown(() => directory.delete(recursive: true));
       final bodies = <String>[];
-      OpenAiTranscriber service() => OpenAiTranscriber(
+      SpeechTranscriber service() => SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: directory.path,
         clientFactory: () => MockClient((request) async {
@@ -169,7 +169,7 @@ void main() {
     );
     addTearDown(() => directory.delete(recursive: true));
     var calls = 0;
-    final service = OpenAiTranscriber(
+    final service = SpeechTranscriber(
       'synthetic-key',
       temporaryRoot: directory.path,
       clientFactory: () => MockClient((_) async {
@@ -207,7 +207,7 @@ void main() {
         'worker-probe-test-',
       );
       addTearDown(() => directory.delete(recursive: true));
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: directory.path,
         ffmpeg: ffmpeg,
@@ -247,7 +247,7 @@ void main() {
       ]);
       expect(conversion.exitCode, 0);
       var calls = 0;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: '${directory.path}/audio',
         ffprobe: '',
@@ -282,7 +282,7 @@ void main() {
       );
       addTearDown(() => directory.delete(recursive: true));
       var calls = 0;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: directory.path,
         ffprobe: '',
@@ -314,7 +314,7 @@ void main() {
       final audio = syntheticWav(seconds: 901);
       expect(audio.length, greaterThan(transcriptionMaxBytes));
       var calls = 0;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: directory.path,
         ffprobe: '',
@@ -349,7 +349,7 @@ void main() {
       );
       await Process.run('chmod', ['700', executable.path]);
       var calls = 0;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: '${directory.path}/audio',
         ffmpeg: executable.path,
@@ -400,7 +400,7 @@ else:
 ''');
       await Process.run('chmod', ['700', executable.path]);
       var calls = 0;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: '${directory.path}/audio',
         ffmpeg: executable.path,
@@ -440,7 +440,7 @@ else:
       );
       addTearDown(() => directory.delete(recursive: true));
       var calls = 0;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         '',
         temporaryRoot: directory.path,
         ffmpeg: 'absent-binary',
@@ -491,7 +491,7 @@ else:
       });
       final playlist =
           '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1,\nhttp://127.0.0.1:${canary.port}/canary.wav\n#EXTINF:1,\n${secret.uri}\n#EXT-X-ENDLIST\n';
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: '${directory.path}/audio',
         ffprobe: '',
@@ -537,7 +537,7 @@ else:
     pathlib.Path(sys.argv[-1].replace('%06d','000000')).write_bytes(b'fixture')
 ''');
     await Process.run('chmod', ['700', executable.path]);
-    final service = OpenAiTranscriber(
+    final service = SpeechTranscriber(
       'synthetic-key',
       temporaryRoot: '${directory.path}/audio',
       ffmpeg: executable.path,
@@ -599,7 +599,7 @@ else:
     );
     await Process.run('chmod', ['700', executable.path]);
     var calls = 0;
-    final service = OpenAiTranscriber(
+    final service = SpeechTranscriber(
       'synthetic-key',
       temporaryRoot: '${directory.path}/audio',
       ffmpeg: executable.path,
@@ -635,7 +635,7 @@ else:
       );
       addTearDown(() => directory.delete(recursive: true));
       var calls = 0;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: directory.path,
         requireCodecSandbox: true,

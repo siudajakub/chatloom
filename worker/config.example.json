@@ -10,5 +10,6 @@
   "allowConversationSends": false,
   "autoTranscription": false,
   "autoTranscriptionMatrix": true,
-  "transcriptionModel": "gpt-transcribe"
+  "transcriptionProvider": "openrouter",
+  "transcriptionModel": "x-ai/grok-stt-1.0"
 }

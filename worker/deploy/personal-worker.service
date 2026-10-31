@@ -13,6 +13,10 @@ WorkingDirectory=/opt/personal-worker
 ExecStartPre=/usr/bin/python3 /opt/personal-worker/prepare_credentials.py
 ExecStart=/opt/personal-worker/bundle/bin/worker run /etc/personal-worker/config.json
 LoadCredential=credentials.json:/etc/personal-worker/credentials.json
+# Key of the default transcription provider (OpenRouter), root-owned 0600;
+# prepare_credentials.py copies it next to credentials.json. Drop this line
+# with "transcriptionProvider": "openai" (key in credentials.json instead).
+LoadCredential=openrouter_api_key:/etc/personal-worker/openrouter.key
 StateDirectory=personal-worker
 StateDirectoryMode=0700
 RuntimeDirectory=personal-worker

@@ -276,11 +276,11 @@ Future<void> main(List<String> args) async {
         credentials['databaseCipher'] as String,
       ),
     );
-    // Prove journal authentication without ticking jobs or invoking OpenAI.
+    // Prove journal authentication without ticking jobs or invoking a provider.
     final engine = WorkerEngine(
       store,
       transport,
-      OpenAiTranscriber('', temporaryRoot: config.temporaryDirectory),
+      SpeechTranscriber('', temporaryRoot: config.temporaryDirectory),
     );
     final pins = config.trustedDeviceIds.toSet()..add(transport.deviceId);
     final journal = WorkerJournal(client, room.id, pins, store, engine);

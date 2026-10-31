@@ -28,9 +28,12 @@ class WorkerConfig {
   /// Lets the operator keep automatic work to local sources only.
   final bool autoTranscriptionMatrix;
 
-  /// The provider speech model (`transcriptionModel` in the config):
-  /// `gpt-transcribe` (default) or `whisper-1`, whose one request also
-  /// returns segment and word timestamps for the live transcript view.
+  /// The provider and speech model (`transcriptionProvider` and
+  /// `transcriptionModel` in the config). Default: `x-ai/grok-stt-1.0`
+  /// through OpenRouter, whose one request also returns segment and word
+  /// timestamps for the live transcript view. `openai` keeps
+  /// `gpt-transcribe` (its default, no timestamps) or `whisper-1`; switching
+  /// back is a config change.
   final TranscriptionModel transcriptionModel;
   WorkerConfig({
     required this.stateDirectory,
@@ -45,7 +48,7 @@ class WorkerConfig {
     this.localSourceSocket,
     this.autoTranscription = false,
     this.autoTranscriptionMatrix = true,
-    this.transcriptionModel = TranscriptionModel.gptTranscribe,
+    this.transcriptionModel = TranscriptionModel.standard,
   });
   factory WorkerConfig.read(String filename) {
     final value =
@@ -71,15 +74,10 @@ class WorkerConfig {
         !path.isAbsolute(credential)) {
       throw const WorkerFailure('absolute_paths_required');
     }
-    final modelName = value['transcriptionModel'];
-    final model = modelName == null
-        ? TranscriptionModel.gptTranscribe
-        : modelName is String
-        ? TranscriptionModel.byName(modelName)
-        : null;
-    if (model == null) {
-      throw const WorkerFailure('invalid_transcription_model');
-    }
+    final model = transcriptionModelOf(
+      value['transcriptionProvider'],
+      value['transcriptionModel'],
+    );
     return WorkerConfig(
       stateDirectory: state,
       temporaryDirectory: temporary,
@@ -113,6 +111,77 @@ Map<String, dynamic> readCredentials(WorkerConfig config) {
   requirePrivateFile(config.credentialsPath);
   return jsonDecode(File(config.credentialsPath).readAsStringSync())
       as Map<String, dynamic>;
+}
+
+/// The model a config selects with `transcriptionProvider` and
+/// `transcriptionModel`, both optional: neither selects
+/// [TranscriptionModel.standard] (Grok through OpenRouter), a provider alone
+/// its default model, a model alone that model and its provider. A model of
+/// another provider, or an unknown name, refuses to start.
+TranscriptionModel transcriptionModelOf(
+  Object? providerName,
+  Object? modelName,
+) {
+  TranscriptionProvider? provider;
+  if (providerName != null) {
+    provider = TranscriptionProvider.byName(providerName);
+    if (provider == null) {
+      throw const WorkerFailure('invalid_transcription_provider');
+    }
+  }
+  if (modelName == null) {
+    return provider == null
+        ? TranscriptionModel.standard
+        : TranscriptionModel.defaultFor(provider);
+  }
+  final model = modelName is String
+      ? TranscriptionModel.byName(modelName, provider: provider)
+      : null;
+  if (model == null) throw const WorkerFailure('invalid_transcription_model');
+  return model;
+}
+
+/// File next to the credentials JSON that holds the OpenRouter key: the
+/// systemd credential of the same name (`LoadCredential=openrouter_api_key:…`),
+/// copied there with mode 0600 by `prepare_credentials.py`.
+const openRouterKeyFile = 'openrouter_api_key';
+
+/// The API key of the configured provider; empty when none is configured
+/// (transcripts then fail with `openai_key_missing`, nothing is sent).
+///
+/// OpenAI: `openaiApiKey` in the credentials JSON. OpenRouter: the
+/// owner-only file [openRouterKeyFile] next to the credentials JSON when it
+/// exists, otherwise `openrouterApiKey` in the credentials JSON. The key is
+/// never printed.
+String transcriptionApiKey(
+  WorkerConfig config,
+  Map<String, dynamic> credentials,
+) {
+  switch (config.transcriptionModel.provider) {
+    case TranscriptionProvider.openai:
+      return credentials['openaiApiKey'] as String? ?? '';
+    case TranscriptionProvider.openrouter:
+      final file = path.join(
+        path.dirname(config.credentialsPath),
+        openRouterKeyFile,
+      );
+      final type = FileSystemEntity.typeSync(file, followLinks: false);
+      if (type == FileSystemEntityType.notFound) {
+        return credentials['openrouterApiKey'] as String? ?? '';
+      }
+      if (type != FileSystemEntityType.file) {
+        throw const WorkerFailure('credentials_permissions');
+      }
+      requirePrivateFile(file);
+      final bytes = File(file).readAsBytesSync();
+      final key = String.fromCharCodes(bytes).trim();
+      // A header value: printable ASCII without spaces.
+      if (bytes.length > 4096 ||
+          key.codeUnits.any((u) => u <= 0x20 || u > 0x7e)) {
+        throw const WorkerFailure('invalid_openrouter_key');
+      }
+      return key;
+  }
 }
 
 /// Never silently opens SQLite when SQLCipher or its key is unavailable.

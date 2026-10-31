@@ -130,11 +130,11 @@ void main() {
   });
   tearDownAll(() => directory.delete(recursive: true));
 
-  OpenAiTranscriber transcriber(
+  SpeechTranscriber transcriber(
     _FakeProvider provider, {
     String? probe,
     List<Duration>? sleeps,
-  }) => OpenAiTranscriber(
+  }) => SpeechTranscriber(
     'synthetic-key',
     temporaryRoot: '${directory.path}/work',
     ffmpeg: ffmpeg,

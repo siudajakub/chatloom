@@ -331,7 +331,7 @@ class WorkerEngine {
           _reject(op, previous, 'already_exists');
           return;
         }
-        // Only automatic detection or an offered language reaches OpenAI.
+        // Only automatic detection or an offered language reaches the provider.
         if (!validTranscriptionLanguage(op.payload['language'])) {
           throw const WorkerFailure('invalid_language');
         }

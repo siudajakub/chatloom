@@ -54,7 +54,7 @@ class FakeTransport implements FeatureTransport, MediaPreflight {
       throw StateError('unexpected conversation operation');
 }
 
-/// Mirrors OpenAiTranscriber: estimate() is the pre-upload gate.
+/// Mirrors SpeechTranscriber: estimate() is the pre-upload gate.
 class MeasuringTranscriber implements Transcriber {
   double duration = 30;
   final uploads = <String>[];

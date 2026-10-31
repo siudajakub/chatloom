@@ -10,9 +10,16 @@ import 'transcript_timestamps.dart';
 const transcriptionMaxBytes = 25000000;
 
 /// The model name of the job contract (`TranscriptionJob.model`); the
-/// provider model actually called is [OpenAiTranscriber.model].
+/// provider model actually called is [SpeechTranscriber.model].
 const transcriptionModel = 'gpt-transcribe';
 const transcriptionPricePerMinute = 0.0045;
+
+final _openAiTranscriptions = Uri.parse(
+  'https://api.openai.com/v1/audio/transcriptions',
+);
+final _openRouterTranscriptions = Uri.parse(
+  'https://openrouter.ai/api/v1/audio/transcriptions',
+);
 
 /// Provider attempts per chunk when the provider (429/502/503, or the
 /// network before any byte was sent) says definitively that the request was
@@ -41,11 +48,22 @@ bool _noAudioStream(String stderr) =>
     stderr.contains('matches no streams') ||
     stderr.contains('does not contain any stream');
 
-class OpenAiTranscriber implements Transcriber {
+/// Transcribes through the provider of [model] (OpenAI or OpenRouter): the
+/// same local media pipeline, chunking, retries and paid-uncertainty rules
+/// for both; only the request differs.
+///
+/// Provider failures keep their `openai_*` codes for every provider: they
+/// are part of the job contract that installed apps read (any `openai_`
+/// code reads "Transcription service unavailable", and the transient ones
+/// are shown as still pending).
+class SpeechTranscriber implements Transcriber {
+  /// The key of [model]'s provider.
   final String apiKey;
 
   /// The provider model; with [TranscriptionModel.timestamps] the same
   /// request also returns segment and word timestamps (`verbose_json`).
+  /// The worker passes the config's model (default Grok through
+  /// OpenRouter); callers that pass none get `gpt-transcribe`.
   final TranscriptionModel model;
   final String temporaryRoot;
   final String ffmpeg;
@@ -56,7 +74,7 @@ class OpenAiTranscriber implements Transcriber {
 
   /// Backoff wait between provider attempts (test seam).
   final Future<void> Function(Duration) sleep;
-  OpenAiTranscriber(
+  SpeechTranscriber(
     this.apiKey, {
     required this.temporaryRoot,
     this.model = TranscriptionModel.gptTranscribe,
@@ -368,38 +386,13 @@ class OpenAiTranscriber implements Transcriber {
     cancel.listen(client.close);
     try {
       cancel.check();
-      final request =
-          http.MultipartRequest(
-              'POST',
-              Uri.parse('https://api.openai.com/v1/audio/transcriptions'),
-            )
-            ..headers['Authorization'] = 'Bearer $apiKey'
-            ..fields['model'] = model.name;
-      if (model.timestamps) {
-        // One request: text plus segment and word times (whisper-1). The
-        // multipart form repeats the array field, so the second value is
-        // its own part (a plain field part, no file name).
-        request.fields['response_format'] = 'verbose_json';
-        request.fields['timestamp_granularities[]'] = 'segment';
-        request.files.add(
-          http.MultipartFile.fromString('timestamp_granularities[]', 'word'),
-        );
-        if (language != null && language.isNotEmpty) {
-          request.fields['language'] = language;
-        }
-      } else {
-        request.fields['response_format'] = 'json';
-        if (language != null && language.isNotEmpty) {
-          request.fields['languages[]'] = language;
-        }
-      }
-      request.files.add(
-        await http.MultipartFile.fromPath(
-          'file',
-          file.path,
-          filename: 'audio.mp3',
+      final request = switch (model.provider) {
+        TranscriptionProvider.openai => await _openAiRequest(file, language),
+        TranscriptionProvider.openrouter => await _openRouterRequest(
+          file,
+          language,
         ),
-      );
+      };
       final response = await client
           .send(request)
           .timeout(const Duration(minutes: 5));
@@ -410,17 +403,22 @@ class OpenAiTranscriber implements Transcriber {
       if (response.statusCode != 200) {
         final code = response.statusCode == 401
             ? 'openai_auth_failed'
+            : response.statusCode == 402
+            // OpenRouter: the account has no credits left.
+            ? 'openai_payment_required'
             : response.statusCode == 429
             ? 'openai_rate_limited'
             : response.statusCode >= 500
             ? 'openai_unavailable'
             : 'openai_rejected';
         // 500/504 (and other 5xx) can arrive after the provider processed
-        // and billed the audio: paid uncertainty, never retried. Only
-        // 429 and 502/503 (rejected before processing) are retried.
-        if (response.statusCode >= 500 &&
-            response.statusCode != 502 &&
-            response.statusCode != 503) {
+        // and billed the audio, and so can OpenRouter's 408 (its upstream
+        // timed out): paid uncertainty, never retried. Only 429 and
+        // 502/503 (rejected before processing) are retried.
+        if (response.statusCode == 408 ||
+            (response.statusCode >= 500 &&
+                response.statusCode != 502 &&
+                response.statusCode != 503)) {
           throw const PaidRequestUnknown();
         }
         final retryable =
@@ -482,6 +480,70 @@ class OpenAiTranscriber implements Transcriber {
     } finally {
       client.close();
     }
+  }
+
+  /// OpenAI: a multipart form with the MP3 chunk.
+  Future<http.BaseRequest> _openAiRequest(File file, String? language) async {
+    final request = http.MultipartRequest('POST', _openAiTranscriptions)
+      ..headers['Authorization'] = 'Bearer $apiKey'
+      ..fields['model'] = model.name;
+    if (model.timestamps) {
+      // One request: text plus segment and word times (whisper-1). The
+      // multipart form repeats the array field, so the second value is
+      // its own part (a plain field part, no file name).
+      request.fields['response_format'] = 'verbose_json';
+      request.fields['timestamp_granularities[]'] = 'segment';
+      request.files.add(
+        http.MultipartFile.fromString('timestamp_granularities[]', 'word'),
+      );
+      if (language != null && language.isNotEmpty) {
+        request.fields['language'] = language;
+      }
+    } else {
+      request.fields['response_format'] = 'json';
+      if (language != null && language.isNotEmpty) {
+        request.fields['languages[]'] = language;
+      }
+    }
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'file',
+        file.path,
+        filename: 'audio.mp3',
+      ),
+    );
+    return request;
+  }
+
+  /// OpenRouter: a JSON body with the MP3 chunk in base64 (about 4.8 MB for
+  /// a 15-minute chunk). Only the JSON body carries provider preferences:
+  /// providers that may keep or train on the audio are excluded
+  /// (`data_collection: deny`). The language is sent only when the job
+  /// names one; otherwise the model detects it.
+  Future<http.BaseRequest> _openRouterRequest(
+    File file,
+    String? language,
+  ) async {
+    final request = http.Request('POST', _openRouterTranscriptions)
+      ..headers['Authorization'] = 'Bearer $apiKey'
+      ..headers['Content-Type'] = 'application/json';
+    request.bodyBytes = utf8.encode(
+      jsonEncode({
+        'model': model.name,
+        'input_audio': {
+          'data': base64Encode(await file.readAsBytes()),
+          'format': 'mp3',
+        },
+        if (language != null && language.isNotEmpty) 'language': language,
+        if (model.timestamps) ...{
+          'response_format': 'verbose_json',
+          'timestamp_granularities': ['segment', 'word'],
+        } else
+          'response_format': 'json',
+        'provider': {'data_collection': 'deny'},
+      }),
+    );
+    return request;
   }
 
   static bool _neverConnected(SocketException e) {

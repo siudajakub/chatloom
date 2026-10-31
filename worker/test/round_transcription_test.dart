@@ -326,7 +326,7 @@ void main() {
         reason: 'Configured media runtime must encode fixture MP4',
       );
       var uploads = 0;
-      final service = OpenAiTranscriber(
+      final service = SpeechTranscriber(
         'synthetic-key',
         temporaryRoot: '${directory.path}/leases',
         ffmpeg: ffmpeg,

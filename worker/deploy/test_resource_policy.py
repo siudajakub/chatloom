@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parent
 
 
 def unit(name):
-    document = configparser.ConfigParser(interpolation=None)
+    # systemd repeats some keys (one LoadCredential= per credential).
+    document = configparser.ConfigParser(interpolation=None, strict=False)
     document.optionxform = str
     document.read(ROOT / name)
     return document
