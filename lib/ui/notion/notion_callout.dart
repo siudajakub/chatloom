@@ -9,6 +9,11 @@ enum NotionCalloutTone { neutral, warning, danger }
 /// one action, optional secondary action and dismiss. A flat `surface`
 /// block like Notion's callout; [tone] colours only the icon (status colours
 /// are never decoration).
+///
+/// [compact] is one row for a state that fixes itself and only needs a
+/// nudge (a lasting connection problem): a small icon, the title over at
+/// most one muted line, the action as a quiet button and the dismiss; no
+/// secondary action. About half the full height.
 class NotionCallout extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -28,6 +33,9 @@ class NotionCallout extends StatelessWidget {
   final VoidCallback? onDismiss;
   final String dismissLabel;
 
+  /// One row instead of the full block (see the class comment).
+  final bool compact;
+
   const NotionCallout({
     super.key,
     required this.icon,
@@ -41,6 +49,7 @@ class NotionCallout extends StatelessWidget {
     this.onSecondary,
     this.onDismiss,
     this.dismissLabel = 'Dismiss',
+    this.compact = false,
   });
 
   @override
@@ -52,6 +61,7 @@ class NotionCallout extends StatelessWidget {
       NotionCalloutTone.warning => colors.warning,
       NotionCalloutTone.danger => colors.danger,
     };
+    if (compact) return _compact(context, iconColor);
     final hasAction = actionLabel != null;
     final hasSecondary = secondaryLabel != null && onSecondary != null;
     final dismissible = onDismiss != null;
@@ -139,6 +149,76 @@ class NotionCallout extends StatelessWidget {
                   onPressed: onDismiss,
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _compact(BuildContext context, Color iconColor) {
+    final typography = context.notion.typography;
+    final dismissible = onDismiss != null;
+    return Semantics(
+      container: true,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: context.notion.colors.surface,
+          borderRadius: NotionRadius.mdAll,
+        ),
+        child: Padding(
+          // The buttons bring their own 48 pt targets; the text keeps the
+          // full callout's 12 pt inset.
+          padding: EdgeInsetsDirectional.fromSTEB(
+            NotionSpace.sm,
+            NotionSpace.xxs,
+            dismissible ? NotionSpace.xxs : NotionSpace.xs,
+            NotionSpace.xxs,
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minHeight: NotionSize.touchTarget,
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: NotionSize.iconSm, color: iconColor),
+                const SizedBox(width: NotionSpace.xs),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: typography.footnote.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (message != null)
+                        Text(
+                          message!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: typography.captionMuted,
+                        ),
+                    ],
+                  ),
+                ),
+                if (actionLabel != null)
+                  NotionButton.ghost(
+                    label: actionLabel!,
+                    onPressed: onAction,
+                    busy: actionBusy,
+                  ),
+                if (dismissible)
+                  NotionIconButton(
+                    icon: Icons.close,
+                    label: dismissLabel,
+                    onPressed: onDismiss,
+                  ),
+              ],
+            ),
           ),
         ),
       ),

@@ -422,6 +422,17 @@ Widget _callouts() => _page([
     tone: NotionCalloutTone.danger,
     title: 'Encryption is off on this device',
   ),
+  const SizedBox(height: NotionSpace.sm),
+  // Compact: a lasting connection problem in the inbox.
+  const NotionCallout(
+    compact: true,
+    icon: Icons.cloud_off_outlined,
+    title: 'No internet connection',
+    message: 'Showing loaded chats',
+    actionLabel: 'Retry',
+    onAction: _noop,
+    onDismiss: _noop,
+  ),
 ]);
 
 /// Resting states of the motion primitives (reduced motion: the skeleton is
@@ -915,7 +926,7 @@ void main() {
       tester,
       'callout-dark',
       _callouts(),
-      size: const Size(390, 420),
+      size: const Size(390, 480),
     ),
   );
   testWidgets(
@@ -924,7 +935,7 @@ void main() {
       tester,
       'callout-light',
       _callouts(),
-      size: const Size(390, 420),
+      size: const Size(390, 480),
       brightness: Brightness.light,
     ),
   );
