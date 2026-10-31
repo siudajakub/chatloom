@@ -4,9 +4,11 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:chatloom/pages/chat/conversation_motion.dart';
+import 'package:chatloom/personal/media_transcript.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
 import 'package:video_player/video_player.dart';
 
 import 'round_video_view.dart';
@@ -29,6 +31,9 @@ class RoundStageActions {
   /// Poster shown until the first frame is ready (never a bare surface).
   final Uint8List? Function()? thumbnail;
 
+  /// The message playing, for its live transcript (null: none).
+  final Event? event;
+
   const RoundStageActions({
     required this.toggle,
     required this.seek,
@@ -40,6 +45,7 @@ class RoundStageActions {
     this.canReportPlayed,
     this.sourceRect,
     this.thumbnail,
+    this.event,
   });
 }
 
@@ -252,6 +258,12 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
   );
   bool _closing = false;
 
+  /// The controller's position for the live transcript.
+  late final _position = MediaPositionListenable(
+    widget.video,
+    () => widget.video.value.position,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -290,89 +302,147 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
           (route != null && !identical(widget.controller._route, route))) {
         return const SizedBox.shrink();
       }
-      return Builder(
-        builder: (context) {
-          final size = MediaQuery.sizeOf(context);
-          final padding = MediaQuery.paddingOf(context);
-          const controlsHeight = NotionSize.touchTarget * 2 + NotionSpace.md;
-          final diameter = math
-              .min(
-                math.min(
-                  size.width - 2 * NotionSpace.inset,
-                  size.height -
-                      padding.vertical -
-                      2 * NotionSpace.md -
-                      controlsHeight,
-                ),
-                RoundVideoStage.maxDiameter,
-              )
-              .clamp(RoundVideoView.minDiameter, RoundVideoStage.maxDiameter);
-          final top = math.max(
+      return MediaTranscriptBuilder(
+        event: actions.event,
+        builder: (context, transcript) => ValueListenableBuilder<bool>(
+          valueListenable: MediaTranscriptPreference.visible,
+          builder: (context, visible, _) =>
+              _stage(context, actions, transcript, visible ? transcript : null),
+        ),
+      );
+    },
+  );
+
+  /// The circle with its controls under it; with a [shown] transcript the
+  /// circle gets smaller at the top, the transcript follows playback in the
+  /// middle and the controls sit at the bottom (Apple Music lyrics). Circle
+  /// and controls glide between the two layouts ([NotionLayoutFlip]).
+  Widget _stage(
+    BuildContext context,
+    RoundStageActions actions,
+    MediaTranscript? transcript,
+    MediaTranscript? shown,
+  ) {
+    final size = MediaQuery.sizeOf(context);
+    final padding = MediaQuery.paddingOf(context);
+    const controlsHeight = NotionSize.touchTarget * 2 + NotionSpace.md;
+    final showing = shown != null;
+    final available =
+        size.height - padding.vertical - 2 * NotionSpace.md - controlsHeight;
+    final diameter = math
+        .min(
+          math.min(
+            size.width - 2 * NotionSpace.inset,
+            // The transcript takes the larger part of the height.
+            showing ? available * .42 : available,
+          ),
+          RoundVideoStage.maxDiameter,
+        )
+        .clamp(RoundVideoView.minDiameter, RoundVideoStage.maxDiameter);
+    final top = showing
+        ? padding.top + NotionSpace.md
+        : math.max(
             padding.top + NotionSpace.md,
             (size.height - diameter - controlsHeight) / 2,
           );
-          final target = Rect.fromLTWH(
-            (size.width - diameter) / 2,
-            top,
-            diameter,
-            diameter,
-          );
-          return Material(
-            type: MaterialType.transparency,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    excludeFromSemantics: true,
-                    onTap: widget.controller.shrink,
-                    onVerticalDragEnd: _dragEnd,
-                  ),
-                ),
-                AnimatedBuilder(
-                  animation: _curve,
-                  builder: (context, child) {
-                    final source = _sourceRect(actions);
-                    final from =
-                        source ??
-                        Rect.fromCenter(
-                          center: target.center,
-                          width: diameter * .8,
-                          height: diameter * .8,
-                        );
-                    final t = _curve.value;
-                    return Positioned.fromRect(
-                      rect: Rect.lerp(from, target, t)!,
-                      child: source == null
-                          ? Opacity(opacity: t.clamp(0.0, 1.0), child: child)
-                          : child!,
-                    );
-                  },
-                  child: _circle(actions),
-                ),
-                Positioned(
-                  left: NotionSpace.inset,
-                  right: NotionSpace.inset,
-                  top: target.bottom + NotionSpace.md,
-                  child: FadeTransition(
-                    opacity: _curve,
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(
-                          maxWidth: RoundVideoStage.maxDiameter,
-                        ),
-                        child: _controls(actions),
+    final target = Rect.fromLTWH(
+      (size.width - diameter) / 2,
+      top,
+      diameter,
+      diameter,
+    );
+    Widget constrained(Widget child) => Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: RoundVideoStage.maxDiameter,
+        ),
+        child: child,
+      ),
+    );
+    final event = actions.event;
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            key: const ValueKey('round-stage-backdrop'),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              excludeFromSemantics: true,
+              onTap: widget.controller.shrink,
+              onVerticalDragEnd: _dragEnd,
+            ),
+          ),
+          AnimatedBuilder(
+            key: const ValueKey('round-stage-circle'),
+            animation: _curve,
+            builder: (context, child) {
+              final source = _sourceRect(actions);
+              final from =
+                  source ??
+                  Rect.fromCenter(
+                    center: target.center,
+                    width: diameter * .8,
+                    height: diameter * .8,
+                  );
+              final t = _curve.value;
+              return Positioned.fromRect(
+                rect: Rect.lerp(from, target, t)!,
+                child: source == null
+                    ? Opacity(opacity: t.clamp(0.0, 1.0), child: child)
+                    : child!,
+              );
+            },
+            child: NotionLayoutFlip(trigger: showing, child: _circle(actions)),
+          ),
+          if (shown != null)
+            Positioned(
+              key: const ValueKey('round-stage-transcript'),
+              left: NotionSpace.inset,
+              right: NotionSpace.inset,
+              top: target.bottom + NotionSpace.md,
+              bottom: padding.bottom + NotionSpace.md + controlsHeight,
+              child: FadeTransition(
+                opacity: _curve,
+                child: constrained(
+                  NotionEntrance(
+                    child: MediaSyncedTranscript(
+                      transcript: shown,
+                      position: _position,
+                      duration: _ready(widget.video.value)
+                          ? widget.video.value.duration
+                          : null,
+                      declaredDuration: event == null
+                          ? null
+                          : declaredMediaDuration(event),
+                      onSeek: (position) => unawaited(
+                        actions.seek(position).catchError((Object _) {}),
                       ),
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
-          );
-        },
-      );
-    },
-  );
+          Positioned(
+            key: const ValueKey('round-stage-controls'),
+            left: NotionSpace.inset,
+            right: NotionSpace.inset,
+            top: showing ? null : target.bottom + NotionSpace.md,
+            bottom: showing ? padding.bottom + NotionSpace.md : null,
+            child: FadeTransition(
+              opacity: _curve,
+              child: NotionLayoutFlip(
+                trigger: showing,
+                child: constrained(
+                  _controls(actions, transcript: transcript != null),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// The owner's circle, or null. Never throws into this build: an
   /// exception here would replace the whole stage with an ErrorWidget (a
@@ -531,7 +601,7 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
   static bool _ready(VideoPlayerValue value) =>
       value.isInitialized && !value.hasError;
 
-  Widget _controls(RoundStageActions actions) {
+  Widget _controls(RoundStageActions actions, {required bool transcript}) {
     return ValueListenableBuilder<VideoPlayerValue>(
       valueListenable: widget.video,
       builder: (context, value, _) => NotionMediaPlaybackControls(
@@ -558,6 +628,7 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (transcript) const MediaTranscriptToggle(),
             NotionMediaActionsButton(
               actions: [
                 if (actions.save != null)

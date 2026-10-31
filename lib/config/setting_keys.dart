@@ -108,6 +108,13 @@ enum AppSettings<T> {
 
   /// Voice note playback speed, remembered across notes (Telegram).
   personalVoicePlaybackSpeed<double>('pl.personal.voice.playback_speed', 1.0),
+
+  /// The full-screen players show a finished transcript in time with
+  /// playback (Apple Music lyrics); the toggle is remembered here.
+  personalMediaTranscriptVisible<bool>(
+    'pl.personal.media.transcript_visible',
+    true,
+  ),
   personalRoundHighQuality<bool>('pl.personal.round.high_quality', false),
   personalRoundStabilization<bool>('pl.personal.round.stabilization', true),
 

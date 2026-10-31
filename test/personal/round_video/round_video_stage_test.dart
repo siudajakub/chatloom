@@ -1,9 +1,32 @@
 import 'dart:async';
 
 import 'package:chatloom/pages/chat/events/round_video_stage.dart';
+import 'package:chatloom/personal/media_transcript.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart';
 import 'package:video_player/video_player.dart';
+
+import '../../notion/conversation_test_support.dart';
+
+/// Private sync with one finished transcript per event.
+class _Transcripts extends PersonalClient {
+  _Transcripts(super.client)
+    : super.forTesting(openStore: () => throw StateError('No fixture store'));
+
+  final jobs = <String, TranscriptionJob>{};
+  int requests = 0;
+
+  @override
+  Map<String, TranscriptionJob> get transcripts => jobs;
+  @override
+  String transcriptId(Event e) => 'transcript:${e.eventId}';
+  @override
+  Future<void> transcribe(Event e, {String? language}) async => requests++;
+}
 
 /// No initialize() or native texture: ownership and routing only.
 VideoPlayerController _video({bool playing = true}) {
@@ -25,6 +48,7 @@ class _Calls {
   final seeks = <Duration>[];
   final speeds = <double>[];
   Rect? source;
+  Event? event;
 
   RoundStageActions actions({bool save = true}) => RoundStageActions(
     toggle: () async => toggles++,
@@ -33,6 +57,7 @@ class _Calls {
     stop: () async => stops++,
     save: save ? () async => saves++ : null,
     sourceRect: () => source,
+    event: event,
   );
 }
 
@@ -72,6 +97,7 @@ bool _notDisposed(ChangeNotifier notifier) {
 }
 
 void main() {
+  _transcriptTests();
   testWidgets('shrinking keeps the same controller playing', (tester) async {
     final stage = RoundStageController();
     final video = _video();
@@ -271,6 +297,78 @@ void main() {
     await tester.pumpAndSettle();
     expect(stage.isOpen, isFalse);
     expect(_notDisposed(video), isTrue);
+  });
+}
+
+void _transcriptTests() {
+  testWidgets('a finished transcript follows the round and can be hidden', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    MediaTranscriptPreference.visible.value = true;
+    final client = ConversationClient();
+    final room = ConversationRoom(client, '!round:example.invalid');
+    final event = room.message(
+      r'$round',
+      'round.mp4',
+      content: {
+        'msgtype': MessageTypes.Video,
+        'body': 'round.mp4',
+        'url': 'mxc://example.invalid/round',
+      },
+    );
+    final personal = _Transcripts(client);
+    PersonalClient.debugUse(client, personal);
+    personal.jobs['transcript:${event.eventId}'] = TranscriptionJob(
+      id: 'transcript:${event.eventId}',
+      source: SourceEventRef(
+        conversation: ConversationRef(
+          accountId: client.userID,
+          roomId: room.id,
+        ),
+        eventId: event.eventId,
+      ),
+      state: JobState.done,
+      text:
+          'First we met at the station near the river. '
+          'Then we walked home together in the rain.',
+      durationSeconds: 10,
+    );
+    final stage = RoundStageController();
+    final video = _video();
+    final calls = _Calls()..event = event;
+    addTearDown(video.dispose);
+    await tester.pumpWidget(_app(stage, video, calls));
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NotionSyncedTranscript), findsOneWidget);
+    expect(find.text(MediaSyncedTranscript.approximateCaption), findsOneWidget);
+    final withTranscript = tester.getRect(find.byType(VideoPlayer)).width;
+
+    // A tap on a line seeks the owner's player to its start.
+    await tester.tap(find.text('Then we walked home together in the rain.'));
+    await tester.pumpAndSettle();
+    expect(calls.seeks, hasLength(1));
+    expect(calls.seeks.single, greaterThan(const Duration(seconds: 3)));
+
+    // Hidden: the circle takes the room back (gliding there).
+    await tester.tap(find.byTooltip('Hide transcript'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NotionSyncedTranscript), findsNothing);
+    expect(MediaTranscriptPreference.visible.value, isFalse);
+    expect(
+      tester.getRect(find.byType(VideoPlayer)).width,
+      greaterThan(withTranscript),
+    );
+    await tester.tap(find.byTooltip('Show transcript'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NotionSyncedTranscript), findsOneWidget);
+    expect(personal.requests, 0);
+    expect(tester.takeException(), isNull);
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
   });
 }
 

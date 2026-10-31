@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/events/inline_loop_video.dart';
 import 'package:chatloom/pages/chat/events/round_video_view.dart';
 import 'package:chatloom/personal/media/cancellable_download.dart';
 import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/media_transcript.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
@@ -140,6 +141,19 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   }
 
   VideoPlayerController? _videoPlayerController;
+
+  /// Position of [_videoPlayerController] for the live transcript; one per
+  /// controller, so the transcript keeps its listener across rebuilds.
+  MediaPositionListenable? _position;
+
+  MediaPositionListenable _positionOf(VideoPlayerController video) {
+    final current = _position;
+    if (current != null && identical(current.source, video)) return current;
+    return _position = MediaPositionListenable(
+      video,
+      () => video.value.position,
+    );
+  }
 
   double? _downloadProgress;
   int _downloadedBytes = 0;
@@ -418,135 +432,194 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final info = widget.event.content.tryGetMap<String, Object?>('info');
-      final video = _videoPlayerController;
-      final initialized = video?.value.isInitialized == true;
-      final intrinsic = initialized
-          ? video!.value.size
-          : Size(
-              (info?.tryGet<int>('w') ?? 400).toDouble(),
-              (info?.tryGet<int>('h') ?? 300).toDouble(),
-            );
-      final bottom = MediaQuery.paddingOf(context).bottom;
-      // Leave the transport its own space, including short landscape screens.
-      final bounds = Size(
-        constraints.maxWidth - 2 * NotionSpace.inset,
-        (constraints.maxHeight -
-                bottom -
-                NotionSize.touchTarget * 2 -
-                NotionSpace.xl)
-            .clamp(1.0, double.infinity),
-      );
-      final fitted =
-          notionFitMedia(intrinsic.width, intrinsic.height, bounds) ?? bounds;
-      final blurHash =
-          (widget.event.infoMap as Map<String, dynamic>).tryGet<String>(
-            'xyz.amorgan.blurhash',
-          ) ??
-          fallbackBlurHash;
-      final media = NotionMediaHero(
-        tag: widget.heroTag ?? widget.event.eventId,
-        sourceRadius: widget.sourceRadius,
-        child: SizedBox.fromSize(
-          size: fitted,
-          child: initialized
-              ? GestureDetector(
-                  onTap: _toggle,
-                  child: ClipRRect(
-                    borderRadius: NotionRadius.mdAll,
-                    child: ValueListenableBuilder<VideoPlayerValue>(
-                      valueListenable: video!,
-                      child: VideoPlayer(video),
-                      builder: (context, value, player) => value.hasError
-                          ? _failure()
-                          : Stack(
-                              fit: StackFit.expand,
-                              alignment: Alignment.center,
-                              children: [
-                                player!,
-                                if (value.isBuffering)
-                                  const Center(child: NotionDelayedSpinner()),
-                                if (!value.isPlaying && !value.isBuffering)
-                                  const Center(
-                                    child: DecoratedBox(
-                                      decoration: ShapeDecoration(
-                                        color: NotionMediaColors.scrim,
-                                        shape: CircleBorder(),
-                                      ),
-                                      child: Padding(
-                                        padding: EdgeInsets.all(NotionSpace.sm),
-                                        child: Icon(
-                                          Icons.play_arrow,
-                                          color: NotionMediaColors.onScrim,
-                                          size: NotionSize.touchTarget,
-                                        ),
+    builder: (context, constraints) => MediaTranscriptBuilder(
+      event: widget.event,
+      builder: (context, transcript) => ValueListenableBuilder<bool>(
+        valueListenable: MediaTranscriptPreference.visible,
+        builder: (context, visible, _) => _layout(
+          context,
+          constraints,
+          transcript,
+          visible ? transcript : null,
+        ),
+      ),
+    ),
+  );
+
+  /// The video over its transport; with a [shown] transcript the video gets
+  /// smaller, the transcript follows playback between them (Apple Music
+  /// lyrics) and video and transport glide to their places.
+  Widget _layout(
+    BuildContext context,
+    BoxConstraints constraints,
+    MediaTranscript? transcript,
+    MediaTranscript? shown,
+  ) {
+    final info = widget.event.content.tryGetMap<String, Object?>('info');
+    final video = _videoPlayerController;
+    final initialized = video?.value.isInitialized == true;
+    final showing = shown != null && initialized;
+    final intrinsic = initialized
+        ? video!.value.size
+        : Size(
+            (info?.tryGet<int>('w') ?? 400).toDouble(),
+            (info?.tryGet<int>('h') ?? 300).toDouble(),
+          );
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    // Leave the transport its own space, including short landscape screens.
+    final room =
+        constraints.maxHeight -
+        bottom -
+        NotionSize.touchTarget * 2 -
+        NotionSpace.xl;
+    final bounds = Size(
+      constraints.maxWidth - 2 * NotionSpace.inset,
+      // The transcript takes the larger part of the height.
+      (showing ? room * .42 : room).clamp(1.0, double.infinity),
+    );
+    final fitted =
+        notionFitMedia(intrinsic.width, intrinsic.height, bounds) ?? bounds;
+    final blurHash =
+        (widget.event.infoMap as Map<String, dynamic>).tryGet<String>(
+          'xyz.amorgan.blurhash',
+        ) ??
+        fallbackBlurHash;
+    final media = NotionMediaHero(
+      tag: widget.heroTag ?? widget.event.eventId,
+      sourceRadius: widget.sourceRadius,
+      child: SizedBox.fromSize(
+        size: fitted,
+        child: initialized
+            ? GestureDetector(
+                onTap: _toggle,
+                child: ClipRRect(
+                  borderRadius: NotionRadius.mdAll,
+                  child: ValueListenableBuilder<VideoPlayerValue>(
+                    valueListenable: video!,
+                    child: VideoPlayer(video),
+                    builder: (context, value, player) => value.hasError
+                        ? _failure()
+                        : Stack(
+                            fit: StackFit.expand,
+                            alignment: Alignment.center,
+                            children: [
+                              player!,
+                              if (value.isBuffering)
+                                const Center(child: NotionDelayedSpinner()),
+                              if (!value.isPlaying && !value.isBuffering)
+                                const Center(
+                                  child: DecoratedBox(
+                                    decoration: ShapeDecoration(
+                                      color: NotionMediaColors.scrim,
+                                      shape: CircleBorder(),
+                                    ),
+                                    child: Padding(
+                                      padding: EdgeInsets.all(NotionSpace.sm),
+                                      child: Icon(
+                                        Icons.play_arrow,
+                                        color: NotionMediaColors.onScrim,
+                                        size: NotionSize.touchTarget,
                                       ),
                                     ),
                                   ),
-                              ],
-                            ),
-                    ),
+                                ),
+                            ],
+                          ),
                   ),
-                )
-              : Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    if (widget.event.hasThumbnail)
-                      MxcImage(
-                        event: widget.event,
-                        isThumbnail: true,
-                        fit: BoxFit.cover,
-                        placeholder: (_) => BlurHash(
-                          blurhash: blurHash,
-                          width: fitted.width,
-                          height: fitted.height,
-                          fit: BoxFit.cover,
-                        ),
-                      )
-                    else
-                      BlurHash(
+                ),
+              )
+            : Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (widget.event.hasThumbnail)
+                    MxcImage(
+                      event: widget.event,
+                      isThumbnail: true,
+                      fit: BoxFit.cover,
+                      placeholder: (_) => BlurHash(
                         blurhash: blurHash,
                         width: fitted.width,
                         height: fitted.height,
+                        fit: BoxFit.cover,
                       ),
-                    if (_loadFailed)
-                      Center(child: _failure())
-                    else if (_stopped && !_downloading)
-                      Center(child: _playButton())
-                    else
-                      Center(
-                        child: NotionDelayedReveal(
-                          child: _DownloadRing(
-                            progress: _downloadProgress,
-                            received: _downloadedBytes,
-                            total: _fileSize,
-                            onCancel: _downloading ? _cancelDownload : null,
-                          ),
+                    )
+                  else
+                    BlurHash(
+                      blurhash: blurHash,
+                      width: fitted.width,
+                      height: fitted.height,
+                    ),
+                  if (_loadFailed)
+                    Center(child: _failure())
+                  else if (_stopped && !_downloading)
+                    Center(child: _playButton())
+                  else
+                    Center(
+                      child: NotionDelayedReveal(
+                        child: _DownloadRing(
+                          progress: _downloadProgress,
+                          received: _downloadedBytes,
+                          total: _fileSize,
+                          onCancel: _downloading ? _cancelDownload : null,
                         ),
                       ),
-                  ],
-                ),
-        ),
-      );
-      return Padding(
-        padding: EdgeInsets.only(bottom: bottom),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Center(child: media),
-            if (initialized)
-              Padding(
+                    ),
+                ],
+              ),
+      ),
+    );
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottom),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Center(
+            key: const ValueKey('viewer-video-media'),
+            child: NotionLayoutFlip(trigger: showing, child: media),
+          ),
+          if (showing)
+            Expanded(
+              key: const ValueKey('viewer-video-transcript'),
+              child: Padding(
                 padding: const EdgeInsets.fromLTRB(
                   NotionSpace.inset,
-                  NotionSpace.sm,
+                  NotionSpace.md,
                   NotionSpace.inset,
                   0,
                 ),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    maxWidth: NotionSize.dialogMaxWidth,
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      maxWidth: NotionSize.dialogMaxWidth,
+                    ),
+                    child: NotionEntrance(
+                      child: MediaSyncedTranscript(
+                        transcript: shown,
+                        position: _positionOf(video!),
+                        duration: video.value.duration,
+                        declaredDuration: declaredMediaDuration(widget.event),
+                        onSeek: (position) => unawaited(_seek(position)),
+                      ),
+                    ),
                   ),
+                ),
+              ),
+            ),
+          if (initialized)
+            Padding(
+              key: const ValueKey('viewer-video-controls'),
+              padding: const EdgeInsets.fromLTRB(
+                NotionSpace.inset,
+                NotionSpace.sm,
+                NotionSpace.inset,
+                0,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: NotionSize.dialogMaxWidth,
+                ),
+                child: NotionLayoutFlip(
+                  trigger: showing,
                   child: ValueListenableBuilder<VideoPlayerValue>(
                     valueListenable: video!,
                     builder: (context, value, _) => NotionMediaPlaybackControls(
@@ -568,15 +641,18 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
                               speed: value.playbackSpeed,
                               onChanged: _setSpeed,
                             ),
+                      trailing: transcript == null
+                          ? null
+                          : const MediaTranscriptToggle(),
                     ),
                   ),
                 ),
               ),
-          ],
-        ),
-      );
-    },
-  );
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Download progress of the viewer's video (Telegram): a ring with an "×"

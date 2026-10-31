@@ -276,6 +276,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       canReportPlayed: () => _canReportPlayed,
       sourceRect: _circleRect,
       thumbnail: () => _thumbnail,
+      event: widget.event,
     );
   }
 

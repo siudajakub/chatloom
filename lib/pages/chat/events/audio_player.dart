@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/media_inflight.dart';
 import 'package:chatloom/personal/media/voice_remux.dart';
+import 'package:chatloom/personal/media_transcript.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
@@ -66,6 +67,9 @@ class AudioPlayerState extends State<AudioPlayerWidget>
   /// Player updates rebuild only the transport, never the transcript or the
   /// caption below it. The subscriptions are made once per player.
   final _transport = ValueNotifier<int>(0);
+
+  /// The shared player's position for the live transcript on the stage.
+  final _position = ValueNotifier<Duration>(Duration.zero);
   AudioPlayer? _bound;
   RawDialogRoute<void>? _stageRoute;
   List<StreamSubscription<Object?>> _subscriptions = const [];
@@ -95,7 +99,10 @@ class AudioPlayerState extends State<AudioPlayerWidget>
   );
 
   void _tick(Object? _) {
-    if (mounted) _transport.value++;
+    if (!mounted) return;
+    _transport.value++;
+    // The stage transcript follows the same ticks (no extra subscription).
+    _position.value = _player?.position ?? Duration.zero;
   }
 
   /// Follows the shared player when it starts, ends or moves to another note.
@@ -181,6 +188,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
     _cancelSubscriptions();
     _releaseStage();
     _transport.dispose();
+    _position.dispose();
     final shared = matrix;
     final messenger = _messenger;
     final event = widget.event;
@@ -543,34 +551,17 @@ class AudioPlayerState extends State<AudioPlayerWidget>
             type: MaterialType.transparency,
             child: Padding(
               padding: const EdgeInsets.all(NotionSpace.md),
-              child: Column(
-                children: [
-                  Align(
-                    alignment: AlignmentDirectional.centerEnd,
-                    child: IconButton(
-                      tooltip: 'Close audio player',
-                      color: NotionMediaColors.onScrim,
-                      onPressed: navigator.pop,
-                      icon: const Icon(Icons.close_rounded),
-                    ),
+              child: MediaTranscriptBuilder(
+                event: widget.event,
+                builder: (context, transcript) => ValueListenableBuilder<bool>(
+                  valueListenable: MediaTranscriptPreference.visible,
+                  builder: (context, visible, _) => _stage(
+                    context,
+                    navigator,
+                    visible ? transcript : null,
+                    [if (transcript != null) const MediaTranscriptToggle()],
                   ),
-                  Expanded(
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(
-                          maxWidth: NotionSize.dialogMaxWidth,
-                        ),
-                        child: ValueListenableBuilder<int>(
-                          valueListenable: _transport,
-                          builder: (context, _, _) => !mounted
-                              ? const SizedBox.shrink()
-                              : _buildTransport(context, expanded: true),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: NotionSize.touchTarget),
-                ],
+                ),
               ),
             ),
           ),
@@ -582,6 +573,82 @@ class AudioPlayerState extends State<AudioPlayerWidget>
       navigator.push(route).whenComplete(() {
         if (identical(_stageRoute, route)) _stageRoute = null;
       }),
+    );
+  }
+
+  /// The enlarged transport; with a [transcript] it follows playback above
+  /// the transport (Apple Music lyrics), which glides down to make room.
+  Widget _stage(
+    BuildContext context,
+    NavigatorState navigator,
+    MediaTranscript? transcript,
+    List<Widget> actions,
+  ) {
+    final showing = transcript != null;
+    Widget constrained(Widget child) => Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: NotionSize.dialogMaxWidth),
+        child: child,
+      ),
+    );
+    return Column(
+      children: [
+        Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...actions,
+              IconButton(
+                tooltip: 'Close audio player',
+                color: NotionMediaColors.onScrim,
+                onPressed: navigator.pop,
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+        ),
+        if (transcript != null)
+          Expanded(
+            key: const ValueKey('voice-stage-transcript'),
+            child: constrained(
+              NotionEntrance(
+                child: MediaSyncedTranscript(
+                  transcript: transcript,
+                  position: _position,
+                  duration: _player?.duration,
+                  declaredDuration: _metadataDuration,
+                  onSeek: (position) {
+                    final player = _player;
+                    if (player != null) unawaited(_seek(player, position));
+                  },
+                ),
+              ),
+            ),
+          )
+        else
+          const Spacer(key: ValueKey('voice-stage-top')),
+        NotionLayoutFlip(
+          key: const ValueKey('voice-stage-transport'),
+          trigger: showing,
+          child: constrained(
+            ValueListenableBuilder<int>(
+              valueListenable: _transport,
+              builder: (context, _, _) => !mounted
+                  ? const SizedBox.shrink()
+                  : _buildTransport(context, expanded: true),
+            ),
+          ),
+        ),
+        if (showing)
+          const SizedBox(
+            key: ValueKey('voice-stage-gap'),
+            height: NotionSpace.md,
+          )
+        else
+          const Spacer(key: ValueKey('voice-stage-bottom')),
+        const SizedBox(height: NotionSize.touchTarget),
+      ],
     );
   }
 

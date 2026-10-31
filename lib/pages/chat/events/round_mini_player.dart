@@ -197,6 +197,7 @@ class RoundMiniPlayerController extends ChangeNotifier
               service.incognito &&
               service.canExplicitlyReport(session.event);
         },
+        event: session.event,
       );
 
   void _bind(RoundDetachedPlayback session) {
