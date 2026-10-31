@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:chatloom/personal/media/media_access.dart';
+import 'package:chatloom/personal/media/voice_remux.dart';
 import 'package:chatloom/personal/storage/sql_cipher_json_database.dart';
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
@@ -12,7 +13,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:integration_test/integration_test.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:ogg_caf_converter/ogg_caf_converter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:webcrypto/webcrypto.dart' as webcrypto;
@@ -108,9 +108,8 @@ void main() {
     final videoPlayer = VideoPlayerController.file(video.file);
     try {
       final caf = voice.derivedFile('.caf');
-      await OggCafConverter().convertOggToCaf(
-        input: voice.file.path,
-        output: caf.path,
+      await caf.writeAsBytes(
+        await oggVoiceToCaf(await voice.file.readAsBytes()),
       );
       final audioDuration = await audioPlayer.setFilePath(caf.path);
       expect(audioDuration!.inMilliseconds, greaterThanOrEqualTo(800));
