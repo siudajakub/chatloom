@@ -512,7 +512,7 @@ morphs its glyph; `NotionIconButton(selected:)` tweens its background;
 icon and staggers its text; tab indicators move elastically.
 `ChatLoomThemes.animationDuration`/`animationCurve` point at `short`/`standard`,
 so the ~56 legacy `Animated*` widgets got the new timing for free.
-Use `NotionPulse` and `NotionTypingDots` directly; the old FluffyChat
+Use `NotionPulse` and `NotionTypingDots` directly; the old
 `PulsatingWidget`/`TypingAnimation` shims are gone.
 
 ### Page motion and predictive back
@@ -657,7 +657,7 @@ Don't:
 - Hard-code hex colours, font sizes, paddings or radii in screens.
 - Restyle a Material widget inline when the theme already covers it; fix
   `notion_theme.dart` instead.
-- Mass-restyle legacy FluffyChat screens as a side effect of a feature
+- Mass-restyle legacy screens as a side effect of a feature
   change. Move a screen to the primitives when you are already changing it.
 
 ## Enforcement

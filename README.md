@@ -14,7 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <p align="center">
   <b>Every chat app. One calm, private inbox.</b><br>
-  An open-source Beeper client for Android and macOS, built on Matrix and FluffyChat.
+  An open-source Beeper client for Android and macOS, built on Matrix.
 </p>
 
 <p align="center">
@@ -151,9 +151,13 @@ Security and privacy: [SECURITY.md](SECURITY.md) · [PRIVACY.md](PRIVACY.md) ·
 
 ## Credits and license
 
-ChatLoom is a fork of [FluffyChat](https://github.com/krille-chan/fluffychat)
-by Christian Kußowski and contributors, and is licensed under the
-[AGPL-3.0-or-later](LICENSE) (see [NOTICE.md](NOTICE.md)). It uses the
+ChatLoom is licensed under the [AGPL-3.0-or-later](LICENSE). It includes code
+from [FluffyChat](https://github.com/krille-chan/fluffychat); see
+[NOTICE.md](NOTICE.md). It uses the
 [Matrix Dart SDK](https://github.com/famedly/matrix-dart-sdk) and talks to
 your networks through [Beeper](https://www.beeper.com/)'s bridges. ChatLoom is
 not affiliated with Beeper, Meta, Telegram, Signal or Slack.
+
+"ChatLoom" and the ChatLoom logo are the project's brand. Forks are welcome
+under the AGPL, but must use a different name and logo
+([docs/brand/BRAND.md](docs/brand/BRAND.md)).

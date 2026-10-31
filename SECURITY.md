@@ -18,6 +18,6 @@ platform (Android or macOS) and whether the worker or push gateway is involved.
 Do not include real tokens, recovery keys or message content.
 
 Vulnerabilities in upstream components should also be reported to their
-projects: [FluffyChat](https://github.com/krille-chan/fluffychat/security) and
-the [Matrix Dart SDK](https://github.com/famedly/matrix-dart-sdk/security).
+projects, for example the
+[Matrix Dart SDK](https://github.com/famedly/matrix-dart-sdk/security).
 Reports are handled on a best-effort basis, without guarantees.

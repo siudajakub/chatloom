@@ -14,7 +14,7 @@ allow retry. The jump-to-latest control sits above this action.
 
 2026-10-13. Write only this isolated checkout. Root coordinator owns `lib/ui/notion/`, theme/router/app/locale/avatar/hub/organization/assets registration/preview/evidence and every Flutter job. A owns inbox paths and inbox/network/search tests; B owns conversation presentation and merged/media/transcript paths and tests; C owns details/settings presentation and corresponding tests. Protected functional files remain unchanged except reviewed presentation hunks.
 
-Import `package:fluffychat/ui/notion/notion.dart`: `NotionTokens` (background/surface/selected/border/text/secondary/cover, inset/radius/avatarRadius/headerHeight/touchTarget, title/heading/body/caption), `NotionIconButton(icon:, label:, onPressed:)`, `NotionPropertyRow(label:, value:, onTap:)`, `NotionListRow(leading:, title:, subtitle:, trailing:, onTap:)`, `NotionCompactChatHeader(avatar:, name:, onDetails:)`.
+Import `package:chatloom/ui/notion/notion.dart`: `NotionTokens` (background/surface/selected/border/text/secondary/cover, inset/radius/avatarRadius/headerHeight/touchTarget, title/heading/body/caption), `NotionIconButton(icon:, label:, onPressed:)`, `NotionPropertyRow(label:, value:, onTap:)`, `NotionListRow(leading:, title:, subtitle:, trailing:, onTap:)`, `NotionCompactChatHeader(avatar:, name:, onDetails:)`.
 
 Details: `NotionConversationDetailsData` and `NotionConversationDetailsActions` exported by the barrel. C implements `NotionChatDetailsPage(data:, actions:)` in `lib/personal/ui/notion_chat_details_page.dart`. C also exports `showNotionMergedChatDetails(BuildContext context, {required PersonalClient personal, required PersonGroup group})` from `notion_chat_details_adapter.dart`, which B calls from merged identity header. Adapter must listen to live metadata and separate person actions from individual source actions.
 
@@ -107,9 +107,9 @@ Attach menu order: Image, Video, File | Take a photo, Record a video (mobile) | 
 
 ## Motion system — 2026-10-19
 
-Supersedes the timing in "Motion, deferred page work and rounds": push is now `NotionMotion.long` (320 ms, `emphasized`), pop `reverse` (220 ms, `easeInCubic`), the pushed page fades in over the first 35 % (`pageFadeWindow`), reduced motion keeps a plain short fade. Predictive back, `routeSettled`, instant routes and `AfterRouteTransition` keep their contracts; `AfterRouteTransition` now fades its child in (140 ms) when it waited for a push. `FluffyThemes.animationDuration`/`animationCurve` = `NotionMotion.short`/`standard`.
+Supersedes the timing in "Motion, deferred page work and rounds": push is now `NotionMotion.long` (320 ms, `emphasized`), pop `reverse` (220 ms, `easeInCubic`), the pushed page fades in over the first 35 % (`pageFadeWindow`), reduced motion keeps a plain short fade. Predictive back, `routeSettled`, instant routes and `AfterRouteTransition` keep their contracts; `AfterRouteTransition` now fades its child in (140 ms) when it waited for a push. `ChatLoomThemes.animationDuration`/`animationCurve` = `NotionMotion.short`/`standard`.
 
-Frozen API (all from `package:fluffychat/ui/notion/notion.dart`; full table and examples in DESIGN.md "Motion"):
+Frozen API (all from `package:chatloom/ui/notion/notion.dart`; full table and examples in DESIGN.md "Motion"):
 
 - Tokens: `NotionMotion.{instant, quick, short, medium, long, forward, reverse, stagger, staggerCap, loaderGrace, highlight, standard, emphasized, exitFast, enter, exit, snappy, smooth, bouncy, snappyCurve, smoothCurve, bouncyCurve, springTolerance, rise, riseList, riseSheet, pressButton, pressIcon, pressRow, popFrom, dialogFrom, popoverFrom, sheetStyle, menuStyle}`, `NotionMotion.reduced(context)`, `.of(context, d)`, `.staggerFor(i)`, `.springTo(spring, from, to, velocity:)`, `.whenRouteSettled(context, action)`; `NotionSpringCurve(spring)`; `NotionHaptics.{light, send, longPress}()`.
 - `NotionPressable(child:, scale:, enabled:, bounce:, onTap:, onLongPress:, hapticOnTap:, alignment:)` — `notion_pressable.dart`.
@@ -138,7 +138,7 @@ Device playback remains a separate acceptance check.
 
 ## Glass and rounded surfaces — 2026-10-19
 
-The floating dock's language is now the standard surface (DESIGN.md "Glass" and "Radius"). Additive API from `package:fluffychat/ui/notion/notion.dart`; existing signatures are unchanged.
+The floating dock's language is now the standard surface (DESIGN.md "Glass" and "Radius"). Additive API from `package:chatloom/ui/notion/notion.dart`; existing signatures are unchanged.
 
 - Radius scale (values changed, names kept): `NotionRadius.{xs 6, sm 10, md 16, lg 20, xl 28, field 26, pill, avatar = pill}` with `xsAll, smAll, mdAll, lgAll, xlAll, pillAll, avatarAll, rowAll, fieldAll, sheetTop`; `NotionTokens.avatarRadius` = pill (avatars are circles); `AppConfig.borderRadius` = 16. Shapes: `NotionShapes.{pill, xs, sm, md, lg, xl, row, sheet}`.
 - Glass tokens: `context.notion.glass.{tint, dockTint, overlayTint, border, blurSigma}`, `NotionGlass.{dockRadius, panelRadius, dialogRadius, sheetRadius, floatingInset}`; `NotionTokens.copyWith(glass:)` now keeps the glass tokens.

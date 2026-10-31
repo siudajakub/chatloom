@@ -31,7 +31,7 @@ i weryfikacji wspólnego kodu pozostają w `scripts/`. Dotychczasowe komendy
 jako wejścia zgodności. Nie kopiujemy całej aplikacji dla każdej platformy.
 macOS działa bez powiadomień systemowych; konfiguracja push Androida pozostaje osobna.
 
-Prywatny fork FluffyChat v2.10.0 dla Androida i macOS, z zachowanym transportem Matrix. Źródła upstream i ich licencje pozostają w repo; nasze moduły używają AGPL-3.0-or-later. To lokalna implementacja do odbioru, nie potwierdzony zamiennik oficjalnego Beepera.
+Klient Matrix dla Androida i macOS. Licencje kodu zewnętrznego są w `NOTICE.md`; nasze moduły używają AGPL-3.0-or-later. To lokalna implementacja do odbioru, nie potwierdzony zamiennik oficjalnego Beepera.
 
 ## Uruchomienie
 

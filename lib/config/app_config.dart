@@ -56,15 +56,10 @@ abstract class AppConfig {
   static const String logoSilhouetteAsset =
       'assets/logo/chatloom-mark-flat.png';
 
-  /// ChatLoom is based on FluffyChat; its AGPL source and credits stay linked.
-  static const String upstreamName = 'FluffyChat';
-  static const String upstreamSourceCodeUrl =
-      'https://github.com/krille-chan/fluffychat';
+  /// ChatLoom's own source, offered to users as AGPL-3.0 requires.
+  static const String sourceCodeUrl = 'https://github.com/siudajakub/chatloom';
   static const String upstreamCredit =
-      'ChatLoom is a modified version of FluffyChat v2.10.0 (modified since '
-      'October 2026). FluffyChat © 2019-Present Christian Kußowski and the '
-      'FluffyChat contributors. Licensed under the GNU Affero General Public '
-      'License v3.0 or later.';
+      'Based on FluffyChat by Christian Kußowski and contributors.';
 
   static const String mainIsolatePortName = 'main_isolate';
   static const String pushIsolatePortName = 'push_isolate';

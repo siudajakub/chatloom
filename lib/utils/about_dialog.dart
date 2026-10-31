@@ -55,8 +55,8 @@ Future<void> showChatLoomAboutDialog(
         actions: [
           NotionButton.ghost(
             icon: Icons.source_outlined,
-            label: '${AppConfig.upstreamName} ${l10n.sourceCode}',
-            onPressed: () => launchUrlString(AppConfig.upstreamSourceCodeUrl),
+            label: l10n.sourceCode,
+            onPressed: () => launchUrlString(AppConfig.sourceCodeUrl),
           ),
           NotionButton.ghost(
             label: 'Licences',

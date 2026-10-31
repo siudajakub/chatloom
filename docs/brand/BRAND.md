@@ -155,3 +155,10 @@ Three directions were drawn and checked at 1024, 192, 48 and 24 px on
   One glass thread loops into a bubble and crosses itself at the tail. It is
   the most minimal of the three. The crossing disappears below 48 px, and
   the outline reads as the letter P.
+
+## Use of the name and logo
+
+The code is AGPL-3.0-or-later, but the license does not cover the "ChatLoom"
+name or logo. Forks and redistributed builds must use their own name and icon
+and must not suggest they are the official ChatLoom app. Saying "based on
+ChatLoom" in a description is fine.
