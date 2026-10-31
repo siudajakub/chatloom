@@ -177,6 +177,113 @@ void main() {
     });
   });
 
+  group('network usernames', () {
+    const ig = SearchHandle(display: '@anna.kowalska', network: 'Instagram');
+    const tg = SearchHandle(display: '@AnnaK_tg', network: 'Telegram');
+    const tel = SearchHandle(
+      display: '+48600100200',
+      network: 'WhatsApp',
+      phone: true,
+    );
+
+    test('match with or without @, any case, start before inside', () {
+      expect(searchHandleRank(ig, '@anna.kowalska'), 0);
+      expect(searchHandleRank(ig, 'ANNA.KOW'), 0);
+      expect(searchHandleRank(ig, '@@anna'), 0);
+      // A part after "." or "_" starts too.
+      expect(searchHandleRank(ig, 'kowal'), 0);
+      expect(searchHandleRank(tg, 'tg'), 0);
+      expect(searchHandleRank(tg, 'annak'), 0);
+      // Inside a part: 3+ characters only.
+      expect(searchHandleRank(ig, 'owals'), 1);
+      expect(searchHandleRank(ig, 'ow'), isNull);
+      expect(searchHandleRank(ig, 'anna kowalska'), isNull);
+      expect(searchHandleRank(ig, '@'), isNull);
+      expect(searchHandleRank(ig, 'zz'), isNull);
+      expect(ig.label, '@anna.kowalska · Instagram');
+    });
+
+    test('phone numbers match by 4+ digits of a number-like query', () {
+      expect(searchHandleRank(tel, '+48 600'), 0);
+      expect(searchHandleRank(tel, '600 100'), 1);
+      expect(searchHandleRank(tel, '200'), isNull);
+      expect(searchHandleRank(tel, 'anna 6001'), isNull);
+      expect(searchHandleRank(ig, '6001'), isNull);
+    });
+
+    test('a chat found by a handle ranks after every name match and '
+        'carries the handle; a name match does not', () {
+      final now = DateTime.utc(2026, 10, 21, 12);
+      SearchChatCandidate withHandles(
+        InboxRecord r,
+        List<SearchHandle> handles,
+      ) => SearchChatCandidate(
+        record: r,
+        roomIds: [r.representativeRoomId],
+        handles: handles,
+      );
+      final results = mergeUnifiedSearch(
+        query: '@anna',
+        chats: [
+          withHandles(
+            record('!ig', 'Zofia', at: now, networks: {'instagram'}),
+            const [ig],
+          ),
+          withHandles(
+            record(
+              '!tg',
+              'Wiktor',
+              at: now.subtract(const Duration(days: 1)),
+              networks: {'telegram'},
+            ),
+            const [tg],
+          ),
+          withHandles(record('!name', 'Anna Nowak'), const []),
+          withHandles(record('!inner', 'Joanna'), const []),
+          withHandles(record('!none', 'Bob'), const [tel]),
+        ],
+        people: const [],
+        bridges: const [],
+        messages: [
+          SearchMessageCandidate(
+            roomId: '!none',
+            eventId: r'$m',
+            chatName: 'Bob',
+            text: 'ask @anna',
+            time: now,
+          ),
+        ],
+      );
+      // "@anna" is not a name match ("@" is not part of a name)...
+      expect(results.chats.map((c) => c.record.representativeRoomId), [
+        '!ig',
+        '!tg',
+      ]);
+      expect(results.chats.first.handle, ig);
+      expect(results.chats.first.rank, searchHandleRankOffset);
+      // ...message hits stay in their own section.
+      expect(results.messages.single.eventId, r'$m');
+
+      final byName = mergeUnifiedSearch(
+        query: 'anna',
+        chats: [
+          withHandles(record('!ig', 'Zofia', at: now), const [ig]),
+          withHandles(record('!inner', 'Joanna', at: now), const []),
+          withHandles(record('!name', 'Anna Nowak'), const [tg]),
+        ],
+        people: const [],
+        bridges: const [],
+      );
+      expect(byName.chats.map((c) => c.record.representativeRoomId), [
+        '!name',
+        '!inner',
+        '!ig',
+      ]);
+      expect(byName.chats.first.handle, isNull);
+      expect(byName.chats.last.handle, ig);
+    });
+  });
+
   group('bridges', () {
     test('endpoint name, domain and ghost namespace follow bbctl naming', () {
       expect(_whatsapp.name, 'sh-whatsapp');

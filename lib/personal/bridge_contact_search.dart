@@ -114,6 +114,73 @@ int? searchRank(String folded, List<String> terms) {
   return rank;
 }
 
+/// A network username or phone number of the other person of a one-to-one
+/// chat, as the bridge put it in that person's member state
+/// (`com.beeper.bridge.identifiers`). Search finds the chat by it and shows
+/// it under the chat's name.
+@immutable
+class SearchHandle {
+  const SearchHandle({
+    required this.display,
+    required this.network,
+    this.phone = false,
+  });
+
+  /// What the row shows: `@anna_k` or `+48600100200`.
+  final String display;
+
+  /// The network's label ("Instagram"), empty when unknown.
+  final String network;
+  final bool phone;
+
+  /// The row's subtitle: `@anna_k · Instagram`.
+  String get label => network.isEmpty ? display : '$display · $network';
+
+  @override
+  bool operator ==(Object other) =>
+      other is SearchHandle &&
+      other.display == display &&
+      other.network == network &&
+      other.phone == phone;
+
+  @override
+  int get hashCode => Object.hash(display, network, phone);
+
+  @override
+  String toString() => 'SearchHandle(${phone ? 'phone' : 'username'})';
+}
+
+final _phoneQuery = RegExp(r'^\+?[\d\s\-().]+$');
+final _handleBreak = RegExp(r'[._\-]+');
+
+/// How [handle] matches [query]: 0 when the query starts the handle (or a
+/// part of it after `.`, `_` or `-`), 1 when it only appears inside it,
+/// null otherwise. A leading `@` of the query is ignored; case and
+/// diacritics fold as in [searchFold]. A query with spaces never matches a
+/// username. Short queries (under 3 characters) match only at a start, so
+/// "a" does not list every handle with an "a". Phone numbers match only a
+/// query of phone characters with at least 4 digits.
+int? searchHandleRank(SearchHandle handle, String query) {
+  final text = query.trim();
+  if (handle.phone) {
+    if (!_phoneQuery.hasMatch(text)) return null;
+    final digits = _digits(text);
+    if (digits.length < 4) return null;
+    final number = _digits(handle.display);
+    if (number.startsWith(digits)) return 0;
+    return number.contains(digits) ? 1 : null;
+  }
+  final folded = searchFold(text).replaceFirst(RegExp('^@+'), '');
+  if (folded.isEmpty || folded.contains(RegExp(r'\s'))) return null;
+  final name = searchFold(handle.display).replaceFirst(RegExp('^@+'), '');
+  if (name.startsWith(folded)) return 0;
+  if (name.split(_handleBreak).any((part) => part.startsWith(folded))) {
+    return 0;
+  }
+  if (folded.length < 3) return null;
+  return name.contains(folded) ? 1 : null;
+}
+
 /// What an explicit lookup would send to a bridge for [query].
 enum SearchIdentifierKind { phone, username, email }
 
@@ -747,6 +814,7 @@ class SearchChatCandidate {
     required this.record,
     required this.roomIds,
     this.extraText = '',
+    this.handles = const [],
   });
 
   final InboxRecord record;
@@ -756,15 +824,29 @@ class SearchChatCandidate {
 
   /// More searchable text (e.g. network names).
   final String extraText;
+
+  /// Network usernames and phone numbers of the other person of each
+  /// one-to-one source chat. Never group members' (`ChatHandleIndex`).
+  final List<SearchHandle> handles;
 }
 
 @immutable
 class SearchChatHit {
-  const SearchChatHit(this.candidate, this.rank);
+  const SearchChatHit(this.candidate, this.rank, {this.handle});
   final SearchChatCandidate candidate;
+
+  /// 0–1: the name matched ([searchRank]); 2–3: only [handle] did.
   final int rank;
+
+  /// The username or number the chat was found by, when its name did not
+  /// match; the row shows it so the user sees why it is listed.
+  final SearchHandle? handle;
   InboxRecord get record => candidate.record;
 }
+
+/// Rank of a chat found only by a username or phone number: below every
+/// name match ([searchRank] gives 0 or 1).
+const searchHandleRankOffset = 2;
 
 /// The latest loaded message of a conversation.
 @immutable
@@ -941,8 +1023,30 @@ UnifiedSearchResults mergeUnifiedSearch({
       searchFold('${candidate.record.displayName} ${candidate.extraText}'),
       terms,
     );
-    if (rank == null) continue;
-    chatHits.add(SearchChatHit(candidate, rank));
+    if (rank != null) {
+      chatHits.add(SearchChatHit(candidate, rank));
+      shownRooms.addAll(candidate.roomIds);
+      continue;
+    }
+    // A network username or number (Telegram's and Instagram's search):
+    // after every name match, with the handle under the name.
+    SearchHandle? matched;
+    int? handleRank;
+    for (final handle in candidate.handles) {
+      final r = searchHandleRank(handle, query);
+      if (r != null && (handleRank == null || r < handleRank)) {
+        matched = handle;
+        handleRank = r;
+      }
+    }
+    if (matched == null) continue;
+    chatHits.add(
+      SearchChatHit(
+        candidate,
+        searchHandleRankOffset + handleRank!,
+        handle: matched,
+      ),
+    );
     shownRooms.addAll(candidate.roomIds);
   }
   chatHits.sort(_compareChats);

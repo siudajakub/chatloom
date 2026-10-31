@@ -106,6 +106,7 @@ Room _room(
   required Map<String, String> members,
   String? name,
   bool dm = false,
+  Map<String, List<String>> identifiers = const {},
 }) {
   final room = Room(
     id: id,
@@ -136,7 +137,11 @@ Room _room(
     _state(
       room,
       EventTypes.RoomMember,
-      {'membership': 'join', 'displayname': entry.value},
+      {
+        'membership': 'join',
+        'displayname': entry.value,
+        'com.beeper.bridge.identifiers': ?identifiers[entry.key],
+      },
       key: entry.key,
       sender: bot,
     );
@@ -685,6 +690,94 @@ void main() {
     );
     expect(fixture.client.startedChats, isEmpty);
     expect(opened.rooms, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+    fixture.dispose();
+  });
+
+  testWidgets('a chat is found by the other person\'s network username, '
+      'never by a group member\'s', (tester) async {
+    const igBot = '@sh-instagrambot:beeper.local';
+    const igPeer = '@sh-instagram_1:beeper.local';
+    const tgPeer = '@sh-telegram_3:beeper.local';
+    const tgMember = '@sh-telegram_4:beeper.local';
+    final fixture = _Fixture();
+    _room(
+      fixture.client,
+      '!ig:example.invalid',
+      bot: igBot,
+      protocol: 'instagram',
+      members: {igPeer: 'Zofia Fikcyjna'},
+      identifiers: {
+        igPeer: ['instagram:zofia.photo'],
+      },
+      dm: true,
+    );
+    _room(
+      fixture.client,
+      '!tg:example.invalid',
+      bot: _tgBot,
+      protocol: 'telegram',
+      members: {tgPeer: 'Wiktor Fikcyjny'},
+      identifiers: {
+        tgPeer: ['telegram:WiktorF', 'tel:+48600100777'],
+      },
+      dm: true,
+    );
+    _room(
+      fixture.client,
+      '!tg-group:example.invalid',
+      bot: _tgBot,
+      protocol: 'telegram',
+      members: {tgMember: 'Ewa Grupowa', tgPeer: 'Wiktor Fikcyjny'},
+      identifiers: {
+        tgMember: ['telegram:ewa_secret'],
+        tgPeer: ['telegram:WiktorF'],
+      },
+      name: 'Szachy',
+    );
+    final opened = _Opened();
+    await _openSearch(
+      tester,
+      fixture,
+      BridgeDirectory.disabled('Not available in tests.'),
+      opened,
+    );
+
+    // Instagram handle, with or without @, any case.
+    for (final query in ['@zofia.photo', 'ZOFIA.PH', 'photo']) {
+      await _type(tester, query);
+      expect(find.text('Zofia Fikcyjna'), findsOneWidget, reason: query);
+      expect(
+        find.text('@zofia.photo · Instagram'),
+        findsOneWidget,
+        reason: query,
+      );
+    }
+    // Telegram username, case-insensitive; the group shares the person
+    // but is not found by a username.
+    await _type(tester, '@wiktorf');
+    expect(find.text('Wiktor Fikcyjny'), findsOneWidget);
+    expect(find.text('@WiktorF · Telegram'), findsOneWidget);
+    expect(find.text('Szachy'), findsNothing);
+    // A phone number by 4+ digits.
+    await _type(tester, '0100777');
+    expect(find.text('+48600100777 · Telegram'), findsOneWidget);
+    // A group member's username finds nothing and is never shown.
+    await _type(tester, 'ewa_secret');
+    expect(find.text('Szachy'), findsNothing);
+    expect(find.text('Ewa Grupowa'), findsNothing);
+    expect(find.textContaining('ewa_secret ·'), findsNothing);
+    expect(find.textContaining('No results for'), findsOneWidget);
+    // A name match shows the network, not the username.
+    await _type(tester, 'zofia');
+    expect(find.text('Zofia Fikcyjna'), findsOneWidget);
+    expect(find.text('@zofia.photo · Instagram'), findsNothing);
+    expect(find.text('Instagram'), findsWidgets);
+
+    await _type(tester, '@zofia.photo');
+    await tester.tap(find.text('Zofia Fikcyjna'));
+    await tester.pumpAndSettle();
+    expect(opened.rooms, ['!ig:example.invalid']);
     await tester.pumpWidget(const SizedBox.shrink());
     fixture.dispose();
   });

@@ -7,6 +7,7 @@ import 'package:chatloom/pages/chat_list/chat_list_item.dart'
 import 'package:chatloom/pages/chat_list/inbox_controller.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/bridge_start_chat.dart';
+import 'package:chatloom/personal/chat_handles.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/local_message_search.dart';
 import 'package:chatloom/personal/matrix_start_chat.dart';
@@ -103,6 +104,26 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
   final _messagesMemo = PersonalSearchMemo<List<SearchMessageCandidate>>();
   final _resultsMemo = PersonalSearchMemo<UnifiedSearchResults>();
 
+  /// Usernames and numbers of the people of one-to-one chats, cached per
+  /// room until their member state changes.
+  final _handles = ChatHandleIndex();
+
+  /// Bumped when people's member state was read from the store.
+  int _handlesRevision = 0;
+  bool _handlesLoading = false;
+
+  /// The SDK loads members lazily: reads the missing people of one-to-one
+  /// chats from this device's store once, so their usernames match too.
+  void _loadHandles() {
+    if (_handlesLoading) return;
+    _handlesLoading = true;
+    unawaited(
+      ChatHandleIndex.loadMissingPeers(_searchableRooms()).then((found) {
+        if (found && mounted) setState(() => _handlesRevision++);
+      }),
+    );
+  }
+
   /// Messages stored on this device (FX-04): read on the first query, then
   /// filtered per query off the typing path; dropped with the page.
   DeviceMessageSearch? _device;
@@ -146,6 +167,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       if (!mounted) return;
       // whoami + capabilities only: no query leaves the device.
       unawaited(_directory.probe(_bridges()));
+      _loadHandles();
       if (_applied.isNotEmpty) {
         _loadContacts();
         _deviceSearch.search(_applied);
@@ -252,27 +274,42 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     );
   });
 
-  List<SearchChatCandidate> _chats() => _chatsMemo.resolve(_generation, () {
-    final index = widget.inbox.index;
-    final projection = index.projection;
-    return [
-      for (final record in index.records)
-        if (!record.technical)
-          SearchChatCandidate(
-            record: record,
-            roomIds: [
-              record.representativeRoomId,
-              if (record.entityId.startsWith('person:'))
-                ...?projection
-                    .groupById(record.entityId.substring('person:'.length))
-                    ?.members
-                    .map((m) => m.roomId),
-            ],
-            // A merged person is found by its sources' network names.
-            extraText: personSearchText(projection, record),
-          ),
-    ];
-  });
+  List<SearchChatCandidate> _chats() =>
+      _chatsMemo.resolve((_generation, _handlesRevision), () {
+        final index = widget.inbox.index;
+        final projection = index.projection;
+        String network(Room room) =>
+            notionNetworkLabel(projection.classifier.classify(room).network);
+        final result = <SearchChatCandidate>[];
+        for (final record in index.records) {
+          if (record.technical) continue;
+          final roomIds = [
+            record.representativeRoomId,
+            if (record.entityId.startsWith('person:'))
+              ...?projection
+                  .groupById(record.entityId.substring('person:'.length))
+                  ?.members
+                  .map((m) => m.roomId),
+          ];
+          result.add(
+            SearchChatCandidate(
+              record: record,
+              roomIds: roomIds,
+              // A merged person is found by its sources' network names.
+              extraText: personSearchText(projection, record),
+              // ... and a chat by the other person's username or number.
+              handles: record.isGroup
+                  ? const []
+                  : {
+                      for (final id in roomIds)
+                        if (_client.getRoomById(id) case final room?)
+                          ..._handles.handlesOf(room, network: network),
+                    }.toList(),
+            ),
+          );
+        }
+        return result;
+      });
 
   List<SearchMessageCandidate> _messages() =>
       _messagesMemo.resolve(_generation, () {
@@ -311,6 +348,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     (
       _applied,
       _generation,
+      _handlesRevision,
       _directory,
       _directory.revision,
       _device?.query == _applied ? _device?.hits : null,
@@ -820,8 +858,10 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     if (room == null) return const SizedBox.shrink();
     final projection = widget.inbox.projection;
     final networks = record.networks.toSet().toList();
+    final handle = hit.handle;
     final details = [
-      ...networks.map(notionNetworkLabel),
+      // Found by a username or number: show it, so the match is clear.
+      if (handle != null) handle.label else ...networks.map(notionNetworkLabel),
       if (record.isGroup) 'Group',
       if (record.metadata.archived) 'Archived',
       if (record.metadata.ignored) 'Ignored',
