@@ -242,7 +242,8 @@ void main() {
       await f.mount(tester);
       await tester.longPress(find.text('Fictional menu message'));
       await tester.pumpAndSettle();
-      expect(haptics, ['HapticFeedbackType.lightImpact']);
+      // Android long-press buzz: HapticFeedback.vibrate() has no arguments.
+      expect(haptics, [null]);
       for (final emoji in NotionReactions.defaults) {
         expect(_emoji(emoji), findsOneWidget);
       }

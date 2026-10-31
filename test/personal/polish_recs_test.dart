@@ -274,7 +274,8 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
       expect(committed, ['archive']);
-      expect(haptics, ['HapticFeedbackType.selectionClick']);
+      // Android selection tick (CONTEXT_CLICK); tests run as Android.
+      expect(haptics, ['HapticFeedbackType.heavyImpact']);
       expect(tester.getTopLeft(find.text('Fictional person')), rest);
       expect(find.text('Archive'), findsNothing);
 

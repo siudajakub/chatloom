@@ -101,7 +101,8 @@ void main() {
     await armed.moveBy(const Offset(70, 0));
     await tester.pump();
     expect(replies, 0);
-    expect(haptics, ['HapticFeedbackType.selectionClick']);
+    // Android selection tick (CONTEXT_CLICK); tests run as Android.
+    expect(haptics, ['HapticFeedbackType.heavyImpact']);
     await armed.moveBy(const Offset(40, 0));
     await armed.up();
     await tester.pumpAndSettle();
@@ -413,7 +414,8 @@ void main() {
     expect(tester.getRect(find.byKey(_surface)).width, lessThan(rect.width));
     await tester.pump(const Duration(milliseconds: 250));
     expect(presses, hasLength(1));
-    expect(haptics, ['HapticFeedbackType.lightImpact']);
+    // Android long-press buzz: HapticFeedback.vibrate() has no arguments.
+    expect(haptics, [null]);
     final press = presses.single;
     expect(press.rect, rect);
     expect(press.visualRect.width, lessThanOrEqualTo(rect.width));

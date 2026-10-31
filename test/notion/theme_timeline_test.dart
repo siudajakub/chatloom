@@ -256,12 +256,12 @@ void main() {
     testWidgets('NotionTapTarget buzzes on long press, not on right click', (
       tester,
     ) async {
-      final haptics = <String>[];
+      final haptics = <Object?>[];
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
         (call) async {
           if (call.method == 'HapticFeedback.vibrate') {
-            haptics.add(call.arguments as String);
+            haptics.add(call.arguments);
           }
           return null;
         },
@@ -286,7 +286,8 @@ void main() {
       );
       await tester.longPress(find.byType(NotionTapTarget));
       expect(presses, 1);
-      expect(haptics, ['HapticFeedbackType.lightImpact']);
+      // Android long-press buzz: HapticFeedback.vibrate() has no arguments.
+      expect(haptics, [null]);
       await tester.tap(find.byType(NotionTapTarget), buttons: kSecondaryButton);
       expect(presses, 2);
       expect(haptics, hasLength(1));

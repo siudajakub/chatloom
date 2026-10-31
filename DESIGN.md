@@ -443,12 +443,18 @@ dialogs and sheets never bounce.
 | `of(context, d)` | Duration | `d`, or zero under reduced motion |
 | `staggerFor(i)` | Duration | capped stagger delay |
 
-`NotionHaptics.send()` / `.longPress()` (a light impact) and
-`.selection()` (a selection click) are the only haptics: on send, on a
-recognised long-press, and once per change of choice while the finger
+`NotionHaptics.send()`, `.longPress()` / `.recordStart()` and
+`.selection()` are the only haptics: on send, on a recognised long-press or
+a recording that starts, and once per change of choice while the finger
 scrubs (the reaction bar's hovered emoji, swipe-to-reply and inbox
-swipe arming). Screens
-decide; nothing buzzes by default.
+swipe arming). On Android they feel like Messenger: send is a light click
+(`lightImpact`, `VIRTUAL_KEY`), long-press and record start are the system
+long-press buzz (`HapticFeedback.vibrate()`, `LONG_PRESS`), selection is a
+crisp tick (`heavyImpact`, which Android maps to `CONTEXT_CLICK`, not a
+heavy thump; `selectionClick` is a faint `CLOCK_TICK`). Other platforms keep
+a light impact, a medium impact for record start and a selection click.
+Everything honours the Haptic feedback switch (`NotionHaptics.enabled`).
+Screens decide; nothing buzzes by default.
 
 ### Primitives
 

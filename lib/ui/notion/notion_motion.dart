@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -391,12 +392,22 @@ class NotionSpringCurve extends Curve {
   double transformInternal(double t) => _simulation.x(t * _settle);
 }
 
-/// Haptic feedback vocabulary. Only for send and long-press; screens decide.
+/// Haptic feedback vocabulary. Only for send, long-press and scrubbing;
+/// screens decide.
+///
+/// On Android the vocabulary follows Facebook Messenger: a crisp click on
+/// send, the system long-press buzz (`HapticFeedbackConstants.LONG_PRESS`, a
+/// heavy click) when a hold is recognised or a recording starts, and a crisp
+/// tick per choice while the finger scrubs. Other platforms keep the
+/// original light / medium impacts and selection clicks.
 abstract final class NotionHaptics {
   /// Settings → Appearance → Haptic feedback; set by `ThemeController`.
   static bool enabled = true;
 
-  /// A light tick: message sent, long-press menu opened.
+  static bool get _android => defaultTargetPlatform == TargetPlatform.android;
+
+  /// A light tick: message sent, a double-tap like, unlock. Android:
+  /// `VIRTUAL_KEY` (a click).
   static void light() {
     if (enabled) unawaited(HapticFeedback.lightImpact());
   }
@@ -405,19 +416,35 @@ abstract final class NotionHaptics {
   static void send() => light();
 
   /// Long-press recognised (context menu, reaction picker, drag start).
-  static void longPress() => light();
+  /// Android: the system long-press buzz, Messenger's.
+  static void longPress() {
+    if (!enabled) return;
+    unawaited(
+      _android ? HapticFeedback.vibrate() : HapticFeedback.lightImpact(),
+    );
+  }
 
-  /// A voice/round recording started (Telegram's firmer tick: the hold
-  /// became a recording).
+  /// A voice/round recording started (the hold became a recording).
+  /// Android: the same long-press buzz; elsewhere a medium impact.
   static void recordStart() {
-    if (enabled) unawaited(HapticFeedback.mediumImpact());
+    if (!enabled) return;
+    unawaited(
+      _android ? HapticFeedback.vibrate() : HapticFeedback.mediumImpact(),
+    );
   }
 
   /// A selection tick: the finger moved onto another choice while scrubbing
   /// (reaction bar, swipe-to-reply arming). Fires once per change, never per
   /// frame.
   static void selection() {
-    if (enabled) unawaited(HapticFeedback.selectionClick());
+    if (!enabled) return;
+    // Android: `heavyImpact` is a misleading name here. The engine maps it to
+    // `HapticFeedbackConstants.CONTEXT_CLICK` (EFFECT_TICK), a short crisp
+    // tick, whereas `selectionClick` maps to `CLOCK_TICK`, a texture tick
+    // that many devices barely render.
+    unawaited(
+      _android ? HapticFeedback.heavyImpact() : HapticFeedback.selectionClick(),
+    );
   }
 }
 

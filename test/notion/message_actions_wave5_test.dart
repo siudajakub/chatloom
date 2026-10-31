@@ -19,6 +19,8 @@ import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -585,7 +587,62 @@ void main() {
       expect(find.text('Copied'), findsOneWidget);
     });
 
-    testWidgets('NotionHaptics.selection is a selection click', (tester) async {
+    // Android follows Messenger: the system long-press buzz
+    // (`HapticFeedback.vibrate`, no arguments) for long-press and recording,
+    // a crisp CONTEXT_CLICK tick (`heavyImpact`) while scrubbing, a click on
+    // send. Other platforms keep the original vocabulary.
+    final mapping = <TargetPlatform, List<Object?>>{
+      TargetPlatform.android: [
+        'HapticFeedbackType.lightImpact',
+        null,
+        null,
+        'HapticFeedbackType.heavyImpact',
+      ],
+      TargetPlatform.iOS: [
+        'HapticFeedbackType.lightImpact',
+        'HapticFeedbackType.lightImpact',
+        'HapticFeedbackType.mediumImpact',
+        'HapticFeedbackType.selectionClick',
+      ],
+      TargetPlatform.macOS: [
+        'HapticFeedbackType.lightImpact',
+        'HapticFeedbackType.lightImpact',
+        'HapticFeedbackType.mediumImpact',
+        'HapticFeedbackType.selectionClick',
+      ],
+    };
+    for (final MapEntry(key: platform, value: expected) in mapping.entries) {
+      testWidgets('NotionHaptics on ${platform.name}: send, long-press, '
+          'record start, selection', (tester) async {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        final calls = <Object?>[];
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          (call) async {
+            if (call.method == 'HapticFeedback.vibrate') {
+              calls.add(call.arguments);
+            }
+            return null;
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            null,
+          ),
+        );
+        NotionHaptics.send();
+        NotionHaptics.longPress();
+        NotionHaptics.recordStart();
+        NotionHaptics.selection();
+        await tester.pump();
+        expect(calls, expected);
+        debugDefaultTargetPlatformOverride = null;
+      });
+    }
+
+    testWidgets('NotionHaptics stays silent while disabled', (tester) async {
       final calls = <Object?>[];
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
@@ -596,15 +653,20 @@ void main() {
           return null;
         },
       );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      addTearDown(() {
+        NotionHaptics.enabled = true;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
           SystemChannels.platform,
           null,
-        ),
-      );
+        );
+      });
+      NotionHaptics.enabled = false;
+      NotionHaptics.send();
+      NotionHaptics.longPress();
+      NotionHaptics.recordStart();
       NotionHaptics.selection();
       await tester.pump();
-      expect(calls, ['HapticFeedbackType.selectionClick']);
+      expect(calls, isEmpty);
     });
   });
 
