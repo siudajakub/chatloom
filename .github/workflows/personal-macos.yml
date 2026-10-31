@@ -68,8 +68,12 @@ jobs:
           IDENTITY: ${{ vars.CHATLOOM_MACOS_SIGN_IDENTITY || 'ChatLoom Local Signing' }}
         run: |
           if [ -z "$P12" ]; then
-            echo "::warning::CHATLOOM_MACOS_SIGNING_P12 is not set: the app is ad-hoc signed and macOS asks for Keychain access after every update"
+            echo "::warning::CHATLOOM_MACOS_SIGNING_P12 is not set or empty: the app is ad-hoc signed and macOS asks for Keychain access after every update"
             exit 0
+          fi
+          if [ -z "$P12_PASSWORD" ]; then
+            echo "::error::CHATLOOM_MACOS_SIGNING_P12_PASSWORD is not set: the certificate cannot be imported"
+            exit 1
           fi
           keychain="$RUNNER_TEMP/chatloom-signing.keychain-db"
           password="$(openssl rand -hex 24)"

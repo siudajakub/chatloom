@@ -122,13 +122,19 @@ it once as repository secrets:
 1. Keychain Access → login → My Certificates → right-click
    `ChatLoom Local Signing` → Export… → format Personal Information Exchange
    (.p12), with a strong export password.
-2. Upload it and delete the file:
+2. In the folder that holds `ChatLoom.p12`, upload it and delete the file.
+   `test -s` stops the upload when the file is missing or empty, so a typo
+   cannot store an empty secret (the build would then fall back to ad-hoc):
 
    ```sh
-   rtk gh secret set CHATLOOM_MACOS_SIGNING_P12 --repo siudajakub/chatloom < <(base64 -i ChatLoom.p12)
+   test -s ChatLoom.p12 && base64 -i ChatLoom.p12 | rtk gh secret set CHATLOOM_MACOS_SIGNING_P12 --repo siudajakub/chatloom
    rtk gh secret set CHATLOOM_MACOS_SIGNING_P12_PASSWORD --repo siudajakub/chatloom
    rm ChatLoom.p12
    ```
+
+   The second command asks for the export password. Then run the workflow
+   and check that its summary has no ad-hoc warning and the manifest's
+   `signing` field names the certificate.
 
 A certificate with another name also needs the repository variable
 `CHATLOOM_MACOS_SIGN_IDENTITY`. The workflow imports the .p12 into a
