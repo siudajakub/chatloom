@@ -23,13 +23,29 @@ Future<void> wakeSyncOnNetworkRecovery(
   if (!networks.any((network) => network != ConnectivityResult.none)) return;
   await Future.wait([
     for (final client in clients)
-      if (client.isLogged())
-        (client.prevBatch == null
-                ? client.oneShotSync()
-                : client.restartSync(timeout: Duration.zero))
-            .catchError((Object _) {}),
+      if (client.isLogged()) syncNow(client),
   ]);
 }
+
+/// Syncs [client] at once and completes when that sync is done (a failure is
+/// reported on `onSyncStatus`, never thrown). A long-poll still waiting for
+/// its answer, perhaps on a socket that no longer works, is dropped and the
+/// retry backoff is skipped; the server answers at once (`timeout=0`). The
+/// initial sync is joined, never thrown away. For explicit retries and wake
+/// hints (network transitions, the app coming back on screen).
+///
+/// [responseTimeout]: how long the answer may take (the SDK default is 10 s
+/// for `timeout=0`); a catch-up after a long absence passes a long-poll's
+/// budget so a large backlog on a slow network is not cut off and fetched
+/// twice.
+Future<void> syncNow(Client client, {Duration? responseTimeout}) =>
+    (client.prevBatch == null
+            ? client.oneShotSync()
+            : client.restartSync(
+                timeout: Duration.zero,
+                responseTimeout: responseTimeout,
+              ))
+        .catchError((Object _) {});
 
 /// Turns the platform connectivity stream into sync restarts.
 ///

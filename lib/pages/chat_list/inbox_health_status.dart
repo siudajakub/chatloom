@@ -15,6 +15,7 @@ import 'package:chatloom/personal/ui/inbox_health_notice.dart';
 import 'package:chatloom/personal/worker_readiness.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/background_push.dart';
+import 'package:chatloom/utils/sync_network_recovery.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -58,6 +59,7 @@ class InboxHealthStatus extends StatefulWidget {
   final Future<PushDiagnosticsSnapshot> Function()? pushDiagnostics;
   final WorkerReadiness? Function()? worker;
   final DateTime Function()? clock;
+  final Future<void> Function(Client client)? retrySync;
 
   const InboxHealthStatus({
     super.key,
@@ -69,6 +71,7 @@ class InboxHealthStatus extends StatefulWidget {
     this.pushDiagnostics,
     this.worker,
     this.clock,
+    this.retrySync,
   });
 
   static InboxHealthItem itemFor(E2eeIssue issue) => InboxHealthItem(
@@ -116,6 +119,7 @@ class InboxHealthStatus extends StatefulWidget {
       title: issue.title,
       message: issue.message,
       actionLabel: issue.actionLabel,
+      compact: issue.source == HealthSource.connection,
     );
   }
 
@@ -228,7 +232,12 @@ class _InboxHealthStatusState extends State<InboxHealthStatus> {
   }
 
   List<HealthIssue> _issues() => combineHealthIssues(
-    connection: _connection.value,
+    // A passing connection problem is the header line's alone; only a
+    // lasting one earns the notice (and hides the stale bridge and worker
+    // signals).
+    connection: _connection.lasting
+        ? _connection.value
+        : ConnectionPhase.online,
     e2ee: _health.issues,
     bridges: _bridges.problems,
     pushPhase: _push?.phase(),
@@ -260,7 +269,8 @@ class _InboxHealthStatusState extends State<InboxHealthStatus> {
         if (_retrying) return;
         setState(() => _retrying = true);
         try {
-          await widget.client.oneShotSync(timeout: Duration.zero);
+          // Drops a long-poll stuck on a dead socket instead of joining it.
+          await (widget.retrySync ?? syncNow)(widget.client);
         } catch (error) {
           Logs().w('[Personal] Sync retry failed: ${error.runtimeType}');
         } finally {
@@ -324,7 +334,7 @@ class _InboxHealthStatusState extends State<InboxHealthStatus> {
     listenable: _listenable,
     builder: (context, _) {
       final all = _issues();
-      final issues = _dismissal.covers(all) ? const <HealthIssue>[] : all;
+      final issues = _dismissal.visible(all);
       if (issues.isNotEmpty) _shown = issues;
       final shown = _shown;
       if (shown.isEmpty) return const SizedBox.shrink();
@@ -349,7 +359,12 @@ class _InboxHealthStatusState extends State<InboxHealthStatus> {
                     unawaited(_fix(current[index]));
                   }
                 },
-                onDismiss: () => unawaited(_dismiss(all)),
+                // A compact (connection) row shows only itself, so its
+                // dismiss hides only itself: problems the user has not seen
+                // are never hidden with it.
+                onDismiss: () => unawaited(
+                  _dismiss(items.first.compact ? [shown.first] : all),
+                ),
                 onDetails: _details,
               ),
             ),

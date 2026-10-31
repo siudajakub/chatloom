@@ -278,6 +278,11 @@ void main() {
       );
       addTearDown(monitor.dispose);
       await mountTitle(tester, client, room, monitor: monitor);
+      // The failure from before counts once; the next one is evidence.
+      statuses.add(const SyncStatusUpdate(SyncStatus.error));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
       expect(find.text('Connecting…'), findsOneWidget);
       expect(find.text('WhatsApp'), findsNothing);
       statuses.add(const SyncStatusUpdate(SyncStatus.finished));

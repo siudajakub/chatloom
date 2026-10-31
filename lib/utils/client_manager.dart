@@ -160,6 +160,10 @@ abstract class ClientManager {
       ),
     );
     client.syncErrorMaxTimeoutSec = 60;
+    // A retry after a failed sync gets an immediate answer, so recovery is
+    // known (and the "Connecting…" line gone) at once, not after an empty
+    // 30 s long-poll.
+    client.quickSyncRetry = true;
     // No typed `/logout`, `/leave`, `/clearcache`…: formatting commands only.
     restrictComposerCommands(client);
     ClientPerformanceProbe.watch(client);
@@ -178,10 +182,26 @@ abstract class ClientManager {
   /// chats that came back limited, which cost a request per chat for
   /// nothing. Notifications come from pushes, and an opened chat pages its
   /// own history, exactly as after a foreground catch-up.
-  static void applyMobileLifecycle(Client client, {required bool foreground}) {
+  ///
+  /// [catchUp] (coming back after the loop was stopped): a zero-timeout sync
+  /// starts at once instead of joining a long-poll from before the
+  /// background ([syncNow]); the loop joins it and long-polls after it. It
+  /// may bring hours of backlog, so it keeps a long-poll's response budget.
+  /// Returns that sync.
+  static Future<void>? applyMobileLifecycle(
+    Client client, {
+    required bool foreground,
+    bool catchUp = false,
+  }) {
     client.syncErrorMaxTimeoutSec = foregroundSyncRetryCapSec;
     client.requestHistoryOnLimitedTimeline = false;
+    // Started before the loop, which then joins it rather than opening a
+    // long-poll beside it.
+    final sync = foreground && catchUp && client.isLogged()
+        ? syncNow(client, responseTimeout: Client.longPollResponseTimeout)
+        : null;
     client.backgroundSync = foreground;
+    return sync;
   }
 
   /// macOS sync settings while the window is shown or has been hidden for

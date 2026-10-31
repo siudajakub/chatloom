@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/personal/bridge_health.dart';
 import 'package:chatloom/personal/bridge_health_monitor.dart';
 import 'package:chatloom/personal/connection_status.dart';
 import 'package:chatloom/personal/inbox_health.dart' show networkRoute;
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/sync_network_recovery.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -14,18 +17,36 @@ import 'package:matrix/matrix.dart';
 /// One self-contained widget for the inbox header
 /// (`NotionInboxPage(headerStatus:)`) and chat headers
 /// (`NotionCompactChatHeader(status:)`).
+///
+/// The quiet form of every connection state, Telegram style: a small
+/// spinner while a request is on its way, and a tap on a problem syncs at
+/// once. The inbox adds a notice only when a problem lasts
+/// (`ConnectionStatusMonitor.lasting`).
 class ConnectionStatusLine extends StatelessWidget {
-  const ConnectionStatusLine({super.key, required this.client, this.monitor});
+  const ConnectionStatusLine({
+    super.key,
+    required this.client,
+    this.monitor,
+    this.retry,
+  });
 
   final Client client;
 
   /// Test seam; defaults to the client's shared monitor.
   final ConnectionStatusMonitor? monitor;
 
+  /// Test seam; defaults to [syncNow].
+  final Future<void> Function(Client client)? retry;
+
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
     valueListenable: monitor ?? ConnectionStatusMonitor.of(client),
-    builder: (context, phase, _) => NotionStatusLine(status: phase.label),
+    builder: (context, phase, _) => NotionStatusLine(
+      status: phase.label,
+      busy: phase.busy,
+      onTap: phase.offline ? () => unawaited((retry ?? syncNow)(client)) : null,
+      tapHint: 'Retry',
+    ),
   );
 }
 

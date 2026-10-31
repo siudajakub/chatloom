@@ -25,6 +25,7 @@ import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/desktop_sync_pause.dart';
 import 'package:chatloom/utils/init_with_restore.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
+import 'package:chatloom/utils/mobile_sync_lifecycle.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/sync_network_recovery.dart';
@@ -577,8 +578,9 @@ class MatrixState extends State<Matrix> {
       }
       final recovery = SyncNetworkRecovery(
         foreground: () => PlatformInfos.isMobile
-            ? WidgetsBinding.instance.lifecycleState ==
-                  AppLifecycleState.resumed
+            ? MobileSyncLifecycle.syncsIn(
+                WidgetsBinding.instance.lifecycleState,
+              )
             : !(_desktopSyncPause?.paused ?? false),
       );
       _networkChanges = Connectivity().onConnectivityChanged.listen(
@@ -597,6 +599,8 @@ class MatrixState extends State<Matrix> {
       for (final client in widget.clients) {
         client.syncErrorMaxTimeoutSec = foregroundSyncRetryCapSec;
       }
+      _mobileSync = MobileSyncLifecycle(clients: () => widget.clients)
+        ..seed(WidgetsBinding.instance.lifecycleState);
     }
 
     if (PlatformInfos.isMobile) {
@@ -632,6 +636,10 @@ class MatrixState extends State<Matrix> {
 
   DesktopSyncPause? _desktopSyncPause;
 
+  /// The phone's foreground sync loop (stops in the background, catches up
+  /// at once on return).
+  MobileSyncLifecycle? _mobileSync;
+
   void _onMacWindowVisible() =>
       _desktopSyncPause?.onWindowVisible(MacDesktopWindow.visible.value);
 
@@ -643,16 +651,14 @@ class MatrixState extends State<Matrix> {
       // Own presence is always offline, in front or not
       // (`PrivacyPolicy.allowOnlinePresence`).
       client.syncPresence = PresenceType.offline;
-      if (PlatformInfos.isMobile) {
-        // The loop only runs in the foreground on phones; keep its retries
-        // short there (see [ClientManager.applyMobileLifecycle]).
-        ClientManager.applyMobileLifecycle(client, foreground: foreground);
-        Logs().v('Set background sync to', foreground);
-      } else if (foreground) {
+      if (!PlatformInfos.isMobile && foreground) {
         // Resume promptly even if the desktop sync loop is backing off offline.
         unawaited(client.oneShotSync().catchError((Object _) {}));
       }
     }
+    // Phones: the loop runs only on screen, with short retries there, and
+    // catches up at once on return (see [MobileSyncLifecycle]).
+    _mobileSync?.onLifecycle(state);
   }
 
   @override

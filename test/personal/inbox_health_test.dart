@@ -255,6 +255,51 @@ void main() {
       );
     });
 
+    test('a passing problem shows alone, without the hidden ones', () {
+      final dismissal = HealthDismissal(account: '@me:x', stored: '');
+      final bridge = bridgeHealthIssue(
+        _bridge(BridgeHealthState.loggedOut),
+        _now,
+      )!;
+      final offline = connectionIssue(ConnectionPhase.waitingForNetwork)!;
+      dismissal.dismiss([bridge]);
+      // A lasting connection problem: just that row, no "1 more".
+      expect(dismissal.visible([offline, bridge]), [offline]);
+      // It ends: the hidden problem stays hidden.
+      expect(dismissal.visible([bridge]), isEmpty);
+      // A changed lasting problem brings everything current back.
+      final changed = bridgeHealthIssue(
+        _bridge(BridgeHealthState.loggedOut, stamp: '2'),
+        _now,
+      )!;
+      expect(dismissal.visible([offline, changed]), [offline, changed]);
+    });
+
+    test('a hidden passing problem stays hidden when another one shows', () {
+      final dismissal = HealthDismissal(account: '@me:x', stored: '');
+      final offline = connectionIssue(ConnectionPhase.connecting)!;
+      final bridge = bridgeHealthIssue(
+        _bridge(BridgeHealthState.loggedOut),
+        _now,
+      )!;
+      // Only the compact connection row was hidden: a problem it did not
+      // show still shows, without the connection coming back with it.
+      dismissal.dismiss([offline]);
+      expect(dismissal.visible([offline, bridge]), [bridge]);
+      dismissal.dismiss([bridge]);
+      expect(dismissal.visible([offline, bridge]), isEmpty);
+      // A changed lasting problem brings the lasting ones back, still
+      // without the passing one hidden in this session.
+      final changed = bridgeHealthIssue(
+        _bridge(BridgeHealthState.loggedOut, stamp: '2'),
+        _now,
+      )!;
+      expect(dismissal.visible([offline, changed]), [changed]);
+      // Once the connection problem ends, its dismissal ends with it.
+      expect(dismissal.visible([changed]), [changed]);
+      expect(dismissal.visible([offline, changed]), [offline, changed]);
+    });
+
     test('existing E2EE dismissals keep working', () {
       final issues = e2eeIssues(
         const E2eeSnapshot(backupConnected: false),
@@ -286,6 +331,7 @@ void main() {
     final bridges = _FakeBridges(client, management)
       ..fake = [_bridge(BridgeHealthState.loggedOut)];
     final pushChanges = ValueNotifier(0);
+    var retries = 0;
     final router = GoRouter(
       routes: [
         GoRoute(
@@ -303,6 +349,7 @@ void main() {
               pushDiagnostics: () async => PushDiagnosticsSnapshot.empty,
               worker: () => null,
               clock: () => _now,
+              retrySync: (_) async => retries++,
             ),
           ),
         ),
@@ -331,15 +378,46 @@ void main() {
     expect(find.text('Sign in'), findsOneWidget);
     expect(find.text('2 more'), findsOneWidget);
 
-    // Offline outranks everything and hides the (stale) bridge problem.
-    statuses.add(const SyncStatusUpdate(SyncStatus.error));
+    // A passing connection problem is the header line's alone.
+    statuses
+      ..add(const SyncStatusUpdate(SyncStatus.error))
+      ..add(const SyncStatusUpdate(SyncStatus.error));
+    await tester.pumpAndSettle();
+    expect(connection.value, ConnectionPhase.waitingForNetwork);
+    expect(find.text('No internet connection'), findsNothing);
+    expect(find.text('WhatsApp is signed out'), findsOneWidget);
+    // A lasting one outranks everything as one compact row without "N more"
+    // and hides the (stale) bridge problem.
+    await tester.pump(const Duration(seconds: 30));
     await tester.pumpAndSettle();
     expect(find.text('No internet connection'), findsOneWidget);
+    expect(find.text('Showing loaded chats'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
-    expect(find.text('2 more'), findsOneWidget);
+    expect(find.text('2 more'), findsNothing);
+    expect(
+      tester.widget<NotionCallout>(find.byType(NotionCallout)).compact,
+      isTrue,
+    );
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(retries, 1, reason: 'Retry syncs at once');
+    // Hiding the compact row hides only the connection problem: the ones
+    // it did not show are not hidden with it.
+    await tester.tap(find.byTooltip('Hide until something changes'));
+    await tester.pumpAndSettle();
+    expect(find.text('No internet connection'), findsNothing);
+    expect(find.text('Notifications are off'), findsOneWidget);
+    expect(
+      tester.widget<NotionCallout>(find.byType(NotionCallout)).compact,
+      isFalse,
+    );
     statuses.add(const SyncStatusUpdate(SyncStatus.finished));
     await tester.pumpAndSettle();
     expect(find.text('WhatsApp is signed out'), findsOneWidget);
+    expect(
+      tester.widget<NotionCallout>(find.byType(NotionCallout)).compact,
+      isFalse,
+    );
 
     // "2 more" lists everything with its own fix.
     await tester.tap(find.text('2 more'));
@@ -377,6 +455,7 @@ void main() {
     final statuses = StreamController<SyncStatusUpdate>.broadcast();
     addTearDown(statuses.close);
     final connection = _connection(statuses);
+    var retries = 0;
     await tester.pumpWidget(
       MaterialApp(
         theme: NotionTheme.build(Brightness.dark),
@@ -385,20 +464,44 @@ void main() {
             avatar: const SizedBox.square(dimension: 32),
             name: 'Synthetic chat',
             onDetails: null,
-            status: ConnectionStatusLine(client: client, monitor: connection),
+            status: ConnectionStatusLine(
+              client: client,
+              monitor: connection,
+              retry: (_) async => retries++,
+            ),
           ),
         ),
       ),
     );
     expect(find.text('Connecting…'), findsNothing);
     final idle = tester.getSize(find.byType(NotionCompactChatHeader));
+    Future<void> settle() async {
+      // The spinner loops; step through the reveal instead of settling.
+      await tester.pump();
+      await tester.pump(NotionMotion.medium);
+      await tester.pump(NotionMotion.medium);
+    }
+
+    // One failed request says nothing.
     statuses.add(const SyncStatusUpdate(SyncStatus.error));
-    await tester.pumpAndSettle();
+    await settle();
+    expect(find.text('Connecting…'), findsNothing);
+    statuses.add(const SyncStatusUpdate(SyncStatus.error));
+    await settle();
     expect(find.text('Connecting…'), findsOneWidget);
+    expect(find.byType(NotionDelayedSpinner), findsOneWidget);
+    // A tap on the problem syncs at once.
+    await tester.tap(find.text('Connecting…'));
+    expect(retries, 1);
     statuses.add(const SyncStatusUpdate(SyncStatus.processing));
-    await tester.pumpAndSettle();
+    await settle();
     expect(find.text('Updating…'), findsOneWidget);
+    expect(find.byType(NotionDelayedSpinner), findsOneWidget);
+    // Updating is no problem to retry.
+    await tester.tap(find.text('Updating…'), warnIfMissed: false);
+    expect(retries, 1);
     statuses.add(const SyncStatusUpdate(SyncStatus.finished));
+    await settle();
     await tester.pumpAndSettle();
     expect(find.text('Updating…'), findsNothing);
     // The header keeps its height (48 pt minimum) with or without status.

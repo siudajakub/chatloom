@@ -182,7 +182,10 @@ void main() {
     expect(find.text('online'), findsOneWidget);
     client.onSyncStatus.add(const SyncStatusUpdate(SyncStatus.error));
     currentStatus = const SyncStatusUpdate(SyncStatus.error);
-    statuses.add(currentStatus);
+    // Two failed syncs in a row: evidence, not a blip.
+    statuses
+      ..add(currentStatus)
+      ..add(currentStatus);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('conversation-online-dot')), findsNothing);
     expect(find.text('online'), findsNothing);

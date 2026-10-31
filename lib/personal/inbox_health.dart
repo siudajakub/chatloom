@@ -91,13 +91,15 @@ abstract final class HealthPriority {
   static const workerOutdated = 80;
 }
 
+/// The inbox notice of a connection problem. Only a lasting one is passed
+/// here (`ConnectionStatusMonitor.lasting`); before that the header line says
+/// it quietly. Shown compact (one row), so the message stays short.
 HealthIssue? connectionIssue(ConnectionPhase phase) => switch (phase) {
   ConnectionPhase.waitingForNetwork => const HealthIssue(
     source: HealthSource.connection,
     priority: HealthPriority.connection,
     title: 'No internet connection',
-    message:
-        'Showing loaded chats. New messages arrive when you’re back online.',
+    message: 'Showing loaded chats',
     actionLabel: 'Retry',
     action: HealthAction.retrySync,
     severity: HealthSeverity.neutral,
@@ -108,9 +110,7 @@ HealthIssue? connectionIssue(ConnectionPhase phase) => switch (phase) {
     source: HealthSource.connection,
     priority: HealthPriority.connection,
     title: 'Can’t reach the server',
-    message:
-        'Showing loaded chats. ChatLoom keeps retrying; new messages may be '
-        'delayed.',
+    message: 'Retrying automatically',
     actionLabel: 'Retry',
     action: HealthAction.retrySync,
     severity: HealthSeverity.neutral,
@@ -357,19 +357,31 @@ class HealthDismissal {
 
   /// True when every current issue was dismissed. A new or changed issue
   /// shows the row again; a resolved one never does.
-  bool covers(List<HealthIssue> issues) {
-    if (issues.isEmpty) return true;
+  bool covers(List<HealthIssue> issues) => visible(issues).isEmpty;
+
+  /// The issues to show, in order. A new or changed lasting problem brings
+  /// the row back with everything current except a passing problem hidden
+  /// in this session; a passing one (the connection) shows alone, without
+  /// the problems hidden before (they used to come back with it, as an
+  /// unexplained "1 more", and vanish with it).
+  List<HealthIssue> visible(List<HealthIssue> issues) {
+    if (issues.isEmpty) return const [];
     // A passing problem that went away may come back later and show again.
     _session.retainAll(issues.map((issue) => issue.signature));
     final lines = _stored.isEmpty ? const <String>[] : _stored.split('\n');
     final stored = lines.isNotEmpty && lines.first == fnv1a(account)
         ? lines.skip(1).toSet()
         : const <String>{};
-    return issues.every(
-      (issue) => issue.persistentDismissal
-          ? stored.contains(issue.signature)
-          : _session.contains(issue.signature),
+    bool hidden(HealthIssue issue) => issue.persistentDismissal
+        ? stored.contains(issue.signature)
+        : _session.contains(issue.signature);
+    final changed = issues.any(
+      (issue) => issue.persistentDismissal && !hidden(issue),
     );
+    return [
+      for (final issue in issues)
+        if (!hidden(issue) || (changed && issue.persistentDismissal)) issue,
+    ];
   }
 
   /// Dismisses [issues]; returns the new stored value.

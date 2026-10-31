@@ -11,6 +11,7 @@ class InboxHealthItem {
     required this.message,
     required this.actionLabel,
     this.tone = NotionCalloutTone.warning,
+    this.compact = false,
   });
 
   final IconData icon;
@@ -18,11 +19,16 @@ class InboxHealthItem {
   final String message;
   final String actionLabel;
   final NotionCalloutTone tone;
+
+  /// A problem that fixes itself (connection): one quiet row on top.
+  final bool compact;
 }
 
 /// The inbox's single status row: the most important problem with its
 /// one-tap fix, "N more" for the rest, and a dismiss that lasts until the
-/// problems change. Data and callbacks only.
+/// problems change. A [InboxHealthItem.compact] problem on top shows as one
+/// row without "N more" (the rest are back once it is solved). Data and
+/// callbacks only.
 class InboxHealthNotice extends StatelessWidget {
   final List<InboxHealthItem> items;
   final ValueChanged<int> onFix;
@@ -45,7 +51,7 @@ class InboxHealthNotice extends StatelessWidget {
   Widget build(BuildContext context) {
     if (items.isEmpty) return const SizedBox.shrink();
     final first = items.first;
-    final more = items.length - 1;
+    final more = first.compact ? 0 : items.length - 1;
     return NotionCallout(
       icon: first.icon,
       tone: first.tone,
@@ -58,6 +64,7 @@ class InboxHealthNotice extends StatelessWidget {
       onSecondary: more > 0 ? onDetails : null,
       onDismiss: onDismiss,
       dismissLabel: 'Hide until something changes',
+      compact: first.compact,
     );
   }
 }
