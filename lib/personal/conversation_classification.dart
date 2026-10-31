@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/personal/network_chat_actions.dart';
+import 'package:chatloom/personal/privacy.dart' show PersonalPrivacy;
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart' show personalRoomMarker;
 
 const _bridgeTypes = ['m.bridge', 'uk.half-shot.bridge', 'com.beeper.bridge'];
 const _roomFeaturesType = 'com.beeper.room_features';
+
+/// A bridge bot account on Beeper's bridge pseudo-server: the cloud bridges'
+/// `@whatsappbot:beeper.local` and the self-hosted `@sh-whatsappbot:…`.
+/// That server hosts no people; its remote-contact ghosts carry an
+/// underscore (`@sh-whatsapp_…`) and never match.
+final _beeperBridgeBot = RegExp(r'^@(sh-)?[a-z0-9]+bot:beeper\.local$');
 
 String? canonicalNetwork(Object? value) {
   if (value is! String) return null;
@@ -97,6 +105,31 @@ class ConversationClassifier {
   /// any loaded room (bridge info `bridgebot`, functional members).
   bool isServiceMember(String userId) => _serviceMembers.contains(userId);
 
+  /// Whether [userId] is a bot in [room]: a service member of any loaded
+  /// room, a member whose own join (sent by itself) says it is a bridge bot,
+  /// or a bot account of Beeper's bridge server. The flag on a member event
+  /// someone else sent proves nothing; neither does a name.
+  bool _isBot(Room room, String userId) {
+    if (_serviceMembers.contains(userId)) return true;
+    if (_beeperBridgeBot.hasMatch(userId)) return true;
+    final member = room.states[EventTypes.RoomMember]?[userId];
+    return member != null &&
+        member.stateKey == userId &&
+        member.senderId == userId &&
+        member.content['com.beeper.bridge.is_bridge_bot'] == true;
+  }
+
+  /// Whether [room]'s last event is something a person would see in the
+  /// chat: a message, sticker or call (the inbox preview types). Nothing, a
+  /// state or membership change, or the SDK's pending-refresh placeholder is
+  /// not.
+  static bool _showsEvent(Room room) {
+    final last = room.lastEvent;
+    return last != null &&
+        last.stateKey == null &&
+        room.client.roomPreviewLastEvents.contains(last.type);
+  }
+
   /// Whether this classifier already knows every service member [room]
   /// declares and no bridge started declaring room kinds since it was built,
   /// i.e. a changed [room] cannot change other rooms' results.
@@ -156,6 +189,8 @@ class ConversationClassifier {
       Room.bridgeBotsDeclaringRoomKinds(room.client).length,
       identityHashCode(room.getState('io.element.functional_members')),
       identityHashCode(room.getState(EventTypes.RoomCreate)),
+      identityHashCode(room.getState(personalRoomMarker)),
+      _showsEvent(room),
     ]);
   }
 
@@ -184,26 +219,36 @@ class ConversationClassifier {
       Membership.join,
       Membership.invite,
     ]);
+    final own = room.client.userID;
+    bool isBot(String id) => _isBot(room, id);
     final peers = participants
         .map((user) => user.id)
-        .where((id) => id != room.client.userID)
+        .where((id) => id != own)
         .toSet();
     final joined = room.summary.mJoinedMemberCount;
     final invited = room.summary.mInvitedMemberCount;
-    final complete =
-        joined != null &&
-        invited != null &&
-        participants.length == joined + invited;
+    final heroes = [
+      for (final id in room.summary.mHeroes ?? const <String>[])
+        if (id != own) id,
+    ];
     final direct = room.directChatMatrixID;
+    // Without member counts (some servers leave them out) a room is complete
+    // when it loads at most the account and one more member and its heroes
+    // and m.direct partner, at least one of them known, are all bots.
+    final complete = joined != null && invited != null
+        ? participants.length == joined + invited
+        : (joined ?? 0) <= 2 &&
+              participants.length <= 2 &&
+              (heroes.isNotEmpty || direct != null) &&
+              heroes.every(isBot) &&
+              (direct == null || isBot(direct));
     final botDirect =
         direct != null &&
-        _serviceMembers.contains(direct) &&
+        isBot(direct) &&
         joined == 2 &&
         (invited ?? 0) == 0 &&
-        peers.every(_serviceMembers.contains) &&
-        (room.summary.mHeroes ?? []).every(
-          (id) => id == room.client.userID || _serviceMembers.contains(id),
-        );
+        peers.every(isBot) &&
+        heroes.every(isBot);
     // A bridge portal (bridge info naming a remote chat, sent by its bot) is a
     // real conversation even when no remote member is loaded: Telegram Saved
     // Messages, a WhatsApp channel posting as the bot, a Signal DM before the
@@ -215,13 +260,42 @@ class ConversationClassifier {
           id is String &&
           id.trim().isNotEmpty;
     });
+    // A plain Matrix room the account is alone in (the other side left, a
+    // dead bridge's leftover) with nothing to read shows as "Empty chat".
+    // Members are lazily loaded, so the server's joined count decides who is
+    // still there (an invited count left out means none). Without it, a
+    // loaded leave must show someone was there, and every hero and the
+    // m.direct partner must be known to have left: a bare room proves
+    // nothing. A message, sticker or call keeps it a chat; an invite, the
+    // journal and spaces are never orphans.
+    bool gone(StrippedStateEvent? member) {
+      final membership = member?.content['membership'];
+      return membership == 'leave' || membership == 'ban';
+    }
+
+    bool left(String id) => gone(room.getState(EventTypes.RoomMember, id));
+    final orphan =
+        infos.isEmpty &&
+        room.membership == Membership.join &&
+        !room.isSpace &&
+        !PersonalPrivacy.isJournal(room) &&
+        peers.isEmpty &&
+        (joined != null
+            ? joined <= 1 && (invited ?? 0) == 0
+            : (invited ?? 0) == 0 &&
+                  (room.states[EventTypes.RoomMember]?.values.any(
+                        (member) => member.stateKey != own && gone(member),
+                      ) ??
+                      false) &&
+                  heroes.every(left) &&
+                  (direct == null || left(direct))) &&
+        !_showsEvent(room);
     final technical =
         !room.isSpace &&
         !portal &&
-        ((complete &&
-                peers.isNotEmpty &&
-                peers.every(_serviceMembers.contains)) ||
-            botDirect);
+        ((complete && peers.isNotEmpty && peers.every(isBot)) ||
+            botDirect ||
+            orphan);
     return ConversationClassification(
       networks.length == 1
           ? networks.single

@@ -12,7 +12,8 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
-import 'package:personal_core/personal_core.dart' show PersonGroup;
+import 'package:personal_core/personal_core.dart'
+    show PersonGroup, personalRoomMarker, personalSchemaVersion;
 
 const _owner = '@owner:example.invalid';
 
@@ -387,6 +388,53 @@ Room _portal(
   return room;
 }
 
+/// A plain Matrix room (no bridge info) with the owner and [members]
+/// (user id → membership). Each member event is sent by the member itself
+/// unless [senders] names someone else; [extra] adds member event content.
+/// Counts and heroes are left out unless given, as some servers do.
+Room _matrixRoom(
+  _Client client,
+  String name, {
+  Map<String, String> members = const {},
+  Map<String, Map<String, dynamic>> extra = const {},
+  Map<String, String> senders = const {},
+  int? joined,
+  int? invited,
+  List<String>? heroes,
+  Membership membership = Membership.join,
+}) {
+  final room = Room(
+    id: '!$name:example.invalid',
+    client: client,
+    membership: membership,
+  );
+  client.rooms.add(room);
+  final all = {_owner: membership.name, ...members};
+  for (final MapEntry(key: user, value: state) in all.entries) {
+    _setState(
+      room,
+      EventTypes.RoomMember,
+      {'membership': state, ...?extra[user]},
+      sender: senders[user] ?? user,
+      key: user,
+    );
+  }
+  room.summary
+    ..mJoinedMemberCount = joined
+    ..mInvitedMemberCount = invited
+    ..mHeroes = heroes;
+  return room;
+}
+
+Event _textFrom(Room room, String sender) => Event(
+  room: room,
+  type: EventTypes.Message,
+  eventId: '\$text-${room.id}',
+  senderId: sender,
+  originServerTs: DateTime.utc(2026, 10, 21, 12),
+  content: {'msgtype': MessageTypes.Text, 'body': 'Fictional'},
+);
+
 void main() {
   late _Client client;
   late PersonalClient personal;
@@ -591,6 +639,271 @@ void main() {
       ).rooms(client.rooms, filter: InboxFilter.technical),
       [control],
     );
+  });
+
+  group('Matrix rooms that are no conversation go to Technical', () {
+    const person = '@x:matrix.org';
+
+    ConversationClassification kind(Room room) =>
+        ConversationClassifier(client.rooms).classify(room);
+
+    /// Technical only, never on the main list or under Matrix.
+    void expectTechnical(Room room) {
+      final classification = kind(room);
+      expect(classification.technical, isTrue);
+      expect(classification.network, 'matrix');
+      final projection = InboxProjection(personal);
+      expect(
+        projection.rooms(client.rooms, filter: InboxFilter.technical),
+        contains(room),
+      );
+      expect(projection.rooms(client.rooms), isNot(contains(room)));
+    }
+
+    void expectChat(Room room) {
+      final classification = kind(room);
+      expect(classification.technical, isFalse);
+      expect(classification.network, 'matrix');
+      expect(InboxProjection(personal).rooms(client.rooms), contains(room));
+    }
+
+    test('DM with a Beeper bridge bot that bridges no loaded portal', () {
+      for (final (i, bot) in [
+        '@whatsappbot:beeper.local', // Beeper cloud bridge, replaced
+        '@sh-signalbot:beeper.local', // self-hosted, no portal yet
+      ].indexed) {
+        final control = _matrixRoom(
+          client,
+          'control-$i',
+          members: {bot: 'join'},
+          joined: 2,
+          invited: 0,
+          heroes: [bot],
+        );
+        expectTechnical(control);
+      }
+    });
+
+    test('a bot account elsewhere needs its own bridge-bot join', () {
+      const bot = '@legacybot:example.invalid';
+      final control = _matrixRoom(
+        client,
+        'flagged',
+        members: {bot: 'join'},
+        extra: {
+          bot: {'com.beeper.bridge.is_bridge_bot': true},
+        },
+        joined: 2,
+        invited: 0,
+        heroes: [bot],
+      );
+      expectTechnical(control);
+      // The flag on someone's member event sent by another, non-bot account.
+      final forged = _matrixRoom(
+        client,
+        'forged-flag',
+        members: {person: 'join'},
+        extra: {
+          person: {'com.beeper.bridge.is_bridge_bot': true},
+        },
+        senders: {person: '@mallory:example.invalid'},
+        joined: 2,
+        invited: 0,
+        heroes: [person],
+      );
+      expectChat(forged);
+      // A look-alike bot id outside Beeper's bridge server proves nothing.
+      final lookalike = _matrixRoom(
+        client,
+        'lookalike',
+        members: {'@whatsappbot:matrix.org': 'join'},
+        joined: 2,
+        invited: 0,
+        heroes: ['@whatsappbot:matrix.org'],
+      );
+      expectChat(lookalike);
+    });
+
+    test('bot DM without member counts', () {
+      const bot = '@sh-telegrambot:example.invalid'; // bridges the portals
+      final control = _matrixRoom(
+        client,
+        'uncounted',
+        members: {bot: 'join'},
+        heroes: [bot],
+      );
+      client.direct[bot] = [control.id];
+      expectTechnical(control);
+      // A person among the heroes keeps it a chat. (Classifier only from
+      // here: the person's member event is not loaded, and a display name
+      // would ask the store for it.)
+      final mixed = _matrixRoom(
+        client,
+        'uncounted-mixed',
+        members: {bot: 'join'},
+        heroes: [bot, person],
+      );
+      expect(kind(mixed).technical, isFalse);
+      // So does a person as the m.direct partner.
+      final partner = _matrixRoom(
+        client,
+        'uncounted-partner',
+        members: {bot: 'join'},
+        heroes: [bot],
+      );
+      client.direct[person] = [partner.id];
+      expect(kind(partner).technical, isFalse);
+    });
+
+    test('a room the account is alone in with nothing to read', () {
+      final empty = _matrixRoom(
+        client,
+        'orphan',
+        members: {person: 'leave'},
+        joined: 1,
+        invited: 0,
+        heroes: [],
+      );
+      expect(empty.lastEvent, isNull);
+      expectTechnical(empty);
+      // The other side's leave as the last event is no message either.
+      final left = _matrixRoom(
+        client,
+        'orphan-left',
+        members: {person: 'leave'},
+        joined: 1,
+        invited: 0,
+        heroes: [person],
+      );
+      left.lastEvent = Event(
+        room: left,
+        type: EventTypes.RoomMember,
+        stateKey: person,
+        eventId: '\$leave',
+        senderId: person,
+        originServerTs: DateTime.utc(2026, 10, 21),
+        content: {'membership': 'leave'},
+      );
+      expectTechnical(left);
+      // A server that leaves out a zero invited count.
+      final noInvitedCount = _matrixRoom(
+        client,
+        'orphan-joined-count-only',
+        members: {person: 'leave'},
+        joined: 1,
+        heroes: [],
+      );
+      expectTechnical(noInvitedCount);
+      // Without counts only members known to have left make it an orphan.
+      final uncounted = _matrixRoom(
+        client,
+        'orphan-uncounted',
+        members: {person: 'leave'},
+        heroes: [person],
+      );
+      expectTechnical(uncounted);
+      // A bare room (nothing loaded, no counts) proves nothing.
+      final bare = _matrixRoom(client, 'bare');
+      expectChat(bare);
+    });
+
+    test('an orphan with a message stays a Matrix chat', () {
+      final room = _matrixRoom(
+        client,
+        'orphan-with-text',
+        members: {person: 'leave'},
+        joined: 1,
+        invited: 0,
+        heroes: [person],
+      );
+      final classifier = ConversationClassifier(client.rooms);
+      expect(classifier.classify(room).technical, isTrue);
+      room.lastEvent = _textFrom(room, person);
+      // The memo notices the new last event.
+      expect(classifier.classify(room).technical, isFalse);
+      expectChat(room);
+    });
+
+    test('a person on Matrix stays a Matrix chat', () {
+      final dm = _matrixRoom(
+        client,
+        'person',
+        members: {person: 'join'},
+        joined: 2,
+        invited: 0,
+        heroes: [person],
+      );
+      client.direct[person] = [dm.id];
+      expectChat(dm);
+      // A DM the account started, still waiting for the person to accept.
+      final pending = _matrixRoom(
+        client,
+        'person-invited',
+        members: {person: 'invite'},
+        joined: 1,
+        invited: 1,
+        heroes: [person],
+      );
+      expectChat(pending);
+      // Classifier only from here: the person's member event is not loaded
+      // (lazy loading), and a display name would ask the store for it.
+      // No message so far, but the counts still show the person.
+      final lazy = _matrixRoom(
+        client,
+        'person-lazy',
+        joined: 2,
+        invited: 0,
+        heroes: [person],
+      );
+      expect(kind(lazy).technical, isFalse);
+      expect(kind(lazy).network, 'matrix');
+      // A pending DM without counts and without the invite loaded.
+      final pendingUncounted = _matrixRoom(
+        client,
+        'person-invited-uncounted',
+        heroes: [person],
+      );
+      client.direct[person] = [dm.id, pendingUncounted.id];
+      expect(kind(pendingUncounted).technical, isFalse);
+    });
+
+    test('invites, the journal and portals are never orphans', () {
+      final invite = _matrixRoom(
+        client,
+        'invite',
+        membership: Membership.invite,
+      );
+      expect(kind(invite).technical, isFalse);
+      final journal = _matrixRoom(client, 'journal', joined: 1, invited: 0);
+      _setState(journal, personalRoomMarker, {
+        'schema': personalSchemaVersion,
+      }, sender: _owner);
+      expect(kind(journal).technical, isFalse);
+      // A portal everyone else left, with no message, bridged by a Beeper
+      // bot: still the network's conversation.
+      final portal = _portal(
+        client,
+        const _Case(
+          'whatsapp',
+          'abandoned',
+          _Kind.dm,
+          contacts: 0,
+          isGroup: false,
+        ),
+        900,
+        bot: '@sh-whatsappbot:beeper.local',
+      );
+      portal.lastEvent = null;
+      portal.summary
+        ..mJoinedMemberCount = null
+        ..mInvitedMemberCount = null;
+      final classification = kind(portal);
+      expect(classification.technical, isFalse);
+      expect(classification.network, 'whatsapp');
+      for (final c in _cases) {
+        expect(kind(rooms[c]!).technical, isFalse, reason: '$c');
+      }
+    });
   });
 
   group('evidence that a bridge declares room kinds', () {
