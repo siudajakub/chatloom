@@ -804,10 +804,9 @@ class TelegramRoundPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         require(audio.requestAudioFocus(focus, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
         val recorder = MediaRecorder()
         capture.recorder = recorder
-        // VOICE_COMMUNICATION engages the platform noise suppressor/AGC/AEC chain;
-        // CAMCORDER is tuned for video and keeps the ambient sound otherwise.
-        recorder.setAudioSource(if (capture.profile.noiseReduction) MediaRecorder.AudioSource.VOICE_COMMUNICATION
-            else MediaRecorder.AudioSource.CAMCORDER)
+        // DEFAULT (Telegram's plain microphone) unless noise reduction asks for the
+        // VOICE_COMMUNICATION noise suppressor/AGC/AEC chain.
+        recorder.setAudioSource(capture.profile.audioSource)
         recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
         recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
         recorder.setOutputFile(capture.raw.path)

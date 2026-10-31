@@ -15,12 +15,13 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
+import android.media.MediaRecorder
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
-/** Missing quality flags keep the previous behaviour: no stabilization, plain camcorder audio. */
+/** Missing quality flags keep the previous behaviour: no stabilization, plain microphone audio. */
 data class RoundProfile(val side: Int, val maxBytes: Long, val maxDurationMs: Int, val videoBitrate: Int, val audioBitrate: Int,
                         val stabilize: Boolean = false, val noiseReduction: Boolean = false,
                         val highQuality: Boolean = false) {
@@ -49,6 +50,15 @@ data class RoundProfile(val side: Int, val maxBytes: Long, val maxDurationMs: In
     }
 
     val recorderAudioBitrate: Int get() = audioBitrate
+
+    /**
+     * MediaRecorder audio source. Telegram's InstantCameraView records rounds from
+     * `AudioSource.DEFAULT`, the plain microphone without call processing. The opt-in
+     * noise reduction takes the voice-communication path (platform NS/AGC/AEC), which
+     * is cleaner in noise but narrower, like a call.
+     */
+    val audioSource: Int get() =
+        if (noiseReduction) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.DEFAULT
 
     companion object {
         const val MIN_VIDEO_BITRATE = 100_000

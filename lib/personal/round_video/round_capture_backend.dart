@@ -28,11 +28,12 @@ class RoundCaptureProfile {
   final bool stabilize;
 
   /// Voice-communication microphone path (platform noise suppression/AGC).
+  /// Off: the plain microphone (`AudioSource.DEFAULT`), as Telegram rounds.
   final bool noiseReduction;
   final bool highQuality;
 
   /// Defaults keep the previous native behaviour for callers that predate the
-  /// quality settings: no stabilization request, plain camcorder microphone.
+  /// quality settings: no stabilization request, plain microphone.
   const RoundCaptureProfile({
     required this.maxBytes,
     this.side = 384,
@@ -56,7 +57,7 @@ class RoundCaptureProfile {
     required int audioBitrate,
     bool highQuality = false,
     bool stabilize = true,
-    bool noiseReduction = true,
+    bool noiseReduction = false,
   }) {
     int even(int value) => value - value % 2;
     final standardSide = even(

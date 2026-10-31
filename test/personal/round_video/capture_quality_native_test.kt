@@ -73,5 +73,9 @@ fun main() {
     rejected("excessive audio bitrate") { RoundProfile(384, 25_000_000, 60000, 1_000_000, 256_001).validate() }
     rejected("odd side even in HQ") { RoundProfile(481, 25_000_000, 60000, 2_000_000, 96000, highQuality = true).validate() }
     verify(RoundProfile.AUDIO_SAMPLE_RATE == 48_000, "48 kHz recorder audio")
-    println("PASS native quality: $checks assertions; stream size, AE fps range, downsample step, profile/bitrate limits")
+    // Telegram's InstantCameraView: AudioSource.DEFAULT (0); noise reduction opts into
+    // VOICE_COMMUNICATION (7). Never CAMCORDER (5).
+    verify(legacy.audioSource == 0, "plain microphone by default: ${legacy.audioSource}")
+    verify(hq.audioSource == 7, "noise reduction uses the call path: ${hq.audioSource}")
+    println("PASS native quality: $checks assertions; stream size, AE fps range, downsample step, profile/bitrate limits, audio source")
 }

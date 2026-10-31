@@ -15,7 +15,7 @@ RoundCaptureProfile bridge({
   int audioBitrate = 64000,
   bool highQuality = false,
   bool stabilize = true,
-  bool noiseReduction = true,
+  bool noiseReduction = false,
 }) => RoundCaptureProfile.fromBridge(
   maxBytes: 25000000,
   maxSide: maxSide,
@@ -38,8 +38,23 @@ void main() {
       expect(profile.audioBitrate, 64000);
       expect(profile.highQuality, isFalse);
       expect(profile.stabilize, isTrue);
-      expect(profile.noiseReduction, isTrue);
+      expect(profile.noiseReduction, isFalse);
       expect(profile.isValid, isTrue);
+    });
+
+    test('rounds record from the plain microphone unless asked', () {
+      // Telegram's InstantCameraView uses AudioSource.DEFAULT; the call
+      // path (VOICE_COMMUNICATION) is the opt-in noise reduction.
+      final plain = RoundCaptureProfile.fromBridge(
+        maxBytes: 25000000,
+        maxSide: 640,
+        recommendedSide: 384,
+        maxDurationMs: 60000,
+        videoBitrate: 1000000,
+        audioBitrate: 64000,
+      );
+      expect(plain.noiseReduction, isFalse);
+      expect(bridge(noiseReduction: true).noiseReduction, isTrue);
     });
 
     test('high quality uses 480 px, 2 Mbps and 96 kbps', () {
