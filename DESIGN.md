@@ -740,7 +740,7 @@ round the wheel. Presets now include indigo, amber and cyan.
 Chats adds link preview cards on/off, the quick reaction bar (a JSON list in
 `quickReactions`, filtered per network like the defaults) and the actions of
 the two inbox swipe directions (`inboxSwipeLeft`/`Right`: archive,
-read/unread, pin/unpin, nothing).
+read/unread, pin/unpin, move down/up, nothing).
 
 ## Composer panel: stickers and GIFs
 

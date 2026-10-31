@@ -215,17 +215,19 @@ class InboxProjection {
 
   String metadataKey(Room room) => 'org:${entityFor(room)}';
 
-  /// Private synced key of "Move down" on an unanswered chat: the time of
-  /// the newest message it covered.
-  static String movedDownKey(String entity) => 'unanswered-moved:$entity';
+  /// Private synced key of "Move down" on an unread chat: `{until: ms}`,
+  /// the inbox time ([InboxRecord.lastActivity]) of the newest message it
+  /// covered. (`unanswered-moved:` belonged to the retired unanswered rule
+  /// and is no longer read.)
+  static String movedDownKey(String entity) => 'moved-down:$entity';
 
-  /// Whether the user moved [entity] down while [latest] was its newest
-  /// message; a newer message from the other side raises it again.
-  bool movedDown(String entity, Event? latest) {
+  /// Whether the user moved [entity] down while [activity] was its inbox
+  /// time; a newer message raises it again.
+  bool movedDown(String entity, DateTime? activity) {
     final until = personal.values[movedDownKey(entity)]?['until'];
-    return latest != null &&
+    return activity != null &&
         until is int &&
-        latest.originServerTs.millisecondsSinceEpoch <= until;
+        activity.millisecondsSinceEpoch <= until;
   }
 
   ConversationMetadata metadataFor(Room room) =>
@@ -524,12 +526,7 @@ class InboxProjection {
                 personal.conflicts.containsKey('draft:${r.id}'),
           ),
       unanswered: unanswered,
-      awaitingReply:
-          unanswered &&
-          (group != null || !kinds.single.isGroup) &&
-          !(group == null && kinds.single.messageRequest) &&
-          !metadata.muted &&
-          !movedDown(entity, latest),
+      movedDown: movedDown(entity, lastActivity),
       lastActivity: lastActivity,
     );
     return (record, representative);

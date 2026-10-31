@@ -71,7 +71,8 @@ import '../../widgets/matrix.dart';
 enum ActiveFilter { allChats, unread, groups, messages }
 
 /// The long-press menu of an inbox row, in order (Telegram, Messenger):
-/// Mark as read/unread, Pin/Unpin, Mute…/Unmute, Archive/Unarchive, Merge…
+/// Mark as read/unread, Pin/Unpin, Move down/up (an unread chat only),
+/// Mute…/Unmute, Archive/Unarchive, Merge…
 /// (Unmerge on a merged person), Ignore/Restore. Notification settings are
 /// the last row of the Mute menu. Disabled entries explain themselves by
 /// staying visible (private sync not ready, a change awaiting
@@ -91,6 +92,10 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
   final ignored = projection.placementFor(room) == ChatPlacement.ignored;
   final unread = inboxSources(owner, room).any(personalRoomUnread);
   final canWrite = joined && canEditChatPreferences(owner, 'org:$entity');
+  // Only a chat the unread rule raises (unread, unmuted, unpinned) can move
+  // down; a moved one offers to move back up until its next message.
+  final movable = unread && !pinned && !metadata.muted;
+  final movedDown = movable && projection.recordFor(room).movedDown;
   return [
     unread
         ? ChatMenuItem(
@@ -111,6 +116,20 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
       pinned ? unpinLabel : pinLabel,
       enabled: joined && NotionMetadataActions.canEdit(owner, entity),
     ),
+    if (movable)
+      movedDown
+          ? ChatMenuItem(
+              ChatMenuAction.moveUp,
+              Icons.vertical_align_top,
+              'Move up',
+              enabled: joined && owner.ready,
+            )
+          : ChatMenuItem(
+              ChatMenuAction.moveDown,
+              Icons.low_priority,
+              'Move down',
+              enabled: joined && owner.ready,
+            ),
     metadata.muted
         ? ChatMenuItem(
             ChatMenuAction.unmute,
@@ -217,28 +236,45 @@ Future<void> markInboxRowRead(
   }
 }
 
-/// The newest preview event of [room]'s inbox row across its sources.
-Event? latestInboxEvent(PersonalClient owner, Room room) {
-  Event? latest;
-  for (final source in inboxSources(owner, room)) {
-    final event = source.lastEvent;
-    if (event != null &&
-        (latest == null ||
-            event.originServerTs.isAfter(latest.originServerTs))) {
-      latest = event;
-    }
-  }
-  return latest;
+/// "Move down" of an unread inbox row: it sorts by time among the read
+/// chats until a message newer than [activity] (its current inbox time)
+/// arrives. Private synced metadata only: the chat stays unread and no
+/// receipt or read marker is sent.
+Future<void> moveInboxRowDown(
+  PersonalClient owner,
+  String entity,
+  DateTime activity,
+) => owner.put(InboxProjection.movedDownKey(entity), {
+  'until': activity.millisecondsSinceEpoch,
+});
+
+/// Takes [entity] back into the unread-on-top group ("Move up"). An
+/// `until` of 0 is written instead of a delete because a staged delete
+/// shows only after the worker acknowledges it.
+Future<void> moveInboxRowUp(PersonalClient owner, String entity) =>
+    owner.put(InboxProjection.movedDownKey(entity), {'until': 0});
+
+/// Forgets a "Move down" of [entity] when the user marks it unread or pins
+/// it. Best effort: without private sync the next message raises it anyway.
+Future<void> clearInboxMovedDown(PersonalClient owner, String entity) async {
+  final until = owner.values[InboxProjection.movedDownKey(entity)]?['until'];
+  if (until is! int || until <= 0 || !owner.ready) return;
+  try {
+    await moveInboxRowUp(owner, entity);
+  } catch (_) {}
 }
 
 /// Marks [room]'s inbox row unread (Telegram's dot): the manual-unread flag
-/// on one source (a merged person's default chat), never a receipt.
-Future<void> markInboxRowUnread(PersonalClient owner, Room room) {
-  final group = InboxProjection(owner).groupFor(room);
+/// on one source (a merged person's default chat), never a receipt. A
+/// "Move down" of the row is forgotten, so it rises with the unread chats.
+Future<void> markInboxRowUnread(PersonalClient owner, Room room) async {
+  final projection = InboxProjection(owner);
+  final group = projection.groupFor(room);
   final target =
       (group == null ? null : owner.client.getRoomById(group.defaultRoomId)) ??
       room;
-  return target.markUnread(true);
+  await target.markUnread(true);
+  await clearInboxMovedDown(owner, projection.entityFor(room));
 }
 
 /// Human end of a timed mute for the confirmation ("for 1 hour").
@@ -741,33 +777,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         applyRowAction(room, action, owner: owner, account: account);
         return;
       case ChatMenuAction.pin:
-        final pinned = InboxProjection(owner).metadataFor(room).isPinned;
-        _runChange(
-          owner,
-          account,
-          () => NotionMetadataActions.setPinned(owner, entity(), !pinned),
-          failure: pinned
-              ? 'Couldn’t unpin the chat. Check private sync and try again.'
-              : 'Couldn’t pin the chat. Check private sync and try again.',
-        );
-        return;
       case ChatMenuAction.moveDown:
-        final target = entity();
-        final latest = latestInboxEvent(owner, room);
-        if (latest == null) return;
-        final key = InboxProjection.movedDownKey(target);
-        final previous = owner.values[key]?['until'];
-        _runChange(
-          owner,
-          account,
-          () => owner.put(key, {
-            'until': latest.originServerTs.millisecondsSinceEpoch,
-          }),
-          failure:
-              'Couldn’t move the chat down. Check private sync and try again.',
-          done: 'Moved down until the next message',
-          undo: () => owner.put(key, {'until': previous is int ? previous : 0}),
-        );
+      case ChatMenuAction.moveUp:
+        applyRowAction(room, action, owner: owner, account: account);
         return;
       case ChatMenuAction.mute:
         final choice = await showChatActionsMenu<MuteChoice>(
@@ -965,30 +977,73 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
               : null,
         );
       case ChatMenuAction.pin:
-        // A swipe toggles; the menu has its own pin handling.
+        // Toggles; pinning also forgets a "Move down".
         final projection = InboxProjection(personal);
         final pinned = projection.metadataFor(room).isPinned;
         final target = projection.entityFor(room);
         _runChange(
           personal,
           key,
-          () => NotionMetadataActions.setPinned(personal, target, !pinned),
+          () async {
+            await NotionMetadataActions.setPinned(personal, target, !pinned);
+            if (!pinned) await clearInboxMovedDown(personal, target);
+          },
           failure: pinned
               ? 'Couldn’t unpin the chat. Check private sync and try again.'
               : 'Couldn’t pin the chat. Check private sync and try again.',
+        );
+      case ChatMenuAction.moveDown:
+        // The row glides down to its place among the read chats
+        // (NotionListMotion); it keeps its unread count and highlight.
+        final projection = InboxProjection(personal);
+        final target = projection.entityFor(room);
+        final activity = _latestActivity(
+          projection.recordFor(room).lastActivity,
+          inbox.index.recordFor(room)?.lastActivity,
+        );
+        if (activity == null) return;
+        final previous =
+            personal.values[InboxProjection.movedDownKey(target)]?['until'];
+        _runChange(
+          personal,
+          key,
+          () => moveInboxRowDown(personal, target, activity),
+          failure:
+              'Couldn’t move the chat down. Check private sync and try again.',
+          done: 'Moved down until the next message',
+          undo: () => previous is int && previous > 0
+              ? personal.put(InboxProjection.movedDownKey(target), {
+                  'until': previous,
+                })
+              : moveInboxRowUp(personal, target),
+        );
+      case ChatMenuAction.moveUp:
+        final target = InboxProjection(personal).entityFor(room);
+        _runChange(
+          personal,
+          key,
+          () => moveInboxRowUp(personal, target),
+          failure:
+              'Couldn’t move the chat up. Check private sync and try again.',
         );
       default:
         return;
     }
   }
 
+  /// The later of two inbox times of one row: the fresh record and the
+  /// shown index may disagree while a technical event keeps the shown time,
+  /// and "Move down" must cover both.
+  static DateTime? _latestActivity(DateTime? a, DateTime? b) =>
+      a == null || (b != null && b.isAfter(a)) ? b : a;
+
   /// The swipe sides of an inbox row (UX-14, Telegram). By default a swipe
   /// towards the start archives (unarchives in the Archive view) and one
   /// towards the end marks read or unread; Settings → Chats chooses either
-  /// side's action (archive, read/unread, pin/unpin or nothing). Null
-  /// without the setting, for invites and left chats. The menu's rules
-  /// decide at release, so a swipe never does what its menu row would
-  /// refuse.
+  /// side's action (archive, read/unread, pin/unpin, move down/up or
+  /// nothing). Null without the setting, for invites and left chats. The
+  /// menu's rules decide at release, so a swipe never does what its menu
+  /// row would refuse.
   ({NotionSwipeActionSide? toStart, NotionSwipeActionSide? toEnd})?
   rowSwipeSides(Room room, InboxProjection projection) {
     if (!AppSettings.inboxSwipeActions.value ||
@@ -1007,6 +1062,12 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     final archived = metadata.archived;
     final pinned = metadata.isPinned;
     final ignored = projection.placementFor(room) == ChatPlacement.ignored;
+    // Move down/up applies only where the unread rule raises the row; the
+    // shown record says whether it is moved down (no per-row recompute).
+    final movable =
+        !pinned && !metadata.muted && sources.any(personalRoomUnread);
+    final movedDown =
+        movable && (inbox.index.recordFor(room)?.movedDown ?? false);
     void commit(ChatMenuAction action, String refused) {
       if (!mounted) return;
       final item = chatMenuItems(
@@ -1064,6 +1125,19 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
                   'Pinning needs private sync. Try again in a moment.',
                 ),
               ),
+      InboxSwipeChoice.moveDown =>
+        movable
+            ? NotionSwipeActionSide(
+                icon: movedDown
+                    ? Icons.vertical_align_top
+                    : Icons.low_priority,
+                label: movedDown ? 'Move up' : 'Move down',
+                onCommit: () => commit(
+                  movedDown ? ChatMenuAction.moveUp : ChatMenuAction.moveDown,
+                  'Moving needs private sync. Try again in a moment.',
+                ),
+              )
+            : null,
       InboxSwipeChoice.none => null,
     };
 

@@ -2,7 +2,12 @@
 // Offline fixtures: fictional bridged rooms, no account, store or network.
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
-import 'package:chatloom/pages/chat_list/chat_list.dart' show chatMenuItems;
+import 'package:chatloom/pages/chat_list/chat_list.dart'
+    show
+        chatMenuItems,
+        clearInboxMovedDown,
+        moveInboxRowDown,
+        moveInboxRowUp;
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -517,6 +522,178 @@ void main() {
       'Until I unmute',
       'Notification settings…',
     ]);
+  });
+
+  test('Move down: an unread chat sorts among read ones until its next '
+      'message, still unread', () async {
+    List<String> labels(Room room) => [
+      for (final item in chatMenuItems(
+        personal,
+        room,
+        pinLabel: 'Pin',
+        unpinLabel: 'Unpin',
+      ))
+        item.label,
+    ];
+    List<Room> order() => InboxProjection(
+      personal,
+    ).rooms(client.rooms).where((r) => r != group).toList();
+    InboxRecord record(Room room) => InboxProjection(personal).recordFor(room);
+    // Read chats offer no Move down.
+    expect(labels(signal), isNot(contains('Move down')));
+    expect(order(), [whatsapp, telegram, signal]);
+    signal.notificationCount = 2;
+    expect(order(), [signal, whatsapp, telegram]);
+    expect(labels(signal), [
+      'Mark as read',
+      'Pin',
+      'Move down',
+      'Mute…',
+      'Archive',
+      'Merge…',
+      'Ignore chat',
+    ]);
+    expect(
+      chatMenuItems(personal, signal, pinLabel: 'Pin', unpinLabel: 'Unpin')
+          .singleWhere((i) => i.action == ChatMenuAction.moveDown)
+          .enabled,
+      isTrue,
+    );
+
+    await moveInboxRowDown(personal, signal.id, record(signal).lastActivity!);
+    // One private synced write; no receipt, the chat stays unread.
+    expect(personal.writes, ['put ${InboxProjection.movedDownKey(signal.id)}']);
+    expect(personal.values[InboxProjection.movedDownKey(signal.id)], {
+      'until': DateTime.utc(2026, 10, 19, 12, 1).millisecondsSinceEpoch,
+    });
+    expect(order(), [whatsapp, telegram, signal]);
+    expect(record(signal).unread, isTrue);
+    expect(record(signal).unreadCount, 2);
+    expect(record(signal).movedDown, isTrue);
+    expect(signal.notificationCount, 2);
+    expect(labels(signal), contains('Move up'));
+    expect(labels(signal), isNot(contains('Move down')));
+
+    // Move up takes it back without touching the read state.
+    await moveInboxRowUp(personal, signal.id);
+    expect(order(), [signal, whatsapp, telegram]);
+    expect(labels(signal), contains('Move down'));
+    await moveInboxRowDown(personal, signal.id, record(signal).lastActivity!);
+    expect(order(), [whatsapp, telegram, signal]);
+
+    // A newer message raises it again.
+    signal.lastEvent = Event(
+      room: signal,
+      type: EventTypes.Message,
+      eventId: '\$newer-sig',
+      senderId: _peer,
+      originServerTs: DateTime.utc(2026, 10, 19, 12, 5),
+      content: {'msgtype': MessageTypes.Text, 'body': 'Fictional'},
+    );
+    expect(order(), [signal, whatsapp, telegram]);
+    expect(record(signal).movedDown, isFalse);
+    expect(labels(signal), contains('Move down'));
+  });
+
+  test('Move down is only for chats the unread rule raises', () async {
+    List<String> labels(Room room) => [
+      for (final item in chatMenuItems(
+        personal,
+        room,
+        pinLabel: 'Pin',
+        unpinLabel: 'Unpin',
+      ))
+        item.label,
+    ];
+    signal.notificationCount = 1;
+    // Pinned: pins sort on their own.
+    personal.values['org:${signal.id}'] = {'pinOrder': 0};
+    expect(labels(signal), isNot(contains('Move down')));
+    // Muted: never raised.
+    personal.values['org:${signal.id}'] = {'muted': true};
+    expect(labels(signal), isNot(contains('Move down')));
+    personal.values.remove('org:${signal.id}');
+    expect(labels(signal), contains('Move down'));
+    // Without private sync the row stays visible but disabled.
+    personal.available = false;
+    expect(
+      chatMenuItems(personal, signal, pinLabel: 'Pin', unpinLabel: 'Unpin')
+          .singleWhere((i) => i.action == ChatMenuAction.moveDown)
+          .enabled,
+      isFalse,
+    );
+    personal.available = true;
+
+    // Pinning or marking unread forgets a Move down; an inert value is
+    // left alone.
+    await clearInboxMovedDown(personal, signal.id);
+    expect(personal.writes, isEmpty);
+    final activity = InboxProjection(personal).recordFor(signal).lastActivity!;
+    await moveInboxRowDown(personal, signal.id, activity);
+    expect(InboxProjection(personal).recordFor(signal).movedDown, isTrue);
+    await clearInboxMovedDown(personal, signal.id);
+    expect(InboxProjection(personal).recordFor(signal).movedDown, isFalse);
+    expect(personal.values[InboxProjection.movedDownKey(signal.id)], {
+      'until': 0,
+    });
+    personal.writes.clear();
+    await clearInboxMovedDown(personal, signal.id);
+    expect(personal.writes, isEmpty);
+  });
+
+  test('Move down covers a merged person until any of its chats gets a '
+      'newer message', () async {
+    signal.lastEvent = Event(
+      room: signal,
+      type: EventTypes.Message,
+      eventId: '\$later-sig',
+      senderId: _peer,
+      originServerTs: DateTime.utc(2026, 10, 19, 12, 4),
+      content: {'msgtype': MessageTypes.Text, 'body': 'Fictional'},
+    );
+    personal.values['person:p'] = PersonGroup(
+      id: 'p',
+      name: 'Fictional person',
+      members: [personal.ref(whatsapp), personal.ref(telegram)],
+      defaultRoomId: whatsapp.id,
+    ).toJson().cast<String, dynamic>();
+    List<Room> order() => InboxProjection(
+      personal,
+    ).rooms(client.rooms).where((r) => r != group).toList();
+    telegram.notificationCount = 1;
+    expect(order(), [whatsapp, signal]);
+    final projection = InboxProjection(personal);
+    expect(projection.entityFor(telegram), 'person:p');
+    // The menu of the person's row offers it for the whole person.
+    expect(
+      chatMenuItems(
+        personal,
+        whatsapp,
+        pinLabel: 'Pin',
+        unpinLabel: 'Unpin',
+      ).map((i) => i.action),
+      contains(ChatMenuAction.moveDown),
+    );
+    await moveInboxRowDown(
+      personal,
+      'person:p',
+      projection.recordFor(whatsapp).lastActivity!,
+    );
+    expect(personal.writes, [
+      'put ${InboxProjection.movedDownKey('person:p')}',
+    ]);
+    expect(order(), [signal, whatsapp]);
+    expect(InboxProjection(personal).recordFor(telegram).unread, isTrue);
+    // A newer message in the other source chat raises the person.
+    telegram.lastEvent = Event(
+      room: telegram,
+      type: EventTypes.Message,
+      eventId: '\$newer-tg',
+      senderId: _peer,
+      originServerTs: DateTime.utc(2026, 10, 19, 12, 6),
+      content: {'msgtype': MessageTypes.Text, 'body': 'Fictional'},
+    );
+    expect(order(), [whatsapp, signal]);
   });
 
   test('a timed mute limits notifications until it ends', () {

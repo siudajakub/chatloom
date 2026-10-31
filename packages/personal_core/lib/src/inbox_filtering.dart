@@ -38,9 +38,10 @@ class InboxRecord {
   final bool hasDraft;
   final bool unanswered;
 
-  /// An unanswered one-to-one chat the user has not moved down. It no longer
-  /// changes the order: unpinned chats sort by latest activity only.
-  final bool awaitingReply;
+  /// The user moved this unread chat down ("Move down") until its next
+  /// message: it keeps its unread state but sorts by time among the read
+  /// chats instead of above them.
+  final bool movedDown;
   final DateTime? lastActivity;
   final ConversationMetadata metadata;
   InboxRecord({
@@ -58,7 +59,7 @@ class InboxRecord {
     this.unreadCount = 0,
     this.hasDraft = false,
     this.unanswered = false,
-    this.awaitingReply = false,
+    this.movedDown = false,
     this.lastActivity,
   }) : networks = Set.unmodifiable(networks),
        labelKeys = Set.unmodifiable(labelKeys);
@@ -145,6 +146,7 @@ List<InboxRecord> projectInbox(
   return List.unmodifiable(result);
 }
 
-/// Unread, unmuted chats sit above the other unpinned chats; inside each
-/// band the newest message comes first.
-bool _raised(InboxRecord record) => record.unread && !record.metadata.muted;
+/// Unread, unmuted chats sit above the other unpinned chats unless the user
+/// moved them down; inside each band the newest message comes first.
+bool _raised(InboxRecord record) =>
+    record.unread && !record.metadata.muted && !record.movedDown;

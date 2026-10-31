@@ -265,6 +265,10 @@ String syncEntityTitle(
         '${_personName(personal, entity.substring('person-prefs:'.length))}';
   }
   if (entity.startsWith('merge-dismissed:')) return 'Merge suggestion';
+  if (entity.startsWith('moved-down:')) {
+    return 'Unread chat moved down · '
+        '${_subject(personal, entity.substring('moved-down:'.length))}';
+  }
   if (entity.startsWith('unanswered-moved:')) {
     return 'Unanswered chat moved down · '
         '${_subject(personal, entity.substring('unanswered-moved:'.length))}';

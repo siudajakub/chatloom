@@ -157,7 +157,7 @@ enum AppSettings<T> {
   inboxSwipeActions<bool>('pl.personal.inbox.swipe_actions', true),
 
   /// What a swipe towards the start (left) and the end (right) does:
-  /// `InboxSwipeChoice.name` (archive, read, pin, none).
+  /// `InboxSwipeChoice.name` (archive, read, pin, moveDown, none).
   inboxSwipeLeft<String>('pl.personal.inbox.swipe_left', 'archive'),
   inboxSwipeRight<String>('pl.personal.inbox.swipe_right', 'read'),
   /// Chat header line "online" / "last seen …" from received Matrix

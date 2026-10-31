@@ -238,6 +238,11 @@ void main() {
       InboxSwipeChoice.parse('bogus', InboxSwipeChoice.read),
       InboxSwipeChoice.read,
     );
+    expect(
+      InboxSwipeChoice.parse('moveDown', InboxSwipeChoice.read),
+      InboxSwipeChoice.moveDown,
+    );
+    expect(InboxSwipeChoice.moveDown.label, 'Move down or up');
   });
 
   group('Effects', () {

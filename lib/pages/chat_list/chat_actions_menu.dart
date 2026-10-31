@@ -9,6 +9,7 @@ enum InboxSwipeChoice {
   archive('Archive'),
   read('Mark as read or unread'),
   pin('Pin or unpin'),
+  moveDown('Move down or up'),
   none('Nothing');
 
   final String label;
@@ -27,7 +28,11 @@ enum ChatMenuAction {
   read,
   unread,
   pin,
+
+  /// An unread chat leaves the unread-on-top group until its next message
+  /// (it stays unread); [moveUp] takes it back.
   moveDown,
+  moveUp,
   mute,
   unmute,
   archive,

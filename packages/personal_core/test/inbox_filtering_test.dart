@@ -12,7 +12,7 @@ InboxRecord fixture(
   bool unread = false,
   bool draft = false,
   bool unanswered = false,
-  bool awaiting = false,
+  bool movedDown = false,
   Iterable<String> labels = const [],
   String name = 'Synthetic person',
   String network = 'WhatsApp',
@@ -33,7 +33,7 @@ InboxRecord fixture(
   unread: unread,
   hasDraft: draft,
   unanswered: unanswered,
-  awaitingReply: awaiting,
+  movedDown: movedDown,
   lastActivity: activity ?? now,
 );
 
@@ -186,6 +186,44 @@ void main() {
       'newest',
       'read',
     ]);
+  });
+  test('a moved-down unread chat sorts by time among the read ones', () {
+    final items = [
+      fixture('newest', activity: now),
+      fixture(
+        'moved',
+        unread: true,
+        movedDown: true,
+        activity: now.subtract(const Duration(days: 2)),
+      ),
+      fixture('read', activity: now.subtract(const Duration(days: 1))),
+      fixture(
+        'unread',
+        unread: true,
+        activity: now.subtract(const Duration(days: 3)),
+      ),
+      fixture(
+        'pinned',
+        pin: 0,
+        movedDown: true,
+        unread: true,
+        activity: now.subtract(const Duration(days: 9)),
+      ),
+    ];
+    final result = projectInbox(items);
+    expect(result.map((r) => r.entityId), [
+      'pinned',
+      'unread',
+      'newest',
+      'read',
+      'moved',
+    ]);
+    // Still unread: the Unread view keeps it, below the raised ones.
+    expect(result.firstWhere((r) => r.entityId == 'moved').unread, isTrue);
+    expect(
+      projectInbox(items, filter: InboxFilter.unread).map((r) => r.entityId),
+      ['pinned', 'unread', 'moved'],
+    );
   });
   test('people and groups never duplicate one another', () {
     final items = [fixture('person'), fixture('network-group', group: true)];
