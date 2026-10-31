@@ -33,6 +33,7 @@ void main() {
     WidgetTester tester, {
     bool rounds = true,
     bool bluetooth = true,
+    bool effects = true,
   }) async {
     tester.view.physicalSize = const Size(800, 2400);
     tester.view.devicePixelRatio = 1;
@@ -43,6 +44,7 @@ void main() {
         home: SettingsMediaPage(
           showRoundOptions: rounds,
           showBluetoothOption: bluetooth,
+          showEffectOptions: effects,
         ),
       ),
     );
@@ -189,6 +191,67 @@ void main() {
       find.byKey(ValueKey(AppSettings.personalVoiceHighQuality.key)),
       findsOneWidget,
     );
+  });
+
+  final effectRows = [
+    AppSettings.audioRecordingNoiseSuppress,
+    AppSettings.audioRecordingAutoGain,
+    AppSettings.audioRecordingEchoCancel,
+    AppSettings.personalVoiceIsolation,
+    AppSettings.personalRoundStabilization,
+    AppSettings.personalRoundNoiseReduction,
+  ];
+  const noEffects =
+      'macOS records from the system input device without effects.';
+
+  testWidgets('Android shows the capture effects and no macOS caption', (
+    tester,
+  ) async {
+    await mount(tester);
+    for (final setting in effectRows) {
+      expect(find.byKey(ValueKey(setting.key)), findsOneWidget);
+    }
+    expect(find.text(noEffects), findsNothing);
+    expect(find.text('480 px at about 2 Mbps, larger files'), findsOneWidget);
+  });
+
+  testWidgets('macOS: no effect rows, a caption, round High quality only', (
+    tester,
+  ) async {
+    await mount(tester, bluetooth: false, effects: false);
+    for (final setting in effectRows) {
+      expect(
+        find.byKey(ValueKey(setting.key)),
+        findsNothing,
+        reason: setting.key,
+      );
+    }
+    expect(find.text('Strong noise reduction'), findsNothing);
+    // The caption sits right under the voice note's High quality row.
+    final quality = find.byKey(
+      ValueKey(AppSettings.personalVoiceHighQuality.key),
+    );
+    final caption = find.text(noEffects);
+    expect(caption, findsOneWidget);
+    expect(
+      tester.getTopLeft(caption).dy,
+      greaterThanOrEqualTo(tester.getBottomLeft(quality).dy),
+    );
+    expect(
+      tester.getTopLeft(caption).dy,
+      lessThan(tester.getTopLeft(find.text('Round videos')).dy),
+    );
+    // Rounds on macOS honour only the picture size.
+    expect(find.text('Round videos'), findsOneWidget);
+    expect(
+      find.text('Larger picture (up to 480 px), larger files'),
+      findsOneWidget,
+    );
+    expect(find.text('480 px at about 2 Mbps, larger files'), findsNothing);
+    await tap(tester, AppSettings.personalRoundHighQuality);
+    expect(AppSettings.personalRoundHighQuality.value, isTrue);
+    await tap(tester, AppSettings.personalVoiceHighQuality);
+    expect(AppSettings.personalVoiceHighQuality.value, isTrue);
   });
 
   testWidgets('round section is hidden where round capture is unavailable', (
