@@ -254,21 +254,69 @@ DisappearingTimerState disappearingTimerState(Object? value) {
 bool disappearingTimerLimits(Object? value) =>
     disappearingTimerState(value) != DisappearingTimerState.off;
 
+/// mautrix bridgev2's view-limited media (`event.BeeperViewLimitedMedia`):
+/// `{"type": "...", "count": n, "time": ms}`, every field optional.
+const beeperViewLimitedKey = 'com.beeper.view_limited';
+
+/// ChatLoom's Instagram bridge fork marks the view-once ("raven") photos and
+/// videos it bridges: `{"version": 1, "view_mode": 0|1}`. The media itself is
+/// ordinary `m.image`/`m.video`; nothing is ever reported back to Instagram,
+/// so the sender is never told it was opened. Deliberately not
+/// [beeperViewLimitedKey], which opts into bridgev2's view-limited flows.
+const instagramRavenKey = 'pl.personal.chat.instagram.raven';
+
+/// How an Instagram sender limited a view-once photo or video
+/// (`view_mode` 0 and 1; 2, "keep in chat", is never marked).
+enum InstagramRavenMode { viewOnce, allowReplay }
+
+/// The [instagramRavenKey] marker of [content]: `present` is false without
+/// the key; `mode` is null when the key is there but malformed.
+({bool present, InstagramRavenMode? mode}) instagramRavenOf(Map content) {
+  if (!content.containsKey(instagramRavenKey)) {
+    return (present: false, mode: null);
+  }
+  final value = content[instagramRavenKey];
+  final mode = value is Map && value['version'] == 1
+      ? switch (value['view_mode']) {
+          0 => InstagramRavenMode.viewOnce,
+          1 => InstagramRavenMode.allowReplay,
+          _ => null,
+        }
+      : null;
+  return (present: true, mode: mode);
+}
+
+/// True when [value] has the shape of bridgev2's `com.beeper.view_limited`
+/// object (a string type, non-negative integer count and time).
+bool _beeperViewLimitedShape(Object? value) {
+  if (value is! Map) return false;
+  final type = value['type'], count = value['count'], time = value['time'];
+  return (type == null || type is String) &&
+      (count == null || (count is int && count >= 0)) &&
+      (time == null || (time is int && time >= 0));
+}
+
 /// Guard before SDK download/decrypt, preload, thumbnail or cache access.
 /// Limited media stays a placeholder until a proven lazy-consumption transport.
 class RoundMediaPolicy {
   final bool isTimeLimited, protectedContent, malformed, transferAllowed;
+
+  /// Instagram view-once media (see [instagramRavenKey]): downloaded, cached
+  /// and shown like other media, but never saved, shared, forwarded or
+  /// transcribed from ChatLoom.
+  final InstagramRavenMode? viewOnceMode;
   const RoundMediaPolicy({
     this.isTimeLimited = false,
     this.protectedContent = false,
     this.malformed = false,
     this.transferAllowed = true,
+    this.viewOnceMode,
   });
   bool get canPlay => transferAllowed && !isTimeLimited && !malformed;
   bool get canPersist => canPlay && !protectedContent;
-  bool get canExport => canPersist;
-  bool get canForward => canPersist;
-  bool get canTranscribe => canPersist;
+  bool get canExport => canPersist && viewOnceMode == null;
+  bool get canForward => canExport;
+  bool get canTranscribe => canExport;
   String? get placeholderReason => malformed
       ? 'invalidProtectiveMetadata'
       : !transferAllowed || isTimeLimited
@@ -276,6 +324,11 @@ class RoundMediaPolicy {
       : null;
   static RoundMediaPolicy fromContent(Map<String, dynamic> content) {
     var limited = false, protected = false, malformed = false, allowed = true;
+    final raven = instagramRavenOf(content);
+    if (raven.present && raven.mode == null) {
+      limited = true;
+      malformed = true;
+    }
     final maps = <Map>[content];
     if (content['info'] is Map) maps.add(content['info'] as Map);
     for (final root in List<Map>.from(maps)) {
@@ -303,12 +356,16 @@ class RoundMediaPolicy {
         'view_once',
         'fi.mau.telegram.view_once',
         'com.beeper.view_once',
-        'com.beeper.view_limited',
+        beeperViewLimitedKey,
       ]) {
         if (!map.containsKey(key)) continue;
-        if (map[key] is bool)
+        if (map[key] is bool) {
           limited |= map[key] == true;
-        else {
+        } else if (key == beeperViewLimitedKey &&
+            _beeperViewLimitedShape(map[key])) {
+          // bridgev2 sends an object, not a flag: limited, not malformed.
+          limited = true;
+        } else {
           limited = true;
           malformed = true;
         }
@@ -375,6 +432,7 @@ class RoundMediaPolicy {
       protectedContent: protected,
       malformed: malformed,
       transferAllowed: allowed,
+      viewOnceMode: raven.mode,
     );
   }
 }

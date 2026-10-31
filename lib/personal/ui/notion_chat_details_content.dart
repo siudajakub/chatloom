@@ -13,6 +13,7 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/conversation_content_controller.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_page.dart';
+import 'package:chatloom/personal/view_once_openings.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -28,7 +29,8 @@ import 'package:personal_core/personal_core.dart'
 bool _thumbnailAllowed(Event event) =>
     event.showThumbnail &&
     event.hasThumbnail &&
-    RoundMediaPolicy.fromContent(event.content).canPlay;
+    RoundMediaPolicy.fromContent(event.content).canPlay &&
+    !ViewOnceOpenings.isSealed(event);
 
 Widget _thumbnailPlaceholder(BuildContext context) => ColoredBox(
   color: Theme.of(context).colorScheme.surfaceContainerHigh,
@@ -105,6 +107,8 @@ List<(String, List<T>)> groupSharedByMonth<T>(
 @visibleForTesting
 bool sharedOpensInViewer(Event event, {bool? supportsVideo}) {
   if (event.redacted || !event.showThumbnail) return false;
+  // Unopened view-once media opens from its own "Tap to view" in the chat.
+  if (ViewOnceOpenings.isSealed(event)) return false;
   if (event.messageType == MessageTypes.Image) return true;
   if (event.messageType != MessageTypes.Video) return false;
   return (supportsVideo ?? PlatformInfos.supportsVideoPlayer) &&

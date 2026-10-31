@@ -7,6 +7,7 @@ import 'package:chatloom/pages/image_viewer/image_viewer_view.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
+import 'package:chatloom/personal/view_once_openings.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/share_scaffold_dialog.dart';
@@ -237,11 +238,15 @@ class ImageViewerController extends State<ImageViewer>
         widget.mediaEvents ??
         widget.timeline?.events
             .where(
-              (event) => {
-                MessageTypes.Image,
-                MessageTypes.Sticker,
-                if (PlatformInfos.supportsVideoPlayer) MessageTypes.Video,
-              }.contains(event.messageType),
+              (event) =>
+                  {
+                    MessageTypes.Image,
+                    MessageTypes.Sticker,
+                    if (PlatformInfos.supportsVideoPlayer) MessageTypes.Video,
+                  }.contains(event.messageType) &&
+                  // View-once media opens only from its own "Tap to view".
+                  (event.eventId == widget.event.eventId ||
+                      !ViewOnceOpenings.isSealed(event)),
             )
             .toList()
             .reversed

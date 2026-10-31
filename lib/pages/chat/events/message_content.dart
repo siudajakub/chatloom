@@ -42,6 +42,7 @@ import 'link_preview.dart';
 import 'map_bubble.dart';
 import 'message_download_content.dart';
 import 'sticker_event.dart';
+import 'view_once_message.dart';
 
 class MessageContent extends StatelessWidget {
   final Event event;
@@ -126,6 +127,19 @@ class MessageContent extends StatelessWidget {
     // cannot decrypt looks and recovers the same way in each.
     if (isUndecryptable(event)) {
       return UndecryptableMessage(event, textColor: textColor);
+    }
+    // Instagram view-once photo/video: "Tap to view" until opened here.
+    final viewOnce = mediaPolicy.viewOnceMode;
+    if (viewOnce != null &&
+        {MessageTypes.Image, MessageTypes.Video}.contains(event.messageType)) {
+      return ViewOnceMessage(
+        event,
+        mode: viewOnce,
+        timeline: timeline,
+        borderRadius: borderRadius,
+        textColor: textColor,
+        linkColor: linkColor,
+      );
     }
     // MSC4274 gallery: one message, many photos/videos/files.
     final gallery = GalleryContent.of(event);

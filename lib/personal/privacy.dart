@@ -181,7 +181,7 @@ abstract final class PersonalPrivacy {
     client.authorizeAttachmentAccess = (event, thumbnail) async {
       if (!RoundMediaPolicy.fromContent(event.content).canPlay) {
         throw const PersonalCapabilityUnavailable(
-          'This media can only be opened in Telegram.',
+          'This media can only be opened in the app it was sent from.',
         );
       }
       if (RoundVideoDescriptor.fromContent(event.content) != null &&

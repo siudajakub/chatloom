@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/events/deleted_message.dart';
 import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/message_preview.dart';
+import 'package:chatloom/personal/view_once_openings.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
@@ -58,8 +59,10 @@ class ReplyContent extends StatelessWidget {
         _thumbnailTypes.contains(display.messageType);
     // A video without a thumbnail has nothing to download: a static glyph
     // instead of a loader that never resolves.
+    // Unopened view-once media shows nothing of itself, here neither.
     final thumbnail =
         media &&
+        !ViewOnceOpenings.isSealed(display) &&
         (display.hasThumbnail || display.messageType == MessageTypes.Image);
     // Part of the bubble: a double tap reacts, a single tap jumps.
     return ConversationMessageChromeTap(

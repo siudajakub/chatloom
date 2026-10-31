@@ -8,6 +8,8 @@ import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart'
+    show beeperViewLimitedKey, instagramRavenKey;
 
 /// Network-side chat actions of mautrix bridgev2 (`event/beeper.go`,
 /// `bridgev2/portal.go` `handleMatrixDeleteChat` / `handleMatrixBlockUser` /
@@ -460,7 +462,9 @@ String? pinStaysInChatLoom(Room room) =>
     isBridgedRoom(room) ? bridgedNetworkLabel(room) ?? 'The network' : null;
 
 /// View-once or timed media from the network (`com.beeper.view_limited`,
-/// bridgev2 `view_limited_media`, BR-10): shown, but never saved, shared or
-/// forwarded from ChatLoom.
+/// bridgev2 `view_limited_media`, BR-10, or an Instagram view-once photo or
+/// video, [instagramRavenKey]): shown, but never saved, shared or forwarded
+/// from ChatLoom.
 bool isViewLimited(Event event) =>
-    event.content['com.beeper.view_limited'] is Map;
+    event.content[beeperViewLimitedKey] is Map ||
+    event.content.containsKey(instagramRavenKey);

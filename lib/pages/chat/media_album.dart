@@ -62,7 +62,8 @@ abstract final class MediaAlbums {
       if (InlineLoopVideo.applies(event)) return false;
     }
     final policy = RoundMediaPolicy.fromContent(event.content);
-    return policy.canPlay;
+    // View-once media is its own "Tap to view" bubble, never a grid tile.
+    return policy.canPlay && policy.viewOnceMode == null;
   }
 
   /// One sender's neighbours within [maxGap], or of one ChatLoom multi-pick

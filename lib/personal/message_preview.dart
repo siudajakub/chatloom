@@ -12,7 +12,8 @@
 /// personalPreview(event, own: true, group: true);   // "You: Photo: caption"
 /// personalPreviewLabel(event);              // label only, never a prefix
 /// ```
-/// Rules: sticker → "Sticker"; image → "Photo" / "Photo: caption"; round
+/// Rules: sticker → "Sticker"; image → "Photo" / "Photo: caption"; Instagram
+/// view-once image/video → "📷 View-once photo" / "📹 View-once video"; round
 /// video note → "Video message"; GIF → "GIF"; other video → "Video" /
 /// "Video: caption"; voice → "Voice message"; other audio → "Audio"; file →
 /// "File" / "File: caption"; location → "Location"; poll → "Poll: question";
@@ -35,7 +36,8 @@ import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:matrix/matrix.dart';
-import 'package:personal_core/personal_core.dart' show RoundVideoDescriptor;
+import 'package:personal_core/personal_core.dart'
+    show RoundVideoDescriptor, instagramRavenOf;
 
 const _pollStartTypes = {'org.matrix.msc3381.poll.start', 'm.poll.start'};
 const _defaultI18n = MatrixDefaultLocalizations();
@@ -105,8 +107,10 @@ String? _label(Event event) {
     case MessageTypes.Sticker:
       return 'Sticker';
     case MessageTypes.Image:
+      if (instagramRavenOf(event.content).present) return '📷 View-once photo';
       return _withCaption('Photo', event);
     case MessageTypes.Video:
+      if (instagramRavenOf(event.content).present) return '📹 View-once video';
       if (RoundVideoDescriptor.fromContent(event.content) != null) {
         return 'Video message';
       }

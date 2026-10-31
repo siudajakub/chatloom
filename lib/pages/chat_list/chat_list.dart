@@ -43,6 +43,7 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_search_page.dart';
 import 'package:chatloom/personal/ui/person_sheets.dart'
     show showPersonNotificationsSheet;
+import 'package:chatloom/personal/view_once_openings.dart';
 import 'package:chatloom/ui/notion/metadata_actions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/error_reporter.dart';
@@ -663,6 +664,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
           KeptMessages.instance.load(client);
           // Where incognito chats reopen, ready before the first tap.
           SeenPositions.instance.load(client);
+          // Instagram view-once media already opened on this device.
+          ViewOnceOpenings.instance.load(client);
           if (mounted && Matrix.of(context).client == client) setState(() {});
         })
         .catchError((Object error, StackTrace stack) {

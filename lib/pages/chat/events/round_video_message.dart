@@ -1113,7 +1113,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
           'Message availability could not be verified. Reopen the conversation.';
     } else if (!policy.canPlay) {
       blockedReason = policy.isTimeLimited
-          ? 'View-once or timed messages are not supported yet.'
+          ? 'This media can only be opened in the app it was sent from.'
           : policy.protectedContent
           ? 'Protected content is not supported yet.'
           : 'This message cannot be opened safely.';

@@ -47,6 +47,7 @@ export 'notion_swipe_action.dart';
 export 'notion_switchers.dart';
 export 'notion_synced_transcript.dart';
 export 'notion_tokens.dart';
+export 'notion_view_once.dart';
 export 'notion_wallpapers.dart';
 
 /// Uses the active theme so the existing light/system preference remains usable.
