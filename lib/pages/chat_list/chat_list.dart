@@ -32,6 +32,7 @@ import 'package:chatloom/personal/personal_search_page.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/push_rule_mirror.dart';
 import 'package:chatloom/personal/read_targets.dart';
+import 'package:chatloom/personal/seen_positions.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/ui/merge_picker_sheet.dart';
@@ -622,6 +623,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         .then((_) {
           // Messages removed for you (FX-16), from the store just opened.
           HiddenMessages.instance.load(client);
+          // Where incognito chats reopen, ready before the first tap.
+          SeenPositions.instance.load(client);
           if (mounted && Matrix.of(context).client == client) setState(() {});
         })
         .catchError((Object error, StackTrace stack) {

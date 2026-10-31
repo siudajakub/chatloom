@@ -219,6 +219,134 @@ void main() {
       expect(room.readMarkers, isNotEmpty);
       await _unmount(tester);
     });
+
+    testWidgets('incognito reopens at the newest message this device showed', (
+      tester,
+    ) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.binding.setSurfaceSize(const Size(400, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      expect(AppSettings.personalIncognito.value, isTrue);
+      await _mount(tester, client, ChatPage(roomId: room.id));
+      var controller = tester.state<ChatController>(
+        find.byType(ChatPageWithRoom),
+      );
+      expect(room.loads, [null, r'$busy-9']);
+      // Down to the newest message (the jump button: unread, then newest).
+      for (var i = 0; i < 3 && controller.jumpButtonVisible.value; i++) {
+        final down = controller.scrollDown();
+        await tester.pumpAndSettle();
+        await down;
+      }
+      expect(controller.timeline!.allowNewEvent, isTrue);
+      expect(controller.jumpButtonVisible.value, isFalse);
+      controller.setReadMarker();
+      await tester.pumpAndSettle();
+      await _unmount(tester);
+      // Incognito sent nothing: the server's marker stays on $busy-9.
+      expect(room.readMarkers, isEmpty);
+      expect(room.fullyRead, r'$busy-9');
+
+      room.loads.clear();
+      await _mount(tester, client, ChatPage(roomId: room.id));
+      controller = tester.state<ChatController>(find.byType(ChatPageWithRoom));
+      // Opens on the live timeline at the bottom: no context, no jump.
+      expect(room.loads, [null]);
+      expect(controller.readMarkerEventId, isEmpty);
+      expect(controller.timeline!.allowNewEvent, isTrue);
+      expect(controller.jumpButtonVisible.value, isFalse);
+      expect(find.textContaining('unread message'), findsNothing);
+
+      // A new message after that: the divider sits above it.
+      room.message(r'$busy-60', 'Fictional message 60', minute: 60);
+      room.lastEvent = room.sourceEvents.first;
+      await _unmount(tester);
+      room.loads.clear();
+      await _mount(tester, client, ChatPage(roomId: room.id));
+      controller = tester.state<ChatController>(find.byType(ChatPageWithRoom));
+      expect(room.loads, [null]);
+      expect(controller.readMarkerEventId, r'$busy-59');
+      expect(find.text('1 unread message'), findsOneWidget);
+      expect(controller.timeline!.allowNewEvent, isTrue);
+      expect(room.readMarkers, isEmpty);
+      await _unmount(tester);
+    });
+
+    testWidgets('a context with nothing unread from others is not kept', (
+      tester,
+    ) async {
+      // Anna replied in a thread to the last message read: the read marker
+      // is the thread root, everything after it in the chat is from the
+      // owner (and the thread reply has no row in the chat).
+      final owner = _BusyRoom(client, '!thread:example.invalid');
+      for (var i = 0; i < 60; i++) {
+        owner.message(
+          '\$own-$i',
+          'Fictional message $i',
+          outgoing: i >= 10,
+          minute: i % 60,
+        );
+      }
+      owner.message(
+        r'$thread-reply',
+        'Fictional thread reply',
+        minute: 59,
+        content: {
+          'msgtype': MessageTypes.Text,
+          'body': 'Fictional thread reply',
+          'm.relates_to': {
+            'rel_type': RelationshipTypes.thread,
+            'event_id': r'$own-9',
+          },
+        },
+      );
+      owner.lastEvent = owner.sourceEvents.first;
+      owner.roomAccountData['m.fully_read'] = BasicEvent(
+        type: 'm.fully_read',
+        content: {'event_id': r'$own-9'},
+      );
+      await _mount(tester, client, ChatPage(roomId: owner.id));
+      final controller = tester.state<ChatController>(
+        find.byType(ChatPageWithRoom),
+      );
+      // The context was tried, then the live timeline loaded again.
+      expect(owner.loads, [null, r'$own-9', null]);
+      expect(controller.timeline!.allowNewEvent, isTrue);
+      expect(controller.jumpButtonVisible.value, isFalse);
+      expect(controller.timelineHold.value, isFalse);
+      expect(controller.scrollUpBannerEventId, isNull);
+      expect(find.text('Fictional message 59'), findsOneWidget);
+      await _unmount(tester);
+    });
+
+    testWidgets('editing an own message keeps the live timeline', (
+      tester,
+    ) async {
+      final own = room.message(
+        r'$busy-60',
+        'Fictional own message',
+        outgoing: true,
+        minute: 59,
+      );
+      room.lastEvent = own;
+      await _mount(tester, client, ChatPage(roomId: room.id));
+      final controller = tester.state<ChatController>(
+        find.byType(ChatPageWithRoom),
+      );
+      expect(room.loads, [null]);
+      final timeline = controller.timeline;
+      controller.editEventAction(
+        controller.timeline!.events.firstWhere((e) => e.eventId == own.eventId),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.editEvent?.eventId, own.eventId);
+      // No reload at the read marker ($busy-9): same timeline, no jump.
+      expect(room.loads, [null]);
+      expect(controller.timeline, same(timeline));
+      expect(controller.timeline!.allowNewEvent, isTrue);
+      expect(controller.jumpButtonVisible.value, isFalse);
+      await _unmount(tester);
+    });
   });
 
   group('FX-10 merged chat', () {

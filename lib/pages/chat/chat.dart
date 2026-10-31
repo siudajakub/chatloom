@@ -54,6 +54,7 @@ import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
 import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
+import 'package:chatloom/personal/seen_positions.dart';
 import 'package:chatloom/personal/send_warmup.dart';
 import 'package:chatloom/personal/text_split.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
@@ -801,9 +802,16 @@ class ChatController extends State<ChatPageWithRoom>
         room.lastEvent?.relationshipType == RelationshipTypes.thread
         ? room.lastEvent?.relationshipEventId
         : null;
-    readMarkerEventId = room.hasNewMessages
+    final serverMarker = room.hasNewMessages
         ? lastEventThreadId ?? room.fullyRead
         : '';
+    // Incognito never moves the read marker: open at what is new to this
+    // device instead (a positioning hint only; nothing is sent).
+    SeenPositions.instance.load(widget.room.client);
+    readMarkerEventId =
+        serverMarker.isEmpty || PersonalPrivacy.policy.allowAutomaticRead
+        ? serverMarker
+        : SeenPositions.instance.openMarker(room, serverMarker);
     WidgetsBinding.instance.addObserver(this);
     final preload = widget.timeline == null
         ? ChatTimelinePreload.take(widget.room)
@@ -955,25 +963,43 @@ class ChatController extends State<ChatPageWithRoom>
 
   /// Replaces the timeline by the history around the read marker (the
   /// event-context path of [scrollToEventId]) while the list stays hidden.
-  /// Returns the marker's row index in it, or -1 when the context did not
-  /// load (the live timeline is kept then).
+  /// Returns the read marker's row in it, with unread rows to open at below
+  /// it; -1 when the context did not load (the live timeline is kept then).
+  /// A context with nothing to open at (no unread message from others after
+  /// the marker, only one row after it, or no row for it) is never kept:
+  /// the live timeline loads again, still hidden, and 0 is returned.
   Future<int> _loadAroundReadMarker() async {
     timelineHold.value = true;
-    setTimelineState(() {
-      timeline?.cancelSubscriptions();
-      timeline = null;
-      _scrolledUp = false;
-      _loadTimeline(eventContextId: readMarkerEventId);
-    });
+    _swapTimeline(eventContextId: readMarkerEventId);
+    await loadTimelineFuture;
+    final rows = conversationEvents;
+    if (!mounted || timeline == null || rows == null) return -1;
+    final markerRow = conversationReadMarkerRow(
+      rows,
+      readMarkerEventId,
+      timelineEvents: timeline!.events,
+    );
+    if (timeline!.allowNewEvent) return markerRow;
+    final firstUnread = _firstUnreadRow();
+    if (firstUnread > 0) return markerRow;
+    // Unread messages right after the marker: "First unread" still goes
+    // there (around the marker, as a jump does).
+    final offerFirstUnread = firstUnread == 0;
+    _swapTimeline();
     await loadTimelineFuture;
     if (!mounted || timeline == null) return -1;
-    return timeline!.events
-        .filterByVisibleInGui(
-          exceptionEventId: readMarkerEventId,
-          threadId: activeThreadId,
-        )
-        .indexWhere((e) => e.eventId == readMarkerEventId);
+    if (offerFirstUnread) _showScrollUpMaterialBanner(readMarkerEventId);
+    return 0;
   }
+
+  /// Drops the timeline and loads the live one, or the history around
+  /// [eventContextId].
+  void _swapTimeline({String? eventContextId}) => setTimelineState(() {
+    timeline?.cancelSubscriptions();
+    timeline = null;
+    _scrolledUp = false;
+    _loadTimeline(eventContextId: eventContextId);
+  });
 
   /// The oldest unread row (above which "N unread messages" sits), or -1.
   int _firstUnreadRow() {
@@ -1425,6 +1451,7 @@ class ChatController extends State<ChatPageWithRoom>
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused) {
       if (mounted) _flushDraft();
+      SeenPositions.instance.flush(widget.room.client);
       return;
     }
     if (state != AppLifecycleState.resumed) return;
@@ -1537,6 +1564,20 @@ class ChatController extends State<ChatPageWithRoom>
         }
         personalSeenEventId = seenEventId;
         PersonalPrivacy.observe(seenRoom, seenEventId);
+        // Where an incognito reopen starts (device-local, never sent).
+        final live = this.timeline;
+        if (!PersonalPrivacy.policy.allowAutomaticRead &&
+            activeThreadId == null &&
+            live != null &&
+            live.allowNewEvent) {
+          SeenPositions.instance.record(
+            seenRoom,
+            seenEventId,
+            originServerTs: live.events
+                .firstWhereOrNull((e) => e.eventId == seenEventId)
+                ?.originServerTs,
+          );
+        }
       });
     }
     if (!PersonalPrivacy.policy.allowAutomaticRead) return;
@@ -1572,6 +1613,7 @@ class ChatController extends State<ChatPageWithRoom>
     timeline?.cancelSubscriptions();
     timeline = null;
     _flushDraft();
+    SeenPositions.instance.flush(widget.room.client);
     typingCoolDown?.cancel();
     typingTimeout?.cancel();
     sendController.dispose();
@@ -1594,6 +1636,9 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void setSendingClient(Client c) {
+    // Editing an own message passes its (usually the same) account: the
+    // timeline and the position in it stay.
+    if (identical(c, sendingClient)) return;
     // first cancel typing with the old sending client
     if (currentlyTyping) {
       // no need to have the setting typing to false be blocking
@@ -1604,8 +1649,9 @@ class ChatController extends State<ChatPageWithRoom>
     }
     setState(() => sendingClient = c);
     // then cancel the old timeline
-    // fixes bug with read reciepts and quick switching
-    _loadTimeline(eventContextId: room.fullyRead);
+    // fixes bug with read reciepts and quick switching. The other account's
+    // live timeline: its newest messages, not a jump to its read marker.
+    _loadTimeline();
 
     setTimelineState(() {});
   }
