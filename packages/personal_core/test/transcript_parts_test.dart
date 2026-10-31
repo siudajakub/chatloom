@@ -290,6 +290,27 @@ void main() {
       );
       expect(r.transcripts[_entity]!.text, 'krótko');
     });
+
+    test('timestamps never outlive the text they were made for', () async {
+      final r = _replica(_Store());
+      final timing = {
+        'v': 1,
+        'segments': [0, 90, 0, 6],
+      };
+      await r.acceptResult(
+        _op('timed', 'transcript.result', {
+          ..._job(3, 'done', text: 'krótko'),
+          'timing': timing,
+        }),
+      );
+      expect(r.transcripts[_entity]!.timing, timing);
+      // Transcribed again by a worker that writes no timestamps.
+      await r.acceptResult(
+        _op('again', 'transcript.result', _job(5, 'done', text: 'inaczej')),
+      );
+      expect(r.transcripts[_entity]!.text, 'inaczej');
+      expect(r.transcripts[_entity]!.timing, isNull);
+    });
   });
 
   group('seen markers', () {

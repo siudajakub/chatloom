@@ -997,6 +997,15 @@ class PersonalReplica {
     if (job != null && payload != null && !payload.containsKey('textParts')) {
       job.remove('textParts');
     }
+    // Timestamps belong to the text of the same result: a new text without
+    // them (an older worker transcribing again, an erased text) must not
+    // inherit old ones. A result without text (a refusal) keeps them.
+    if (job != null &&
+        payload != null &&
+        payload.containsKey('text') &&
+        !payload.containsKey('timing')) {
+      job.remove('timing');
+    }
     final meta = TranscriptTextParts.tryParse(job?['textParts']);
     final stored = record['transcriptText'];
     if (job != null) record['job'] = job;
