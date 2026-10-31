@@ -112,7 +112,8 @@ def stable_env(flutter):
                 'CARGO_TARGET_DIR', 'XDG_CACHE_HOME', 'CMAKE_BUILD_PARALLEL_LEVEL',
                 'FFMPEG_PATH', 'FFPROBE_PATH', 'CHROME_EXECUTABLE',
                 'PLAYWRIGHT_BROWSERS_PATH',
-                'CONVERSATION_CAPTURE_DIR', 'NOTION_CAPTURE_DIR'):
+                'CONVERSATION_CAPTURE_DIR', 'NOTION_CAPTURE_DIR',
+                'README_CAPTURE_DIR'):
         if os.environ.get(key):
             env[key] = os.environ[key]
     return env

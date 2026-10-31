@@ -48,7 +48,13 @@ abstract class PlatformInfos {
   static bool get supportsVideoTranscode => isMobile || isMacOS;
 
   /// Web could also record in theory but currently creates broken opus
-  static bool get platformCanRecord => (isMobile || isMacOS);
+  static bool get platformCanRecord =>
+      debugPlatformCanRecord ?? (isMobile || isMacOS);
+
+  /// Lets widget tests and the README captures (`test/readme/`) show the
+  /// phone composer (voice mic) on a Linux host. Null: the real platform.
+  @visibleForTesting
+  static bool? debugPlatformCanRecord;
 
   static bool get supportsRoundCapture => isAndroid || isMacOS;
 
