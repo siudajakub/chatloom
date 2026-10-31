@@ -12,7 +12,6 @@ import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/voice_format.dart';
 import 'package:chatloom/personal/media/voice_remux.dart';
 import 'package:chatloom/personal/privacy.dart';
-import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -1103,12 +1102,12 @@ void main() {
     final (state, room) = await mount(tester);
     await start(state, room);
     final config = platform.lastConfig!;
-    // macOS records the same Opus into CAF and remuxes it to Ogg.
-    final apple = PlatformInfos.isCupertinoStyle;
+    // The plan follows defaultTargetPlatform (Android in widget tests), so
+    // this is the Ogg path on every host; macOS CAF has its own tests below.
     expect(config.encoder, AudioEncoder.opus);
     expect(config.sampleRate, 48000);
     expect(config.bitRate, 96000);
-    expect(platform.outputPath, endsWith(apple ? '.caf' : '.ogg'));
+    expect(platform.outputPath, endsWith('.ogg'));
     expect(config.numChannels, 1);
     expect(
       config.androidConfig.audioSource,
