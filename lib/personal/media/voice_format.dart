@@ -24,7 +24,17 @@ String voiceRecordingMime(List<int> bytes, String fallback) {
   return fallback;
 }
 
-/// Prefer native support over bridge conversion; retain Opus on unknown bridges.
+/// Opus in WebM: Slack's own voice clips (mautrix-slack lists it as fully
+/// supported).
+const webmOpusVoiceMime = 'audio/webm; codecs=opus';
+
+/// Whether a voice note for a room with [capabilities] is recorded as
+/// Ogg/Opus (true) or as AAC in MP4 (false). See docs/voice-recording.md.
+///
+/// Prefer native support over bridge conversion; retain Opus on unknown
+/// bridges. A network whose own voice codec is Opus in another container
+/// (Slack: WebM) keeps Opus while the bridge takes Ogg: it only remuxes
+/// the stream, whereas an AAC note would need a re-encode it does not do.
 bool preferOpusVoice(BridgeRoomCapabilities capabilities) {
   BridgeCapabilityEvidence evidence(String mime) => capabilities.evidence(
     BridgeFeature.voice,
@@ -37,6 +47,9 @@ bool preferOpusVoice(BridgeRoomCapabilities capabilities) {
     ),
   );
   final opus = evidence(opusVoiceMime);
+  if (opus.result.allowed && evidence(webmOpusVoiceMime).supportLevel == 2) {
+    return true;
+  }
   final aac = evidence('audio/mp4');
   if (aac.result.allowed &&
       (!opus.result.allowed ||

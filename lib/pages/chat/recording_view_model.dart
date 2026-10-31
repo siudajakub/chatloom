@@ -31,26 +31,36 @@ import 'recording_waveform.dart';
 /// User-facing voice capture preferences (Settings → Chats & organization →
 /// Voice & video messages). Kept separate from [AppSettings] so the mapping
 /// to the platform recorder stays a pure, testable function.
+///
+/// The defaults are Telegram's: the plain microphone with no platform
+/// effects. Android's noise suppressor and gain control are tuned for calls
+/// and pump or thin out a close voice (docs/voice-recording.md).
 @immutable
 class VoiceCaptureOptions {
   final bool noiseSuppress;
   final bool autoGain;
   final bool echoCancel;
 
-  /// Platform voice-communication path: forces echo cancellation and noise
-  /// suppression and lets the device apply its call-grade processing. Cleaner
-  /// in noisy places, but may sound narrower.
+  /// Platform voice-communication path: forces echo cancellation, noise
+  /// suppression and gain control and lets the device apply its call-grade
+  /// processing. Cleaner in noisy places, but may sound narrower.
   final bool isolation;
 
   /// Higher bitrate (Opus 96 kbps / AAC 128 kbps) for larger files.
   final bool highQuality;
 
+  /// Record from a connected Bluetooth headset (Android SCO). Off: the
+  /// phone's own microphone even while a headset plays audio, because SCO
+  /// capture is 8–16 kHz call audio.
+  final bool bluetoothMic;
+
   const VoiceCaptureOptions({
-    this.noiseSuppress = true,
-    this.autoGain = true,
+    this.noiseSuppress = false,
+    this.autoGain = false,
     this.echoCancel = false,
     this.isolation = false,
     this.highQuality = false,
+    this.bluetoothMic = false,
   });
 
   factory VoiceCaptureOptions.fromSettings() => VoiceCaptureOptions(
@@ -59,6 +69,7 @@ class VoiceCaptureOptions {
     echoCancel: AppSettings.audioRecordingEchoCancel.value,
     isolation: AppSettings.personalVoiceIsolation.value,
     highQuality: AppSettings.personalVoiceHighQuality.value,
+    bluetoothMic: AppSettings.personalVoiceBluetoothMic.value,
   );
 }
 
@@ -66,10 +77,11 @@ class VoiceCaptureOptions {
 ///
 /// Opus records at its native 48 kHz (Ogg container, Android 10+); the AAC-LC
 /// fallback uses 44.1 kHz, which every Android/iOS AAC encoder accepts. The
-/// default Android source is `VOICE_RECOGNITION` (flat, unprocessed-by-OEM
-/// response that suits speech and transcription); voice isolation switches to
-/// `VOICE_COMMUNICATION` with echo cancellation and noise suppression on.
-/// Effects are attached by the plugin only when the device reports them.
+/// default Android source is `DEFAULT` (the plain microphone, as Telegram's
+/// voice notes and rounds); voice isolation switches to
+/// `VOICE_COMMUNICATION` with echo cancellation, noise suppression and gain
+/// control on. Effects are attached by the plugin only when the device
+/// reports them; macOS records to a file and ignores them.
 RecordConfig buildVoiceRecordConfig(
   AudioEncoder encoder,
   VoiceCaptureOptions options,
@@ -78,23 +90,23 @@ RecordConfig buildVoiceRecordConfig(
   return RecordConfig(
     encoder: encoder,
     sampleRate: opus ? 48000 : 44100,
-    // Opus speech is transparent at 32 kbit/s (MediaQuality, MD-19); AAC
-    // needs more for the same quality.
     bitRate: opus
         ? (options.highQuality
               ? MediaQuality.voiceOpusHighQualityBitrate
               : MediaQuality.voiceOpusBitrate)
-        : (options.highQuality ? 128000 : 64000),
+        : (options.highQuality
+              ? MediaQuality.voiceAacHighQualityBitrate
+              : MediaQuality.voiceAacBitrate),
     numChannels: 1,
-    autoGain: options.autoGain,
+    autoGain: options.autoGain || options.isolation,
     echoCancel: options.echoCancel || options.isolation,
     noiseSuppress: options.noiseSuppress || options.isolation,
     audioInterruption: AudioInterruptionMode.pause,
     androidConfig: AndroidRecordConfig(
       audioSource: options.isolation
           ? AndroidAudioSource.voiceCommunication
-          : AndroidAudioSource.voiceRecognition,
-      manageBluetooth: true,
+          : AndroidAudioSource.defaultSource,
+      manageBluetooth: options.bluetoothMic,
     ),
   );
 }

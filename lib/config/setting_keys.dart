@@ -17,9 +17,15 @@ enum AppSettings<T> {
 
   /// Max lines for unselected HTML/text bubbles; 0 = unlimited (no fade).
   messagePreviewMaxLines<int>('chat.fluffy.message_preview_max_lines', 50),
-  audioRecordingAutoGain<bool>('audioRecordingAutoGain', true),
+
+  /// Voice note effects, off by default like Telegram (2026-10-31): the
+  /// platform's call-tuned gain control and noise suppressor pump and thin
+  /// out a close voice. Defaults are read at use and never written, so
+  /// installs that never changed them follow the new default while an
+  /// explicit choice is kept.
+  audioRecordingAutoGain<bool>('audioRecordingAutoGain', false),
   audioRecordingEchoCancel<bool>('audioRecordingEchoCancel', false),
-  audioRecordingNoiseSuppress<bool>('audioRecordingNoiseSuppress', true),
+  audioRecordingNoiseSuppress<bool>('audioRecordingNoiseSuppress', false),
   showNoGoogle<bool>('chat.fluffy.show_no_google', false),
   unifiedPushRegistered<bool>('chat.fluffy.unifiedpush.registered', false),
   unifiedPushEndpoint<String>('chat.fluffy.unifiedpush.endpoint', ''),
@@ -77,11 +83,19 @@ enum AppSettings<T> {
   /// Voice note capture: higher bitrate (Opus 96 kbps / AAC 128 kbps).
   personalVoiceHighQuality<bool>('pl.personal.voice.high_quality', false),
 
+  /// Voice note capture (Android): record from a connected Bluetooth
+  /// headset's call microphone (SCO, 8–16 kHz). Off like Telegram's "record
+  /// via Bluetooth": the phone's microphone is used.
+  personalVoiceBluetoothMic<bool>('pl.personal.voice.bluetooth_mic', false),
+
   /// Voice note playback speed, remembered across notes (Telegram).
   personalVoicePlaybackSpeed<double>('pl.personal.voice.playback_speed', 1.0),
   personalRoundHighQuality<bool>('pl.personal.round.high_quality', false),
   personalRoundStabilization<bool>('pl.personal.round.stabilization', true),
-  personalRoundNoiseReduction<bool>('pl.personal.round.noise_reduction', true),
+
+  /// Round video capture: voice-communication microphone path. Off by
+  /// default (2026-10-31): rounds use the plain microphone like Telegram.
+  personalRoundNoiseReduction<bool>('pl.personal.round.noise_reduction', false),
 
   /// Show sender and message preview (decrypted on this device only) in
   /// message notifications. Hidden while the app lock is set; on the lock

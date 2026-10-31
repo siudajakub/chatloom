@@ -376,7 +376,10 @@ void main() {
     });
   });
 
-  test('voice notes are 32 kbit/s Opus', () {
-    expect(MediaQuality.voiceOpusBitrate, 32000);
+  test('voice notes are 64 kbit/s Opus or 64 kbit/s AAC', () {
+    expect(MediaQuality.voiceOpusBitrate, 64000);
+    expect(MediaQuality.voiceOpusHighQualityBitrate, 96000);
+    expect(MediaQuality.voiceAacBitrate, 64000);
+    expect(MediaQuality.voiceAacHighQualityBitrate, 128000);
   });
 }

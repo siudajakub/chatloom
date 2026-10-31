@@ -69,3 +69,5 @@ ffmpeg with librsvg, or `cairosvg`). Do not edit the PNGs by hand.
 
 - [Instagram link media](instagram-link-media.md): optional bridge contract,
   integration behavior and current acceptance limits.
+- [Voice notes and round videos](voice-recording.md): microphone capture,
+  codecs and what each bridged network receives.

@@ -918,26 +918,29 @@ void main() {
   );
 
   group('voice capture config', () {
-    test('defaults to mono Opus 48 kHz speech capture with NS and AGC', () {
+    test('defaults to Telegram: plain mic, mono Opus 48 kHz, no effects', () {
       final config = buildVoiceRecordConfig(
         AudioEncoder.opus,
         const VoiceCaptureOptions(),
       );
       expect(config.encoder, AudioEncoder.opus);
       expect(config.sampleRate, 48000);
-      // 32 kbit/s Opus: transparent for speech, half the old upload (MD-19).
-      expect(config.bitRate, 32000);
+      // 64 kbit/s Opus: headroom for a bridge's re-encode (Signal → AAC).
+      expect(config.bitRate, 64000);
       expect(config.numChannels, 1);
-      expect(config.noiseSuppress, isTrue);
-      expect(config.autoGain, isTrue);
+      expect(config.noiseSuppress, isFalse);
+      expect(config.autoGain, isFalse);
       expect(config.echoCancel, isFalse);
       expect(config.audioInterruption, AudioInterruptionMode.pause);
+      // record_android maps defaultSource to MediaRecorder.AudioSource.DEFAULT,
+      // the source of Telegram's voice notes and rounds.
       expect(
         config.androidConfig.audioSource,
-        AndroidAudioSource.voiceRecognition,
+        AndroidAudioSource.defaultSource,
       );
       expect(config.androidConfig.useLegacy, isFalse);
-      expect(config.androidConfig.manageBluetooth, isTrue);
+      // No Bluetooth SCO (8–16 kHz call audio) unless the user opts in.
+      expect(config.androidConfig.manageBluetooth, isFalse);
     });
 
     test('high quality raises Opus to 96 kbps and AAC to 128 kbps', () {
@@ -951,10 +954,17 @@ void main() {
         const VoiceCaptureOptions(),
       );
       expect(aacDefault.bitRate, 64000);
+      expect(aacDefault.sampleRate, 44100);
       expect(aacDefault.numChannels, 1);
+      expect(
+        aacDefault.androidConfig.audioSource,
+        AndroidAudioSource.defaultSource,
+      );
+      expect(aacDefault.autoGain, isFalse);
+      expect(aacDefault.noiseSuppress, isFalse);
     });
 
-    test('voice isolation forces the communication path with AEC and NS', () {
+    test('voice isolation forces the communication path with AEC, NS, AGC', () {
       final config = buildVoiceRecordConfig(
         AudioEncoder.opus,
         const VoiceCaptureOptions(
@@ -970,22 +980,103 @@ void main() {
       );
       expect(config.echoCancel, isTrue);
       expect(config.noiseSuppress, isTrue);
-      expect(config.autoGain, isFalse);
+      // The plugin disables an effect it is told is off, which can switch
+      // off the call path's own gain control.
+      expect(config.autoGain, isTrue);
+      expect(config.bitRate, 64000);
     });
 
     test('individual effect toggles map through unchanged', () {
       final config = buildVoiceRecordConfig(
         AudioEncoder.opus,
         const VoiceCaptureOptions(
-          noiseSuppress: false,
-          autoGain: false,
+          noiseSuppress: true,
+          autoGain: true,
           echoCancel: true,
         ),
       );
-      expect(config.noiseSuppress, isFalse);
-      expect(config.autoGain, isFalse);
+      expect(config.noiseSuppress, isTrue);
+      expect(config.autoGain, isTrue);
       expect(config.echoCancel, isTrue);
+      expect(
+        config.androidConfig.audioSource,
+        AndroidAudioSource.defaultSource,
+      );
+      final ns = buildVoiceRecordConfig(
+        AudioEncoder.opus,
+        const VoiceCaptureOptions(noiseSuppress: true),
+      );
+      expect(ns.noiseSuppress, isTrue);
+      expect(ns.autoGain, isFalse);
+      expect(ns.echoCancel, isFalse);
     });
+
+    test('the Bluetooth headset microphone is opt-in for either codec', () {
+      for (final encoder in [AudioEncoder.opus, AudioEncoder.aacLc]) {
+        expect(
+          buildVoiceRecordConfig(
+            encoder,
+            const VoiceCaptureOptions(),
+          ).androidConfig.manageBluetooth,
+          isFalse,
+        );
+        final bluetooth = buildVoiceRecordConfig(
+          encoder,
+          const VoiceCaptureOptions(bluetoothMic: true),
+        );
+        expect(bluetooth.androidConfig.manageBluetooth, isTrue);
+        // The source stays the plain microphone; Android routes it to the
+        // headset once SCO is up.
+        expect(
+          bluetooth.androidConfig.audioSource,
+          AndroidAudioSource.defaultSource,
+        );
+      }
+      expect(
+        buildVoiceRecordConfig(
+          AudioEncoder.opus,
+          const VoiceCaptureOptions(bluetoothMic: true, isolation: true),
+        ).androidConfig.manageBluetooth,
+        isTrue,
+      );
+    });
+
+    test(
+      'untouched settings read the new defaults; explicit ones are kept',
+      () async {
+        final keys = [
+          AppSettings.audioRecordingNoiseSuppress,
+          AppSettings.audioRecordingAutoGain,
+          AppSettings.audioRecordingEchoCancel,
+          AppSettings.personalVoiceBluetoothMic,
+        ];
+        for (final setting in keys) {
+          await AppSettings.store.remove(setting.key);
+        }
+        addTearDown(() async {
+          for (final setting in keys) {
+            await AppSettings.store.remove(setting.key);
+          }
+        });
+        var options = VoiceCaptureOptions.fromSettings();
+        expect(options.noiseSuppress, isFalse);
+        expect(options.autoGain, isFalse);
+        expect(options.echoCancel, isFalse);
+        expect(options.bluetoothMic, isFalse);
+        // A value the user chose (even the old default) is stored and wins.
+        await AppSettings.audioRecordingNoiseSuppress.setItem(true);
+        await AppSettings.audioRecordingAutoGain.setItem(true);
+        await AppSettings.personalVoiceBluetoothMic.setItem(true);
+        options = VoiceCaptureOptions.fromSettings();
+        expect(options.noiseSuppress, isTrue);
+        expect(options.autoGain, isTrue);
+        expect(options.bluetoothMic, isTrue);
+        final config = buildVoiceRecordConfig(AudioEncoder.opus, options);
+        expect(config.noiseSuppress, isTrue);
+        expect(config.autoGain, isTrue);
+        expect(config.androidConfig.manageBluetooth, isTrue);
+      },
+    );
   });
 
   testWithDeadline('recorder starts with the configured voice settings', (
@@ -1010,6 +1101,24 @@ void main() {
       config.androidConfig.audioSource,
       AndroidAudioSource.voiceCommunication,
     );
+    state.cancel();
+    await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
+  });
+
+  testWithDeadline('recorder starts with Telegram defaults when untouched', (
+    tester,
+  ) async {
+    final (state, room) = await mount(tester);
+    await start(state, room);
+    final config = platform.lastConfig!;
+    final apple = PlatformInfos.isCupertinoStyle;
+    expect(config.encoder, apple ? AudioEncoder.aacLc : AudioEncoder.opus);
+    expect(config.bitRate, 64000);
+    expect(config.autoGain, isFalse);
+    expect(config.noiseSuppress, isFalse);
+    expect(config.echoCancel, isFalse);
+    expect(config.androidConfig.audioSource, AndroidAudioSource.defaultSource);
+    expect(config.androidConfig.manageBluetooth, isFalse);
     state.cancel();
     await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
   });

@@ -14,7 +14,15 @@ import 'package:material_ui/material_ui.dart';
 class SettingsMediaPage extends StatefulWidget {
   /// Round video capture exists only on Android; tests can force the section.
   final bool? showRoundOptions;
-  const SettingsMediaPage({super.key, this.showRoundOptions});
+
+  /// Bluetooth headset recording is an Android (SCO) choice; macOS records
+  /// from the system's input device. Tests can force the row.
+  final bool? showBluetoothOption;
+  const SettingsMediaPage({
+    super.key,
+    this.showRoundOptions,
+    this.showBluetoothOption,
+  });
 
   @override
   State<SettingsMediaPage> createState() => _SettingsMediaPageState();
@@ -61,6 +69,7 @@ class _SettingsMediaPageState extends State<SettingsMediaPage> {
     final isolation = AppSettings.personalVoiceIsolation.value;
     final autoDownload = AppSettings.personalAutoDownloadVoiceRounds.value;
     final rounds = widget.showRoundOptions ?? PlatformInfos.isAndroid;
+    final bluetooth = widget.showBluetoothOption ?? PlatformInfos.isAndroid;
     final secondary = context.notion.colors.textSecondary;
     return NotionSettingsScaffold(
       title: 'Voice messages & round videos',
@@ -79,7 +88,10 @@ class _SettingsMediaPageState extends State<SettingsMediaPage> {
           _toggle(
             AppSettings.audioRecordingAutoGain,
             title: 'Automatic gain',
-            subtitle: 'Keep your voice at an even volume',
+            subtitle: isolation
+                ? 'Included in strong noise reduction'
+                : 'Keep your voice at an even volume',
+            forcedValue: isolation ? true : null,
           ),
           _toggle(
             AppSettings.audioRecordingEchoCancel,
@@ -99,6 +111,12 @@ class _SettingsMediaPageState extends State<SettingsMediaPage> {
             title: 'High quality',
             subtitle: 'Higher bitrate, larger files',
           ),
+          if (bluetooth)
+            _toggle(
+              AppSettings.personalVoiceBluetoothMic,
+              title: 'Record with Bluetooth headset microphone',
+              subtitle: 'Uses the call microphone; sounds narrower',
+            ),
           if (rounds) ...[
             const NotionSettingsSection('Round videos'),
             _toggle(

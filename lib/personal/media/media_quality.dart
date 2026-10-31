@@ -14,7 +14,7 @@
 /// | Screenshot (opaque PNG) | original up to [screenshotKeepBytes], else JPEG q[screenshotJpegQuality] 4:4:4 (crisp text) |
 /// | Thumbnail | long side ≤ [thumbnailMaxSide] px, JPEG q[thumbnailJpegQuality] + blurhash |
 /// | Video | long side ≤ [videoMaxSide] (720p), ≤ [videoMaxFps] fps, H.264 ≈ [videoBitrate] bit/s, AAC; skipped when already that small |
-/// | Voice | Opus mono 48 kHz at [voiceOpusBitrate] bit/s |
+/// | Voice | Opus mono 48 kHz at [voiceOpusBitrate] bit/s (Ogg); AAC-LC mono 44.1 kHz at [voiceAacBitrate] bit/s (MP4) where the network's native voice is AAC |
 ///
 /// Sending never asks whether to compress (J, 2026-10-24): every photo and
 /// video is compressed on the device before upload by the [MediaProfile]
@@ -66,10 +66,18 @@ abstract final class MediaQuality {
   /// Videos up to this size are never worth a re-encode (a few seconds).
   static const videoSmallBytes = 2 * 1000 * 1000;
 
-  /// Opus is transparent for speech at 24–32 kbit/s (WhatsApp/Telegram
-  /// voice notes are 16–32 kbit/s).
-  static const voiceOpusBitrate = 32000;
+  /// Voice notes: 64 kbit/s mono Opus at 48 kHz (J, 2026-10-31). Telegram
+  /// records about 30 kbit/s, but a voice note is often forwarded again by a
+  /// bridge (Signal re-encodes it to AAC), so the source keeps headroom;
+  /// a minute is about 480 KB. High quality: 96 kbit/s.
+  static const voiceOpusBitrate = 64000;
   static const voiceOpusHighQualityBitrate = 96000;
+
+  /// AAC-LC needs about twice Opus's rate for the same speech quality: mono
+  /// 44.1 kHz at 64 kbit/s (Messenger/Instagram, macOS), 128 with high
+  /// quality.
+  static const voiceAacBitrate = 64000;
+  static const voiceAacHighQualityBitrate = 128000;
 
   /// HD (Telegram's "HD" toggle): photos up to 2560 px at JPEG q85.
   static const photoHdMaxSide = 2560;

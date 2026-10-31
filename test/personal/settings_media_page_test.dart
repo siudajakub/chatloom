@@ -18,6 +18,7 @@ void main() {
       AppSettings.audioRecordingEchoCancel,
       AppSettings.personalVoiceIsolation,
       AppSettings.personalVoiceHighQuality,
+      AppSettings.personalVoiceBluetoothMic,
       AppSettings.personalRoundHighQuality,
       AppSettings.personalRoundStabilization,
       AppSettings.personalRoundNoiseReduction,
@@ -28,14 +29,21 @@ void main() {
     }
   });
 
-  Future<void> mount(WidgetTester tester, {bool rounds = true}) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    bool rounds = true,
+    bool bluetooth = true,
+  }) async {
     tester.view.physicalSize = const Size(800, 2400);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
       MaterialApp(
         theme: ThemeData.dark(),
-        home: SettingsMediaPage(showRoundOptions: rounds),
+        home: SettingsMediaPage(
+          showRoundOptions: rounds,
+          showBluetoothOption: bluetooth,
+        ),
       ),
     );
     // Let the sections' one-shot entrance settle (semantics of a section
@@ -73,14 +81,27 @@ void main() {
     ]) {
       expect(find.text(section), findsOneWidget);
     }
-    expect(toggle(tester, AppSettings.audioRecordingNoiseSuppress).value, true);
-    expect(toggle(tester, AppSettings.audioRecordingAutoGain).value, true);
+    // Telegram's capture: no platform effects, phone microphone, plain
+    // microphone for rounds.
+    expect(
+      toggle(tester, AppSettings.audioRecordingNoiseSuppress).value,
+      false,
+    );
+    expect(toggle(tester, AppSettings.audioRecordingAutoGain).value, false);
     expect(toggle(tester, AppSettings.audioRecordingEchoCancel).value, false);
     expect(toggle(tester, AppSettings.personalVoiceIsolation).value, false);
     expect(toggle(tester, AppSettings.personalVoiceHighQuality).value, false);
+    expect(toggle(tester, AppSettings.personalVoiceBluetoothMic).value, false);
+    expect(
+      find.text('Record with Bluetooth headset microphone'),
+      findsOneWidget,
+    );
     expect(toggle(tester, AppSettings.personalRoundHighQuality).value, false);
     expect(toggle(tester, AppSettings.personalRoundStabilization).value, true);
-    expect(toggle(tester, AppSettings.personalRoundNoiseReduction).value, true);
+    expect(
+      toggle(tester, AppSettings.personalRoundNoiseReduction).value,
+      false,
+    );
     expect(
       toggle(tester, AppSettings.personalAutoDownloadVoiceRounds).value,
       true,
@@ -96,7 +117,12 @@ void main() {
     await tap(tester, AppSettings.personalVoiceHighQuality);
     expect(AppSettings.personalVoiceHighQuality.value, isTrue);
     await tap(tester, AppSettings.audioRecordingAutoGain);
-    expect(AppSettings.audioRecordingAutoGain.value, isFalse);
+    expect(AppSettings.audioRecordingAutoGain.value, isTrue);
+    await tap(tester, AppSettings.personalVoiceBluetoothMic);
+    expect(AppSettings.personalVoiceBluetoothMic.value, isTrue);
+    expect(toggle(tester, AppSettings.personalVoiceBluetoothMic).value, isTrue);
+    await tap(tester, AppSettings.personalRoundNoiseReduction);
+    expect(AppSettings.personalRoundNoiseReduction.value, isTrue);
     await tap(tester, AppSettings.personalRoundHighQuality);
     expect(AppSettings.personalRoundHighQuality.value, isTrue);
     await tap(tester, AppSettings.personalRoundStabilization);
@@ -106,7 +132,7 @@ void main() {
     expect(toggle(tester, AppSettings.personalVoiceHighQuality).value, isTrue);
   });
 
-  testWidgets('voice isolation locks noise suppression and echo cancel on', (
+  testWidgets('voice isolation locks noise suppression, gain and echo on', (
     tester,
   ) async {
     await AppSettings.audioRecordingNoiseSuppress.setItem(false);
@@ -119,12 +145,21 @@ void main() {
     expect(AppSettings.personalVoiceIsolation.value, isTrue);
     final ns = toggle(tester, AppSettings.audioRecordingNoiseSuppress);
     final aec = toggle(tester, AppSettings.audioRecordingEchoCancel);
+    final agc = toggle(tester, AppSettings.audioRecordingAutoGain);
     expect(ns.value, isTrue);
     expect(ns.onChanged, isNull);
     expect(aec.value, isTrue);
     expect(aec.onChanged, isNull);
-    // The stored individual preference is kept for when isolation is off.
+    expect(agc.value, isTrue);
+    expect(agc.onChanged, isNull);
+    // The stored individual preferences are kept for when isolation is off.
     expect(AppSettings.audioRecordingNoiseSuppress.value, isFalse);
+    expect(AppSettings.audioRecordingAutoGain.value, isFalse);
+    // The Bluetooth choice is independent of the processing path.
+    expect(
+      toggle(tester, AppSettings.personalVoiceBluetoothMic).onChanged,
+      isNotNull,
+    );
   });
 
   testWidgets('Wi-Fi only is disabled while auto-download is off', (
@@ -138,6 +173,22 @@ void main() {
       isNull,
     );
     expect(find.text('Turn on auto-download first'), findsOneWidget);
+  });
+
+  testWidgets('Bluetooth row is hidden where recording has no SCO choice', (
+    tester,
+  ) async {
+    await mount(tester, bluetooth: false);
+    expect(
+      find.byKey(ValueKey(AppSettings.personalVoiceBluetoothMic.key)),
+      findsNothing,
+    );
+    expect(find.text('Record with Bluetooth headset microphone'), findsNothing);
+    // The rest of the voice section stays.
+    expect(
+      find.byKey(ValueKey(AppSettings.personalVoiceHighQuality.key)),
+      findsOneWidget,
+    );
   });
 
   testWidgets('round section is hidden where round capture is unavailable', (
@@ -163,6 +214,19 @@ void main() {
       matchesSemantics(
         label: 'Strong noise reduction',
         hint: 'Voice isolation for noisy places. May sound narrower',
+        hasToggledState: true,
+        hasEnabledState: true,
+        isEnabled: true,
+        hasTapAction: true,
+      ),
+    );
+    expect(
+      tester.getSemantics(
+        find.byKey(ValueKey(AppSettings.personalVoiceBluetoothMic.key)),
+      ),
+      matchesSemantics(
+        label: 'Record with Bluetooth headset microphone',
+        hint: 'Uses the call microphone; sounds narrower',
         hasToggledState: true,
         hasEnabledState: true,
         isEnabled: true,
