@@ -65,7 +65,10 @@ class _Client extends ConversationClient {
   Object? syncFailure;
 
   @override
-  Future<void> restartSync({Duration? timeout}) async {
+  Future<void> restartSync({
+    Duration? timeout,
+    Duration? responseTimeout,
+  }) async {
     expect(timeout, Duration.zero);
     syncRestarts++;
     if (syncFailure != null) throw syncFailure!;

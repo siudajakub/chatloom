@@ -1869,6 +1869,19 @@ class Client extends MatrixApi {
   /// Opt in to exponential retry delays; other SDK consumers retain their base.
   int syncErrorMaxTimeoutSec = 3;
 
+  /// Opt in: a retry after a failed sync asks the server to answer at once
+  /// (`timeout=0`) instead of opening another long-poll. A connection that
+  /// works again is then known as soon as the server answers, not after an
+  /// empty long-poll of up to 30 s. The answer keeps a long-poll's response
+  /// budget ([longPollResponseTimeout]), so a large backlog on a slow network
+  /// is never cut off; the loop long-polls again after it. Initial syncs
+  /// (no `since` token yet) retry as before.
+  bool quickSyncRetry = false;
+
+  /// What a 30 s long-poll may take to answer (its timeout + 10 s); also the
+  /// budget of a zero-timeout catch-up that may bring a large backlog.
+  static const longPollResponseTimeout = Duration(seconds: 40);
+
   bool _initLock = false;
 
   /// Fetches the corresponding Event object from a notification including a
@@ -2405,12 +2418,15 @@ class Client extends MatrixApi {
 
   /// Immediately start a sync and wait for completion.
   /// If there is an active sync already, wait for the active sync instead.
-  Future<void> oneShotSync({Duration? timeout}) {
+  ///
+  /// [responseTimeout] is how long the answer may take (by default the
+  /// timeout + 10 s).
+  Future<void> oneShotSync({Duration? timeout, Duration? responseTimeout}) {
     // Push wakes and explicit retries must never wait behind an offline timer.
     _syncRetryTimer?.cancel();
     _syncRetryTimer = null;
     _syncFailures = 0;
-    return _sync(timeout: timeout);
+    return _sync(timeout: timeout, responseTimeout: responseTimeout);
   }
 
   /// Starts a sync at once even when a long-poll is already waiting for its
@@ -2418,29 +2434,45 @@ class Client extends MatrixApi {
   /// waiting request is dropped: its late response or error is ignored and
   /// never processed. Sync processing that already received its response is
   /// never interrupted; the call then waits for it like [oneShotSync].
-  Future<void> restartSync({Duration? timeout}) {
+  Future<void> restartSync({Duration? timeout, Duration? responseTimeout}) {
     if (_disposed || !isLogged()) return Future<void>.value();
     if (_currentSync != null && _syncAwaitingResponse != null) {
       _currentSyncId = -1;
       _syncAwaitingResponse = null;
       _currentSync = null;
     }
-    return oneShotSync(timeout: timeout);
+    return oneShotSync(timeout: timeout, responseTimeout: responseTimeout);
   }
 
   /// The `/sync` request of the current loop iteration while it has not
   /// answered yet; null while its response is processed.
   Future<SyncUpdate?>? _syncAwaitingResponse;
+  Duration? _syncAwaitingTimeout;
+
+  /// The server timeout (`timeout=`) of the `/sync` request still waiting
+  /// for its answer: [Duration.zero] when the server answers at once (a
+  /// catch-up or quick retry), null when no request is waiting or it is an
+  /// initial sync. A connection status can tell a healthy long-poll from a
+  /// request that should have answered by now.
+  Duration? get syncRequestTimeout =>
+      _syncAwaitingResponse == null ? null : _syncAwaitingTimeout;
 
   /// Pass a timeout to set how long the server waits before sending an empty response.
   /// (Corresponds to the timeout param on the /sync request.)
-  Future<void> _sync({Duration? timeout}) {
+  ///
+  /// [responseTimeout] overrides how long the answer may take (by default the
+  /// timeout + 10 s).
+  Future<void> _sync({Duration? timeout, Duration? responseTimeout}) {
     _syncRetryTimer?.cancel();
     _syncRetryTimer = null;
     final pending = _currentSync;
     if (pending != null) return pending;
     late final Future<void> currentSync;
-    currentSync = _currentSync = _innerSync(timeout: timeout).whenComplete(() {
+    final inner = _innerSync(
+      timeout: timeout,
+      responseTimeout: responseTimeout,
+    );
+    currentSync = _currentSync = inner.whenComplete(() {
       // A request dropped by [restartSync] or [abortSync] neither clears
       // nor continues the loop that replaced it.
       if (!identical(_currentSync, currentSync)) return;
@@ -2455,7 +2487,15 @@ class Client extends MatrixApi {
           _syncRetryTimer = Timer(Duration(seconds: seconds), () {
             _syncRetryTimer = null;
             if (_backgroundSync && isLogged() && !_disposed && !_aborted) {
-              unawaited(_sync());
+              final quick = quickSyncRetry && prevBatch != null;
+              unawaited(
+                quick
+                    ? _sync(
+                        timeout: Duration.zero,
+                        responseTimeout: longPollResponseTimeout,
+                      )
+                    : _sync(),
+              );
             }
           });
         } else {
@@ -2535,7 +2575,10 @@ class Client extends MatrixApi {
 
   /// Pass a timeout to set how long the server waits before sending an empty response.
   /// (Corresponds to the timeout param on the /sync request.)
-  Future<void> _innerSync({Duration? timeout}) async {
+  Future<void> _innerSync({
+    Duration? timeout,
+    Duration? responseTimeout,
+  }) async {
     _lastSyncFailed = false;
     _syncAwaitingResponse = null;
     if (!isLogged() || _disposed || _aborted) return;
@@ -2573,12 +2616,13 @@ class Client extends MatrixApi {
           });
       _currentSyncId = syncRequest.hashCode;
       _syncAwaitingResponse = syncRequest;
+      _syncAwaitingTimeout = timeout;
       onSyncStatus.add(SyncStatusUpdate(SyncStatus.waitingForResponse));
 
       // The timeout for the response from the server. If we do not set a sync
       // timeout (for initial sync) we give the server a longer time to
       // responde.
-      final responseTimeout = timeout == null
+      responseTimeout ??= timeout == null
           ? null
           : timeout + const Duration(seconds: 10);
 
@@ -2603,9 +2647,12 @@ class Client extends MatrixApi {
         );
         return;
       }
-      onSyncStatus.add(SyncStatusUpdate(SyncStatus.processing));
       final syncResp = response;
+      // Only an answer is processed; a failed request reports its error
+      // without a "processing" step (a connection status reads processing
+      // as "the server answered").
       if (syncResp == null) throw syncError ?? 'Unknown sync error';
+      onSyncStatus.add(SyncStatusUpdate(SyncStatus.processing));
 
       final database = this.database;
       await userDeviceKeysLoading;

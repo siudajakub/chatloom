@@ -16,7 +16,10 @@ class _Client implements Client {
   @override
   String? get prevBatch => 'synthetic-batch';
   @override
-  Future<void> restartSync({Duration? timeout}) async => restarts++;
+  Future<void> restartSync({
+    Duration? timeout,
+    Duration? responseTimeout,
+  }) async => restarts++;
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

@@ -67,7 +67,10 @@ class _PushClient extends Client {
   bool? returnNullIfSeen;
 
   @override
-  Future<void> oneShotSync({Duration? timeout}) async => syncs++;
+  Future<void> oneShotSync({
+    Duration? timeout,
+    Duration? responseTimeout,
+  }) async => syncs++;
 
   @override
   bool isLogged() => logged;
