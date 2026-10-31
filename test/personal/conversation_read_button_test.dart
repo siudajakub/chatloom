@@ -459,6 +459,16 @@ void main() {
       expect(conversationSourceUnread(room, loaded: loaded), isFalse);
     });
 
+    test('a counted reaction that is not loaded keeps the chat unread', () {
+      final room = _Room(_Client(), '!fixture:example.invalid');
+      final own = room.client.userID!;
+      final mine = _event(room, r'$mine', sender: own, minute: 2);
+      room.latest = mine;
+      expect(conversationSourceUnread(room, loaded: [mine]), isFalse);
+      room.notificationCount = 1;
+      expect(conversationSourceUnread(room, loaded: [mine]), isTrue);
+    });
+
     test('a receipt at or after the newest message reads it; an older one '
         'does not', () {
       final room = _Room(_Client(), '!fixture:example.invalid');

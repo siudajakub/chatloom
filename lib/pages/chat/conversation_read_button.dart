@@ -100,13 +100,31 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
         ModalRoute.of(context)?.isCurrent != true) {
       return;
     }
-    final targets = conversationReadTargets(
+    var targets = conversationReadTargets(
       widget.rooms,
       loaded: widget.loadedEvents,
     );
-    if (targets.isEmpty) return;
+    final counted = [
+      for (final room in widget.rooms)
+        if (room.notificationCount > 0) room,
+    ];
+    if (targets.isEmpty && counted.isEmpty) return;
     setState(() => _sending = true);
     try {
+      // A counted chat needs its newest server event of any kind: the
+      // preview skips a reaction to the user's message, which Beeper counts.
+      if (counted.isNotEmpty) {
+        final newest = {
+          for (final room in counted) room: await newestServerEventId(room),
+        };
+        targets = [
+          for (final (room, id) in targets)
+            if (!newest.containsKey(room)) (room, id),
+          for (final MapEntry(key: room, value: id) in newest.entries)
+            if (id != null) (room, id),
+        ];
+        if (targets.isEmpty) return;
+      }
       final failed = await markConversationRead(targets, publicReceipt: true);
       if (failed > 0) throw StateError('Read marker not confirmed');
     } catch (_) {

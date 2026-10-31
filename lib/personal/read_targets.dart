@@ -162,10 +162,12 @@ bool conversationSourceUnread(Room room, {Iterable<Event> loaded = const []}) {
   }
 
   if (newest != null && !readAt(newest)) return true;
-  return room.notificationCount > 0 &&
-      counted != null &&
-      !identical(counted, newest) &&
-      !readAt(counted);
+  if (room.notificationCount <= 0) return false;
+  // The server counts an event that is not loaded (a reaction to the
+  // user's message is aggregated, not a timeline row): only a read marker
+  // can clear it, so the button stays.
+  if (counted == null) return true;
+  return !identical(counted, newest) && !readAt(counted);
 }
 
 /// The newest server event of [room] of any type, for a read marker that
