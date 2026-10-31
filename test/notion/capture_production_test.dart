@@ -131,6 +131,9 @@ Widget _inbox({bool empty = false, int extraPins = 0}) {
                       : i == 2
                       ? 3
                       : 0,
+                  // Marked unread by hand: three highlighted rows in a row
+                  // show the gap that keeps their highlights apart.
+                  unread: i == 1,
                   onTap: _noop,
                 ),
             ],

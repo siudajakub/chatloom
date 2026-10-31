@@ -163,12 +163,12 @@ class NotionInboxRow extends StatelessWidget {
                 child: Padding(
                   padding: EdgeInsets.symmetric(
                     horizontal: NotionSpace.xs,
-                    vertical: NotionSpace.md * scale,
+                    vertical: NotionSpace.lg * scale,
                   ),
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
                       minHeight:
-                          NotionSize.touchTarget - 2 * NotionSpace.md * scale,
+                          NotionSize.touchTarget - 2 * NotionSpace.lg * scale,
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -255,7 +255,7 @@ class NotionInboxRow extends StatelessWidget {
                                   ],
                                 ),
                                 if (display.inboxPreviews || typing) ...[
-                                  SizedBox(height: NotionSpace.xxs * scale),
+                                  SizedBox(height: NotionSpace.xs * scale),
                                   Row(
                                     children: [
                                       if (tag != null) ...[

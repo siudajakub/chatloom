@@ -52,8 +52,8 @@ void main() {
     await tester.pumpWidget(host(row(), NotionDisplayPreferences.standard));
     await tester.pumpAndSettle();
     final after = tester.getSize(find.byKey(const Key('row'))).height;
-    expect(before, 88);
-    expect(after, closeTo(66, .5));
+    expect(before, 96);
+    expect(after, closeTo(72, .5));
     expect(after / before, closeTo(.75, .01));
     await tester.pumpWidget(
       host(row(), const NotionDisplayPreferences(inboxScale: .65), scale: 2),

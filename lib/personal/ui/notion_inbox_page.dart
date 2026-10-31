@@ -238,10 +238,15 @@ class NotionInboxPage extends StatelessWidget {
                           return NotionListMotionItem(
                             key: key is GlobalKey ? null : key,
                             index: index,
-                            child: NotionEntrance(
-                              playKey: row.key,
-                              rise: NotionMotion.riseList,
-                              child: row,
+                            // The gap belongs to the item, so reorder offsets
+                            // include it and highlights never touch.
+                            child: Padding(
+                              padding: NotionSpace.listItem,
+                              child: NotionEntrance(
+                                playKey: row.key,
+                                rise: NotionMotion.riseList,
+                                child: row,
+                              ),
                             ),
                           );
                         },

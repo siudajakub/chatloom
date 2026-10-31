@@ -21,6 +21,17 @@ abstract final class NotionSpace {
 
   static const EdgeInsets page = EdgeInsets.symmetric(horizontal: inset);
   static const EdgeInsets row = EdgeInsets.symmetric(vertical: 10);
+
+  /// Gap between adjacent rows of a list whose rows carry a rounded
+  /// highlight (inbox, search results), so two highlights never touch.
+  static const double listGap = xxs;
+
+  /// Each list item keeps half of [listGap] above and below its row. It wraps
+  /// the row inside the motion item, so reorder offsets include it, and
+  /// outside any swipe action, so the swipe pill matches the highlight.
+  static const EdgeInsets listItem = EdgeInsets.symmetric(
+    vertical: listGap / 2,
+  );
   static const EdgeInsets dialog = EdgeInsets.fromLTRB(xl, xl, xl, md);
   static const EdgeInsets sheet = EdgeInsets.fromLTRB(lg, xs, lg, xl);
 }

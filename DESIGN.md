@@ -185,7 +185,8 @@ scale (`bodyLarge` = body, `bodyMedium` = callout, `titleMedium` = headline,
 
 `xxs 4 · xs 8 · sm 12 · md 16 · lg 20 · xl 24 · xxl 32`. `inset` (20) is the
 page gutter; `NotionSpace.page` is the horizontal page padding. Also
-`row`, `dialog`, `sheet` presets.
+`row`, `dialog`, `sheet` presets, and `listGap` (4) / `listItem` (half of it
+above and below) between rows with rounded highlights (inbox).
 
 ### Radius: `NotionRadius.*` and `NotionShapes.*` (const)
 
@@ -218,8 +219,13 @@ Message bubbles keep their own geometry (`NotionBubble`).
 `iconSm 16 / icon 20 / iconMd 22 / iconLg 24`, avatars `24 / 40 / 56`,
 `dialogMaxWidth 420`, `contentMaxWidth 720`.
 
-Inbox conversation rows default to 75% density: 42 dp avatars and 12 dp
-vertical padding (66 dp at standard text scaling, previously 88). Names and
+Inbox conversation rows default to 75% density: 42 dp avatars, 15 dp
+vertical padding and 6 dp between name and preview (a 72 dp row at standard
+text scaling, Telegram's height; 96 dp at 100%). Rows sit `NotionSpace.listGap`
+(4 dp) apart: each list item keeps `NotionSpace.listItem` (half the gap above
+and below) inside its `NotionListMotionItem` and outside the swipe action, so
+adjacent unread or selected highlights never touch, reorder offsets include
+the gap and the swipe pill matches the highlight. Names and
 previews retain 87.5% of their original type size for readability. Settings →
 Appearance → Chat list offers a 65–100% row scale, avatars, previews, network
 badges, timestamps and unread highlighting. Rows retain a 48 dp minimum tap
