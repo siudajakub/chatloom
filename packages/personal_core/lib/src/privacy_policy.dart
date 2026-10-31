@@ -5,18 +5,18 @@ import 'contracts.dart';
 class PrivacyPolicy {
   final bool incognito;
   final bool typingEnabled;
-  final bool presenceEnabled;
 
-  const PrivacyPolicy({
-    this.incognito = false,
-    this.typingEnabled = true,
-    this.presenceEnabled = true,
-  });
+  const PrivacyPolicy({this.incognito = false, this.typingEnabled = true});
 
   bool get allowAutomaticRead => !incognito;
   bool get allowPrivateFullyRead => !incognito;
   bool get allowTyping => !incognito && typingEnabled;
-  bool get allowOnlinePresence => !incognito && presenceEnabled;
+
+  /// Own Matrix presence is never broadcast, incognito or not: the account
+  /// always appears offline (`set_presence=offline` on every sync, no
+  /// presence other than `offline` is ever set). Reading other people's
+  /// presence is a display choice and is not governed here.
+  bool get allowOnlinePresence => false;
 
   /// Explicit exceptions must never be inferred from an attempted send.
   bool allowRead({bool manual = false, bool acceptedReply = false}) =>

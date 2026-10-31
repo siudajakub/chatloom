@@ -361,12 +361,11 @@ class AppStarter with WidgetsBindingObserver {
     Logs().i(
       '${AppSettings.applicationName.value} switches from the detached background-fetch mode to ${state.name} mode. Rendering GUI...',
     );
-    // Switching to foreground mode needs to reenable send online sync presence.
+    // Switching to foreground mode re-enables sync; own presence stays
+    // offline (`PrivacyPolicy.allowOnlinePresence`).
     for (final client in clients) {
       client.backgroundSync = true;
-      client.syncPresence = PersonalPrivacy.policy.allowOnlinePresence
-          ? PresenceType.online
-          : PresenceType.offline;
+      client.syncPresence = PresenceType.offline;
     }
     // Claim startup before its first await and release the one-shot observer.
     guiStarted = true;

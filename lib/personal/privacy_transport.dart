@@ -233,7 +233,9 @@ class PrivacyHttpClient extends http.BaseClient {
         throw const PrivacySuppressed();
       }
     }
-    if (!private) return inner.send(request);
+    // Own presence is always offline, incognito or not
+    // (`PrivacyPolicy.allowOnlinePresence`): a presence other than offline is
+    // refused and every sync is rewritten to `set_presence=offline`.
     if (segments.length == 6 &&
         segments[3] == 'presence' &&
         segments[5] == 'status' &&

@@ -464,10 +464,10 @@ abstract final class PersonalPrivacy {
         await setTyping(room, false);
       }
     }
+    // Own presence stays offline in both modes
+    // (`PrivacyPolicy.allowOnlinePresence`).
     for (final client in clients) {
-      client.syncPresence = enabled
-          ? PresenceType.offline
-          : PresenceType.unavailable;
+      client.syncPresence = PresenceType.offline;
     }
   }
 

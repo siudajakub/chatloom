@@ -126,8 +126,41 @@ Future<void> main() async {
   );
   hidden = false;
   await client.send(queued);
+  // Own presence stays offline outside incognito too.
+  await denied(request('presence/fixture-user/status', {'presence': 'online'}));
+  await denied(
+    request('presence/fixture-user/status', {'presence': 'unavailable'}),
+  );
+  await client.send(
+    request('presence/fixture-user/status', {'presence': 'offline'}),
+  );
+  check(
+    recorder.calls.last.url.path.endsWith('/presence/fixture-user/status'),
+    'Offline presence suppressed',
+  );
+  for (final query in [
+    '',
+    '?set_presence=online',
+    '?set_presence=unavailable',
+  ]) {
+    await client.send(
+      http.Request('GET', server.resolve('/_matrix/client/v3/sync$query')),
+    );
+    check(
+      recorder.calls.last.url.queryParameters['set_presence'] == 'offline',
+      'Sync leaked presence outside incognito: $query',
+    );
+  }
+  // Typing outside incognito is untouched by the presence rule.
+  await client.send(
+    request('rooms/fixture/typing/fixture-user', {'typing': true}),
+  );
+  check(
+    recorder.calls.last.url.path.contains('/typing/'),
+    'Typing suppressed outside incognito',
+  );
   client.close();
   stdout.writeln(
-    'PASS final HTTP privacy recorder: foreground/background request guard, public/private/fully read, typing/presence, exact manual grant, late request and unchanged sends',
+    'PASS final HTTP privacy recorder: foreground/background request guard, public/private/fully read, typing/presence, presence always offline, exact manual grant, late request and unchanged sends',
   );
 }

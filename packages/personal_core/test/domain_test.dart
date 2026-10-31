@@ -98,15 +98,18 @@ void main() {
         isFalse,
       );
     });
-    test('disabling typing or presence independently remains effective', () {
-      const policy = PrivacyPolicy(
-        typingEnabled: false,
-        presenceEnabled: false,
-      );
+    test('disabling typing independently remains effective', () {
+      const policy = PrivacyPolicy(typingEnabled: false);
       expect(policy.allowRead(), isTrue);
       expect(policy.allowPrivateFullyRead, isTrue);
       expect(policy.allowTyping, isFalse);
-      expect(policy.allowOnlinePresence, isFalse);
+    });
+    test('own presence is never online, incognito or not', () {
+      expect(const PrivacyPolicy().allowOnlinePresence, isFalse);
+      expect(const PrivacyPolicy(incognito: true).allowOnlinePresence, isFalse);
+      // Outside incognito the other emissions stay allowed.
+      expect(const PrivacyPolicy().allowTyping, isTrue);
+      expect(const PrivacyPolicy().allowAutomaticRead, isTrue);
     });
     test('leaving incognito creates no queued receipt flush', () {
       const policy = PrivacyPolicy();

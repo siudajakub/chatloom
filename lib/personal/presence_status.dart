@@ -5,8 +5,8 @@ import 'package:intl/intl.dart';
 
 /// The display-only "Show activity status" preference for chat headers.
 ///
-/// It only decides whether received presence is shown; outgoing presence
-/// stays governed by the privacy policy (incognito / `set_presence`).
+/// It only decides whether received presence is shown; own presence is
+/// always sent as offline (`PrivacyPolicy.allowOnlinePresence`).
 abstract final class PresenceDisplay {
   static ValueNotifier<bool>? _enabled;
 

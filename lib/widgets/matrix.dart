@@ -616,11 +616,9 @@ class MatrixState extends State<Matrix> {
     final foreground = state == AppLifecycleState.resumed;
     backgroundPush?.setRegistrationForeground(foreground);
     for (final client in widget.clients) {
-      client.syncPresence = PersonalPrivacy.policy.allowOnlinePresence
-          ? (state == AppLifecycleState.resumed
-                ? null
-                : PresenceType.unavailable)
-          : PresenceType.offline;
+      // Own presence is always offline, in front or not
+      // (`PrivacyPolicy.allowOnlinePresence`).
+      client.syncPresence = PresenceType.offline;
       if (PlatformInfos.isMobile) {
         // The loop only runs in the foreground on phones; keep its retries
         // short there (see [ClientManager.applyMobileLifecycle]).

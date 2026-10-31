@@ -163,9 +163,9 @@ abstract class ClientManager {
     // No typed `/logout`, `/leave`, `/clearcache`…: formatting commands only.
     restrictComposerCommands(client);
     ClientPerformanceProbe.watch(client);
-    if (!PersonalPrivacy.policy.allowOnlinePresence) {
-      client.syncPresence = PresenceType.offline;
-    }
+    // Own presence is always offline (`PrivacyPolicy.allowOnlinePresence`);
+    // `PrivacyHttpClient` also rewrites every sync to `set_presence=offline`.
+    client.syncPresence = PresenceType.offline;
     PersonalPrivacy.bind(client);
     ConversationActivityReceipts.start(client);
     return client;

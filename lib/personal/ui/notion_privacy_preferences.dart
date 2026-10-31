@@ -26,7 +26,7 @@ class NotionPrivacyPreferences extends StatelessWidget {
       NotionSettingsToggle(
         title: 'Incognito mode',
         subtitle:
-            'Suppress automatic typing, read receipts and presence on this device. Replies may still mark messages read on their source network.',
+            'Suppress automatic typing and read receipts on this device. You always appear offline. Replies may still mark messages read on their source network.',
         value: incognito,
         onChanged: pending ? null : onIncognito,
       ),
