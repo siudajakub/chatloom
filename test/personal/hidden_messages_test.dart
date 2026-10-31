@@ -141,7 +141,7 @@ void main() {
     expect(HiddenMessages.hides(keep), isFalse);
     expect([keep, gone].filterByVisibleInGui(), [keep]);
     // Not the delete-for-everyone path.
-    expect(MessageDeletions.hides(gone), isFalse);
+    expect(MessageDeletions.deleting(gone), isFalse);
     expect(notified, 1);
     hidden.unhide(gone);
     expect([keep, gone].filterByVisibleInGui(), [keep, gone]);
@@ -339,7 +339,7 @@ void main() {
     expect(event.redactions, 0);
     expect(client.requests, isEmpty);
     expect(personal.synced, isEmpty);
-    expect(MessageDeletions.hides(event), isFalse);
+    expect(MessageDeletions.deleting(event), isFalse);
     HiddenMessages.instance.debugReset(client);
   });
 }

@@ -221,3 +221,29 @@ Regressions: app `test/personal/sdk_send_file_event_test.dart` ("a PNG
 re-encoded as JPEG is sent as .jpg" — also proves the shrunk file is the one
 uploaded in an unencrypted room —, "a cancelled send stops its upload and
 sends no event").
+
+### 2026-10-31 — redacted thread messages lose their content; redaction capture hook
+
+Two changes for deleted messages (deletion display and "Keep deleted
+messages"):
+
+- `Timeline._handleEventUpdate`: upstream returned early for *every*
+  redacted event with a `m.relates_to.event_id` (only notifying the related
+  event), so a thread message (or any `m.reference`) deleted while its chat
+  was open kept its content until the next restart. Now only reactions
+  (`m.annotation`) and edits (`m.replace`) take that shortcut; every other
+  redacted event gets `setRedactionEvent` and its own `onChange`, after the
+  related event's. Regression: `test/timeline_redaction_test.dart` (no olm,
+  no database).
+- `Client.onBeforeRedaction` (`Future<void> Function(RedactionCapture)?`,
+  default null = upstream behaviour, nothing is read). For a live (sync
+  timeline) `m.room.redaction`, `_handleRoomEvents` reads the redacted
+  message from the database (or `Room.lastEvent`) and its newest stored
+  `m.replace` by the same author (`Client.redactionEditScan` events back),
+  and awaits the callback *before* `_updateRoomsByEventUpdate` (room
+  preview), `storeEventUpdate` (database) and `onTimelineEvent` (open
+  timelines) apply the redaction. Already redacted or missing messages are
+  skipped; errors are logged by type only (never content);
+  `RedactionCapture.toString` is redacted. The app installs it only while
+  "Keep deleted messages" is on (`lib/personal/kept_messages.dart`).
+  Regression: `test/redaction_capture_test.dart`.

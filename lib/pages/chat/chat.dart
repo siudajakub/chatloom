@@ -40,6 +40,7 @@ import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
@@ -780,6 +781,10 @@ class ChatController extends State<ChatPageWithRoom>
     _loadDraft();
     // "Remove for you" (FX-16): refilter the rows when it changes.
     HiddenMessages.instance
+      ..load(widget.room.client)
+      ..addListener(_hiddenMessagesChanged);
+    // Kept deleted messages (loaded after start, cleared in Settings).
+    KeptMessages.instance
       ..load(widget.room.client)
       ..addListener(_hiddenMessagesChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1602,6 +1607,7 @@ class ChatController extends State<ChatPageWithRoom>
   @override
   void dispose() {
     HiddenMessages.instance.removeListener(_hiddenMessagesChanged);
+    KeptMessages.instance.removeListener(_hiddenMessagesChanged);
     _rejections?.dispose();
     MacDesktopCommands.unbindChat(this);
     ConversationJumpTargets.unregister(this);

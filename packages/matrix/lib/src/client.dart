@@ -167,6 +167,18 @@ class Client extends MatrixApi {
   /// event. Null (the default) keeps upstream behaviour.
   bool Function(String transactionId)? fileSendCancelled;
 
+  /// ChatLoom: called for every live (sync timeline) redaction of a stored
+  /// message, before the redaction is applied anywhere: the room preview
+  /// ([Room.lastEvent]), the database and open timelines. The sync waits for
+  /// the returned future, so the callback must bound its own time. Errors are
+  /// logged by type only and ignored. Null (the default) keeps upstream
+  /// behaviour: nothing is read and nothing waits.
+  Future<void> Function(RedactionCapture capture)? onBeforeRedaction;
+
+  /// How many stored timeline events [onBeforeRedaction] searches for the
+  /// newest edit of a redacted message.
+  static const redactionEditScan = 200;
+
   /// Optional matrix-content-scanner proxy configuration.
   ///
   /// When set, media URL helpers resolve `mxc://` URIs to scanner URLs, and
@@ -3039,6 +3051,49 @@ class Client extends MatrixApi {
   /// Stores event that came down /sync but didn't get decrypted because of missing keys yet.
   final List<_EventPendingDecryption> _eventsPendingDecryption = [];
 
+  /// ChatLoom: reads the message [redaction] removes (and its newest edit by
+  /// its author) while it is still stored, and hands both to
+  /// [onBeforeRedaction]. Nothing is logged but the error type.
+  Future<void> _captureBeforeRedaction(Room room, MatrixEvent redaction) async {
+    final hook = onBeforeRedaction;
+    if (hook == null) return;
+    final redacts =
+        redaction.redacts ?? redaction.content.tryGet<String>('redacts');
+    if (redacts == null) return;
+    try {
+      final preview = room.lastEvent;
+      final original =
+          await database.getEventById(redacts, room) ??
+          (preview?.eventId == redacts ? preview : null);
+      if (original == null || original.redacted) return;
+      Event? edit;
+      bool isEdit(Event e) =>
+          !e.redacted &&
+          e.relationshipType == RelationshipTypes.edit &&
+          e.relationshipEventId == redacts &&
+          e.senderId == original.senderId;
+      if (preview != null && isEdit(preview)) edit = preview;
+      if (edit == null) {
+        final stored = await database.getEventList(
+          room,
+          limit: redactionEditScan,
+        );
+        // Newest first.
+        edit = stored.firstWhereOrNull(isEdit);
+      }
+      await hook(
+        RedactionCapture(
+          room: room,
+          redaction: Event.fromMatrixEvent(redaction, room),
+          original: original,
+          latestEdit: edit,
+        ),
+      );
+    } catch (e) {
+      Logs().w('Redaction capture failed (${e.runtimeType})');
+    }
+  }
+
   Future<void> _handleRoomEvents(
     Room room,
     List<StrippedStateEvent> events,
@@ -3109,6 +3164,14 @@ class Client extends MatrixApi {
         if (user != null) {
           room.setState(user);
         }
+      }
+      // ChatLoom: the redacted message is still intact here (see
+      // [onBeforeRedaction]).
+      if (type == EventUpdateType.timeline &&
+          event.type == EventTypes.Redaction &&
+          event is MatrixEvent &&
+          onBeforeRedaction != null) {
+        await _captureBeforeRedaction(room, event);
       }
       await _updateRoomsByEventUpdate(room, event, type);
       if (store) {
@@ -4523,4 +4586,29 @@ enum ShareKeysWith {
   /// using cross signing, it is enough to verify the user and then the user
   /// can verify their devices.
   directlyVerifiedOnly,
+}
+
+/// ChatLoom: a message as it was stored just before [redaction] removes it
+/// (see [Client.onBeforeRedaction]). Holds message content: never log it.
+class RedactionCapture {
+  final Room room;
+
+  /// The `m.room.redaction` event.
+  final Event redaction;
+
+  /// The stored message, with its content (decrypted when it was).
+  final Event original;
+
+  /// The newest stored `m.replace` of [original] by its author, if any.
+  final Event? latestEdit;
+
+  const RedactionCapture({
+    required this.room,
+    required this.redaction,
+    required this.original,
+    this.latestEdit,
+  });
+
+  @override
+  String toString() => 'RedactionCapture(protected)';
 }

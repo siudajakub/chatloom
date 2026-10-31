@@ -20,13 +20,19 @@
 /// emote → "* text"; text/notice → the plain body. "You: " prefixes every
 /// type for own messages (account or own bridge ghost, see
 /// [OwnSenderResolver]); other senders get "`<name>`: " in groups and no prefix
-/// in DMs. Undecryptable, redacted, state and unknown events keep the SDK's
-/// localized fallback without an extra prefix.
+/// in DMs. A deleted message (also one the user is deleting right now) reads
+/// "Message deleted", "You deleted this message", ... ([deletedLabel]) with no
+/// prefix and never its old text. Undecryptable, state and unknown events keep
+/// the SDK's localized fallback without an extra prefix.
 library;
 
+import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/bridge_notices.dart';
+import 'package:chatloom/personal/deleted_messages.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart' show RoundVideoDescriptor;
@@ -81,6 +87,10 @@ bool _isGif(Event event) {
   final info = event.content['info'];
   return info is Map && (info['fi.mau.gif'] == true);
 }
+
+/// The app's words for [i18n] (English outside the widget tree).
+L10n _l10nOf(MatrixLocalizations? i18n) =>
+    i18n is MatrixLocals ? i18n.l10n : englishL10n;
 
 /// Label for message-like events; null means "use the SDK fallback".
 String? _label(Event event) {
@@ -229,9 +239,26 @@ String _fallback(Event event, MatrixLocalizations i18n) => _oneLine(
   ),
 );
 
-/// Label only ("Sticker", "Photo: caption", message text, SDK fallback).
-String personalPreviewLabel(Event event, {MatrixLocalizations? i18n}) =>
-    _label(event) ?? _fallback(event, i18n ?? _defaultI18n);
+/// A deleted message's preview: its kept text marked "Deleted: …" (Keep
+/// deleted messages), otherwise "Message deleted", "You deleted this
+/// message", ...
+String _deletedPreview(Event event, MatrixLocalizations? i18n) {
+  final l10n = _l10nOf(i18n);
+  final kept = KeptMessages.of(event);
+  if (kept != null) {
+    final copy = kept.toEvent(event.room);
+    final label = _label(copy) ?? _fallback(copy, i18n ?? _defaultI18n);
+    return l10n.deletedMessagePreview(label);
+  }
+  return deletedLabel(event, l10n: l10n);
+}
+
+/// Label only ("Sticker", "Photo: caption", message text, "Message
+/// deleted", SDK fallback).
+String personalPreviewLabel(Event event, {MatrixLocalizations? i18n}) {
+  if (isDeletedForDisplay(event)) return _deletedPreview(event, i18n);
+  return _label(event) ?? _fallback(event, i18n ?? _defaultI18n);
+}
 
 /// Preview with an explicit prefix decision.
 ///
@@ -246,6 +273,8 @@ String personalPreview(
   String? senderName,
   MatrixLocalizations? i18n,
 }) {
+  // "You deleted this message" already says who; never a "You: " prefix.
+  if (isDeletedForDisplay(event)) return _deletedPreview(event, i18n);
   final label = _label(event);
   if (label == null) return _fallback(event, i18n ?? _defaultI18n);
   if (own) return 'You: $label';

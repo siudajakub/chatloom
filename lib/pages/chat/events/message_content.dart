@@ -12,6 +12,7 @@ import 'package:chatloom/pages/chat/events/undecryptable_message.dart';
 import 'package:chatloom/pages/chat/events/video_player.dart';
 import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
+import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/instagram_share.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
@@ -31,6 +32,7 @@ import '../../../utils/platform_infos.dart';
 import '../../../utils/url_launcher.dart';
 import 'audio_player.dart';
 import 'cute_events.dart';
+import 'deleted_message.dart';
 import 'gallery_message.dart';
 import 'html_message.dart';
 import 'image_bubble.dart';
@@ -523,6 +525,9 @@ class MessageContent extends StatelessWidget {
   }
 }
 
+/// The placeholder of a deleted message: "Message deleted", "You deleted
+/// this message", "Message disappeared" or "Deleted by {name}" (see
+/// [deletedLabel]), muted and italic after its icon.
 class RedactionWidget extends StatelessWidget {
   const RedactionWidget({
     super.key,
@@ -539,24 +544,32 @@ class RedactionWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<User?>(
-      future: event.redactedBecause?.fetchSenderUser(),
-      builder: (context, snapshot) {
-        final reason = event.redactedBecause?.content.tryGet<String>('reason');
-        final redactedBy =
-            snapshot.data?.calcDisplayname() ??
-            event.redactedBecause?.senderId.localpart ??
-            L10n.of(context).user;
-        return _ButtonContent(
-          label: reason == null
-              ? L10n.of(context).redactedBy(redactedBy)
-              : L10n.of(context).redactedByBecause(redactedBy, reason),
-          icon: '🗑️',
-          textColor: buttonTextColor.withAlpha(128),
-          onPressed: () => onInfoTab?.call(event),
-          fontSize: fontSize,
-        );
-      },
+    final l10n = L10n.of(context);
+    Widget label() {
+      final info = deletionOf(event);
+      return DeletedMessageLabel(
+        label: deletionText(info, l10n),
+        kind: info.kind,
+        color: buttonTextColor.withValues(alpha: .7),
+        style: NotionType.body.copyWith(fontSize: fontSize),
+      );
+    }
+
+    // Only "Deleted by {name}" needs a name that may not be loaded yet.
+    final redaction = event.redactedBecause;
+    final needsName = deletionOf(event).kind == DeletedKind.byOther;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onInfoTab == null ? null : () => onInfoTab!(event),
+      child: Padding(
+        padding: NotionBubble.textLine,
+        child: needsName && redaction != null
+            ? FutureBuilder<User?>(
+                future: redaction.fetchSenderUser(),
+                builder: (context, _) => label(),
+              )
+            : label(),
+      ),
     );
   }
 }

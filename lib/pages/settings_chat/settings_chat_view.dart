@@ -8,13 +8,17 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
 import 'package:chatloom/personal/emoji/emoji_picker.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/settings_switch_list_tile.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:matrix/matrix.dart' show Client;
+import 'package:provider/provider.dart';
 
 import 'settings_chat.dart';
 
@@ -221,6 +225,7 @@ class SettingsChatView extends StatelessWidget {
             subtitle: 'Technical events the app can’t display',
             setting: AppSettings.hideUnknownEvents,
           ),
+          _KeepDeletedSettings(onChanged: controller.updateState),
           const NotionSettingsSection('Media & people'),
           NotionListRow(
             key: const Key('settings_voice_video_row'),
@@ -244,6 +249,101 @@ class SettingsChatView extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// "Keep deleted messages" (J 2026-10-31): off by default; while on, which
+/// deletions are kept, and "Clear kept messages" (also while off, for
+/// what was kept before).
+class _KeepDeletedSettings extends StatelessWidget {
+  final VoidCallback onChanged;
+  const _KeepDeletedSettings({required this.onChanged});
+
+  Future<void> _clear(BuildContext context, Client? client) async {
+    if (client == null) return;
+    final ok = await showNotionConfirmDialog(
+      context: context,
+      title: 'Clear kept messages?',
+      message:
+          'Deleted messages kept on this device are removed. This can’t be '
+          'undone.',
+      confirmLabel: 'Clear',
+      destructive: true,
+    );
+    if (!ok) return;
+    await KeptMessages.instance.clear(client);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // No account (an offline preview of the page): nothing to clear.
+    final client = Provider.of<MatrixState?>(context, listen: false)?.client;
+    final enabled = AppSettings.keepDeletedMessages.value;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SettingsSwitchListTile.adaptive(
+          key: const Key('settings_keep_deleted'),
+          title: 'Keep deleted messages',
+          subtitle:
+              'Keep a copy on this device when a message is deleted, shown '
+              'as deleted. Only for messages that reached this device '
+              'before they were deleted.',
+          setting: AppSettings.keepDeletedMessages,
+          onChanged: (_) {
+            KeptMessages.instance.refreshHooks();
+            onChanged();
+          },
+        ),
+        NotionSizeReveal(
+          visible: enabled,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SettingsSwitchListTile.adaptive(
+                key: const Key('settings_keep_deleted_others'),
+                title: 'Deleted by others',
+                subtitle: 'Messages other people delete, with a notification',
+                setting: AppSettings.keepDeletedByOthers,
+              ),
+              SettingsSwitchListTile.adaptive(
+                key: const Key('settings_keep_deleted_own'),
+                title: 'Deleted by you',
+                subtitle: 'Messages you delete, here or in another app',
+                setting: AppSettings.keepDeletedOwn,
+              ),
+              SettingsSwitchListTile.adaptive(
+                key: const Key('settings_keep_deleted_disappearing'),
+                title: 'View-once and disappearing messages',
+                subtitle:
+                    'Also keep messages meant to vanish (and protected '
+                    'ones). Off unless you turn it on.',
+                setting: AppSettings.keepDeletedDisappearing,
+              ),
+            ],
+          ),
+        ),
+        ListenableBuilder(
+          listenable: KeptMessages.instance,
+          builder: (context, _) {
+            final count = client == null
+                ? 0
+                : KeptMessages.instance.countFor(client);
+            return NotionListRow(
+              key: const Key('settings_clear_kept'),
+              leading: const Icon(Icons.delete_sweep_outlined),
+              title: 'Clear kept messages',
+              subtitle: count == 0
+                  ? 'Nothing is kept on this device'
+                  : count == 1
+                  ? '1 message kept on this device'
+                  : '$count messages kept on this device',
+              onTap: count == 0 ? null : () => _clear(context, client),
+            );
+          },
+        ),
+      ],
     );
   }
 }

@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:matrix/matrix.dart';
 
 /// This is a temporary helper class until there is a proper solution to this with the new system
@@ -183,26 +184,23 @@ class MatrixLocals extends MatrixLocalizations {
   @override
   String get noPermission => l10n.noKeyForThisMessage;
 
+  /// [redactedEvent] is the `m.room.redaction` event itself: it reads like
+  /// the message it removed ([deletedLabel]).
   @override
-  String redactedAnEvent(Event redactedEvent) {
-    return l10n.redactedAnEvent(
-      redactedEvent.redactedBecause?.senderFromMemoryOrFallback
-              .calcDisplayname() ??
-          l10n.user,
-    );
-  }
+  String redactedAnEvent(Event redactedEvent) =>
+      deletionText(deletionOfRedaction(redactedEvent), l10n);
 
   @override
   String rejectedTheInvitation(String targetName) {
     return l10n.rejectedTheInvitation(targetName);
   }
 
+  /// The SDK passes the *redaction* (its sender is who deleted the
+  /// message, the author is unknown here), so nobody is named; callers with
+  /// the deleted event use [deletedLabel].
   @override
-  String removedBy(Event redactedEvent) {
-    return l10n.redactedBy(
-      redactedEvent.senderFromMemoryOrFallback.calcDisplayname(),
-    );
-  }
+  String removedBy(Event redactedEvent) =>
+      deletionText(deletionOfRedaction(redactedEvent), l10n);
 
   @override
   String get roomHasBeenUpgraded => l10n.roomHasBeenUpgraded;

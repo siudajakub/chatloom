@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/pages/chat_list/chat_list.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
 import 'package:chatloom/pages/chat_list/inbox_health_status.dart';
 import 'package:chatloom/pages/chat_list/inbox_pins.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
@@ -25,9 +27,14 @@ class ChatListViewBody extends StatelessWidget {
     final client = Matrix.of(context).client;
     final inbox = controller.inbox;
     return ListenableBuilder(
-      // "Remove for you" (FX-16) changes a row's preview; the rows' own
-      // signatures keep that to the rows it concerns.
-      listenable: Listenable.merge([inbox, HiddenMessages.instance]),
+      // "Remove for you" (FX-16) and a delete for everyone change a row's
+      // preview; the rows' own signatures keep that to the rows concerned.
+      listenable: Listenable.merge([
+        inbox,
+        HiddenMessages.instance,
+        MessageDeletions.changes,
+        KeptMessages.instance,
+      ]),
       builder: (context, _) {
         final projection = inbox.projection;
         final rooms = controller.filterRooms();

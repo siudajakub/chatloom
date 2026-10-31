@@ -2463,5 +2463,73 @@
     "replyLoading": "Loading reply…",
     "replyOriginalUnavailable": "Original message unavailable",
     "cancelReply": "Cancel reply",
-    "showOriginalMessage": "Show original message"
+    "showOriginalMessage": "Show original message",
+    "messageDeleted": "Message deleted",
+    "@messageDeleted": {
+        "description": "Placeholder and preview of a message another person deleted."
+    },
+    "youDeletedThisMessage": "You deleted this message",
+    "@youDeletedThisMessage": {
+        "description": "Placeholder and preview of a message the user deleted (also from their own bridged accounts)."
+    },
+    "messageDisappeared": "Message disappeared",
+    "@messageDisappeared": {
+        "description": "Placeholder of a disappearing or view-once message the network removed."
+    },
+    "deletedByUser": "Deleted by {username}",
+    "@deletedByUser": {
+        "description": "Placeholder of a message somebody other than its author deleted (a group admin).",
+        "placeholders": {
+            "username": {
+                "type": "String"
+            }
+        }
+    },
+    "savedMessageDeleted": "Saved message was deleted",
+    "@savedMessageDeleted": {
+        "description": "A bookmark whose message was deleted."
+    },
+    "noRecentMessages": "No recent messages",
+    "@noRecentMessages": {
+        "description": "Inbox preview when the newest message was deleted, deleted messages are hidden and no earlier message is at hand."
+    },
+    "deletedMessagePreview": "Deleted: {preview}",
+    "@deletedMessagePreview": {
+        "description": "Preview of a deleted message whose text was kept on this device (Keep deleted messages).",
+        "placeholders": {
+            "preview": {
+                "type": "String"
+            }
+        }
+    },
+    "keptDeletedLabel": "Deleted",
+    "@keptDeletedLabel": {
+        "description": "Chip on a deleted message whose content was kept on this device."
+    },
+    "deletedAtTime": "Deleted at {time}",
+    "@deletedAtTime": {
+        "description": "When a kept message was deleted (date and time).",
+        "placeholders": {
+            "time": {
+                "type": "String"
+            }
+        }
+    },
+    "keptOnThisDevice": "Kept on this device only. Others no longer see it.",
+    "@keptOnThisDevice": {
+        "description": "Explains a deleted message kept by Keep deleted messages."
+    },
+    "userDeletedAMessage": "{username} deleted a message",
+    "@userDeletedAMessage": {
+        "description": "Notification when another person deletes a message that was kept.",
+        "placeholders": {
+            "username": {
+                "type": "String"
+            }
+        }
+    },
+    "aMessageWasDeleted": "A message was deleted",
+    "@aMessageWasDeleted": {
+        "description": "Deletion notification without names or text (previews off)."
+    }
 }

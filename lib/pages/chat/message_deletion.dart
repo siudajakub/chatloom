@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/events/message_delivery_status.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
@@ -20,18 +21,32 @@ String? bridgedNetworkLabel(Room room) {
   return notionNetworkLabel(network);
 }
 
-/// "Delete for everyone" of own messages, Telegram style: a plain confirm
-/// (no reason field), the bubble disappears at once, the redaction runs in
-/// the background and the bubble comes back with an explanation and Retry
-/// if it fails. A message that is still sending is deleted as soon as the
-/// server has it (it is never left behind as a ghost delivery).
+/// "Delete for everyone" of own messages: a plain confirm (no reason
+/// field), the bubble turns into "You deleted this message" at once (or
+/// leaves, with Settings → Chats → "Hide deleted messages" on), the
+/// redaction runs in the background and the message comes back with an
+/// explanation and Retry if it fails. A message that is still sending is
+/// deleted as soon as the server has it (it is never left behind as a ghost
+/// delivery).
 ///
-/// Hidden rows are tracked per client by event and transaction ID, bounded,
-/// and checked by the timeline filters (`isVisibleInGui`, merged rows).
+/// Messages being deleted are tracked per client by event and transaction
+/// ID, bounded, and read by everything that draws a deleted message
+/// ([isDeletedForDisplay] in `lib/personal/deleted_messages.dart`): the
+/// timeline filters (`isVisibleInGui`, merged rows), the bubble, the inbox
+/// preview. After restart the synced redaction gives the same result.
 abstract final class MessageDeletions {
   static const _cap = 256;
   static final _hidden = Expando<LinkedHashSet<String>>();
   static final _quiet = Expando<LinkedHashSet<String>>();
+  static final _quietTargets = Expando<LinkedHashSet<String>>();
+  static final _changes = _DeletionChanges();
+
+  /// Notifies when a deletion starts or fails (hosts that are not the
+  /// deleting conversation, such as the inbox, rebuild on it).
+  static Listenable get changes => _changes;
+
+  /// Bumped on every change, for widget signatures.
+  static int get revision => _changes.revision;
 
   static String _key(String roomId, String id) => '$roomId\u0000$id';
 
@@ -49,8 +64,9 @@ abstract final class MessageDeletions {
     }
   }
 
-  /// Whether [event] is being (or was just) deleted by the user here.
-  static bool hides(Event event) {
+  /// Whether [event] is being (or was just) deleted by the user here: it
+  /// draws as deleted before the server's redaction arrives.
+  static bool deleting(Event event) {
     final set = _hidden[event.room.client];
     if (set == null || set.isEmpty) return false;
     final room = event.room.id;
@@ -65,6 +81,7 @@ abstract final class MessageDeletions {
     if (txid != null) {
       _add(_hidden, event.room.client, _key(event.room.id, txid));
     }
+    _changes.bump();
   }
 
   static void _unhide(Event event) {
@@ -72,6 +89,7 @@ abstract final class MessageDeletions {
     set?.remove(_key(event.room.id, event.eventId));
     final txid = event.transactionId;
     if (txid != null) set?.remove(_key(event.room.id, txid));
+    _changes.bump();
   }
 
   /// A redaction ChatLoom sends to tidy up (a failed original after Send
@@ -83,10 +101,33 @@ abstract final class MessageDeletions {
   static bool isQuiet(Room room, String eventId) =>
       _quiet[room.client]?.contains(_key(room.id, eventId)) ?? false;
 
+  /// The message such a tidy-up redaction removes, marked before the
+  /// request goes out (its redaction can sync before the request returns).
+  /// It never shows as "You deleted this message" and is never kept.
+  static void markQuietTarget(Room room, String eventId) =>
+      _add(_quietTargets, room.client, _key(room.id, eventId));
+
+  /// Whether ChatLoom deleted [event] itself to tidy up (by its target or
+  /// by its redaction, see [markQuiet]).
+  static bool isCleanup(Event event) {
+    final room = event.room;
+    if (_quietTargets[room.client]?.contains(_key(room.id, event.eventId)) ??
+        false) {
+      return true;
+    }
+    final redaction = event.redactedBecause?.eventId;
+    return redaction != null && isQuiet(room, redaction);
+  }
+
+  /// Marks [event] as being deleted here, without a request (tests).
+  @visibleForTesting
+  static void debugMarkDeleting(Event event) => _hide(event);
+
   @visibleForTesting
   static void debugReset(Client client) {
     _hidden[client] = null;
     _quiet[client] = null;
+    _quietTargets[client] = null;
   }
 
   /// The confirmation text for deleting [event] for everyone.
@@ -171,13 +212,16 @@ abstract final class MessageDeletions {
     required ScaffoldMessengerState? messenger,
     required VoidCallback retry,
   }) async {
-    // The bubble shrinks away and its neighbours close the gap first; with
-    // nothing on screen (or reduced motion) it goes at once.
-    final exit = ConversationMessageEntrance.leave([
-      event.eventId,
-      event.transactionId,
-    ]);
-    if (exit != null) await exit;
+    // With deleted messages hidden the bubble shrinks away and its
+    // neighbours close the gap first (with nothing on screen or reduced
+    // motion it goes at once); otherwise it turns into the placeholder.
+    if (AppSettings.hideRedactedEvents.value) {
+      final exit = ConversationMessageEntrance.leave([
+        event.eventId,
+        event.transactionId,
+      ]);
+      if (exit != null) await exit;
+    }
     _hide(event);
     refresh();
     void failed(Object error) {
@@ -253,5 +297,14 @@ abstract final class MessageDeletions {
     });
     // It may have landed between the menu and the confirmation.
     if (event.status.isError) unawaited(settle(event));
+  }
+}
+
+class _DeletionChanges extends ChangeNotifier {
+  int revision = 0;
+
+  void bump() {
+    revision++;
+    notifyListeners();
   }
 }

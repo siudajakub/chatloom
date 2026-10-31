@@ -37,6 +37,24 @@ enum AppSettings<T> {
   ),
   renderHtml<bool>('chat.fluffy.renderHtml', true),
   hideRedactedEvents<bool>('chat.fluffy.hideRedactedEvents', false),
+
+  /// "Keep deleted messages" (J 2026-10-31): a device-local copy of a
+  /// message taken just before a deletion syncs (`KeptMessages`). Off by
+  /// default; the three below only apply while it is on.
+  keepDeletedMessages<bool>('pl.personal.chat.keep_deleted', false),
+
+  /// Keep messages another person (or a network admin) deleted.
+  keepDeletedByOthers<bool>('pl.personal.chat.keep_deleted.others', true),
+
+  /// Keep messages the user deleted (here or in a network's own app).
+  keepDeletedOwn<bool>('pl.personal.chat.keep_deleted.own', false),
+
+  /// Keep view-once and disappearing messages: an explicit opt-in that
+  /// overrides the default of never keeping them.
+  keepDeletedDisappearing<bool>(
+    'pl.personal.chat.keep_deleted.disappearing',
+    false,
+  ),
   hideUnknownEvents<bool>('chat.fluffy.hideUnknownEvents', true),
   autoplayImages<bool>('chat.fluffy.autoplay_images', true),
 

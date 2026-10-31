@@ -128,7 +128,7 @@ class NotionInboxRow extends StatelessWidget {
     ];
     final previewColor = typing
         ? colors.accent
-        : hasUnread && !muted && !draft
+        : hasUnread && !muted && !draft && !redacted
         ? colors.text
         : secondary;
     return Semantics(
@@ -312,12 +312,11 @@ class NotionInboxRow extends StatelessWidget {
                                                 .copyWith(
                                                   height: 1.3,
                                                   color: previewColor,
-                                                  fontStyle: draft
+                                                  // A draft, or the muted
+                                                  // words of a deleted
+                                                  // message (as its bubble).
+                                                  fontStyle: draft || redacted
                                                       ? FontStyle.italic
-                                                      : null,
-                                                  decoration: redacted
-                                                      ? TextDecoration
-                                                            .lineThrough
                                                       : null,
                                                 ),
                                           ),

@@ -474,6 +474,7 @@ abstract final class MessageDeliveryActions {
   /// Redacts a message the network never got; the bridge's report about
   /// that redaction means nothing to the user.
   static Future<void> _removeUndelivered(Event event) async {
+    MessageDeletions.markQuietTarget(event.room, event.eventId);
     final id = await event.redactEvent();
     if (id != null) MessageDeletions.markQuiet(event.room, id);
   }

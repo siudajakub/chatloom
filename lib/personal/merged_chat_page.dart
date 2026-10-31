@@ -47,6 +47,7 @@ import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/media/media_export_actions.dart';
@@ -83,6 +84,7 @@ import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
+import 'package:chatloom/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/app_lock.dart';
@@ -182,6 +184,12 @@ class MergedChatPage extends StatelessWidget {
     initialEventId: initialEventId,
   );
 }
+
+/// Whether [event] is drawn as a row of a merged conversation: the
+/// ordinary timeline's "Hide deleted messages" and "Hide unknown message
+/// types" apply here too.
+@visibleForTesting
+bool mergedChatShowsRow(Event event) => _MergedChatPageState._isRow(event);
 
 class _MergedChatView extends StatefulWidget {
   final PersonalClient personal;
@@ -324,6 +332,9 @@ class _MergedChatPageState extends State<_MergedChatView>
     personal.addListener(_personalChanged);
     // "Remove for you" (FX-16): refilter the rows when it changes.
     HiddenMessages.instance
+      ..load(personal.client)
+      ..addListener(_hiddenMessagesChanged);
+    KeptMessages.instance
       ..load(personal.client)
       ..addListener(_hiddenMessagesChanged);
     scrollController.addListener(_onScroll);
@@ -471,8 +482,10 @@ class _MergedChatPageState extends State<_MergedChatView>
   static bool _isRow(Event e) =>
       _rowTypes.contains(e.type) &&
       e.relationshipType != RelationshipTypes.edit &&
-      // A message the user just deleted disappears at once.
-      !MessageDeletions.hides(e) &&
+      // The ordinary timeline's settings: "Hide deleted messages" (also a
+      // message the user is deleting right now) and "Hide unknown events".
+      e.isDeletedShown &&
+      (!AppSettings.hideUnknownEvents.value || e.isEventTypeKnown) &&
       // "Remove for you" (FX-16): hidden in ChatLoom only.
       !HiddenMessages.hides(e);
 
@@ -2952,6 +2965,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   void dispose() {
     HiddenMessages.instance.removeListener(_hiddenMessagesChanged);
+    KeptMessages.instance.removeListener(_hiddenMessagesChanged);
     _rejections?.dispose();
     MacDesktopCommands.unbindChat(this);
     ConversationJumpTargets.unregister(this);

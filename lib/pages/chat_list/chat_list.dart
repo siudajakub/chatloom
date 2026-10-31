@@ -21,6 +21,7 @@ import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/conversation_shortcuts.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/message_notification.dart'
     show personalAppLockConfigured;
@@ -659,6 +660,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         .then((_) {
           // Messages removed for you (FX-16), from the store just opened.
           HiddenMessages.instance.load(client);
+          KeptMessages.instance.load(client);
           // Where incognito chats reopen, ready before the first tap.
           SeenPositions.instance.load(client);
           if (mounted && Matrix.of(context).client == client) setState(() {});

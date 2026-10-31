@@ -9,6 +9,8 @@ import 'dart:io';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/events/round_mini_player.dart';
 import 'package:chatloom/personal/conversation_shortcuts.dart';
+import 'package:chatloom/personal/kept_message_notification.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -452,7 +454,14 @@ class MatrixState extends State<Matrix> {
           backgroundPush?.forgetClients([c]);
           PersonalPrivacy.forget(c);
           PushRuleMirror.stopFor(c);
-          PersonalClient.of(c).dispose();
+          // Kept deleted messages leave with the account: deleted from the
+          // device store while it is still open, then the store closes.
+          final personal = PersonalClient.of(c);
+          unawaited(
+            KeptMessages.instance
+                .forget(c, personal)
+                .whenComplete(personal.dispose),
+          );
           // Launcher shortcuts name this account's chats (FT-21).
           if (PlatformInfos.isAndroid) clearConversationShortcuts();
           widget.clients.remove(c);
@@ -484,6 +493,21 @@ class MatrixState extends State<Matrix> {
         });
       }
       unawaited(personal.load());
+      // "Keep deleted messages" (off by default): copies a message before
+      // its deletion syncs; another person's deletion is announced.
+      KeptMessages.instance.attach(
+        c,
+        onKept: (room, kept) => unawaited(
+          showKeptDeletionNotification(
+            room,
+            kept,
+            chatOpen: (room) =>
+                activeRoomId == room.id &&
+                WidgetsBinding.instance.lifecycleState ==
+                    AppLifecycleState.resumed,
+          ).catchError((Object _) {}),
+        ),
+      );
       // Chats muted for good or ignored stop waking devices (BP-07).
       PushRuleMirror.startFor(c, personal);
     }

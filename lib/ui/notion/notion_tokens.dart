@@ -151,6 +151,16 @@ abstract final class NotionBubble {
     vertical: xs,
   );
 
+  /// Above and below one line of bubble text (message text, the deleted
+  /// placeholder, a kept deleted message).
+  static const EdgeInsets textLine = EdgeInsets.symmetric(vertical: 2);
+
+  /// The "Deleted" tag of a kept deleted message: a pill inside the bubble.
+  static const EdgeInsets tagPadding = EdgeInsets.symmetric(
+    horizontal: xs,
+    vertical: 2,
+  );
+
   /// Between bubbles of one group, and between groups.
   static const double groupGap = 2;
   static const double seriesGap = 14;

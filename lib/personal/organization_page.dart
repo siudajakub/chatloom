@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -1139,7 +1140,11 @@ class _BookmarkSearchPageState extends State<BookmarkSearchPage> {
             ?.text;
         if (event == null || event.redacted) {
           return ListTile(
-            title: const Text('Saved message unavailable'),
+            title: Text(
+              event == null
+                  ? 'Saved message unavailable'
+                  : L10n.of(context).savedMessageDeleted,
+            ),
             trailing: IconButton(
               tooltip: 'Remove bookmark',
               icon: const Icon(Icons.bookmark_remove_outlined),

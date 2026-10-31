@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/message_deletion.dart';
+import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/conversation_activity.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
@@ -136,10 +140,94 @@ List<Object?> chatListItemSignature(
         event.content['m.new_content'],
         inboxDeliveryProgress(source, event),
         HiddenMessages.hides(event),
+        MessageDeletions.deleting(event),
+        KeptMessages.of(event) != null,
       ] else
         null,
     ],
+    // A deleted newest message shows the one before it, or neutral words.
+    AppSettings.hideRedactedEvents.value,
   ];
+}
+
+/// Inbox rows whose newest message is deleted while deleted messages are
+/// hidden show the message before it: looked up once per deletion in the
+/// room's stored timeline (no network), app-wide and bounded. A stand-in
+/// that is deleted (or being deleted, or removed for you) later is dropped
+/// at once, so a preview never shows the text of a deleted message.
+abstract final class _PreviousPreviews {
+  static const _cap = 64;
+  static final _found = <String, Event?>{};
+  static final _loading = <String>{};
+  static final _rows = <String, VoidCallback>{};
+  static final _watching = Expando<StreamSubscription<Event>>();
+
+  static String _key(Event deleted) =>
+      '${deleted.room.id}\u0000${deleted.eventId}';
+
+  /// The stand-in preview of [deleted], or null while it loads or when the
+  /// stored timeline has none; [loaded] runs once a lookup finishes or the
+  /// stand-in is deleted.
+  static Event? of(Event deleted, VoidCallback loaded) {
+    final key = _key(deleted);
+    _rows[key] = loaded;
+    _watch(deleted.room.client);
+    if (_found.containsKey(key)) {
+      final event = _found[key];
+      if (event == null ||
+          !(isDeletedForDisplay(event) || HiddenMessages.hides(event))) {
+        return event;
+      }
+      _found.remove(key);
+    }
+    if (!_loading.add(key)) return null;
+    final room = deleted.room;
+    void settle(Event? event) {
+      _loading.remove(key);
+      _found
+        ..remove(key)
+        ..[key] = event;
+      while (_found.length > _cap) {
+        final oldest = _found.keys.first;
+        _found.remove(oldest);
+        _rows.remove(oldest);
+      }
+      _rows[key]?.call();
+    }
+
+    // Future.sync: a database that throws at once still settles later,
+    // never inside this build.
+    Future.sync(() => room.client.database.getEventList(room, limit: 30))
+        .then(
+          (events) => settle(
+            previousPreviewEvent(
+              events,
+              deletedId: deleted.eventId,
+              previewTypes: room.client.roomPreviewLastEvents,
+            ),
+          ),
+          onError: (Object _) => settle(null),
+        );
+    return null;
+  }
+
+  /// Drops a stand-in as soon as its own deletion syncs.
+  static void _watch(Client client) {
+    _watching[client] ??= client.onTimelineEvent.stream.listen((event) {
+      if (event.type != EventTypes.Redaction) return;
+      final target = event.redacts ?? event.content['redacts'];
+      final stale = [
+        for (final entry in _found.entries)
+          if (entry.value?.eventId == target &&
+              entry.value?.room.id == event.room.id)
+            entry.key,
+      ];
+      for (final key in stale) {
+        _found.remove(key);
+        _rows[key]?.call();
+      }
+    }, onError: (Object _) {});
+  }
 }
 
 class ChatListItem extends StatefulWidget {
@@ -329,8 +417,36 @@ class _ChatListItemState extends State<ChatListItem> {
     // FX-16: a newest message removed for you shows as such (Messenger);
     // no ticks or failure mark of a message the user no longer sees.
     final hiddenLast = lastEvent != null && HiddenMessages.hides(lastEvent);
+    // A deleted newest message (also one the user is deleting right now)
+    // reads like its placeholder in the chat, muted; with deleted messages
+    // hidden, the message before it stands in when it is at hand.
+    final deletedLast =
+        lastEvent != null && !hiddenLast && isDeletedForDisplay(lastEvent);
+    var mutedPreview = false;
     if (hiddenLast) {
       lastPreview = 'Removed for you';
+    } else if (deletedLast &&
+        (AppSettings.hideRedactedEvents.value ||
+            MessageDeletions.isCleanup(lastEvent)) &&
+        KeptMessages.of(lastEvent) == null) {
+      final previous = _PreviousPreviews.of(lastEvent, () {
+        if (mounted) setState(() {});
+      });
+      if (previous == null) {
+        lastPreview = l10n.noRecentMessages;
+        mutedPreview = true;
+      } else {
+        lastPreview = personalPreview(
+          previous,
+          own: OwnSenderResolver.of(room.client).isOwnEvent(previous),
+          group: personalPreviewShowsSender(previous),
+          i18n: MatrixLocals(l10n),
+        );
+      }
+    } else if (deletedLast) {
+      // "Message deleted", or the kept text marked "Deleted: …".
+      lastPreview = personalPreviewLabel(lastEvent, i18n: MatrixLocals(l10n));
+      mutedPreview = true;
     } else if (lastEvent != null) {
       final own = OwnSenderResolver.of(room.client).isOwnEvent(lastEvent);
       // Telegram and Messenger mark a chat whose last own message failed.
@@ -410,7 +526,7 @@ class _ChatListItemState extends State<ChatListItem> {
         notificationLabel: notificationLabel,
         selected: widget.activeChat,
         draft: draft != null || conflict,
-        redacted: lastEvent?.redacted == true && draft == null && !showsTyping,
+        redacted: mutedPreview && draft == null && !showsTyping,
         typing: showsTyping,
         pinned: metadata.isPinned,
         tag: !invite && isMessageRequest(room) ? 'Request' : null,

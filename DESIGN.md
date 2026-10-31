@@ -135,6 +135,20 @@ spell `👍️`, pickers `👍`) and always go out in the network's spelling. Do
 first quick reaction and plays `NotionReactionBurst` at the finger. There is
 no multi-selection.
 
+A deleted message keeps its bubble as a placeholder: a muted italic line
+after an icon (`DeletedMessageLabel`, `lib/pages/chat/events/deleted_message.dart`,
+padding `NotionBubble.textLine`) with one set of words everywhere
+(`deletedLabel`, `lib/personal/deleted_messages.dart`): "Message deleted",
+"You deleted this message", "Message disappeared" (timer ⊘ glyph) or, only for a
+group admin's removal, "Deleted by {name}". Reply quotes of it take the same
+icon and italic (`ConversationReplyQuote(textIcon:)`), the inbox preview the
+same words in italic. An own delete turns into the placeholder at once;
+"Hide deleted messages" removes placeholders everywhere, merged chats too. A
+message kept by "Keep deleted messages" shows its text dimmed
+(`KeptMessageContent`, opacity .62) with a hairline "Deleted" tag
+(`NotionBubble.tagPadding`, `NotionRadius.pillAll`) and never downloads media;
+a tap tells when it was deleted.
+
 A jump to a message (reply quote, pinned message, notification) flashes its
 bubble once (`ConversationFlash`, Telegram's unselect): the bubble's text
 colour at `ConversationBubble.flashOpacity` over the fill rises in `quick`,

@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/copy_notice.dart';
+import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/network_rejections.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -157,9 +158,8 @@ void main() {
       expect(text.message, contains('on WhatsApp'));
     });
 
-    testWidgets('the bubble goes at once; a failure brings it back + Retry', (
-      tester,
-    ) async {
+    testWidgets('the bubble turns deleted at once; a failure brings it back + '
+        'Retry', (tester) async {
       final client = ConversationClient();
       final room = _Room(client, '!del:example.invalid');
       final event = _Own(room: room, id: r'$gone')
@@ -184,13 +184,20 @@ void main() {
         confirm: false,
         refresh: () => refreshes++,
       );
-      expect(MessageDeletions.hides(event), isTrue);
+      expect(MessageDeletions.deleting(event), isTrue);
+      // It stays as "You deleted this message" (as after a restart) unless
+      // deleted messages are hidden.
+      expect(isDeletedForDisplay(event), isTrue);
+      expect([event].filterByVisibleInGui(), [event]);
+      await AppSettings.hideRedactedEvents.setItem(true);
       expect([event].filterByVisibleInGui(), isEmpty);
+      await AppSettings.hideRedactedEvents.setItem(false);
       expect(refreshes, 1);
       event.redactGate!.complete();
       await done;
       await tester.pump();
-      expect(MessageDeletions.hides(event), isFalse);
+      expect(MessageDeletions.deleting(event), isFalse);
+      expect(isDeletedForDisplay(event), isFalse);
       expect(refreshes, 2);
       expect(find.text('Retry'), findsOneWidget);
       expect(find.textContaining('Couldn’t delete'), findsOneWidget);
@@ -233,8 +240,8 @@ void main() {
         status: EventStatus.sent,
         unsigned: {'transaction_id': 'txn-1'},
       );
-      // Still hidden under its new event ID.
-      expect(MessageDeletions.hides(landed), isTrue);
+      // Still deleting under its new event ID.
+      expect(MessageDeletions.deleting(landed), isTrue);
       client.onTimelineEvent.add(landed);
       await tester.pump();
       expect(landed.redactions, 1);

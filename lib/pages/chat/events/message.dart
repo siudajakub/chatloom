@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
@@ -14,10 +15,12 @@ import 'package:chatloom/pages/chat/matrix_conversation_grouping.dart';
 import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/personal/bridge_notices.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/instagram_share.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/message_preview.dart';
@@ -35,6 +38,7 @@ import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart'
     show ChatTheme, isInstagramShare;
 
+import 'kept_message.dart';
 import 'message_content.dart';
 import 'message_delivery_status.dart';
 import 'message_delivery_ticks.dart';
@@ -143,6 +147,11 @@ class Message extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (album?.lead == false) return const SizedBox.shrink();
+    // A message the user is deleting draws as deleted at once, exactly as
+    // it will once the server's redaction arrives (and after a restart).
+    final event = deletedDisplayCopy(this.event);
+    // "Keep deleted messages": the kept content instead of the placeholder.
+    final kept = event.redacted ? KeptMessages.of(event) : null;
     final theme = Theme.of(context);
     // A message this device cannot decrypt yet is still a message: it keeps
     // its sender, side and grouping, and MessageContent shows its key state.
@@ -252,7 +261,11 @@ class Message extends StatelessWidget {
       pageBackground,
       theme.colorScheme.onSurfaceVariant,
     );
-    final edited = event.hasAggregatedEvents(timeline, RelationshipTypes.edit);
+    // Edits and reactions outlive a deletion on the server; a deleted
+    // message shows neither (the SDK only drops them in the open session).
+    final edited =
+        !event.redacted &&
+        event.hasAggregatedEvents(timeline, RelationshipTypes.edit);
     final delivery = own
         ? messageDeliveryOf(
             event,
@@ -397,21 +410,30 @@ class Message extends StatelessWidget {
           sendingLabel(clock: true),
       ],
     );
-    final messageContent = MessageContent(
-      display,
-      textColor: textColor,
-      // Links in a coloured own bubble take its text colour (underlined),
-      // like Messenger; elsewhere the accent.
-      linkColor: custom is int || own ? textColor : theme.colorScheme.primary,
-      onInfoTab: onInfoTab,
-      borderRadius: radius,
-      timeline: timeline,
-      selected: false,
-      bigEmojis: bigEmojis,
-      outgoing: own,
-      roundStatus: roundStatus,
-      album: album?.members,
-    );
+    final messageContent = kept != null
+        ? KeptMessageContent(
+            kept: kept,
+            event: event,
+            textColor: textColor,
+            fontSize: AppConfig.messageFontSize,
+          )
+        : MessageContent(
+            display,
+            textColor: textColor,
+            // Links in a coloured own bubble take its text colour (underlined),
+            // like Messenger; elsewhere the accent.
+            linkColor: custom is int || own
+                ? textColor
+                : theme.colorScheme.primary,
+            onInfoTab: onInfoTab,
+            borderRadius: radius,
+            timeline: timeline,
+            selected: false,
+            bigEmojis: bigEmojis,
+            outgoing: own,
+            roundStatus: roundStatus,
+            album: album?.members,
+          );
     final isReply = event.inReplyToEventId(includingFallback: false) != null;
     // The quoted original takes the muted colour of its own side, blended
     // towards the page, and stays opaque so wallpapers never show through.
@@ -552,10 +574,11 @@ class Message extends StatelessWidget {
                   ],
                 ),
                 reactions:
-                    event.hasAggregatedEvents(
-                      timeline,
-                      RelationshipTypes.reaction,
-                    )
+                    !event.redacted &&
+                        event.hasAggregatedEvents(
+                          timeline,
+                          RelationshipTypes.reaction,
+                        )
                     ? MessageReactions(
                         event,
                         timeline,
@@ -602,7 +625,8 @@ class Message extends StatelessWidget {
                     toggle: true,
                     strict: strictCapabilities,
                   ),
-                  onLongPress: (press) => _openMenu(context, press),
+                  onLongPress: (press) =>
+                      _openMenu(context, press, event, kept: kept),
                   // Mac: react · reply · more beside the hovered bubble.
                   hoverActions: PlatformInfos.isDesktop,
                   hoverReact: () => ConversationMessageActions.canReactAtAll(
@@ -633,7 +657,12 @@ class Message extends StatelessWidget {
 
   /// The long-press menu: quick reactions of this network (when it takes
   /// reactions here) above the lifted bubble, the host's actions below.
-  void _openMenu(BuildContext context, ConversationMessagePress press) {
+  void _openMenu(
+    BuildContext context,
+    ConversationMessagePress press,
+    Event event, {
+    KeptMessage? kept,
+  }) {
     final canReact = ConversationMessageActions.canReactAtAll(
       event,
       strict: strictCapabilities,
@@ -669,7 +698,10 @@ class Message extends StatelessWidget {
       actions: press.reactionsOnly
           ? const []
           : menuActions?.call(event) ?? const [],
-      caption: event.originServerTs.localizedDetailedTime(context),
+      caption: kept == null
+          ? event.originServerTs.localizedDetailedTime(context)
+          : '${event.originServerTs.localizedDetailedTime(context)} · '
+                '${L10n.of(context).deletedAtTime(kept.deletedAt.localizedDetailedTime(context))}',
     );
   }
 }

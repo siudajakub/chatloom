@@ -104,6 +104,7 @@ class NetworkRejectionWatcher {
   /// about that tidy-up redaction is not shown.
   Future<void> _revert(Event target) async {
     if (target.redacted) return;
+    MessageDeletions.markQuietTarget(target.room, target.eventId);
     final id = await target.redactEvent();
     if (id != null) MessageDeletions.markQuiet(target.room, id);
   }

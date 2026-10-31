@@ -382,6 +382,38 @@ class PersonalClient extends ChangeNotifier {
   Future<void> writeLocalRecord(String key, Map<String, dynamic> value) async =>
       (await _openedStore()).put('${_prefix}local:$key', value);
 
+  /// Every device-local record whose key starts with [prefix], keyed without
+  /// the prefix (see [readLocalRecord]).
+  Future<Map<String, Map<String, dynamic>>> readLocalRecords(
+    String prefix,
+  ) async {
+    final full = '${_prefix}local:$prefix';
+    final records = await (await _openedStore()).readPrefix(full);
+    return {
+      for (final entry in records.entries)
+        entry.key.substring(full.length): entry.value,
+    };
+  }
+
+  /// Deletes a record written by [writeLocalRecord].
+  Future<void> deleteLocalRecord(String key) async =>
+      (await _openedStore()).delete('${_prefix}local:$key');
+
+  /// Deletes every device-local record under [prefix] on sign-out, before
+  /// [dispose]: the account is already signed out then, so the ordinary
+  /// accessors refuse. Does nothing when this run never opened the store.
+  Future<void> purgeLocalRecordsOnSignOut(String prefix) async {
+    try {
+      await _localLoading;
+    } catch (_) {}
+    final store = _store;
+    if (_disposed || store == null) return;
+    final full = '${_prefix}local:$prefix';
+    for (final key in (await store.readPrefix(full)).keys) {
+      await store.delete(key);
+    }
+  }
+
   Future<PersonalStore> _openedStore() async {
     _checkActive();
     if (_store == null) {

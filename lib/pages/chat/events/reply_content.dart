@@ -6,6 +6,8 @@
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
+import 'package:chatloom/pages/chat/events/deleted_message.dart';
+import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -48,8 +50,10 @@ class ReplyContent extends StatelessWidget {
     final display = timeline != null
         ? replyEvent.getDisplayEvent(timeline)
         : replyEvent;
+    // A deleted original reads like its own placeholder (icon, italic).
+    final deleted = isDeletedForDisplay(display);
     final media =
-        !display.redacted &&
+        !deleted &&
         !isUndecryptable(display) &&
         _thumbnailTypes.contains(display.messageType);
     // A video without a thumbnail has nothing to download: a static glyph
@@ -68,6 +72,7 @@ class ReplyContent extends StatelessWidget {
         textColor: textColor,
         outgoing: outgoing,
         caption: caption,
+        textIcon: deleted ? deletedMessageIcon(deletionOf(display).kind) : null,
         leading: thumbnail
             ? MxcImage(
                 event: display,

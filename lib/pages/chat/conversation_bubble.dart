@@ -605,6 +605,10 @@ class ConversationReplyQuote extends StatelessWidget {
   final VoidCallback? onLongPress;
   final String? semanticLabel;
 
+  /// A status glyph before [text] (a deleted original's ⊘); with it the
+  /// text is italic, as in the original's own placeholder.
+  final IconData? textIcon;
+
   const ConversationReplyQuote({
     super.key,
     required this.text,
@@ -616,6 +620,7 @@ class ConversationReplyQuote extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.semanticLabel,
+    this.textIcon,
   });
 
   /// Opaque quote colours for an original whose bubble is [side] on a chat
@@ -680,13 +685,26 @@ class ConversationReplyQuote extends StatelessWidget {
                   ),
                   const SizedBox(width: NotionSpace.xs),
                 ],
+                if (textIcon case final icon?) ...[
+                  Icon(
+                    icon,
+                    size: MediaQuery.textScalerOf(
+                      context,
+                    ).scale(NotionType.callout.fontSize!),
+                    color: textColor,
+                  ),
+                  const SizedBox(width: NotionSpace.xxs),
+                ],
                 Flexible(
                   child: Text(
                     text,
                     maxLines: NotionBubble.quoteMaxLines,
                     overflow: TextOverflow.ellipsis,
                     textWidthBasis: TextWidthBasis.longestLine,
-                    style: NotionType.callout.copyWith(color: textColor),
+                    style: NotionType.callout.copyWith(
+                      color: textColor,
+                      fontStyle: textIcon == null ? null : FontStyle.italic,
+                    ),
                   ),
                 ),
               ],
