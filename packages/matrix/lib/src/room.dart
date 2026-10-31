@@ -30,6 +30,11 @@ const String messageSendingStatusKey =
 const String fileSendingStatusKey =
     'com.famedly.famedlysdk.file_sending_status';
 
+/// Fork (ChatLoom): an edit that became [Room.lastEvent] stores the time of
+/// the message it edits under this unsigned key (persisted with the room), so
+/// editing the last message does not move the chat in the inbox.
+const String lastEventOriginalTsKey = 'org.chatloom.original_ts';
+
 /// Represents a Matrix room.
 class Room {
   /// The full qualified Matrix ID for the room in the format '!localid:server.abc'.

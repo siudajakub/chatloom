@@ -399,7 +399,9 @@ class _ChatListItemState extends State<ChatListItem> {
             : const [],
         name: name,
         preview: preview,
-        time: lastEvent?.originServerTs.localizedTimeShort(context),
+        time: InboxProjection.activityTime(
+          lastEvent,
+        )?.localizedTimeShort(context),
         unreadCount: projection.unreadCount(room),
         unread: sources.any(personalRoomUnread),
         mentioned:

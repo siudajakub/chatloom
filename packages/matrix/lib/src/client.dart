@@ -2870,6 +2870,8 @@ class Client extends MatrixApi {
       final wasKnownRoom = getRoomById(id) != null;
 
       final room = await _updateRoomsByRoomUpdate(id, syncRoomUpdate);
+      // Fork: a recreated preview placeholder keeps this time (below).
+      final previousLastEvent = room.lastEvent;
 
       // Is the timeline limited? Then all previous messages should be
       // removed from the database!
@@ -2986,7 +2988,13 @@ class Client extends MatrixApi {
               (syncRoomUpdate.timeline?.limited == true &&
                   room.lastEvent == null))) {
         room.lastEvent = Event(
+          // Fork: no preview event arrived, so the chat's activity time stays
+          // that of the previous last event. Upstream used the batch's first
+          // event (a reaction, state) or now() for receipt/typing-only updates,
+          // which moved the chat to the top of the inbox on every such update
+          // while its preview refresh was pending or failing.
           originServerTs:
+              previousLastEvent?.originServerTs ??
               syncRoomUpdate.timeline?.events?.firstOrNull?.originServerTs ??
               DateTime.now(),
           type: EventTypes.refreshingLastEvent,
@@ -3356,6 +3364,16 @@ class Client extends MatrixApi {
               (room.lastEvent?.relationshipType == RelationshipTypes.edit &&
                   event.relationshipEventId ==
                       room.lastEvent?.relationshipEventId)) {
+            // Fork: remember the edited message's time (see
+            // [lastEventOriginalTsKey]); a fresh map leaves the sync's
+            // MatrixEvent and the stored timeline event untouched.
+            final previous = room.lastEvent!;
+            event.unsigned = {
+              ...?event.unsigned,
+              lastEventOriginalTsKey:
+                  previous.unsigned?.tryGet<int>(lastEventOriginalTsKey) ??
+                  previous.originServerTs.millisecondsSinceEpoch,
+            };
             room.lastEvent = event;
           }
           break;

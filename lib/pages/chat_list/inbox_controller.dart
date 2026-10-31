@@ -164,7 +164,8 @@ class InboxController extends ChangeNotifier {
   /// counts move only with new events or the account's own receipts (some
   /// servers repeat `unread_notifications` in every room entry, so it is no
   /// signal by itself). The exception is a receipt on the room's last own
-  /// message: it turns the row's ticks into "read".
+  /// message: it turns the row's ticks into "read". Another is an update in
+  /// which the SDK replaced the room's last event (a preview placeholder).
   bool _othersReceiptsOnly(String roomId, JoinedRoomUpdate update) {
     final ephemeral = update.ephemeral;
     final own = client.userID;
@@ -181,7 +182,10 @@ class InboxController extends ChangeNotifier {
         update.summary != null) {
       return false;
     }
-    final last = client.getRoomById(roomId)?.lastEvent;
+    final room = client.getRoomById(roomId);
+    final index = _index;
+    if (room != null && index != null && !index.isCurrent(room)) return false;
+    final last = room?.lastEvent;
     if (last == null || !OwnSenderResolver.of(client).isOwnEvent(last)) {
       return true;
     }
@@ -297,7 +301,9 @@ class InboxController extends ChangeNotifier {
 
   void _rebuild() {
     debugFullBuilds++;
-    final index = InboxProjection.snapshot(personal).buildIndex(client.rooms);
+    final index = InboxProjection.snapshot(
+      personal,
+    ).buildIndex(client.rooms, previous: _index);
     _index = index;
     _networks = _computeNetworks(index);
     _scheduleMuteExpiry();

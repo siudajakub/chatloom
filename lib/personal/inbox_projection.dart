@@ -393,9 +393,24 @@ class InboxProjection {
       !PersonalPrivacy.isJournal(room) &&
       !NetworkChatActions.isDeleting(room);
 
+  /// The time [event] as a chat's last event places the chat in the inbox.
+  /// An edit of the last message keeps the edited message's time (stored by
+  /// the SDK fork), so editing never moves a chat; Telegram does the same.
+  static DateTime? activityTime(Event? event) {
+    if (event == null) return null;
+    final original = event.relationshipType == RelationshipTypes.edit
+        ? event.unsigned?.tryGet<int>(lastEventOriginalTsKey)
+        : null;
+    return original == null
+        ? event.originServerTs
+        : DateTime.fromMillisecondsSinceEpoch(original);
+  }
+
   /// All inbox records of [input], unfiltered. Reusable across filter/search
   /// changes; [InboxIndex.updateRooms] refreshes single rooms in place.
-  InboxIndex buildIndex(Iterable<Room> input) {
+  /// [previous] (the index this one replaces) keeps the activity time of a
+  /// chat whose last event is only a preview placeholder.
+  InboxIndex buildIndex(Iterable<Room> input, {InboxIndex? previous}) {
     assert(_snapshot, 'An index caches state; build it from a snapshot.');
     final available = {
       for (final room in input.where(_candidate)) room.id: room,
@@ -417,7 +432,11 @@ class InboxProjection {
                 if (members[member.roomId]?.id == group.id)
                   available[member.roomId]!,
             ];
-      index._put(entity, _record(room, entity, group, sources));
+      index._put(
+        entity,
+        _record(room, entity, group, sources, previous?._records[entity]),
+        sources,
+      );
     }
     return index;
   }
@@ -426,8 +445,9 @@ class InboxProjection {
     Room room,
     String entity,
     PersonGroup? group,
-    List<Room> sourceRooms,
-  ) {
+    List<Room> sourceRooms, [
+    InboxRecord? previous,
+  ]) {
     final representative = group == null
         ? room
         : sourceRooms.firstWhere(
@@ -438,6 +458,24 @@ class InboxProjection {
         sourceRooms.map((r) => r.lastEvent).whereType<Event>().toList()
           ..sort((a, b) => b.originServerTs.compareTo(a.originServerTs));
     final latest = lastEvents.firstOrNull;
+    // The newest activity of all source chats (a merged person takes the
+    // latest of its chats).
+    Event? newest;
+    DateTime? lastActivity;
+    for (final event in lastEvents) {
+      final time = activityTime(event)!;
+      if (lastActivity == null || time.isAfter(lastActivity)) {
+        newest = event;
+        lastActivity = time;
+      }
+    }
+    // A preview placeholder (refresh pending or failing) or a technical last
+    // event brings no new activity: the chat keeps its place.
+    if (newest != null &&
+        previous?.lastActivity != null &&
+        !personal.client.roomPreviewLastEvents.contains(newest.type)) {
+      lastActivity = previous!.lastActivity;
+    }
     final metadata = metadataForEntity(entity);
     final String title;
     if (group != null) {
@@ -492,7 +530,7 @@ class InboxProjection {
           !(group == null && kinds.single.messageRequest) &&
           !metadata.muted &&
           !movedDown(entity, latest),
-      lastActivity: latest?.originServerTs,
+      lastActivity: lastActivity,
     );
     return (record, representative);
   }
@@ -551,14 +589,25 @@ class InboxIndex {
   final Map<String, PersonGroup> _members;
   final _records = <String, InboxRecord>{};
   final _representatives = <String, Room>{};
+  // The last event id of every source room when its record was computed.
+  final _lastEventIds = <String, String?>{};
   List<InboxRecord>? _list;
   InboxIndex._(this.projection, this._available, this._members);
 
-  void _put(String entity, (InboxRecord, Room) value) {
+  void _put(String entity, (InboxRecord, Room) value, List<Room> sources) {
     _records[entity] = value.$1;
     _representatives[value.$2.id] = value.$2;
+    for (final room in sources) {
+      _lastEventIds[room.id] = room.lastEvent?.eventId;
+    }
     _list = null;
   }
+
+  /// Whether [room]'s record was computed from its current last event (the
+  /// SDK may replace it in an update that otherwise changes no row).
+  bool isCurrent(Room room) =>
+      _lastEventIds.containsKey(room.id) &&
+      _lastEventIds[room.id] == room.lastEvent?.eventId;
 
   List<InboxRecord> get records => _list ??= List.unmodifiable(_records.values);
   Iterable<Room> get rooms => _available.values;
@@ -601,7 +650,11 @@ class InboxIndex {
     }
     for (final room in changed) {
       projection.forgetEntity(room.id);
-      _put(room.id, projection._record(room, room.id, null, [room]));
+      _put(
+        room.id,
+        projection._record(room, room.id, null, [room], _records[room.id]),
+        [room],
+      );
     }
     return true;
   }
