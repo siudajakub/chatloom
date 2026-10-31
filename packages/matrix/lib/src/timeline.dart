@@ -734,13 +734,21 @@ class Timeline {
         if (index < events.length) {
           removeAggregatedEvent(events[index]);
 
-          // Is the redacted event a reaction? Then update the event this
-          // belongs to:
+          // Is the redacted event a reaction or an edit? Then update the
+          // event this belongs to. Fork (ChatLoom): only those; a thread
+          // message or any other related message is a message of its own and
+          // loses its content below like every other redacted event.
           if (onChange != null) {
-            final relationshipEventId = events[index].relationshipEventId;
+            final redacted = events[index];
+            final relationshipEventId = redacted.relationshipEventId;
             if (relationshipEventId != null) {
               onChange?.call(_findEvent(event_id: relationshipEventId));
-              return;
+              if (const {
+                RelationshipTypes.reaction,
+                RelationshipTypes.edit,
+              }.contains(redacted.relationshipType)) {
+                return;
+              }
             }
           }
 
