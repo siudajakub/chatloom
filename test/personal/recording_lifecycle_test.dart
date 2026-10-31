@@ -1103,11 +1103,12 @@ void main() {
     final (state, room) = await mount(tester);
     await start(state, room);
     final config = platform.lastConfig!;
+    // macOS records the same Opus into CAF and remuxes it to Ogg.
     final apple = PlatformInfos.isCupertinoStyle;
-    expect(config.encoder, apple ? AudioEncoder.aacLc : AudioEncoder.opus);
-    expect(config.sampleRate, apple ? 44100 : 48000);
-    expect(config.bitRate, apple ? 128000 : 96000);
-    expect(platform.outputPath, endsWith(apple ? '.m4a' : '.ogg'));
+    expect(config.encoder, AudioEncoder.opus);
+    expect(config.sampleRate, 48000);
+    expect(config.bitRate, 96000);
+    expect(platform.outputPath, endsWith(apple ? '.caf' : '.ogg'));
     expect(config.numChannels, 1);
     expect(
       config.androidConfig.audioSource,
@@ -1123,8 +1124,7 @@ void main() {
     final (state, room) = await mount(tester);
     await start(state, room);
     final config = platform.lastConfig!;
-    final apple = PlatformInfos.isCupertinoStyle;
-    expect(config.encoder, apple ? AudioEncoder.aacLc : AudioEncoder.opus);
+    expect(config.encoder, AudioEncoder.opus);
     expect(config.bitRate, 64000);
     expect(config.autoGain, isFalse);
     expect(config.noiseSuppress, isFalse);
