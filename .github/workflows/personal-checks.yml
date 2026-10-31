@@ -113,6 +113,7 @@ jobs:
       - name: Full application startup and Notion controller regressions
         run: >-
           flutter test --no-pub
+          test/brand_assets_test.dart
           test/client_manager_startup_regression_test.dart
           test/client_startup_widget_test.dart
           test/personal/personal_diagnostics_test.dart

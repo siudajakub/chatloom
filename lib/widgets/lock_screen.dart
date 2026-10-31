@@ -5,6 +5,7 @@
 
 import 'dart:async';
 
+import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/app_lock.dart';
 import 'package:flutter/services.dart';
@@ -184,7 +185,7 @@ class _LockScreenState extends State<LockScreen> {
             scale: NotionMotion.dialogFrom,
             child: Center(
               child: Image.asset(
-                'assets/logo/mini/logo_mono_mini.png',
+                AppConfig.logoSilhouetteAsset,
                 width: 128,
                 color: Theme.of(context).colorScheme.surfaceContainerHigh,
               ),

@@ -152,6 +152,16 @@
         <!-- From flutter_local_notifications package for notification actions -->
         <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver" />
 
+        <!-- Status-bar icon (white ChatLoom silhouette) for the push setup
+             foreground service (start_push_foreground_service.dart) and for
+             notification messages that Firebase shows on its own. -->
+        <meta-data
+            android:name="pl.personal.chatloom.notification_icon"
+            android:resource="@drawable/notifications_icon" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/notifications_icon" />
+
         <!-- To make notifications available in Android Auto -->
         <meta-data
             android:name="com.google.android.gms.car.application"

@@ -200,7 +200,11 @@ abstract class ForegroundServices {
         serviceTypes: [ForegroundServiceTypes.shortService],
         notificationTitle: AppConfig.appName,
         notificationText: text,
-        notificationIcon: NotificationIcon(metaDataName: 'ic_launcher'),
+        // The white status-bar silhouette, declared as manifest meta-data
+        // (the plugin reads a resource id from there, not a drawable name).
+        notificationIcon: NotificationIcon(
+          metaDataName: 'pl.personal.chatloom.notification_icon',
+        ),
       );
       if (result is! ServiceRequestSuccess) {
         throw StateError('Foreground service start failed');

@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/layouts/login_scaffold.dart';
@@ -56,12 +57,11 @@ class LoginView extends StatelessWidget {
                 Center(
                   child: Hero(
                     tag: 'info-logo',
-                    child: ClipOval(
-                      child: Image.asset(
-                        './assets/logo/mini/logo_mini.png',
-                        width: 128,
-                        height: 128,
-                      ),
+                    child: Image.asset(
+                      AppConfig.logoAsset,
+                      width: 128,
+                      height: 128,
+                      filterQuality: FilterQuality.medium,
                     ),
                   ),
                 ),

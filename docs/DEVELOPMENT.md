@@ -58,6 +58,13 @@ Unit, widget and golden tests use fictional fixtures only. They do not prove
 end-to-end encryption, push delivery or native behaviour on a real account;
 record those checks separately for each device and network.
 
+## Logo and icons
+
+The logo, app icons, splash images and notification icon are rendered from
+the SVGs in [docs/brand/](brand/BRAND.md) with
+`python3 scripts/brand/generate-icons.py` (needs one SVG renderer: librsvg,
+ffmpeg with librsvg, or `cairosvg`). Do not edit the PNGs by hand.
+
 ## Feature notes
 
 - [Instagram link media](instagram-link-media.md): optional bridge contract,

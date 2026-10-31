@@ -4,7 +4,7 @@ SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
-<p align="center"><img src="assets/logo/img/logo.png" width="96" alt="ChatLoom logo"></p>
+<p align="center"><img src="docs/brand/chatloom-mark.svg" width="112" alt="ChatLoom logo: two overlapping glass speech bubbles"></p>
 
 <h1 align="center">ChatLoom</h1>
 
@@ -198,7 +198,8 @@ flutter build apk --release --target-platform android-arm64 \
 
 The toolchain, build settings and tests are in
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). The macOS build is in
-[docs/macos-client.md](docs/macos-client.md).
+[docs/macos-client.md](docs/macos-client.md). The logo, app icons and brand
+rules are in [docs/brand/BRAND.md](docs/brand/BRAND.md).
 
 ## Credits and license
 

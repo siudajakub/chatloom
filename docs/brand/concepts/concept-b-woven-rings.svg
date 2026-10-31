@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<title>ChatLoom concept B: woven rings</title>
+<!-- Two speech-bubble rings of glass tubing woven through each other (over at the top crossing, under at the bottom). Not chosen: reads as a chain link at 24-48 px. -->
+<defs>
+  <linearGradient id="gb" gradientUnits="userSpaceOnUse" x1="200" y1="300" x2="640" y2="900">
+    <stop offset="0" stop-color="#5AA9FF"/><stop offset="1" stop-color="#0A7CFF"/>
+  </linearGradient>
+  <linearGradient id="gc" gradientUnits="userSpaceOnUse" x1="420" y1="200" x2="860" y2="800">
+    <stop offset="0" stop-color="#67E8F9"/><stop offset="1" stop-color="#06B6D4"/>
+  </linearGradient>
+  <mask id="cut-c" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <rect width="1024" height="1024" fill="#fff"/>
+    <g clip-path="url(#near-top)"><path d="M194.5,601.7 A226.0,226.0 0 1 1 382.5,771.8 Q289.9,758.8 241.9,762.0 Q233.9,762.7 231.0,751.1 L194.5,601.7 Z" fill="none" stroke="#000" stroke-width="156" stroke-linejoin="round"/></g>
+  </mask>
+  <mask id="cut-b" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <rect width="1024" height="1024" fill="#fff"/>
+    <g clip-path="url(#near-bot)"><path d="M829.5,529.7 A226.0,226.0 0 1 0 641.5,699.8 Q734.1,686.8 782.1,690.0 Q790.1,690.7 793.0,679.1 L829.5,529.7 Z" fill="none" stroke="#000" stroke-width="156" stroke-linejoin="round"/></g>
+  </mask>
+  <clipPath id="near-top"><circle cx="442.9" cy="323.9" r="119.6"/></clipPath>
+  <clipPath id="near-bot"><circle cx="581.1" cy="700.1" r="119.6"/></clipPath>
+  <mask id="tb-tm" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <path d="M194.5,601.7 A226.0,226.0 0 1 1 382.5,771.8 Q289.9,758.8 241.9,762.0 Q233.9,762.7 231.0,751.1 L194.5,601.7 Z" fill="none" stroke="#fff" stroke-width="104" stroke-linejoin="round" stroke-linecap="round"/>
+  </mask>
+  <linearGradient id="tb-hl" gradientUnits="userSpaceOnUse" x1="0" y1="80" x2="0" y2="900">
+    <stop offset="0" stop-color="#fff" stop-opacity="0.5"/>
+    <stop offset="0.65" stop-color="#fff" stop-opacity="0.04"/>
+  </linearGradient>
+  <mask id="tc-tm" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <path d="M829.5,529.7 A226.0,226.0 0 1 0 641.5,699.8 Q734.1,686.8 782.1,690.0 Q790.1,690.7 793.0,679.1 L829.5,529.7 Z" fill="none" stroke="#fff" stroke-width="104" stroke-linejoin="round" stroke-linecap="round"/>
+  </mask>
+  <linearGradient id="tc-hl" gradientUnits="userSpaceOnUse" x1="0" y1="80" x2="0" y2="900">
+    <stop offset="0" stop-color="#fff" stop-opacity="0.5"/>
+    <stop offset="0.65" stop-color="#fff" stop-opacity="0.04"/>
+  </linearGradient>
+</defs>
+  <g mask="url(#cut-c)">
+    <path d="M829.5,529.7 A226.0,226.0 0 1 0 641.5,699.8 Q734.1,686.8 782.1,690.0 Q790.1,690.7 793.0,679.1 L829.5,529.7 Z" fill="none" stroke="url(#gc)" stroke-width="104" stroke-linejoin="round" stroke-linecap="round"/>
+    <g mask="url(#tc-tm)">
+      <path d="M829.5,529.7 A226.0,226.0 0 1 0 641.5,699.8 Q734.1,686.8 782.1,690.0 Q790.1,690.7 793.0,679.1 L829.5,529.7 Z" fill="none" stroke="url(#tc-hl)" stroke-width="31.2" stroke-linejoin="round" stroke-linecap="round" transform="translate(-22.9 -22.9)"/>
+    </g>
+  </g>
+  <g mask="url(#cut-b)">
+    <path d="M194.5,601.7 A226.0,226.0 0 1 1 382.5,771.8 Q289.9,758.8 241.9,762.0 Q233.9,762.7 231.0,751.1 L194.5,601.7 Z" fill="none" stroke="url(#gb)" stroke-width="104" stroke-linejoin="round" stroke-linecap="round"/>
+    <g mask="url(#tb-tm)">
+      <path d="M194.5,601.7 A226.0,226.0 0 1 1 382.5,771.8 Q289.9,758.8 241.9,762.0 Q233.9,762.7 231.0,751.1 L194.5,601.7 Z" fill="none" stroke="url(#tb-hl)" stroke-width="31.2" stroke-linejoin="round" stroke-linecap="round" transform="translate(-22.9 -22.9)"/>
+    </g>
+  </g>
+</svg>

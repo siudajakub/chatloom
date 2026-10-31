@@ -39,6 +39,13 @@ abstract class AppConfig {
   /// change, otherwise existing installs lose access to that data.
   static const String legacyStorageAppName = 'Personal Chat';
 
+  /// The glass ChatLoom mark (transparent, works on dark and light pages)
+  /// and its white silhouette for tinted watermarks. Rendered from
+  /// docs/brand/ by scripts/brand/generate-icons.py.
+  static const String logoAsset = 'assets/logo/chatloom-mark.png';
+  static const String logoSilhouetteAsset =
+      'assets/logo/chatloom-mark-flat.png';
+
   /// ChatLoom is based on FluffyChat; its AGPL source and credits stay linked.
   static const String upstreamName = 'FluffyChat';
   static const String upstreamSourceCodeUrl =

@@ -26,6 +26,13 @@ change only the palette roles (`colors.accent`, `context.notion.palette`);
 incoming messages, status colours and identity never depend on them. Light mode uses the same roles with a paper palette, so any
 code that reads roles works in both.
 
+The logo uses the same language: two glass speech bubbles, Messenger blue
+(`#0A7CFF`) over cyan (`#06B6D4`). It never follows the user's accent. Show it
+through `AppConfig.logoAsset` (the glass mark) or
+`AppConfig.logoSilhouetteAsset` (a white silhouette to tint), never as a
+hand-made copy. The rules, files and generator are in
+[`docs/brand/BRAND.md`](docs/brand/BRAND.md).
+
 ## Tokens
 
 All tokens live in `lib/ui/notion/notion_tokens.dart`.

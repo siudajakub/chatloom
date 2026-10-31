@@ -5,6 +5,7 @@
 
 import 'dart:math';
 
+import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -30,7 +31,7 @@ class EmptyPage extends StatelessWidget {
           rise: 0,
           scale: NotionMotion.dialogFrom,
           child: Image.asset(
-            'assets/logo/mini/logo_mono_mini.png',
+            AppConfig.logoSilhouetteAsset,
             color: theme.colorScheme.surfaceContainerHigh,
             width: width,
             height: width,

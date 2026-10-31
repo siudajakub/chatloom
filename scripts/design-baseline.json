@@ -34,7 +34,6 @@
  "lib/pages/chat_details/participant_list_item.dart::edge-insets": 1,
  "lib/pages/image_viewer/image_viewer_view.dart::edge-insets": 2,
  "lib/pages/intro/intro_page.dart::edge-insets": 1,
- "lib/pages/intro/intro_page.dart::radius": 1,
  "lib/pages/key_verification/key_verification_dialog.dart::edge-insets": 3,
  "lib/pages/key_verification/key_verification_dialog.dart::font-size": 4,
  "lib/pages/settings_notifications/settings_notifications_view.dart::edge-insets": 2,

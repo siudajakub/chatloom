@@ -120,7 +120,7 @@ flutter:
           weight: 700
   assets:
     - assets/
-    - assets/logo/mini/
+    - assets/logo/
     - assets/notion/pinned/
     - assets/notion/fonts/
     - assets/sounds/

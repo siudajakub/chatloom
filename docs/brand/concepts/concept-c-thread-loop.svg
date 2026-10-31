@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<title>ChatLoom concept C: thread loop</title>
+<!-- One glass thread loops into a speech bubble and crosses itself at the tail. Not chosen: the crossing disappears below 48 px and the outline reads as the letter P. -->
+<defs>
+  <linearGradient id="gl" gradientUnits="userSpaceOnUse" x1="800" y1="170" x2="200" y2="900">
+    <stop offset="0" stop-color="#67E8F9"/><stop offset="0.5" stop-color="#06B6D4"/><stop offset="1" stop-color="#0A7CFF"/>
+  </linearGradient>
+  <clipPath id="near"><circle cx="267.1" cy="722.7" r="156.0"/></clipPath>
+  <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <rect width="1024" height="1024" fill="#fff"/>
+    <g clip-path="url(#near)"><path d="M242.8,445.6 Q227.5,554.8 267.1,722.7 L276.7,763.6" fill="none" stroke="#000" stroke-width="164" stroke-linecap="round"/></g>
+  </mask>
+  <mask id="tm" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <path d="M227.4,708.9 L267.1,722.7 Q430.0,779.7 540.1,775.8 A290,290 0 1 0 242.8,445.6 Q227.5,554.8 267.1,722.7 L276.7,763.6" fill="none" stroke="#fff" stroke-width="120" stroke-linecap="round" stroke-linejoin="round"/></mask>
+  <linearGradient id="hl" gradientUnits="userSpaceOnUse" x1="0" y1="120" x2="0" y2="900">
+    <stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="0.7" stop-color="#fff" stop-opacity="0.03"/></linearGradient>
+</defs><g mask="url(#cut)"><path d="M227.4,708.9 L267.1,722.7 Q430.0,779.7 540.1,775.8 A290,290 0 1 0 242.8,445.6 Q227.5,554.8 267.1,722.7 L276.7,763.6" fill="none" stroke="url(#gl)" stroke-width="120" stroke-linecap="round" stroke-linejoin="round"/><g mask="url(#tm)"><path d="M227.4,708.9 L267.1,722.7 Q430.0,779.7 540.1,775.8 A290,290 0 1 0 242.8,445.6 Q227.5,554.8 267.1,722.7 L276.7,763.6" fill="none" stroke="url(#hl)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round" transform="translate(-24 -24)"/></g></g><g clip-path="url(#near)"><path d="M242.8,445.6 Q227.5,554.8 267.1,722.7 L276.7,763.6" fill="none" stroke="url(#gl)" stroke-width="120" stroke-linecap="round" stroke-linejoin="round"/><g mask="url(#tm)"><path d="M242.8,445.6 Q227.5,554.8 267.1,722.7 L276.7,763.6" fill="none" stroke="url(#hl)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round" transform="translate(-24 -24)"/></g></g>
+</svg>

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ChatLoom</title>
+  <defs>
+    <linearGradient id="cl-back" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+    <linearGradient id="cl-front" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#5AA9FF"/>
+      <stop offset="1" stop-color="#0A7CFF"/>
+    </linearGradient>
+    <linearGradient id="cl-lens" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E6FBFF" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#9CD2FF" stop-opacity="0.28"/>
+    </linearGradient>
+    <linearGradient id="cl-sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="cl-back-clip"><path d="M876.0,490.6 A280,280 0 1 0 643.0,701.3 Q757.8,685.1 817.2,689.1 Q827.2,690.0 830.7,675.6 Z"/></clipPath>
+    <clipPath id="cl-front-clip"><path d="M148.0,666.6 A280,280 0 1 1 381.0,877.3 Q266.2,861.1 206.8,865.1 Q196.8,866.0 193.3,851.6 Z"/></clipPath>
+  </defs>
+  <!-- Back pane: cyan glass with a top sheen and a hairline edge. -->
+  <path d="M876.0,490.6 A280,280 0 1 0 643.0,701.3 Q757.8,685.1 817.2,689.1 Q827.2,690.0 830.7,675.6 Z" fill="url(#cl-back)"/>
+  <g clip-path="url(#cl-back-clip)" fill="none">
+    <path d="M876.0,490.6 A280,280 0 1 0 643.0,701.3 Q757.8,685.1 817.2,689.1 Q827.2,690.0 830.7,675.6 Z" stroke="url(#cl-sheen)" stroke-width="32"/>
+    <path d="M876.0,490.6 A280,280 0 1 0 643.0,701.3 Q757.8,685.1 817.2,689.1 Q827.2,690.0 830.7,675.6 Z" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="5"/>
+  </g>
+  <!-- Front pane: blue glass at 88 % so the back pane shows through. -->
+  <g opacity="0.88">
+    <path d="M148.0,666.6 A280,280 0 1 1 381.0,877.3 Q266.2,861.1 206.8,865.1 Q196.8,866.0 193.3,851.6 Z" fill="url(#cl-front)"/>
+    <g clip-path="url(#cl-front-clip)" fill="none">
+      <path d="M148.0,666.6 A280,280 0 1 1 381.0,877.3 Q266.2,861.1 206.8,865.1 Q196.8,866.0 193.3,851.6 Z" stroke="url(#cl-sheen)" stroke-width="32"/>
+      <path d="M148.0,666.6 A280,280 0 1 1 381.0,877.3 Q266.2,861.1 206.8,865.1 Q196.8,866.0 193.3,851.6 Z" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="5"/>
+    </g>
+  </g>
+  <!-- Lens: where the two conversations overlap. -->
+  <path d="M148.0,666.6 A280,280 0 1 1 381.0,877.3 Q266.2,861.1 206.8,865.1 Q196.8,866.0 193.3,851.6 Z" fill="url(#cl-lens)" clip-path="url(#cl-back-clip)"/>
+</svg>

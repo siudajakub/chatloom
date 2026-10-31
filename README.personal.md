@@ -1,6 +1,6 @@
 # ChatLoom
 
-ChatLoom to prywatny klient Beepera dla Androida i macOS. Opis produktu, aktualne screeny i język wizualny: [README.md](README.md). Logo i ikony generuje `scripts/render-chatloom-logo.py`.
+ChatLoom to prywatny klient Beepera dla Androida i macOS. Opis produktu, aktualne screeny i język wizualny: [README.md](README.md). Logo, ikony i zasady marki: [docs/brand/BRAND.md](docs/brand/BRAND.md); rastry generuje `scripts/brand/generate-icons.py`.
 
 ## Android i macOS na jednej gałęzi
 

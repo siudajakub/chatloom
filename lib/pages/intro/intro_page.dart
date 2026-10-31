@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/intro/flows/restore_backup_flow.dart';
@@ -154,13 +155,11 @@ class IntroPage extends StatelessWidget {
                                 padding: const EdgeInsets.all(32.0),
                                 child: Hero(
                                   tag: 'info-logo',
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(128),
-                                    child: Image.asset(
-                                      './assets/logo/mini/logo_mini.png',
-                                      width: 128,
-                                      height: 128,
-                                    ),
+                                  child: Image.asset(
+                                    AppConfig.logoAsset,
+                                    width: 128,
+                                    height: 128,
+                                    filterQuality: FilterQuality.medium,
                                   ),
                                 ),
                               ),

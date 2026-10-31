@@ -15,12 +15,11 @@ Future<void> showChatLoomAboutDialog(
 }) {
   final name = AppSettings.applicationName.value;
   const legalese = 'AGPL-3.0-or-later';
-  Widget logo(double size) => ClipOval(
-    child: Image.asset(
-      './assets/logo/mini/logo_mini.png',
-      width: size,
-      height: size,
-    ),
+  Widget logo(double size) => Image.asset(
+    AppConfig.logoAsset,
+    width: size,
+    height: size,
+    filterQuality: FilterQuality.medium,
   );
   return showNotionCustomDialog<void>(
     context: context,
