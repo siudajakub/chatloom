@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
+
 import 'package:chatloom/personal/ui/notion_settings_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_display_preferences.dart';
@@ -47,13 +49,18 @@ class SettingsStyleController extends State<SettingsStyle> {
     if (mounted) setState(() {});
   }
 
-  void setIntensity(NotionIntensity intensity) => ThemeController.of(
-    context,
-  ).setAppearance(appearance.copyWith(intensity: intensity));
+  // The theme rebuilds at once, but this page is a const route child: it
+  // rebuilds itself so the selected card and swatch follow in the same frame.
+  void setIntensity(NotionIntensity intensity) =>
+      _setAppearance(appearance.copyWith(intensity: intensity));
 
-  void setAccent(NotionAccent accent) => ThemeController.of(
-    context,
-  ).setAppearance(appearance.copyWith(accent: accent, clearCustom: true));
+  void setAccent(NotionAccent accent) =>
+      _setAppearance(appearance.copyWith(accent: accent, clearCustom: true));
+
+  void _setAppearance(NotionAppearance value) {
+    unawaited(ThemeController.of(context).setAppearance(value));
+    setState(() {});
+  }
 
   /// Opens the colour picker; a picked colour replaces the preset's hue.
   Future<void> pickCustomAccent() async {
@@ -65,6 +72,7 @@ class SettingsStyleController extends State<SettingsStyle> {
     await ThemeController.of(
       context,
     ).setAppearance(appearance.copyWith(custom: picked));
+    if (mounted) setState(() {});
   }
 
   ThemeMode get currentTheme => ThemeController.of(context).themeMode;

@@ -169,8 +169,23 @@ void main() {
         'vivid',
       );
 
+      // The page follows its own choice (it is a const route child that the
+      // new theme alone would not rebuild).
+      expect(
+        tester.getSemantics(find.bySemanticsLabel(RegExp('^Vivid colours'))),
+        isSemantics(isSelected: true),
+      );
+      expect(
+        tester.getSemantics(find.bySemanticsLabel(RegExp('^Balanced colours'))),
+        isSemantics(isSelected: false),
+      );
+
       await tester.tap(find.bySemanticsLabel('Pink accent'));
       await tester.pumpAndSettle();
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('Pink accent')),
+        isSemantics(isSelected: true),
+      );
       final pink = NotionPalette.resolve(
         const NotionAppearance(
           accent: NotionAccent.pink,
