@@ -9,6 +9,8 @@ import 'package:chatloom/pages/chat/recording_input_row.dart';
 import 'package:chatloom/pages/chat/recording_view_model.dart';
 import 'package:chatloom/pages/chat/recording_waveform.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
+import 'package:chatloom/personal/media/voice_format.dart';
+import 'package:chatloom/personal/media/voice_remux.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -16,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:personal_core/bridge_capabilities.dart';
 import 'package:provider/provider.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -64,6 +67,9 @@ class _Record extends RecordPlatform {
   bool nativePaused = false;
   RecordConfig? lastConfig;
   Object? startFailure;
+
+  /// The macOS encoder cannot be set up for Opus (start throws).
+  bool rejectOpus = false;
   String? outputPath;
   String stopOutput = '/offline-recorder-fixture/voice.ogg';
   final operations = <String>[];
@@ -95,6 +101,9 @@ class _Record extends RecordPlatform {
     lastConfig = config;
     await startGate?.future;
     if (startFailure != null) throw startFailure!;
+    if (rejectOpus && config.encoder == AudioEncoder.opus) {
+      throw StateError('Format conversion is not possible');
+    }
   }
 
   @override
@@ -267,6 +276,7 @@ void main() {
   tearDown(() async {
     PersonalPrivacy.surfaceUnlocked = true;
     await platform.states.close();
+    VoiceRecordingPlan.appleOpusFailed = false;
     RecordPlatform.instance = originalRecord;
     PathProviderPlatform.instance = originalPaths;
     WakelockPlusPlatformInterface.instance = originalWake;
@@ -297,6 +307,7 @@ void main() {
   Future<(RecordingViewModelState, Room)> mount(
     WidgetTester tester, {
     void Function()? onBuild,
+    VoiceRemux? remux,
   }) async {
     final key = GlobalKey<RecordingViewModelState>();
     await tester.pumpWidget(
@@ -306,6 +317,7 @@ void main() {
         home: Scaffold(
           body: RecordingViewModel(
             key: key,
+            remuxOutput: remux,
             cleanupOutput: ({ownedNativePath, stoppedBlobUrl}) async {
               cleanedOutputs.add((
                 nativePath: ownedNativePath,
@@ -1122,6 +1134,205 @@ void main() {
     state.cancel();
     await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
   });
+
+  group('voice recording plan per platform and network', () {
+    BridgeRoomCapabilities caps(Map<String, int>? mimes) =>
+        BridgeRoomCapabilities.fromState(
+          mimes == null
+              ? null
+              : {
+                  'file': {
+                    'org.matrix.msc3245.voice': {'mime_types': mimes},
+                  },
+                },
+        );
+    Future<VoiceRecordingPlan> plan(
+      TargetPlatform platform,
+      BridgeRoomCapabilities capabilities, {
+      bool supported = true,
+    }) => VoiceRecordingPlan.choose(
+      platform: platform,
+      web: false,
+      preferOpus: preferOpusVoice(capabilities),
+      opusSupported: () async => supported,
+    );
+    // The bridges' voice declarations (docs/voice-recording.md).
+    final networks = <String, (Map<String, int>?, bool)>{
+      'Telegram': ({'audio/ogg': 2, 'audio/mpeg': 2, 'audio/mp4': 2}, true),
+      'WhatsApp': ({opusVoiceMime: 2, 'audio/ogg': 0}, true),
+      'Slack': ({'audio/ogg': 1, webmOpusVoiceMime: 2, 'audio/mp4': 2}, true),
+      'Signal': ({'audio/aac': 2, 'audio/ogg': 1}, true),
+      'an undeclared room': (null, true),
+      'Messenger/Instagram': ({'audio/mp4': 2, 'audio/ogg': 1}, false),
+      'Slack without ffmpeg': (
+        {'audio/ogg': -2, webmOpusVoiceMime: 2, 'audio/mp4': 2},
+        false,
+      ),
+    };
+    for (final MapEntry(key: network, value: (mimes, opus))
+        in networks.entries) {
+      test('$network: macOS records like Android', () async {
+        final mac = await plan(TargetPlatform.macOS, caps(mimes));
+        final android = await plan(TargetPlatform.android, caps(mimes));
+        expect(mac.encoder, android.encoder);
+        expect(mac.sentExtension, android.sentExtension);
+        if (opus) {
+          expect(android, VoiceRecordingPlan.opusOgg);
+          // Apple's recorder writes Opus in CAF; it is remuxed to Ogg.
+          expect(mac, VoiceRecordingPlan.opusCaf);
+          expect(mac.remuxToOgg, isTrue);
+          expect(mac.sentExtension, 'ogg');
+        } else {
+          expect(mac, VoiceRecordingPlan.aacM4a);
+          expect(android, VoiceRecordingPlan.aacM4a);
+        }
+      });
+    }
+    test('AAC when Opus is unavailable or failed earlier on a Mac', () async {
+      expect(
+        await plan(TargetPlatform.macOS, caps(null), supported: false),
+        VoiceRecordingPlan.aacM4a,
+      );
+      VoiceRecordingPlan.appleOpusFailed = true;
+      expect(
+        await plan(TargetPlatform.macOS, caps(null)),
+        VoiceRecordingPlan.aacM4a,
+      );
+      expect(
+        await plan(TargetPlatform.android, caps(null)),
+        VoiceRecordingPlan.opusOgg,
+        reason: 'Android never remuxes',
+      );
+    });
+    test('macOS config: Opus 48 kHz mono 64 kbit/s, 96 high quality', () {
+      final config = buildVoiceRecordConfig(
+        VoiceRecordingPlan.opusCaf.encoder,
+        const VoiceCaptureOptions(),
+      );
+      expect(config.encoder, AudioEncoder.opus);
+      expect(config.sampleRate, 48000);
+      expect(config.numChannels, 1);
+      expect(config.bitRate, 64000);
+      expect(
+        buildVoiceRecordConfig(
+          AudioEncoder.opus,
+          const VoiceCaptureOptions(highQuality: true),
+        ).bitRate,
+        96000,
+      );
+    });
+  });
+
+  final macOS = TargetPlatformVariant.only(TargetPlatform.macOS);
+  const deadline = Timeout(Duration(seconds: 30));
+
+  testWidgets(
+    'macOS records Opus in CAF and sends the remuxed Ogg/Opus file',
+    (tester) async {
+      final remuxed = <(String, String)>[];
+      final (state, room) = await mount(
+        tester,
+        remux: (caf, ogg) async {
+          remuxed.add((caf, ogg));
+          return RemuxedVoice(ogg, const Duration(milliseconds: 4321));
+        },
+      );
+      await start(state, room);
+      final config = platform.lastConfig!;
+      expect(config.encoder, AudioEncoder.opus);
+      expect(config.sampleRate, 48000);
+      expect(config.bitRate, 64000);
+      expect(config.numChannels, 1);
+      final caf = platform.outputPath!;
+      expect(caf, endsWith('.caf'));
+      platform.stopOutput = caf;
+      final sent = <(String, int, String)>[];
+      Future<bool> send(String path, int ms, List<int> _, String name) async {
+        sent.add((path, ms, name));
+        return sent.length > 1;
+      }
+
+      // A failed send keeps the draft; the retry sends the same Ogg file.
+      await state.stopAndSend(send);
+      expect(state.isRecording, isTrue);
+      await state.stopAndSend(send);
+      final ogg = caf.replaceFirst(RegExp(r'\.caf$'), '.ogg');
+      expect(remuxed, [(caf, ogg)], reason: 'remuxed once per recording');
+      expect(sent.map((s) => s.$1), [ogg, ogg]);
+      expect(sent.map((s) => s.$2), [4321, 4321]);
+      expect(sent.first.$3, endsWith('.ogg'));
+      expect(state.isRecording, isFalse);
+      await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
+      await drainNativeLifecycle(tester, () => cleanedOutputs.length == 2);
+      expect(
+        cleanedOutputs.map((o) => o.nativePath),
+        unorderedEquals([caf, ogg]),
+      );
+      expect(VoiceRecordingPlan.appleOpusFailed, isFalse);
+    },
+    variant: macOS,
+    timeout: deadline,
+  );
+
+  testWidgets(
+    'a failed remux on macOS keeps the draft; the next note records AAC',
+    (tester) async {
+      var attempts = 0;
+      final (state, room) = await mount(
+        tester,
+        remux: (caf, ogg) async {
+          attempts++;
+          throw const FormatException('Unexpected CAF');
+        },
+      );
+      await start(state, room);
+      platform.stopOutput = platform.outputPath!;
+      var sends = 0;
+      await state.stopAndSend((_, _, _, _) async {
+        sends++;
+        return true;
+      });
+      await tester.pump();
+      expect(attempts, 1);
+      expect(sends, 0, reason: 'never sends CAF under an Ogg label');
+      expect(state.isRecording, isTrue, reason: 'the draft stays');
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(VoiceRecordingPlan.appleOpusFailed, isTrue);
+      state.cancel();
+      await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
+
+      // Later recordings use AAC in M4A, as before Opus on macOS.
+      await state.startRecording(room);
+      expect(platform.lastConfig!.encoder, AudioEncoder.aacLc);
+      expect(platform.lastConfig!.sampleRate, 44100);
+      expect(platform.outputPath, endsWith('.m4a'));
+      expect(state.fileName, endsWith('.m4a'));
+      state.cancel();
+      await drainNativeLifecycle(tester, () => platform.disposals == 2);
+    },
+    variant: macOS,
+    timeout: deadline,
+  );
+
+  testWidgets(
+    'macOS falls back to AAC when the Opus encoder cannot start',
+    (tester) async {
+      platform.rejectOpus = true;
+      final (state, room) = await mount(tester);
+      await state.startRecording(room);
+      expect(platform.starts, 2);
+      expect(platform.lastConfig!.encoder, AudioEncoder.aacLc);
+      expect(platform.outputPath, endsWith('.m4a'));
+      expect(state.isRecording, isTrue);
+      expect(state.controlsBusy, isFalse);
+      expect(cleanedOutputs.single.nativePath, endsWith('.caf'));
+      expect(VoiceRecordingPlan.appleOpusFailed, isTrue);
+      state.cancel();
+      await drainNativeLifecycle(tester, () => platform.disposed.isCompleted);
+    },
+    variant: macOS,
+    timeout: deadline,
+  );
 
   testWithDeadline(
     'system interruption pause stops the clock, sampling and wake lock',

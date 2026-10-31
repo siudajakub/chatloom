@@ -11,6 +11,7 @@ import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/stale_recordings.dart';
 import 'package:chatloom/personal/media/voice_format.dart';
+import 'package:chatloom/personal/media/voice_remux.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
@@ -73,12 +74,58 @@ class VoiceCaptureOptions {
   );
 }
 
+/// What the platform recorder writes for a voice note and how it is sent.
+/// See docs/voice-recording.md.
+@immutable
+class VoiceRecordingPlan {
+  final AudioEncoder encoder;
+
+  /// The container the recorder writes: `ogg` (Android), `caf` (Apple's
+  /// recorder writes Opus only in CAF) or `m4a` (AAC).
+  final String extension;
+
+  const VoiceRecordingPlan._(this.encoder, this.extension);
+
+  static const opusOgg = VoiceRecordingPlan._(AudioEncoder.opus, 'ogg');
+  static const opusCaf = VoiceRecordingPlan._(AudioEncoder.opus, 'caf');
+  static const aacM4a = VoiceRecordingPlan._(AudioEncoder.aacLc, 'm4a');
+
+  /// The recording is remuxed from CAF to Ogg/Opus before it is sent, so
+  /// every platform sends the same `audio/ogg; codecs=opus`.
+  bool get remuxToOgg => identical(this, opusCaf);
+
+  /// The file extension of what is sent.
+  String get sentExtension => encoder == AudioEncoder.opus ? 'ogg' : 'm4a';
+
+  /// Set when an Opus recording failed to start or to remux on an Apple
+  /// platform: later recordings in this run use AAC, as before Opus.
+  static bool appleOpusFailed = false;
+
+  static bool _apple(TargetPlatform platform) =>
+      platform == TargetPlatform.macOS || platform == TargetPlatform.iOS;
+
+  /// Opus where the room's network takes it ([preferOpus], from
+  /// [preferOpusVoice], the same rule on every platform) and the recorder
+  /// can encode it; AAC in M4A otherwise.
+  static Future<VoiceRecordingPlan> choose({
+    required TargetPlatform platform,
+    required bool preferOpus,
+    required Future<bool> Function() opusSupported,
+    bool web = kIsWeb,
+  }) async {
+    final apple = !web && _apple(platform);
+    if (!preferOpus || (apple && appleOpusFailed)) return aacM4a;
+    if (!await opusSupported()) return aacM4a;
+    return apple ? opusCaf : opusOgg;
+  }
+}
+
 /// Maps [options] to a mono speech recording config for [encoder].
 ///
-/// Opus records at its native 48 kHz (Ogg container, Android 10+); the AAC-LC
-/// fallback uses 44.1 kHz, which every Android/iOS AAC encoder accepts. The
-/// default Android source is `DEFAULT` (the plain microphone, as Telegram's
-/// voice notes and rounds); voice isolation switches to
+/// Opus records at its native 48 kHz (Ogg on Android 10+, CAF on macOS);
+/// the AAC-LC fallback uses 44.1 kHz, which every Android/Apple AAC encoder
+/// accepts. The default Android source is `DEFAULT` (the plain microphone,
+/// as Telegram's voice notes and rounds); voice isolation switches to
 /// `VOICE_COMMUNICATION` with echo cancellation, noise suppression and gain
 /// control on. Effects are attached by the plugin only when the device
 /// reports them; macOS records to a file and ignores them.
@@ -115,9 +162,14 @@ class RecordingViewModel extends StatefulWidget {
   final Widget Function(BuildContext, RecordingViewModelState) builder;
   final RecordingOutputCleanup? cleanupOutput;
 
+  /// CAF → Ogg/Opus remux of an Apple recording before it is sent;
+  /// [remuxCafVoiceToOgg] unless a test replaces it.
+  final VoiceRemux? remuxOutput;
+
   const RecordingViewModel({
     required this.builder,
     this.cleanupOutput,
+    this.remuxOutput,
     super.key,
   });
 
@@ -236,35 +288,60 @@ class RecordingViewModelState extends State<RecordingViewModel> {
         setState(_reset);
         return;
       }
-      final codec =
-          // Apple's record backend writes Opus in CAF, not in the Ogg
-          // container advertised by our voice-message sender. Use AAC/M4A.
-          !PlatformInfos.isCupertinoStyle &&
-              preferOpusVoice(RoomCapabilities.declared(room)) &&
-              await audioRecorder.isEncoderSupported(AudioEncoder.opus)
-          ? AudioEncoder.opus
-          : AudioEncoder.aacLc;
+      // Apple's recorder writes Opus in CAF; the note is remuxed to Ogg/Opus
+      // before sending (VoiceRecordingPlan.opusCaf).
+      var plan = await VoiceRecordingPlan.choose(
+        platform: defaultTargetPlatform,
+        preferOpus: preferOpusVoice(RoomCapabilities.declared(room)),
+        opusSupported: () =>
+            audioRecorder.isEncoderSupported(AudioEncoder.opus),
+      );
       if (!_current(generation, session)) return;
-      fileName =
-          'voice_message_${DateTime.now().millisecondsSinceEpoch}.${codec.fileExtension}';
-      String? path;
+      String? tempDir;
       if (!kIsWeb) {
-        final tempDir = await getTemporaryDirectory();
+        tempDir = (await getTemporaryDirectory()).path;
         if (!_current(generation, session)) return;
-        // Named after this process: a crash's leftover is swept at start.
-        path = path_lib.join(
-          tempDir.path,
-          voiceRecordingName(const Uuid().v4(), codec.fileExtension),
-        );
-        session.ownedNativePath = path;
       }
+      // Named after this process: a crash's leftover is swept at start.
+      String? pathFor(VoiceRecordingPlan plan) => tempDir == null
+          ? null
+          : path_lib.join(
+              tempDir,
+              voiceRecordingName(const Uuid().v4(), plan.extension),
+            );
+      var path = pathFor(plan);
+      session.ownedNativePath = path;
       await _setAwake(true);
       if (!_current(generation, session)) return;
 
-      await session.start(
-        buildVoiceRecordConfig(codec, VoiceCaptureOptions.fromSettings()),
-        path: path ?? '',
-      );
+      final options = VoiceCaptureOptions.fromSettings();
+      try {
+        await session.start(
+          buildVoiceRecordConfig(plan.encoder, options),
+          path: path ?? '',
+        );
+      } catch (_) {
+        // The macOS recorder reports Opus as supported without asking the
+        // system encoder; if it cannot start, record AAC like before.
+        if (!plan.remuxToOgg || !_current(generation, session)) rethrow;
+        VoiceRecordingPlan.appleOpusFailed = true;
+        final failedPath = path;
+        if (failedPath != null) {
+          try {
+            await session.cleanupOutput(ownedNativePath: failedPath);
+          } catch (_) {}
+        }
+        if (!_current(generation, session)) return;
+        plan = VoiceRecordingPlan.aacM4a;
+        path = session.ownedNativePath = pathFor(plan);
+        await session.start(
+          buildVoiceRecordConfig(plan.encoder, options),
+          path: path ?? '',
+        );
+      }
+      session.plan = plan;
+      fileName =
+          'voice_message_${DateTime.now().millisecondsSinceEpoch}.${plan.sentExtension}';
       if (!_current(generation, session)) return;
       _clock.reset();
       _clock.start();
@@ -518,7 +595,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
     try {
       final path = await session.stop();
       if (!_current(generation, session)) return null;
-      if (path == null) throw StateError('Recording failed');
+      if (path == null) throw session.failed();
       _reviewPath = path;
       return path;
     } catch (_) {
@@ -556,16 +633,23 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       isPaused = true;
       await _setAwake(false);
       if (!_current(generation, session)) return;
-      if (path == null) throw StateError('Recording failed');
+      if (path == null) throw session.failed();
       NotionHaptics.send();
+      var sendPath = path;
+      var sendDuration = duration.inMilliseconds;
+      if (session.plan.remuxToOgg) {
+        // The same Ogg file (and bytes) on every retry of this draft.
+        final remuxed = await session.remuxed(
+          path,
+          widget.remuxOutput ?? remuxCafVoiceToOgg,
+        );
+        if (!_current(generation, session)) return;
+        sendPath = remuxed.path;
+        sendDuration = remuxed.duration.inMilliseconds;
+      }
       // Keep the recorded file and source-bound callback until the normal send
       // path accepts it. A failed send remains available for explicit retry.
-      final accepted = await onSend(
-        path,
-        duration.inMilliseconds,
-        waveform,
-        name,
-      );
+      final accepted = await onSend(sendPath, sendDuration, waveform, name);
       if (accepted && _current(generation, session)) setState(_reset);
     } catch (_) {
       if (_current(generation, session)) {
@@ -595,6 +679,11 @@ class _VoiceRecordingSession {
   final AudioRecorder recorder;
   final RecordingOutputCleanup cleanupOutput;
   String? ownedNativePath;
+  VoiceRecordingPlan plan = VoiceRecordingPlan.aacM4a;
+
+  /// The Ogg/Opus file remuxed from an Apple CAF recording; ours to delete.
+  String? _remuxedPath;
+  Future<RemuxedVoice>? _remux;
   String? _stoppedBlobUrl;
   StreamSubscription<RecordState>? stateSubscription;
   Future<void>? _starting;
@@ -602,6 +691,28 @@ class _VoiceRecordingSession {
   Future<void>? _release;
   _VoiceRecordingSession(this.recorder, {required this.cleanupOutput});
   bool get stopped => _stop != null;
+
+  /// The recorder returned no file. An Opus recording on a Mac that ends
+  /// like this (the system encoder stopped it) makes later ones AAC.
+  StateError failed() {
+    if (plan.remuxToOgg) VoiceRecordingPlan.appleOpusFailed = true;
+    return StateError('Recording failed');
+  }
+
+  /// Remuxes the stopped CAF recording at [caf] once; a failure is retried
+  /// by the next send and switches later recordings to AAC.
+  Future<RemuxedVoice> remuxed(String caf, VoiceRemux remux) =>
+      _remux ??= () async {
+        final ogg = _remuxedPath ??= '${path_lib.withoutExtension(caf)}.ogg';
+        try {
+          return await remux(caf, ogg);
+        } catch (e, s) {
+          Logs().w('Voice note CAF to Ogg/Opus remux failed', e, s);
+          VoiceRecordingPlan.appleOpusFailed = true;
+          _remux = null;
+          rethrow;
+        }
+      }();
   Future<void> start(RecordConfig config, {required String path}) =>
       _starting = recorder.start(config, path: path);
   Future<String?> stop() => _stop ??= _stopAndRemember();
@@ -647,6 +758,16 @@ class _VoiceRecordingSession {
       try {
         await recorder.dispose();
       } catch (_) {}
+      // A remux still writing finishes before its file is removed.
+      try {
+        await _remux;
+      } catch (_) {}
+      final remuxed = _remuxedPath;
+      if (remuxed != null) {
+        try {
+          await cleanupOutput(ownedNativePath: remuxed);
+        } catch (_) {}
+      }
       if (ownedNativePath != null || _stoppedBlobUrl != null) {
         try {
           await cleanupOutput(
@@ -657,26 +778,6 @@ class _VoiceRecordingSession {
           // A cleanup/storage failure never falls back to deleting other paths.
         }
       }
-    }
-  }
-}
-
-extension on AudioEncoder {
-  String get fileExtension {
-    switch (this) {
-      case AudioEncoder.aacLc:
-      case AudioEncoder.aacEld:
-      case AudioEncoder.aacHe:
-        return 'm4a';
-      case AudioEncoder.opus:
-        return 'ogg';
-      case AudioEncoder.wav:
-        return 'wav';
-      case AudioEncoder.amrNb:
-      case AudioEncoder.amrWb:
-      case AudioEncoder.flac:
-      case AudioEncoder.pcm16bits:
-        throw UnsupportedError('Not yet used');
     }
   }
 }

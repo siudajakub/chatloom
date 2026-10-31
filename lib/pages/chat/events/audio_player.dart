@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:chatloom/pages/chat/notion_conversation.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/media_inflight.dart';
+import 'package:chatloom/personal/media/voice_remux.dart';
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
@@ -24,7 +25,6 @@ import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-import 'package:ogg_caf_converter/ogg_caf_converter.dart';
 
 import '../../../utils/matrix_sdk_extensions/event_extension.dart';
 import '../../../widgets/chatloom_app.dart';
@@ -374,25 +374,33 @@ class AudioPlayerState extends State<AudioPlayerWidget>
 
       if (!kIsWeb && attachmentUrl != null) {
         final access = await matrix.audioMediaAccess;
-        final suffix = switch (matrixFile.mimeType.toLowerCase()) {
-          'audio/ogg' => '.ogg',
-          'audio/mp4' => '.m4a',
-          'audio/mpeg' => '.mp3',
-          'audio/wav' => '.wav',
-          _ => '.bin',
-        };
+        // `audio/ogg; codecs=opus` (Android, WhatsApp, our macOS notes) is
+        // Ogg as well; the bytes decide when the label does not.
+        final ogg = isOggData(matrixFile.bytes);
+        final suffix = ogg
+            ? '.ogg'
+            : switch (matrixFile.mimeType
+                  .split(';')
+                  .first
+                  .trim()
+                  .toLowerCase()) {
+                'audio/ogg' => '.ogg',
+                'audio/mp4' => '.m4a',
+                'audio/mpeg' => '.mp3',
+                'audio/wav' => '.wav',
+                _ => '.bin',
+              };
         final lease = await access.create(matrixFile.bytes, extension: suffix);
         pendingLease = lease;
         file = lease.file;
 
-        if (Platform.isMacOS &&
-            matrixFile.mimeType.toLowerCase() == 'audio/ogg') {
+        if (Platform.isMacOS && ogg) {
           Logs().v('Remux Ogg voice audio for the native Apple player');
           final convertedFile = pendingLease.derivedFile('.caf');
           if (await convertedFile.exists() == false) {
-            await OggCafConverter().convertOggToCaf(
-              input: file.path,
-              output: convertedFile.path,
+            await convertedFile.writeAsBytes(
+              await oggVoiceToCaf(matrixFile.bytes),
+              flush: true,
             );
           }
           file = convertedFile;
@@ -654,7 +662,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
             builder: (context, _, _) => _buildTransport(context),
           ),
         ),
-        _MarkListenedButton(event: widget.event),
+        MarkListenedButton(event: widget.event, color: widget.color),
         TranscriptPanel(event: widget.event, foregroundColor: widget.color),
         if (fileDescription != null)
           Padding(
@@ -680,18 +688,38 @@ class AudioPlayerState extends State<AudioPlayerWidget>
 
 /// Marks an incoming Telegram voice note listened on Telegram, on tap only.
 /// Playing the note or reading its transcript never sends this; the button
-/// disappears once Telegram accepted it.
-class _MarkListenedButton extends StatefulWidget {
+/// disappears once Telegram accepted it (remembered across restarts), or
+/// once the bridge reports the note listened elsewhere.
+@visibleForTesting
+class MarkListenedButton extends StatefulWidget {
   final Event event;
 
-  const _MarkListenedButton({required this.event});
+  /// The bubble's foreground: the button sits inside the bubble, whose
+  /// colours (private chat palettes, own/incoming) the theme does not know.
+  final Color color;
+
+  const MarkListenedButton({
+    required this.event,
+    required this.color,
+    super.key,
+  });
 
   @override
-  State<_MarkListenedButton> createState() => _MarkListenedButtonState();
+  State<MarkListenedButton> createState() => _MarkListenedButtonState();
 }
 
-class _MarkListenedButtonState extends State<_MarkListenedButton> {
+class _MarkListenedButtonState extends State<MarkListenedButton> {
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(
+      TelegramRoundService.of(
+        widget.event.room.client,
+      ).loadVoiceState(widget.event),
+    );
+  }
 
   Future<void> _mark(TelegramRoundService service) async {
     setState(() => _busy = true);
@@ -725,6 +753,7 @@ class _MarkListenedButtonState extends State<_MarkListenedButton> {
               label: 'Mark listened',
               icon: Icons.hearing_outlined,
               busy: _busy,
+              foreground: widget.color,
               onPressed: _busy || !visible ? null : () => _mark(service),
             ),
           ),
