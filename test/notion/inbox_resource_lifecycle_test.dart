@@ -209,8 +209,8 @@ void main() {
       expect(inbox.debugFullBuilds, builds);
       expect(ConversationClassifier.debugComputations, classified);
 
-      // Only error/recovered transitions republish (offline banner). The
-      // notice waits out a short blip (the SDK retries after 3 s).
+      // Only error/recovered transitions republish (offline notice). One
+      // failed sync is no evidence (the SDK retries after 3 s): no notice.
       client.onSyncStatus.add(
         SyncStatusUpdate(
           SyncStatus.error,
@@ -218,10 +218,10 @@ void main() {
         ),
       );
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.textContaining('Showing loaded chats'), findsNothing);
+      expect(find.text('Can’t reach the server'), findsNothing);
       await tester.pump(const Duration(seconds: 4));
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.textContaining('Showing loaded chats'), findsOneWidget);
+      expect(find.text('Can’t reach the server'), findsNothing);
       client.onSyncStatus.add(
         SyncStatusUpdate(
           SyncStatus.error,
@@ -230,11 +230,19 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 300));
       expect(inbox.generation, generation + 1);
+      // The retry failed too: the header line says so at once, the inbox
+      // adds its compact notice only once the problem lasts (30 s).
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.text('Can’t reach the server'), findsNothing);
+      await tester.pump(const Duration(seconds: 30));
+      await tester.pump(NotionMotion.medium);
+      expect(find.text('Can’t reach the server'), findsOneWidget);
+      expect(inbox.generation, generation + 1);
       client.onSyncStatus.add(const SyncStatusUpdate(SyncStatus.finished));
       await tester.pump(const Duration(milliseconds: 300));
       // The offline notice collapses instead of vanishing in one frame.
       await tester.pump(NotionMotion.medium);
-      expect(find.textContaining('Showing loaded chats'), findsNothing);
+      expect(find.text('Can’t reach the server'), findsNothing);
       expect(inbox.debugFullBuilds, builds);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
