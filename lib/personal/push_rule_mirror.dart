@@ -41,6 +41,7 @@ library;
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -130,12 +131,14 @@ Set<String> chatLoomSilencedRooms(Client client) {
 bool personalRoomUnread(Room room) =>
     room.isUnread || chatLoomSilencedUnread(room);
 
-/// A joined chat a ChatLoom rule silences, with messages after the read
-/// marker (its server count stays zero).
+/// A joined chat a ChatLoom rule or a Beeper mute (`beeper_mute.dart`)
+/// silences, with messages after the read marker (its server count stays
+/// zero).
 bool chatLoomSilencedUnread(Room room) {
   if (room.membership != Membership.join) return false;
   try {
-    return chatLoomSilencedRooms(room.client).contains(room.id) &&
+    return (chatLoomSilencedRooms(room.client).contains(room.id) ||
+            beeperMuted(room)) &&
         room.hasNewMessages;
   } catch (_) {
     return false;

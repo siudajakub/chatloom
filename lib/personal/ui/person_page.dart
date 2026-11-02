@@ -9,6 +9,7 @@ import 'dart:async';
 
 import 'package:chatloom/pages/chat_list/chat_list_item.dart'
     show personalConversationAvatar;
+import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/organization_page.dart'
     show pickAndUploadPrivateAvatar, showChatThemeDialog;
@@ -483,7 +484,7 @@ class _PersonPageState extends State<PersonPage> {
     );
   }
 
-  String _accountRule(Room room) => switch (room.pushRuleState) {
+  String _accountRule(Room room) => switch (accountPushRuleState(room)) {
     PushRuleState.notify => '',
     PushRuleState.mentionsOnly => 'Your Beeper account allows only mentions',
     PushRuleState.dontNotify => 'Muted in your Beeper account',

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/pages/chat_details/chat_details.dart';
+import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/conversation_mute.dart';
@@ -118,8 +119,8 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     final room = widget.room;
     if (room != null) {
       _native = NotionNotificationBinding(
-        read: () => room.pushRuleState,
-        write: room.setPushRuleState,
+        read: () => accountPushRuleState(room),
+        write: (state) => setAccountPushRuleState(room, state),
       )..addListener(_refresh);
     }
     personal.addListener(_refresh);
@@ -380,7 +381,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               child: Row(
                 children: [
                   Expanded(child: Text(notionNotificationLabel(value))),
-                  if (value == room.pushRuleState)
+                  if (value == accountPushRuleState(room))
                     const Icon(Icons.check, size: 20),
                 ],
               ),
@@ -707,7 +708,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               projection.classifier.classify(source).network,
             ),
             subtitle:
-                '${source.getLocalizedDisplayname()} · ${notionNotificationLabel(source.pushRuleState)}',
+                '${source.getLocalizedDisplayname()} · ${notionNotificationLabel(accountPushRuleState(source))}',
             onTap: () => _sourceDetails(source),
           ),
         if (sourceRooms.length != group.members.length)
@@ -721,7 +722,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           leading: const Icon(Icons.notifications_outlined),
           title: 'Account notifications · Beeper / Matrix',
           subtitle:
-              '${notionNotificationLabel(room.pushRuleState)} · changes affect other clients',
+              '${notionNotificationLabel(accountPushRuleState(room))} · changes affect other clients',
           onTap: _native?.canEdit == true ? () => _notifications(room) : null,
         ),
         // What the bridge says works here, in words; a native Matrix chat

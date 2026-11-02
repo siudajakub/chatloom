@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/conversation_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -295,7 +296,7 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
           ),
         ),
         Text(
-          'Account rule: ${switch (source.pushRuleState) {
+          'Account rule: ${switch (accountPushRuleState(source)) {
             PushRuleState.notify => 'All messages',
             PushRuleState.mentionsOnly => 'Mentions only',
             PushRuleState.dontNotify => 'Muted',

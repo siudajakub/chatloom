@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
+import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
@@ -125,7 +126,7 @@ List<Object?> chatListItemSignature(
       source.highlightCount,
       source.markedUnread,
       chatLoomSilencedUnread(source),
-      source.pushRuleState,
+      accountPushRuleState(source),
       source.membership,
       source.typingUsers
           .where((user) => user.id != own)
@@ -400,7 +401,7 @@ class _ChatListItemState extends State<ChatListItem> {
           (source) => personal.conflicts.containsKey('draft:${source.id}'),
         );
     final l10n = L10n.of(context);
-    final nativeRules = sources.map((source) => source.pushRuleState).toSet();
+    final nativeRules = sources.map(accountPushRuleState).toSet();
     final nativeLimited = nativeRules.any(
       (rule) => rule != PushRuleState.notify,
     );

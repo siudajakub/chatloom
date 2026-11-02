@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
+import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/push_rule_mirror.dart';
@@ -47,7 +48,9 @@ NotionPinnedShortcut inboxPinnedShortcut(
     mentioned: !invite && sources.any((source) => source.highlightCount > 0),
     muted:
         metadata.muted ||
-        sources.any((source) => source.pushRuleState != PushRuleState.notify),
+        sources.any(
+          (source) => accountPushRuleState(source) != PushRuleState.notify,
+        ),
     networks: showNetworks
         ? notionBadgeNetworks(notionRoomNetworks(projection, room))
         : const [],

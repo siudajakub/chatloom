@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/events/round_mini_player.dart';
+import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/conversation_shortcuts.dart';
 import 'package:chatloom/personal/kept_message_notification.dart';
 import 'package:chatloom/personal/kept_messages.dart';
@@ -455,6 +456,7 @@ class MatrixState extends State<Matrix> {
           backgroundPush?.forgetClients([c]);
           PersonalPrivacy.forget(c);
           PushRuleMirror.stopFor(c);
+          BeeperMuteRelease.stopFor(c);
           // Kept deleted messages leave with the account: deleted from the
           // device store while it is still open, then the store closes.
           final personal = PersonalClient.of(c);
@@ -511,6 +513,8 @@ class MatrixState extends State<Matrix> {
       );
       // Chats muted for good or ignored stop waking devices (BP-07).
       PushRuleMirror.startFor(c, personal);
+      // Slack channels the bridge muted on creation alert again.
+      BeeperMuteRelease.startFor(c);
     }
 
     if (PlatformInfos.isWeb || PlatformInfos.isDesktop) {
