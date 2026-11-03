@@ -3,6 +3,7 @@ import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat_list/chat_list_item.dart';
+import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/connection_status.dart';
 import 'package:chatloom/personal/disappearing_label.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
@@ -36,7 +37,8 @@ class ChatAppBarTitle extends StatelessWidget {
             (u) =>
                 u.roomId == room.id &&
                 (u.state.type == EventTypes.RoomMember ||
-                    u.state.type == EventTypes.RoomAvatar),
+                    u.state.type == EventTypes.RoomAvatar ||
+                    bridgeInfoStateTypes.contains(u.state.type)),
           ),
           builder: (context, _) => ListenableBuilder(
             listenable: personal,

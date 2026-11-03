@@ -5,6 +5,7 @@ import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/developer_options.dart';
+import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -14,6 +15,7 @@ import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/personal/ui/notion_network_selector.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/avatar_viewer.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -179,9 +181,17 @@ class ContactSheet extends StatelessWidget {
             children: [
               Avatar(
                 client: client,
-                mxContent: user.avatarUrl,
+                mxContent: userAvatarUri(user),
                 name: name,
                 size: NotionSize.avatarLg,
+                onTap: userAvatarUri(user) == null
+                    ? null
+                    : () => showAvatarViewer(
+                        context,
+                        client: client,
+                        uri: userAvatarUri(user),
+                        name: name,
+                      ),
               ),
               const SizedBox(width: NotionSpace.md),
               Expanded(

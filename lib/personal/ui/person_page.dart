@@ -11,6 +11,7 @@ import 'package:chatloom/pages/chat_list/chat_list_item.dart'
     show personalConversationAvatar;
 import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
+import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/personal/organization_page.dart'
     show pickAndUploadPrivateAvatar, showChatThemeDialog;
 import 'package:chatloom/personal/person_location.dart';
@@ -30,6 +31,7 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/avatar_viewer.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -183,7 +185,7 @@ class _PersonPageState extends State<PersonPage> {
     final private = personal.values.containsKey(privateAvatarKey(entity));
     final photos = [
       for (final chat in projection.sourcesOf(group))
-        if (chat.room?.avatar != null) chat,
+        if (chat.room != null && roomAvatarUri(chat.room!) != null) chat,
     ];
     final picked = await showPersonChoiceSheet<String>(
       context,
@@ -206,7 +208,7 @@ class _PersonPageState extends State<PersonPage> {
             subtitle: chat.room!.getLocalizedDisplayname(),
             leading: Avatar(
               client: personal.client,
-              mxContent: chat.room!.avatar,
+              mxContent: roomAvatarUri(chat.room!),
               name: chat.room!.getLocalizedDisplayname(),
               size: NotionSize.iconLg,
             ),
@@ -358,8 +360,7 @@ class _PersonPageState extends State<PersonPage> {
             subtitle: 'New messages go here when nothing else decides',
             leading: Icon(Icons.star_outline),
           ),
-        if (chat.status == PersonSourceStatus.active &&
-            _partner(room!) != null)
+        if (chat.status == PersonSourceStatus.active && _partner(room!) != null)
           const PersonChoice(
             value: 'profile',
             title: 'View profile',
@@ -603,7 +604,10 @@ class _PersonPageState extends State<PersonPage> {
           );
     final overrides = [
       for (final chat in active)
-        (chat, projection.metadataForEntity(chat.member.roomId).notificationMode),
+        (
+          chat,
+          projection.metadataForEntity(chat.member.roomId).notificationMode,
+        ),
     ];
     final avatar = personalConversationAvatar(
       personal,
@@ -619,10 +623,16 @@ class _PersonPageState extends State<PersonPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Semantics(
-            button: editable,
-            label: 'Photo',
+            button: true,
+            label: 'View photo',
             child: NotionTapTarget(
-              onTap: editable ? () => _photo(group) : null,
+              onTap: () => showPersonalAvatarViewer(
+                context,
+                personal: personal,
+                entityId: entity,
+                uri: projection.avatarForGroup(group),
+                name: name,
+              ),
               child: SizedBox.square(
                 dimension: NotionSize.avatarLg,
                 child: avatar,
@@ -733,7 +743,8 @@ class _PersonPageState extends State<PersonPage> {
             ),
             title: personNetworkLabel(chat),
             subtitle: [
-              chat.room?.getLocalizedDisplayname() ?? 'Chat no longer available',
+              chat.room?.getLocalizedDisplayname() ??
+                  'Chat no longer available',
               if (chat.status == PersonSourceStatus.active && chat.room != null)
                 ?personSourceActivity(context, chat.room!),
             ].join(' · '),
@@ -752,11 +763,8 @@ class _PersonPageState extends State<PersonPage> {
           title: 'Add chat…',
           subtitle: 'Another network of this person',
           onTap: editable
-              ? () => addChatsToPerson(
-                  context,
-                  personal: personal,
-                  group: group,
-                )
+              ? () =>
+                    addChatsToPerson(context, personal: personal, group: group)
               : null,
         ),
         NotionListRow(
@@ -902,7 +910,8 @@ class _PersonPageState extends State<PersonPage> {
                   ),
                 ),
         ),
-        if (activeRooms.isNotEmpty) NotionLocalSharedPreview(rooms: activeRooms),
+        if (activeRooms.isNotEmpty)
+          NotionLocalSharedPreview(rooms: activeRooms),
       ],
     );
 
@@ -914,7 +923,8 @@ class _PersonPageState extends State<PersonPage> {
           title: 'Pin chat',
           value: metadata.isPinned,
           onChanged: editable
-              ? (value) => _change(() => setPersonPinned(personal, group, value))
+              ? (value) =>
+                    _change(() => setPersonPinned(personal, group, value))
               : null,
         ),
         NotionSettingsToggle(
@@ -935,7 +945,8 @@ class _PersonPageState extends State<PersonPage> {
         NotionSettingsToggle(
           title: 'Ignore chat',
           subtitle: 'Only in Ignored. No notifications, including mentions.',
-          value: metadata.ignored || metadata.placement == ChatPlacement.ignored,
+          value:
+              metadata.ignored || metadata.placement == ChatPlacement.ignored,
           onChanged: editable
               ? (value) => _change(
                   () => updatePersonMetadata(

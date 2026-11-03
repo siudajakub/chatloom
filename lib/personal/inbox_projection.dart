@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'package:chatloom/personal/conversation_classification.dart';
+import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -326,8 +327,8 @@ class InboxProjection {
   /// resolved by the widgets.
   Uri? avatarFor(Room room) {
     final group = groupFor(room);
-    if (group != null) return avatarForGroup(group) ?? room.avatar;
-    return room.avatar;
+    if (group != null) return avatarForGroup(group) ?? roomAvatarUri(room);
+    return roomAvatarUri(room);
   }
 
   Uri? avatarForGroup(PersonGroup group) {
@@ -335,7 +336,8 @@ class InboxProjection {
       metadataForEntity('person:${group.id}').avatarAsset,
     );
     if (chosen != null && group.members.any((m) => m.roomId == chosen)) {
-      final avatar = personal.client.getRoomById(chosen)?.avatar;
+      final source = personal.client.getRoomById(chosen);
+      final avatar = source == null ? null : roomAvatarUri(source);
       if (avatar != null) return avatar;
     }
     final rooms = [
@@ -343,7 +345,7 @@ class InboxProjection {
       ...group.members.map((m) => m.roomId),
     ].map(personal.client.getRoomById).whereType<Room>();
     for (final source in rooms) {
-      final avatar = source.avatar;
+      final avatar = roomAvatarUri(source);
       if (avatar != null) return avatar;
     }
     return null;

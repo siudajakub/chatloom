@@ -68,6 +68,8 @@ class AvatarCache {
   static Future<void> clearShared() async {
     if (kIsWeb) return;
     try {
+      _queue.clear();
+      _prefetched.clear();
       final cache = await _shared;
       if (cache != null) return await cache.clear();
       final base = await getApplicationSupportDirectory();
@@ -91,11 +93,6 @@ class AvatarCache {
     return buckets.last;
   }
 
-  static bool _retriable(MatrixException e) {
-    final status = e.response?.statusCode ?? 0;
-    return e.error == MatrixError.M_LIMIT_EXCEEDED || status >= 500;
-  }
-
   /// [MxcBytesLoader] for avatars: a crop thumbnail of the bucket covering
   /// the requested size, from disk when known; a missing thumbnail falls
   /// back to the original (kept under the bucket too).
@@ -114,6 +111,9 @@ class AvatarCache {
           : (width > height ? width : height),
     );
     Future<Uint8List> download() async {
+      if (!isThumbnail) {
+        return client.downloadMxcCached(uri, databaseCache: false);
+      }
       try {
         return await client.downloadMxcCached(
           uri,
@@ -125,7 +125,9 @@ class AvatarCache {
           databaseCache: false,
         );
       } on MatrixException catch (e) {
-        if (_retriable(e)) rethrow;
+        // Bridge direct media may serve originals while thumbnail generation
+        // fails (including 5xx). A rate limit still backs off immediately.
+        if (e.error == MatrixError.M_LIMIT_EXCEEDED) rethrow;
         return client.downloadMxcCached(uri, databaseCache: false);
       }
     }
@@ -134,8 +136,59 @@ class AvatarCache {
     final account = client.userID;
     if (cache == null || account == null) return download();
     return cache.fetch(
-      StickerMediaCache.keyFor(account, uri, 'avatar:$side'),
+      StickerMediaCache.keyFor(
+        account,
+        uri,
+        isThumbnail ? 'avatar:$side' : 'avatar:original',
+      ),
       download,
     );
+  }
+
+  /// Keys already queued or stored by [prefetch] in this run.
+  static final _prefetched = <String>{};
+  static final _queue = <(Client, Uri, int)>[];
+  static int _running = 0;
+  static const int _parallel = 2;
+
+  /// Warms the disk cache for [uris] at [physicalSide] (inbox rows beyond
+  /// the screen), a couple at a time, so a scroll shows them from disk.
+  /// Repeated calls with the same avatars cost nothing; failures are
+  /// silent (the row asks again when built).
+  static void prefetch(Client client, Iterable<Uri> uris, num physicalSide) {
+    final account = client.userID;
+    if (kIsWeb || account == null) return;
+    final side = bucketFor(physicalSide);
+    for (final uri in uris) {
+      if (!_prefetched.add('$account\n$uri\n$side')) continue;
+      _queue.add((client, uri, side));
+    }
+    _pump();
+  }
+
+  static void _pump() {
+    while (_running < _parallel && _queue.isNotEmpty) {
+      final (client, uri, side) = _queue.removeAt(0);
+      _running++;
+      unawaited(
+        loadAvatar(
+              client,
+              uri,
+              width: side,
+              height: side,
+              isThumbnail: true,
+              animated: false,
+              thumbnailMethod: ThumbnailMethod.crop,
+            )
+            .then<void>((_) {})
+            .catchError((Object _) {
+              _prefetched.remove('${client.userID}\n$uri\n$side');
+            })
+            .whenComplete(() {
+              _running--;
+              _pump();
+            }),
+      );
+    }
   }
 }

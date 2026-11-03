@@ -8,6 +8,7 @@ import 'package:chatloom/pages/chat_list/inbox_pins.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/kept_messages.dart';
+import 'package:chatloom/personal/media/avatar_cache.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
@@ -62,6 +63,15 @@ class ChatListViewBody extends StatelessWidget {
           for (final (index, room) in rooms.indexed) room.id: index,
         };
         controller.rowMemo.retain(rooms.length);
+        // Avatars of the rows a scroll reaches next come from disk.
+        AvatarCache.prefetch(
+          client,
+          rooms
+              .take(_avatarPrefetchRows)
+              .map(projection.avatarFor)
+              .whereType<Uri>(),
+          _avatarPrefetchSide * MediaQuery.devicePixelRatioOf(context),
+        );
         return NotionInboxPage(
           unreadCount: controller.unreadViewCount(),
           requestCount: controller.requestViewCount(),
@@ -148,6 +158,10 @@ class ChatListViewBody extends StatelessWidget {
 }
 
 const _rowKeyPrefix = 'chat_list_item_';
+
+/// Inbox rows whose avatars are fetched ahead, and their row avatar size.
+const _avatarPrefetchRows = 80;
+const double _avatarPrefetchSide = 42;
 
 /// Stable inbox row key (also used by tests and captures).
 String chatListItemKey(String roomId) => '$_rowKeyPrefix$roomId';

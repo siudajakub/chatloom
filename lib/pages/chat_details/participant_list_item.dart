@@ -5,6 +5,7 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/bridged_room.dart';
+import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/personal/ui/contact_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/member_actions_popup_menu_button.dart';
@@ -73,7 +74,7 @@ class ParticipantListItem extends StatelessWidget {
                 Opacity(
                   opacity: user.membership == Membership.join ? 1 : 0.5,
                   child: Avatar(
-                    mxContent: user.avatarUrl,
+                    mxContent: userAvatarUri(user),
                     name: user.calcDisplayname(),
                     size: NotionSize.avatar,
                     presenceUserId: bridged ? null : user.stateKey,

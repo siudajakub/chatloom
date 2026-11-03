@@ -34,8 +34,8 @@ import 'package:chatloom/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.da
 import 'package:chatloom/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/avatar_viewer.dart';
 import 'package:chatloom/widgets/matrix.dart';
-import 'package:chatloom/widgets/mxc_image_viewer.dart';
 import 'package:chatloom/widgets/qr_code_viewer.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -235,9 +235,10 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
     final hint = availability.hint;
     return NotionListRow(
       leading: const Icon(Icons.radio_button_checked_outlined),
-      title: messengerProtocolIds.contains(PersonalClient.networkOf(room))
-          ? messengerRoundVideoLabel
-          : 'Round video',
+      title: bridgeFeatureLabel(
+        BridgeFeature.roundVideo,
+        network: PersonalClient.networkOf(room),
+      ),
       subtitle: [reason ?? 'Available', ?hint].join(' · '),
     );
   }
@@ -739,7 +740,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
               network: PersonalClient.networkOf(room),
             ),
           ),
-        if (PlatformInfos.isAndroid &&
+        if (PlatformInfos.supportsRoundCapture &&
             roundChatNetworks.contains(PersonalClient.networkOf(room)))
           _roundVideoRow(room),
         NotionListRow(
@@ -834,21 +835,28 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             ? group?.name ?? room?.getLocalizedDisplayname() ?? 'Conversation'
             : name,
         network: network,
-        avatar: PrivateAvatarPreview(
-          personal: personal,
-          entityId: entity,
-          radius: 32,
-          fallback: Avatar(
-            client: personal.client,
-            mxContent: networkAvatar,
-            name: name,
-            size: 64,
-            onTap: networkAvatar == null
-                ? null
-                : () => showNotionCustomDialog(
-                    context: context,
-                    builder: (_) => MxcImageViewer(networkAvatar),
-                  ),
+        avatar: Semantics(
+          button: true,
+          label: 'View photo',
+          child: NotionTapTarget(
+            onTap: () => showPersonalAvatarViewer(
+              context,
+              personal: personal,
+              entityId: entity,
+              uri: networkAvatar,
+              name: name,
+            ),
+            child: PrivateAvatarPreview(
+              personal: personal,
+              entityId: entity,
+              radius: 32,
+              fallback: Avatar(
+                client: personal.client,
+                mxContent: networkAvatar,
+                name: name,
+                size: 64,
+              ),
+            ),
           ),
         ),
         nickname: metadata.nickname,
