@@ -3,7 +3,6 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/personal/media_transcript.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/scheduler.dart';
@@ -22,7 +21,7 @@ class RoundStageActions {
 
   /// Stops playback; the owner releases the stage before disposing.
   final Future<void> Function() stop;
-  final Future<void> Function()? save, forward, reportPlayed;
+  final Future<void> Function()? save, forward, reportPlayed, next;
   final bool Function()? canReportPlayed;
 
   /// Global rect of the inline circle, or null when the row is gone.
@@ -42,6 +41,7 @@ class RoundStageActions {
     this.save,
     this.forward,
     this.reportPlayed,
+    this.next,
     this.canReportPlayed,
     this.sourceRect,
     this.thumbnail,
@@ -59,10 +59,17 @@ class RoundStageController extends ChangeNotifier {
   VideoPlayerController? _video;
   RoundStageActions? _actions;
   RoundStageRoute? _route;
+  Object? _contentOwner;
+  WidgetBuilder? _content;
+  bool _waiting = false;
 
   VideoPlayerController? get video => _video;
   RoundStageActions? get actions => _actions;
-  bool get isOpen => _video != null;
+  bool get isOpen => _route != null && !_route!._removing;
+
+  bool isPresenting(Object? owner) =>
+      owner != null &&
+      (identical(owner, _video) || identical(owner, _contentOwner));
 
   bool isStaged(VideoPlayerController? video) =>
       video != null && identical(video, _video);
@@ -84,6 +91,11 @@ class RoundStageController extends ChangeNotifier {
     required VideoPlayerController video,
     required RoundStageActions actions,
   }) {
+    final existing = _route;
+    if (existing != null && existing.isActive && !existing._removing) {
+      _replace(video, actions);
+      return true;
+    }
     if (identical(video, _video)) {
       final current = _route;
       if (current != null && current.isActive && !current._removing) {
@@ -102,15 +114,73 @@ class RoundStageController extends ChangeNotifier {
     if (navigator == null) return false;
     final route = RoundStageRoute._(
       stage: this,
-      video: video,
-      reducedMotion: ConversationMotion.reduced(context),
+      reducedMotion: NotionMotion.reduced(context),
     );
     _video = video;
     _actions = actions;
+    _contentOwner = null;
+    _content = null;
+    _waiting = false;
     _route = route;
     unawaited(navigator.push(route));
     _notify();
     return true;
+  }
+
+  void _replace(VideoPlayerController video, RoundStageActions actions) {
+    _video = video;
+    _actions = actions;
+    _content = null;
+    _contentOwner = null;
+    _waiting = false;
+    _notify();
+  }
+
+  /// The queue replaces media inside the existing route. A user who closed
+  /// it while the next download ran must never have it opened again.
+  bool presentContinuation({
+    required VideoPlayerController video,
+    required RoundStageActions actions,
+  }) {
+    if (!isOpen) return false;
+    _replace(video, actions);
+    return true;
+  }
+
+  /// Detach before disposing a finished decoder, retaining the route while
+  /// the queue prepares its next round or voice note.
+  void holdForContinuation(Object owner) {
+    if (!isPresenting(owner)) return;
+    _video = null;
+    _actions = null;
+    _contentOwner = null;
+    _content = null;
+    _waiting = true;
+    _notify();
+  }
+
+  bool presentContent({required Object owner, required WidgetBuilder builder}) {
+    if (!isOpen) return false;
+    _video = null;
+    _actions = null;
+    _contentOwner = owner;
+    _content = builder;
+    _waiting = false;
+    _notify();
+    return true;
+  }
+
+  void releaseContent(Object owner) {
+    if (!identical(owner, _contentOwner)) return;
+    final route = _route;
+    _clear();
+    route?._remove();
+  }
+
+  void finishContinuation() {
+    if (!_waiting) return;
+    _waiting = false;
+    _notify();
   }
 
   /// Ownership moved (row ↔ mini player); the controller stays the same.
@@ -140,24 +210,22 @@ class RoundStageController extends ChangeNotifier {
     _video = null;
     _actions = null;
     _route = null;
+    _contentOwner = null;
+    _content = null;
+    _waiting = false;
     _notify();
   }
 }
 
 class RoundStageRoute extends PopupRoute<void> {
   final RoundStageController stage;
-  final VideoPlayerController video;
   final bool reducedMotion;
   bool _removing = false;
 
-  RoundStageRoute._({
-    required this.stage,
-    required this.video,
-    required this.reducedMotion,
-  });
+  RoundStageRoute._({required this.stage, required this.reducedMotion});
 
   @override
-  Color? get barrierColor => NotionMediaColors.stageScrim;
+  Color? get barrierColor => NotionMediaColors.viewer.withValues(alpha: 1);
 
   @override
   bool get barrierDismissible => true;
@@ -167,28 +235,75 @@ class RoundStageRoute extends PopupRoute<void> {
 
   @override
   Duration get transitionDuration =>
-      reducedMotion ? Duration.zero : const Duration(milliseconds: 220);
+      reducedMotion ? Duration.zero : NotionMotion.medium;
 
   @override
   Duration get reverseTransitionDuration =>
-      reducedMotion ? Duration.zero : const Duration(milliseconds: 180);
+      reducedMotion ? Duration.zero : NotionMotion.reverse;
 
   @override
   Widget buildPage(
     BuildContext context,
     Animation<double> animation,
     Animation<double> secondaryAnimation,
-  ) => RoundVideoStage(
-    controller: stage,
-    video: video,
-    animation: animation,
-    route: this,
+  ) => ListenableBuilder(
+    listenable: stage,
+    builder: (context, _) {
+      final video = stage.video;
+      if (!identical(stage._route, this)) return const SizedBox.shrink();
+      if (video != null) {
+        return RoundVideoStage(
+          key: ObjectKey(video),
+          controller: stage,
+          video: video,
+          animation: animation,
+          route: this,
+        );
+      }
+      final content = stage._content;
+      if (content != null) return content(context);
+      return Material(
+        type: MaterialType.transparency,
+        child: SafeArea(
+          child: Stack(
+            children: [
+              Align(
+                alignment: AlignmentDirectional.topEnd,
+                child: Padding(
+                  padding: const EdgeInsets.all(NotionSpace.md),
+                  child: IconButton(
+                    tooltip: 'Close media player',
+                    color: NotionMediaColors.onScrim,
+                    onPressed: stage.shrink,
+                    icon: const Icon(Icons.close),
+                  ),
+                ),
+              ),
+              Center(
+                child: stage._waiting
+                    ? const NotionDelayedSpinner(
+                        key: ValueKey('round-stage-continuing'),
+                        color: NotionMediaColors.onScrim,
+                      )
+                    : Text(
+                        'Playback finished',
+                        style: NotionType.callout.copyWith(
+                          color: NotionMediaColors.onScrim,
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
   );
 
   void _shrink() {
     final navigator = this.navigator;
     if (navigator == null || !isActive || _removing) return;
     if (isCurrent) {
+      _removing = true;
       navigator.pop();
     } else {
       _remove();
@@ -253,10 +368,9 @@ class RoundVideoStage extends StatefulWidget {
 class _RoundVideoStageState extends State<RoundVideoStage> {
   late final CurvedAnimation _curve = CurvedAnimation(
     parent: widget.animation,
-    curve: Curves.easeOutCubic,
-    reverseCurve: Curves.easeInCubic,
+    curve: NotionMotion.emphasized,
+    reverseCurve: NotionMotion.exitFast,
   );
-  bool _closing = false;
 
   /// The controller's position for the live transcript.
   late final _position = MediaPositionListenable(
@@ -265,27 +379,7 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
   );
 
   @override
-  void initState() {
-    super.initState();
-    widget.video.addListener(_onVideo);
-  }
-
-  void _onVideo() {
-    final value = widget.video.value;
-    final complete =
-        value.isCompleted ||
-        (!value.isPlaying &&
-            value.duration > Duration.zero &&
-            value.position >= value.duration);
-    if (complete && !_closing && widget.controller.isStaged(widget.video)) {
-      _closing = true;
-      widget.controller.shrink();
-    }
-  }
-
-  @override
   void dispose() {
-    widget.video.removeListener(_onVideo);
     _curve.dispose();
     super.dispose();
   }
@@ -327,26 +421,30 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
     final padding = MediaQuery.paddingOf(context);
     const controlsHeight = NotionSize.touchTarget * 2 + NotionSpace.md;
     final showing = shown != null;
+    final sideBySide =
+        showing &&
+        size.width >= NotionSize.contentMaxWidth &&
+        size.width > size.height;
     final available =
         size.height - padding.vertical - 2 * NotionSpace.md - controlsHeight;
     final diameter = math
         .min(
           math.min(
-            size.width - 2 * NotionSpace.inset,
+            (sideBySide ? size.width / 2 : size.width) - 2 * NotionSpace.inset,
             // The transcript takes the larger part of the height.
-            showing ? available * .42 : available,
+            showing && !sideBySide ? available * .42 : available,
           ),
           RoundVideoStage.maxDiameter,
         )
-        .clamp(RoundVideoView.minDiameter, RoundVideoStage.maxDiameter);
-    final top = showing
+        .clamp(NotionSize.touchTarget, RoundVideoStage.maxDiameter);
+    final top = showing && !sideBySide
         ? padding.top + NotionSpace.md
         : math.max(
             padding.top + NotionSpace.md,
             (size.height - diameter - controlsHeight) / 2,
           );
     final target = Rect.fromLTWH(
-      (size.width - diameter) / 2,
+      ((sideBySide ? size.width / 2 : size.width) - diameter) / 2,
       top,
       diameter,
       diameter,
@@ -398,26 +496,28 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
           if (shown != null)
             Positioned(
               key: const ValueKey('round-stage-transcript'),
-              left: NotionSpace.inset,
+              left: sideBySide
+                  ? size.width / 2 + NotionSpace.xs
+                  : NotionSpace.inset,
               right: NotionSpace.inset,
-              top: target.bottom + NotionSpace.md,
+              top: sideBySide
+                  ? padding.top + NotionSpace.md
+                  : target.bottom + NotionSpace.md,
               bottom: padding.bottom + NotionSpace.md + controlsHeight,
               child: FadeTransition(
                 opacity: _curve,
                 child: constrained(
-                  NotionEntrance(
-                    child: MediaSyncedTranscript(
-                      transcript: shown,
-                      position: _position,
-                      duration: _ready(widget.video.value)
-                          ? widget.video.value.duration
-                          : null,
-                      declaredDuration: event == null
-                          ? null
-                          : declaredMediaDuration(event),
-                      onSeek: (position) => unawaited(
-                        actions.seek(position).catchError((Object _) {}),
-                      ),
+                  MediaSyncedTranscript(
+                    transcript: shown,
+                    position: _position,
+                    duration: _ready(widget.video.value)
+                        ? widget.video.value.duration
+                        : null,
+                    declaredDuration: event == null
+                        ? null
+                        : declaredMediaDuration(event),
+                    onSeek: (position) => unawaited(
+                      actions.seek(position).catchError((Object _) {}),
                     ),
                   ),
                 ),
@@ -457,7 +557,9 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
   }
 
   void _dragEnd(DragEndDetails details) {
-    if ((details.primaryVelocity ?? 0) > 300) widget.controller.shrink();
+    if ((details.primaryVelocity ?? 0) > NotionDismissDrag.defaultVelocity) {
+      widget.controller.shrink();
+    }
   }
 
   Widget _circle(RoundStageActions actions) {
@@ -631,6 +733,12 @@ class _RoundVideoStageState extends State<RoundVideoStage> {
             if (transcript) const MediaTranscriptToggle(),
             NotionMediaActionsButton(
               actions: [
+                if (actions.next != null)
+                  NotionMediaAction(
+                    label: 'Next message',
+                    icon: Icons.skip_next,
+                    onPressed: actions.next,
+                  ),
                 if (actions.save != null)
                   NotionMediaAction(
                     label: 'Save round video',

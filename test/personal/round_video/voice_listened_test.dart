@@ -15,6 +15,7 @@ import 'package:chatloom/personal/round_video/telegram_room_binding.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/voice_playback.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -301,12 +302,16 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final label = find.text('Mark listened');
-    expect(label, findsOneWidget);
-    final text = tester.widget<RichText>(
-      find.descendant(of: label, matching: find.byType(RichText)),
+    expect(
+      find.text('Mark listened'),
+      findsNothing,
+      reason: 'icon-only action',
     );
-    expect(text.text.style?.color, ink);
+    expect(find.byTooltip('Mark listened'), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('voice-mark-listened'))),
+      const Size.square(NotionSize.touchTarget),
+    );
     final icon = find.byIcon(Icons.hearing_outlined);
     expect(IconTheme.of(tester.element(icon)).color, ink);
     // Unmount before the service closes.

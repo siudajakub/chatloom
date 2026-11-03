@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:chatloom/pages/chat/events/round_video_stage.dart';
 import 'package:chatloom/personal/media_transcript.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
@@ -49,6 +54,7 @@ class _Calls {
   final speeds = <double>[];
   Rect? source;
   Event? event;
+  Uint8List? poster;
 
   RoundStageActions actions({bool save = true}) => RoundStageActions(
     toggle: () async => toggles++,
@@ -58,6 +64,7 @@ class _Calls {
     save: save ? () async => saves++ : null,
     sourceRect: () => source,
     event: event,
+    thumbnail: () => poster,
   );
 }
 
@@ -66,20 +73,25 @@ Widget _app(
   VideoPlayerController video,
   _Calls calls, {
   bool reduced = false,
-}) => MaterialApp(
-  home: Builder(
-    builder: (context) => MediaQuery(
-      data: MediaQuery.of(context).copyWith(disableAnimations: reduced),
-      child: Scaffold(
-        body: Builder(
-          builder: (context) => Center(
-            child: TextButton(
-              onPressed: () => stage.present(
-                context,
-                video: video,
-                actions: calls.actions(),
+}) => RepaintBoundary(
+  key: const ValueKey('round-fixture-screen'),
+  child: MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: NotionTheme.build(Brightness.dark),
+    home: Builder(
+      builder: (context) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: reduced),
+        child: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: TextButton(
+                onPressed: () => stage.present(
+                  context,
+                  video: video,
+                  actions: calls.actions(),
+                ),
+                child: const Text('Open'),
               ),
-              child: const Text('Open'),
             ),
           ),
         ),
@@ -97,6 +109,16 @@ bool _notDisposed(ChangeNotifier notifier) {
 }
 
 void main() {
+  setUpAll(() async {
+    final font = FontLoader('Roboto');
+    for (final name in ['Regular', 'Medium', 'Bold']) {
+      font.addFont(rootBundle.load('assets/notion/fonts/Roboto-$name.ttf'));
+    }
+    await font.load();
+    await (FontLoader(
+      'MaterialIcons',
+    )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+  });
   _transcriptTests();
   testWidgets('shrinking keeps the same controller playing', (tester) async {
     final stage = RoundStageController();
@@ -282,7 +304,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('completion shrinks the stage', (tester) async {
+  testWidgets('completion keeps the stage open for replay', (tester) async {
     final stage = RoundStageController();
     final video = _video();
     addTearDown(video.dispose);
@@ -295,81 +317,212 @@ void main() {
       isCompleted: true,
     );
     await tester.pumpAndSettle();
-    expect(stage.isOpen, isFalse);
+    expect(stage.isOpen, isTrue);
+    expect(find.byTooltip('Play round video'), findsOneWidget);
     expect(_notDisposed(video), isTrue);
+    stage.release(video);
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('queue replacement retains one route across decoder disposal', (
+    tester,
+  ) async {
+    final stage = RoundStageController();
+    final first = _video();
+    final next = _video();
+    addTearDown(next.dispose);
+    await tester.pumpWidget(_app(stage, first, _Calls()));
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    final route = ModalRoute.of(tester.element(find.byType(RoundVideoStage)));
+    stage.holdForContinuation(first);
+    stage.release(first);
+    await first.dispose();
+    await tester.pump();
+    expect(stage.isOpen, isTrue);
+    expect(find.byType(VideoPlayer), findsNothing);
+    expect(
+      stage.presentContinuation(video: next, actions: _Calls().actions()),
+      isTrue,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      ModalRoute.of(tester.element(find.byType(RoundVideoStage))),
+      same(route),
+    );
+    expect(
+      tester.widget<VideoPlayer>(find.byType(VideoPlayer)).controller,
+      same(next),
+    );
+    expect(tester.takeException(), isNull);
+    stage.release(next);
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('closing during continuation never reopens it after loading', (
+    tester,
+  ) async {
+    final stage = RoundStageController();
+    final video = _video();
+    addTearDown(video.dispose);
+    await tester.pumpWidget(_app(stage, video, _Calls()));
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    stage.holdForContinuation(video);
+    await tester.pump();
+    stage.shrink();
+    // A load can finish while the reverse transition still runs.
+    expect(
+      stage.presentContinuation(video: video, actions: _Calls().actions()),
+      isFalse,
+    );
+    await tester.pumpAndSettle();
+    expect(stage.isOpen, isFalse);
+    expect(
+      stage.presentContinuation(video: video, actions: _Calls().actions()),
+      isFalse,
+    );
+    expect(find.byType(RoundVideoStage), findsNothing);
   });
 }
 
 void _transcriptTests() {
-  testWidgets('a finished transcript follows the round and can be hidden', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    MediaTranscriptPreference.visible.value = true;
-    final client = ConversationClient();
-    final room = ConversationRoom(client, '!round:example.invalid');
-    final event = room.message(
-      r'$round',
-      'round.mp4',
-      content: {
-        'msgtype': MessageTypes.Video,
-        'body': 'round.mp4',
-        'url': 'mxc://example.invalid/round',
+  for (final viewport in [const Size(390, 844), const Size(844, 390)]) {
+    testWidgets(
+      'a finished transcript follows the round at $viewport and can be hidden',
+      (tester) async {
+        tester.view.physicalSize = viewport;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        MediaTranscriptPreference.visible.value = true;
+        final client = ConversationClient();
+        final room = ConversationRoom(client, '!round:example.invalid');
+        final event = room.message(
+          r'$round',
+          'round.mp4',
+          content: {
+            'msgtype': MessageTypes.Video,
+            'body': 'round.mp4',
+            'url': 'mxc://example.invalid/round',
+          },
+        );
+        final personal = _Transcripts(client);
+        PersonalClient.debugUse(client, personal);
+        personal.jobs['transcript:${event.eventId}'] = TranscriptionJob(
+          id: 'transcript:${event.eventId}',
+          source: SourceEventRef(
+            conversation: ConversationRef(
+              accountId: client.userID,
+              roomId: room.id,
+            ),
+            eventId: event.eventId,
+          ),
+          state: JobState.done,
+          text:
+              'First we met at the station near the river. '
+              'Then we walked home together in the rain.',
+          durationSeconds: 10,
+        );
+        final stage = RoundStageController();
+        final video = _video();
+        final calls = _Calls()..event = event;
+        await tester.runAsync(() async {
+          // A fictional poster stands in for a decoded native frame in captures.
+          final recorder = ui.PictureRecorder();
+          final canvas = Canvas(recorder);
+          const bounds = Rect.fromLTWH(0, 0, 240, 240);
+          canvas.drawRect(
+            bounds,
+            Paint()
+              ..shader = const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF68735F), Color(0xFF303E44)],
+              ).createShader(bounds),
+          );
+          canvas.drawCircle(
+            const Offset(168, 74),
+            36,
+            Paint()..color = const Color(0xFFE0D3AA),
+          );
+          final picture = recorder.endRecording();
+          final image = await picture.toImage(240, 240);
+          calls.poster = (await image.toByteData(
+            format: ui.ImageByteFormat.png,
+          ))!.buffer.asUint8List();
+          image.dispose();
+          picture.dispose();
+        });
+        addTearDown(video.dispose);
+        await tester.pumpWidget(_app(stage, video, calls));
+        await tester.runAsync(
+          () => precacheImage(
+            MemoryImage(calls.poster!),
+            tester.element(find.text('Open')),
+          ),
+        );
+        await tester.tap(find.text('Open'));
+        await tester.pumpAndSettle();
+        expect(find.byType(NotionSyncedTranscript), findsOneWidget);
+        expect(
+          find.text(MediaSyncedTranscript.approximateCaption),
+          findsOneWidget,
+        );
+        final withTranscript = tester.getRect(find.byType(VideoPlayer)).width;
+        if (viewport.width > viewport.height) {
+          expect(
+            tester.getRect(find.byType(VideoPlayer)).right,
+            lessThan(tester.getRect(find.byType(NotionSyncedTranscript)).left),
+          );
+        }
+        final output = Platform.environment['NOTION_CAPTURE_DIR'];
+        if (output != null) {
+          final boundary = tester.renderObject<RenderRepaintBoundary>(
+            find.byKey(const ValueKey('round-fixture-screen')),
+          );
+          await tester.runAsync(() async {
+            final image = await boundary.toImage(pixelRatio: 1.5);
+            final bytes = await image.toByteData(
+              format: ui.ImageByteFormat.png,
+            );
+            final file = File(
+              '$output/fullscreen-transcript-${viewport.width.toInt()}x${viewport.height.toInt()}.png',
+            );
+            await file.parent.create(recursive: true);
+            await file.writeAsBytes(bytes!.buffer.asUint8List());
+            image.dispose();
+          });
+        }
+
+        // A tap on a line seeks the owner's player to its start.
+        await tester.tap(
+          find.text('Then we walked home together in the rain.'),
+        );
+        await tester.pumpAndSettle();
+        expect(calls.seeks, hasLength(1));
+        expect(calls.seeks.single, greaterThan(const Duration(seconds: 3)));
+
+        // Hidden: the circle takes the room back (gliding there).
+        await tester.tap(find.byTooltip('Hide transcript'));
+        await tester.pumpAndSettle();
+        expect(find.byType(NotionSyncedTranscript), findsNothing);
+        expect(MediaTranscriptPreference.visible.value, isFalse);
+        if (viewport.width < viewport.height) {
+          expect(
+            tester.getRect(find.byType(VideoPlayer)).width,
+            greaterThan(withTranscript),
+          );
+        }
+        await tester.tap(find.byTooltip('Show transcript'));
+        await tester.pumpAndSettle();
+        expect(find.byType(NotionSyncedTranscript), findsOneWidget);
+        expect(personal.requests, 0);
+        expect(tester.takeException(), isNull);
+        await tester.tapAt(const Offset(4, 4));
+        await tester.pumpAndSettle();
       },
     );
-    final personal = _Transcripts(client);
-    PersonalClient.debugUse(client, personal);
-    personal.jobs['transcript:${event.eventId}'] = TranscriptionJob(
-      id: 'transcript:${event.eventId}',
-      source: SourceEventRef(
-        conversation: ConversationRef(
-          accountId: client.userID,
-          roomId: room.id,
-        ),
-        eventId: event.eventId,
-      ),
-      state: JobState.done,
-      text:
-          'First we met at the station near the river. '
-          'Then we walked home together in the rain.',
-      durationSeconds: 10,
-    );
-    final stage = RoundStageController();
-    final video = _video();
-    final calls = _Calls()..event = event;
-    addTearDown(video.dispose);
-    await tester.pumpWidget(_app(stage, video, calls));
-    await tester.tap(find.text('Open'));
-    await tester.pumpAndSettle();
-    expect(find.byType(NotionSyncedTranscript), findsOneWidget);
-    expect(find.text(MediaSyncedTranscript.approximateCaption), findsOneWidget);
-    final withTranscript = tester.getRect(find.byType(VideoPlayer)).width;
-
-    // A tap on a line seeks the owner's player to its start.
-    await tester.tap(find.text('Then we walked home together in the rain.'));
-    await tester.pumpAndSettle();
-    expect(calls.seeks, hasLength(1));
-    expect(calls.seeks.single, greaterThan(const Duration(seconds: 3)));
-
-    // Hidden: the circle takes the room back (gliding there).
-    await tester.tap(find.byTooltip('Hide transcript'));
-    await tester.pumpAndSettle();
-    expect(find.byType(NotionSyncedTranscript), findsNothing);
-    expect(MediaTranscriptPreference.visible.value, isFalse);
-    expect(
-      tester.getRect(find.byType(VideoPlayer)).width,
-      greaterThan(withTranscript),
-    );
-    await tester.tap(find.byTooltip('Show transcript'));
-    await tester.pumpAndSettle();
-    expect(find.byType(NotionSyncedTranscript), findsOneWidget);
-    expect(personal.requests, 0);
-    expect(tester.takeException(), isNull);
-    await tester.tapAt(const Offset(4, 4));
-    await tester.pumpAndSettle();
-  });
+  }
 }
 
 /// Mimics a timeline row: releases, then disposes, inside State.dispose.

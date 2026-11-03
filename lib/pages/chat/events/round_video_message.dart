@@ -277,17 +277,19 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       sourceRect: _circleRect,
       thumbnail: () => _thumbnail,
       event: widget.event,
+      next: _queue.isEmpty ? null : _advance,
     );
   }
 
-  void _present() {
+  void _present({bool continuation = false}) {
     final player = _player;
     if (!mounted || player == null || !widget.enlargeOnPlay) return;
-    RoundStageController.shared.present(
-      context,
-      video: player,
-      actions: _stageActions(),
-    );
+    final stage = RoundStageController.shared;
+    if (continuation) {
+      stage.presentContinuation(video: player, actions: _stageActions());
+    } else {
+      stage.present(context, video: player, actions: _stageActions());
+    }
   }
 
   /// Idle rows release their decoders before this row opens one.
@@ -436,6 +438,16 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
     unawaited(_handOff(player, queue, token, speed: _speed, enlarge: enlarge));
   }
 
+  Future<void> _advance() async {
+    final player = _player;
+    if (player == null || _queue.isEmpty || !_available) return;
+    if (!_handle.isCurrent && !await _handle.acquireAudible()) return;
+    if (!identical(player, _player) || !_handle.isCurrent || !_available) {
+      return;
+    }
+    _finish(player);
+  }
+
   Future<void> _handOff(
     VideoPlayerController player,
     List<Event> queue,
@@ -443,6 +455,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
     required double speed,
     required bool enlarge,
   }) async {
+    if (enlarge) RoundStageController.shared.holdForContinuation(player);
     if (identical(player, _player)) {
       final disposing = _disposePlayer();
       if (mounted) setState(() {});
@@ -851,7 +864,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
           identical(player, _player) &&
           _handle.isCurrent &&
           generation == _generation) {
-        _present();
+        _present(continuation: continuation != null);
       }
       return RoundStartResult.started;
     } catch (_) {

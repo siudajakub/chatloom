@@ -106,8 +106,8 @@ class NotionSyncedTranscript extends StatefulWidget {
   static const Duration defaultFollowHold = Duration(seconds: 3);
 
   /// Resting opacity of lines already spoken and of lines still to come.
-  static const double pastOpacity = .34;
-  static const double upcomingOpacity = .56;
+  static const double pastOpacity = .62;
+  static const double upcomingOpacity = .74;
 
   /// Words of the current line not spoken yet.
   static const double unspokenOpacity = .5;

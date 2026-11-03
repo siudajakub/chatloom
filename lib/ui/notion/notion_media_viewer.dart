@@ -194,7 +194,10 @@ class _RouteMediaEntranceState extends State<_RouteMediaEntrance> {
     super.dispose();
   }
 
-  static final _scaleTween = Tween<double>(begin: NotionMotion.dialogFrom, end: 1);
+  static final _scaleTween = Tween<double>(
+    begin: NotionMotion.dialogFrom,
+    end: 1,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -203,10 +206,12 @@ class _RouteMediaEntranceState extends State<_RouteMediaEntrance> {
     if (fade == null || scale == null) return widget.child;
     return FadeTransition(
       opacity: fade,
-      child: ScaleTransition(
-        scale: _scaleTween.animate(scale),
-        child: widget.child,
-      ),
+      child: NotionMotion.reduced(context)
+          ? widget.child
+          : ScaleTransition(
+              scale: _scaleTween.animate(scale),
+              child: widget.child,
+            ),
     );
   }
 }
@@ -453,9 +458,11 @@ class NotionDoubleTapZoom {
 
   /// The matrix that zooms by [scale] while keeping [focal] (in the
   /// viewer's coordinates at fit) where it is.
-  static Matrix4 zoomAt(Offset focal, double scale) =>
-      Matrix4.diagonal3Values(scale, scale, 1)
-        ..setTranslationRaw(-focal.dx * (scale - 1), -focal.dy * (scale - 1), 0);
+  static Matrix4 zoomAt(Offset focal, double scale) => Matrix4.diagonal3Values(
+    scale,
+    scale,
+    1,
+  )..setTranslationRaw(-focal.dx * (scale - 1), -focal.dy * (scale - 1), 0);
 
   void toggle(
     TransformationController transform,
@@ -504,10 +511,17 @@ class NotionDoubleTapZoom {
 /// scaled up) into [bounds]; null when the size is unknown. Gives a viewer
 /// hero its final rectangle before the full image has loaded.
 Size? notionFitMedia(num? width, num? height, Size bounds) {
-  if (width == null || height == null || width <= 0 || height <= 0) {
+  if (width == null ||
+      height == null ||
+      !width.isFinite ||
+      !height.isFinite ||
+      width <= 0 ||
+      height <= 0) {
     return null;
   }
-  if (!bounds.width.isFinite || !bounds.height.isFinite) return null;
+  if (!bounds.width.isFinite || !bounds.height.isFinite || bounds.isEmpty) {
+    return null;
+  }
   final scale = [
     bounds.width / width,
     bounds.height / height,

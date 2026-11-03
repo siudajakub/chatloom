@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/pages/image_viewer/image_viewer_view.dart';
+import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
@@ -119,6 +120,8 @@ class ImageViewer extends StatefulWidget {
 
 class ImageViewerController extends State<ImageViewer>
     with TickerProviderStateMixin {
+  int _pageGeneration = 0;
+  Offset _interactionTravel = Offset.zero;
   final FocusNode focusNode = FocusNode();
 
   /// The media follows a vertical swipe and closes past a threshold, or
@@ -176,6 +179,7 @@ class ImageViewerController extends State<ImageViewer>
 
   void onInteractionStart(ScaleStartDetails details) {
     zoom.stop();
+    _interactionTravel = Offset.zero;
     final zoomed = NotionDoubleTapZoom.isZoomed(
       transformFor(currentEventOrInitial),
     );
@@ -186,6 +190,13 @@ class ImageViewerController extends State<ImageViewer>
     if (!dismiss.dragging) return;
     if (details.pointerCount > 1) {
       // A pinch takes over: put the media back.
+      dismiss.springBack(reduced: NotionMotion.reduced(context));
+      return;
+    }
+    _interactionTravel += details.focalPointDelta;
+    // A diagonal album swipe belongs to paging. Small vertical movement
+    // during it must never become a dismiss fling at the end.
+    if (_interactionTravel.dx.abs() > _interactionTravel.dy.abs()) {
       dismiss.springBack(reduced: NotionMotion.reduced(context));
       return;
     }
@@ -215,18 +226,33 @@ class ImageViewerController extends State<ImageViewer>
   /// A page swiped away forgets its zoom, like Telegram. Players of other
   /// pages stop first; the new page's video then starts on its own (it
   /// waited for [currentPage]), so the stop never catches it.
-  void onPageChanged(int index) {
+  Future<void> onPageChanged(int index) async {
+    final generation = ++_pageGeneration;
     final current = allEvents[index].eventId;
     zoom.stop();
+    dismiss.springBack(reduced: NotionMotion.reduced(context));
     for (final entry in _transforms.entries) {
       if (entry.key != current) entry.value.value = Matrix4.identity();
     }
     currentPage.value = null;
-    RoundPlaybackCoordinator.shared
-        .stopAll(suspend: false)
-        .catchError((Object _) {});
-    currentPage.value = current;
     currentIndex.value = index;
+    final coordinator = RoundPlaybackCoordinator.shared;
+    try {
+      await coordinator.stopAll(suspend: coordinator.suspended);
+    } catch (_) {
+      // A failed stop keeps the coordinator suspended. Do not start audio.
+      return;
+    }
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (!mounted ||
+        generation != _pageGeneration ||
+        coordinator.suspended ||
+        !PersonalPrivacy.surfaceUnlocked ||
+        !PersonalPrivacy.surfaceForeground ||
+        (lifecycle != null && lifecycle != AppLifecycleState.resumed)) {
+      return;
+    }
+    currentPage.value = current;
   }
 
   Event get currentEventOrInitial => currentEvent;
@@ -301,14 +327,16 @@ class ImageViewerController extends State<ImageViewer>
   Future<void> nextImage() => _goTo(_index + 1);
 
   Future<void> _goTo(int index) async {
-    if (index < 0 || index >= allEvents.length) return;
+    if (index < 0 || index >= allEvents.length || !pageController.hasClients) {
+      return;
+    }
     if (NotionMotion.reduced(context)) {
       pageController.jumpToPage(index);
       return;
     }
     await pageController.animateToPage(
       index,
-      duration: NotionMotion.long,
+      duration: NotionMotion.medium,
       curve: NotionMotion.emphasized,
     );
   }
@@ -350,8 +378,6 @@ class ImageViewerController extends State<ImageViewer>
   /// Copies the image on screen to the clipboard (macOS).
   void copyImageAction(BuildContext context) => currentEvent.copyImage(context);
 
-  static const maxScaleFactor = 1.5;
-
   /// Go back if user swiped it away
   void onInteractionEnds(ScaleEndDetails endDetails) {
     final velocity = endDetails.velocity.pixelsPerSecond.dy;
@@ -359,15 +385,11 @@ class ImageViewerController extends State<ImageViewer>
       _endDismiss(velocity);
       return;
     }
-    if (PlatformInfos.usesTouchscreen == false) {
-      if (velocity > MediaQuery.sizeOf(context).height * maxScaleFactor) {
-        Navigator.of(context, rootNavigator: false).pop();
-      }
-    }
   }
 
   @override
   void dispose() {
+    ++_pageGeneration;
     dismiss.dispose();
     zoom.dispose();
     chromeVisible.dispose();

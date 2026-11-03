@@ -6,6 +6,8 @@ import 'dart:async';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer_chrome.dart';
+import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter/services.dart';
@@ -67,6 +69,8 @@ Future<void> _open(
   WidgetTester tester,
   Future<void> Function(BuildContext context) open,
 ) async {
+  // Construct the shared serial chain inside this test's fake-async zone.
+  RoundPlaybackCoordinator.shared.debugReset();
   await tester.pumpWidget(
     MaterialApp(
       theme: NotionTheme.build(Brightness.dark),
@@ -100,6 +104,131 @@ Future<void> _settleRoute(WidgetTester tester) async {
 }
 
 void main() {
+  setUp(() {
+    RoundPlaybackCoordinator.shared.debugReset();
+    PersonalPrivacy.surfaceUnlocked = true;
+    PersonalPrivacy.surfaceForeground = true;
+  });
+
+  for (final lockBefore in [true, false]) {
+    testWidgets(
+      'paging preserves a lock ${lockBefore ? 'before' : 'during'} decoder cleanup',
+      (tester) async {
+        final album = _album();
+        await _open(
+          tester,
+          (context) => showImageViewer(context, album[0], mediaEvents: album),
+        );
+        final controller = tester.state<ImageViewerController>(
+          find.byType(ImageViewer),
+        );
+        final gate = Completer<void>();
+        final coordinator = RoundPlaybackCoordinator.shared;
+        final handle = coordinator.register(
+          pause: () async {},
+          stop: () => gate.future,
+        );
+        addTearDown(() {
+          handle.dispose();
+          PersonalPrivacy.surfaceUnlocked = true;
+          coordinator.resume();
+        });
+        void lock() {
+          PersonalPrivacy.surfaceUnlocked = false;
+          unawaited(coordinator.stopAll());
+        }
+
+        if (lockBefore) lock();
+        final pending = controller.onPageChanged(1);
+        await tester.pump();
+        if (!lockBefore) lock();
+        gate.complete();
+        await tester.pump();
+        await pending;
+        expect(coordinator.suspended, isTrue);
+        expect(controller.currentPage.value, isNull);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await _settleRoute(tester);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('touch arrows page without dismissing the viewer', (
+    tester,
+  ) async {
+    final album = _album();
+    await _open(
+      tester,
+      (context) => showImageViewer(context, album[0], mediaEvents: album),
+    );
+    final next = find.byIcon(Icons.keyboard_arrow_right_outlined);
+    expect(next, findsOneWidget, reason: 'visible without a mouse hover');
+    await tester.tap(next);
+    await _settleRoute(tester);
+    expect(find.textContaining('2 of 3'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.keyboard_arrow_left_outlined));
+    await _settleRoute(tester);
+    expect(find.textContaining('1 of 3'), findsOneWidget);
+    expect(find.byType(ImageViewer), findsOneWidget);
+    // A tap outside the picture reveals/hides chrome, never closes media.
+    await tester.tapAt(const Offset(300, 550));
+    await _settleRoute(tester);
+    expect(find.byType(ImageViewer), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _settleRoute(tester);
+  });
+
+  testWidgets(
+    'rapid paging waits for old decoders before activating the latest',
+    (tester) async {
+      final album = _album();
+      await _open(
+        tester,
+        (context) => showImageViewer(context, album[0], mediaEvents: album),
+      );
+      final controller = tester.state<ImageViewerController>(
+        find.byType(ImageViewer),
+      );
+      final gate = Completer<void>();
+      final handle = RoundPlaybackCoordinator.shared.register(
+        pause: () async {},
+        stop: () => gate.future,
+      );
+      addTearDown(handle.dispose);
+      final first = controller.onPageChanged(1);
+      await tester.pump();
+      expect(controller.currentPage.value, isNull);
+      final latest = controller.onPageChanged(2);
+      await tester.pump();
+      expect(controller.currentPage.value, isNull);
+      gate.complete();
+      await tester.pump();
+      await Future.wait([first, latest]);
+      expect(controller.currentPage.value, album[2].eventId);
+      expect(controller.currentIndex.value, 2);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await _settleRoute(tester);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('a diagonal horizontal swipe pages and keeps the viewer open', (
+    tester,
+  ) async {
+    final album = _album();
+    await _open(
+      tester,
+      (context) => showImageViewer(context, album[1], mediaEvents: album),
+    );
+    await tester.fling(find.byType(PageView), const Offset(-500, 90), 1200);
+    await _settleRoute(tester);
+    expect(find.byType(ImageViewer), findsOneWidget);
+    expect(find.textContaining('3 of 3'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _settleRoute(tester);
+  });
+
   testWidgets('header shows the position and the caption follows the page', (
     tester,
   ) async {

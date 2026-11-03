@@ -338,7 +338,21 @@ void main() {
   void scenario(String description, WidgetTesterCallback body) =>
       testWidgets(description, (tester) async {
         RoundPlaybackCoordinator.shared.debugReset();
-        await body(tester);
+        try {
+          await body(tester);
+        } finally {
+          // A failing expectation must not leave an old texture attached
+          // when the next scenario installs a fresh platform fixture.
+          unawaited(RoundMiniPlayerController.shared.stop());
+          for (var frame = 0; frame < 3; frame++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          await tester.pumpWidget(const SizedBox.shrink());
+          unawaited(RoundMiniPlayerController.shared.stop());
+          for (var frame = 0; frame < 3; frame++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+        }
       });
 
   Future<void> settle(WidgetTester tester, [int frames = 8]) async {
@@ -463,11 +477,10 @@ void main() {
         expect(textures(), 1);
       }
     }
-    // Last in list: nothing else starts, nothing is left enlarged. The
-    // finished row may keep its paused controller for an instant replay; it
-    // is the only one and is released as soon as anything else opens.
+    // Last in list: the viewer remains available for reading or replay;
+    // completing media never dismisses the user's transcript.
     expect(loader.loads, [r'$message0', r'$message1', r'$message2']);
-    expect(RoundStageController.shared.isOpen, isFalse);
+    expect(RoundStageController.shared.isOpen, isTrue);
     expect(platform.players.length, lessThanOrEqualTo(1));
     expect(platform.played, hasLength(3));
     expect(find.byType(ErrorWidget), findsNothing);
@@ -488,14 +501,17 @@ void main() {
     final session = RoundMiniPlayerController.shared.current;
     expect(session?.event.eventId, r'$message1');
     expect(session?.playing, isTrue);
-    expect(find.text('Round video'), findsOneWidget);
-    // The bar stays usable: pause, change speed, stop.
-    await tester.tap(find.byTooltip('Pause'));
+    expect(RoundStageController.shared.isStaged(session?.video), isTrue);
+    expect(find.bySemanticsLabel('Round video, enlarged'), findsOneWidget);
+    // The retained stage drives the detached owner: pause, speed, stop.
+    await tester.tap(find.byTooltip('Pause round video'));
     await settle(tester, 2);
-    await tester.tap(find.byTooltip('Playback speed'));
+    await tester.tap(find.bySemanticsLabel('Playback speed'));
     await settle(tester, 2);
     expect(RoundMiniPlayerController.shared.current?.speed, 1.25);
-    await tester.tap(find.byTooltip('Stop playback'));
+    await tester.tap(find.byTooltip('More options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Stop playback'));
     await settle(tester);
     expect(tester.takeException(), isNull);
     expect(RoundMiniPlayerController.shared.current, isNull);
@@ -529,6 +545,11 @@ void main() {
     await settle(tester);
     platform.finish(platform.players.keys.single);
     await settle(tester);
+    expect(RoundStageController.shared.isOpen, isTrue);
+    expect(
+      find.byKey(const ValueKey('round-stage-continuing')),
+      findsOneWidget,
+    );
     expect(find.byTooltip('Cancel download'), findsOneWidget);
     expect(platform.players, isEmpty, reason: 'previous decoder released');
     gate.complete();
@@ -536,6 +557,27 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(platform.played, hasLength(2));
     expect(RoundStageController.shared.isOpen, isTrue);
+    await cleanup(tester);
+  });
+
+  scenario('Next message advances the frozen queue from a paused stage', (
+    tester,
+  ) async {
+    final rows = [for (var i = 0; i < 2; i++) _message(i)];
+    await tester.pumpWidget(app(rows: rows));
+    await tester.tap(playButtons().first);
+    await settle(tester);
+    await tester.tap(find.byTooltip('Pause round video'));
+    await settle(tester, 2);
+    await tester.tap(find.byTooltip('More options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next message'));
+    await settle(tester);
+    expect(loader.loads, [r'$message0', r'$message1']);
+    expect(RoundStageController.shared.isOpen, isTrue);
+    expect(platform.players, hasLength(1));
+    expect(platform.maxLive, 1);
+    expect(tester.takeException(), isNull);
     await cleanup(tester);
   });
 
@@ -561,6 +603,10 @@ void main() {
     await settle(tester);
     platform.finish(platform.players.keys.single);
     await settle(tester);
+    // The queue now keeps its fullscreen loading state. Close it to choose
+    // another timeline item; that choice must win over the pending load.
+    RoundStageController.shared.shrink();
+    await settle(tester, 3);
     // The third row: the second shows its download ring instead.
     await tester.tap(playButtons().last);
     await settle(tester);
@@ -675,6 +721,8 @@ void main() {
     expect(voice?.event.eventId, r'$message1');
     expect(_FakeAudio.instances.single.playing, isTrue);
     expect(find.text('Voice message'), findsOneWidget);
+    expect(RoundStageController.shared.isPresenting(voice), isTrue);
+    expect(find.byTooltip('Close media player'), findsOneWidget);
     _FakeAudio.instances.single.finish();
     await settle(tester);
     expect(tester.takeException(), isNull);

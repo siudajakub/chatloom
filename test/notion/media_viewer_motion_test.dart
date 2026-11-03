@@ -49,9 +49,9 @@ class _Source extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            NotionMediaRoute<void>(builder: (_) => const _Viewer()),
-          ),
+          onTap: () => Navigator.of(
+            context,
+          ).push(NotionMediaRoute<void>(builder: (_) => const _Viewer())),
           child: const Hero(
             tag: _tag,
             createRectTween: NotionMediaHero.rectTween,
@@ -130,7 +130,10 @@ void main() {
       expect(flying.width, lessThan(400));
       expect(find.byKey(_viewerKey), findsNothing);
       // The backdrop is fading in, never painted at once.
-      expect(_backdrop(tester).a, inExclusiveRange(0, NotionMediaColors.viewer.a));
+      expect(
+        _backdrop(tester).a,
+        inExclusiveRange(0, NotionMediaColors.viewer.a),
+      );
 
       await tester.pumpAndSettle();
       expect(tester.getSize(find.byKey(_viewerKey)), const Size(400, 300));
@@ -162,9 +165,9 @@ void main() {
           Builder(
             builder: (context) => Scaffold(
               body: TextButton(
-                onPressed: () => Navigator.of(context).push(
-                  NotionMediaRoute<void>(builder: (_) => const _Viewer()),
-                ),
+                onPressed: () => Navigator.of(
+                  context,
+                ).push(NotionMediaRoute<void>(builder: (_) => const _Viewer())),
                 child: const Text('open'),
               ),
             ),
@@ -410,10 +413,20 @@ void main() {
   });
 
   test('notionFitMedia contains and scales up', () {
-    expect(notionFitMedia(400, 300, const Size(800, 1200)), const Size(800, 600));
-    expect(notionFitMedia(1000, 4000, const Size(400, 800)), const Size(200, 800));
+    expect(
+      notionFitMedia(400, 300, const Size(800, 1200)),
+      const Size(800, 600),
+    );
+    expect(
+      notionFitMedia(1000, 4000, const Size(400, 800)),
+      const Size(200, 800),
+    );
     expect(notionFitMedia(null, 300, const Size(400, 800)), isNull);
     expect(notionFitMedia(0, 300, const Size(400, 800)), isNull);
+    expect(notionFitMedia(double.nan, 300, const Size(400, 800)), isNull);
+    expect(notionFitMedia(400, double.infinity, const Size(400, 800)), isNull);
+    expect(notionFitMedia(400, 300, Size.zero), isNull);
+    expect(notionFitMedia(400, 300, const Size(-1, 800)), isNull);
   });
 
   group('inbox motion', () {
@@ -519,7 +532,10 @@ void main() {
       );
       double scaleOf(String name) => tester
           .widgetList<ScaleTransition>(
-            find.ancestor(of: find.text(name), matching: find.byType(ScaleTransition)),
+            find.ancestor(
+              of: find.text(name),
+              matching: find.byType(ScaleTransition),
+            ),
           )
           .fold(1.0, (v, s) => v * s.scale.value);
 
@@ -529,7 +545,10 @@ void main() {
       await tester.pump();
       await tester.pump(NotionMotion.instant);
       expect(scaleOf('Anna'), 1);
-      expect(scaleOf('Team'), inExclusiveRange(NotionMotion.dialogFrom - .01, 1));
+      expect(
+        scaleOf('Team'),
+        inExclusiveRange(NotionMotion.dialogFrom - .01, 1),
+      );
       await tester.pumpAndSettle();
       expect(scaleOf('Team'), 1);
 

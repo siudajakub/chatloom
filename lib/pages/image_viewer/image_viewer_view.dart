@@ -56,7 +56,7 @@ class ImageViewerView extends StatelessWidget {
         focusNode: controller.focusNode,
         autofocus: true,
         child: GestureDetector(
-          onTap: () => Navigator.of(context).pop(),
+          onTap: controller.toggleChrome,
           child: Scaffold(
             backgroundColor: Colors.transparent,
             extendBodyBehindAppBar: true,
@@ -83,7 +83,40 @@ class ImageViewerView extends StatelessWidget {
                       count: controller.allEvents.length,
                     ),
                   ),
-                  actions: [perPage(_actions)],
+                  actions: [
+                    if (controller.allEvents.length > 1)
+                      perPage(
+                        (context, event) =>
+                            event.messageType != MessageTypes.Video
+                            ? const SizedBox.shrink()
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: L10n.of(context).previous,
+                                    color: NotionMediaColors.onScrim,
+                                    onPressed: controller.canGoBack
+                                        ? controller.prevImage
+                                        : null,
+                                    icon: const Icon(
+                                      Icons.keyboard_arrow_left_outlined,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: L10n.of(context).next,
+                                    color: NotionMediaColors.onScrim,
+                                    onPressed: controller.canGoNext
+                                        ? controller.nextImage
+                                        : null,
+                                    icon: const Icon(
+                                      Icons.keyboard_arrow_right_outlined,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    perPage(_actions),
+                  ],
                 ),
               ),
             ),
@@ -97,7 +130,7 @@ class ImageViewerView extends StatelessWidget {
                       (context, event) => NotionMediaBackdrop(
                         drag: drag,
                         color: event.messageType == MessageTypes.Video
-                            ? NotionMediaColors.stageScrim
+                            ? NotionMediaColors.viewer.withValues(alpha: 1)
                             : NotionMediaColors.viewer,
                       ),
                     ),
@@ -134,51 +167,56 @@ class ImageViewerView extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (hovered)
+                  if (hovered || controller.allEvents.length > 1)
                     Positioned.fill(
                       child: perPage(
-                        (context, _) => Stack(
-                          children: [
-                            if (controller.canGoBack)
-                              Align(
-                                alignment: .centerLeft,
-                                child: chrome(
-                                  Padding(
-                                    padding: const EdgeInsets.all(
-                                      NotionSpace.sm,
-                                    ),
-                                    child: IconButton(
-                                      style: iconButtonStyle,
-                                      tooltip: L10n.of(context).previous,
-                                      icon: const Icon(
-                                        Icons.keyboard_arrow_left_outlined,
+                        (context, event) =>
+                            event.messageType == MessageTypes.Video
+                            ? const SizedBox.shrink()
+                            : Stack(
+                                children: [
+                                  if (controller.canGoBack)
+                                    Align(
+                                      alignment: .centerLeft,
+                                      child: chrome(
+                                        Padding(
+                                          padding: const EdgeInsets.all(
+                                            NotionSpace.sm,
+                                          ),
+                                          child: IconButton(
+                                            style: iconButtonStyle,
+                                            tooltip: L10n.of(context).previous,
+                                            icon: const Icon(
+                                              Icons
+                                                  .keyboard_arrow_left_outlined,
+                                            ),
+                                            onPressed: controller.prevImage,
+                                          ),
+                                        ),
                                       ),
-                                      onPressed: controller.prevImage,
                                     ),
-                                  ),
-                                ),
-                              ),
-                            if (controller.canGoNext)
-                              Align(
-                                alignment: .centerRight,
-                                child: chrome(
-                                  Padding(
-                                    padding: const EdgeInsets.all(
-                                      NotionSpace.sm,
-                                    ),
-                                    child: IconButton(
-                                      style: iconButtonStyle,
-                                      tooltip: L10n.of(context).next,
-                                      icon: const Icon(
-                                        Icons.keyboard_arrow_right_outlined,
+                                  if (controller.canGoNext)
+                                    Align(
+                                      alignment: .centerRight,
+                                      child: chrome(
+                                        Padding(
+                                          padding: const EdgeInsets.all(
+                                            NotionSpace.sm,
+                                          ),
+                                          child: IconButton(
+                                            style: iconButtonStyle,
+                                            tooltip: L10n.of(context).next,
+                                            icon: const Icon(
+                                              Icons
+                                                  .keyboard_arrow_right_outlined,
+                                            ),
+                                            onPressed: controller.nextImage,
+                                          ),
+                                        ),
                                       ),
-                                      onPressed: controller.nextImage,
                                     ),
-                                  ),
-                                ),
+                                ],
                               ),
-                          ],
-                        ),
                       ),
                     ),
                 ],
@@ -278,7 +316,7 @@ class ImageViewerView extends StatelessWidget {
       return _VerticalDismiss(
         controller: controller,
         child: Padding(
-          padding: const EdgeInsets.only(top: 52),
+          padding: const EdgeInsets.only(top: NotionSize.headerHeight),
           child: Center(
             child: GestureDetector(
               onTap: () {},
@@ -310,23 +348,17 @@ class ImageViewerView extends StatelessWidget {
     }
     switch (event.messageType) {
       case MessageTypes.Video:
-        return _VerticalDismiss(
-          controller: controller,
-          child: Padding(
-            padding: const EdgeInsets.only(top: 52.0),
-            child: Center(
-              child: GestureDetector(
-                // Ignore taps to not go back here:
-                onTap: () {},
-                child: EventVideoPlayer(
-                  event,
-                  heroTag: controller.heroTagFor(event),
-                  sourceRadius: controller.widget.sourceRadius,
-                  currentPage: controller.currentPage,
-                  playPauseRequests: controller.playPauseRequests,
-                ),
-              ),
-            ),
+        return Padding(
+          padding: const EdgeInsets.only(top: NotionSize.headerHeight),
+          child: EventVideoPlayer(
+            event,
+            key: ValueKey(event.eventId),
+            heroTag: controller.heroTagFor(event),
+            sourceRadius: controller.widget.sourceRadius,
+            currentPage: controller.currentPage,
+            playPauseRequests: controller.playPauseRequests,
+            mediaFrame: (media) =>
+                _VerticalDismiss(controller: controller, child: media),
           ),
         );
       case MessageTypes.Image:
@@ -342,8 +374,7 @@ class ImageViewerView extends StatelessWidget {
           onInteractionUpdate: controller.onInteractionUpdate,
           onInteractionEnd: controller.onInteractionEnds,
           child: GestureDetector(
-            // A tap on the photo toggles the chrome (a tap beside it closes
-            // the viewer); a double tap zooms into that point.
+            // A tap toggles the chrome; a double tap zooms into that point.
             onTap: controller.toggleChrome,
             onDoubleTapDown: controller.onDoubleTapDown,
             onDoubleTap: () => controller.onDoubleTap(event),

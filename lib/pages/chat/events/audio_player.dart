@@ -538,7 +538,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
     final navigator = Navigator.of(context, rootNavigator: true);
     late final RawDialogRoute<void> route;
     route = RawDialogRoute<void>(
-      barrierColor: NotionMediaColors.stageScrim,
+      barrierColor: NotionMediaColors.viewer.withValues(alpha: 1),
       barrierDismissible: true,
       barrierLabel: 'Close audio player',
       transitionDuration: NotionMotion.reduced(context)
@@ -723,13 +723,20 @@ class AudioPlayerState extends State<AudioPlayerWidget>
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        RepaintBoundary(
-          child: ValueListenableBuilder<int>(
-            valueListenable: _transport,
-            builder: (context, _, _) => _buildTransport(context),
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: RepaintBoundary(
+                child: ValueListenableBuilder<int>(
+                  valueListenable: _transport,
+                  builder: (context, _, _) => _buildTransport(context),
+                ),
+              ),
+            ),
+            MarkListenedButton(event: widget.event, color: widget.color),
+          ],
         ),
-        MarkListenedButton(event: widget.event, color: widget.color),
         TranscriptPanel(event: widget.event, foregroundColor: widget.color),
         if (fileDescription != null)
           Padding(
@@ -812,17 +819,25 @@ class _MarkListenedButtonState extends State<MarkListenedButton> {
       listenable: service,
       builder: (context, _) {
         final visible = service.canMarkVoiceListened(widget.event);
-        return NotionSizeReveal(
-          visible: visible,
-          child: Padding(
-            padding: const EdgeInsets.only(top: NotionSpace.xxs),
-            child: NotionButton.ghost(
-              label: 'Mark listened',
-              icon: Icons.hearing_outlined,
-              busy: _busy,
-              foreground: widget.color,
-              onPressed: _busy || !visible ? null : () => _mark(service),
+        if (!visible) return const SizedBox.shrink();
+        return Semantics(
+          button: true,
+          label: _busy ? 'Marking as listened on Telegram' : 'Mark listened',
+          child: IconButton(
+            key: const ValueKey('voice-mark-listened'),
+            tooltip: 'Mark listened',
+            color: widget.color,
+            style: IconButton.styleFrom(
+              minimumSize: const Size.square(NotionSize.touchTarget),
             ),
+            onPressed: _busy ? null : () => _mark(service),
+            icon: _busy
+                ? NotionDelayedSpinner(
+                    size: NotionSize.icon,
+                    color: widget.color,
+                    delay: Duration.zero,
+                  )
+                : const Icon(Icons.hearing_outlined),
           ),
         );
       },

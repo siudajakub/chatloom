@@ -11,6 +11,7 @@ import 'package:chatloom/pages/chat/events/round_video_view.dart';
 import 'package:chatloom/personal/media/cancellable_download.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media_transcript.dart';
+import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
@@ -40,12 +41,20 @@ class EventVideoPlayer extends StatefulWidget {
   /// only the player of the current page reacts.
   final Listenable? playPauseRequests;
 
+  /// Dismiss gestures belong to the picture, leaving transcript scrolling
+  /// and transport scrubbing to their own recognizers.
+  final Widget Function(Widget media)? mediaFrame;
+
+  @visibleForTesting
+  static VideoPlayerController Function(MatrixFile file)? debugCreatePlayer;
+
   const EventVideoPlayer(
     this.event, {
     this.heroTag,
     this.sourceRadius = NotionRadius.mdAll,
     this.currentPage,
     this.playPauseRequests,
+    this.mediaFrame,
     super.key,
   });
 
@@ -54,6 +63,14 @@ class EventVideoPlayer extends StatefulWidget {
 }
 
 class EventVideoPlayerState extends State<EventVideoPlayer> {
+  bool get _canPlay {
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    return PersonalPrivacy.surfaceUnlocked &&
+        PersonalPrivacy.surfaceForeground &&
+        !RoundPlaybackCoordinator.shared.suspended &&
+        (lifecycle == null || lifecycle == AppLifecycleState.resumed);
+  }
+
   late final _playback = RoundPlaybackCoordinator.shared.register(
     pause: () async {
       await _videoPlayerController?.pause();
@@ -66,6 +83,7 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     // Lock, account switch, another page: the player is gone; a play
     // button (not a spinner) starts it again.
     stop: () async {
+      _download?.cancel();
       await _disposeControllers();
       if (mounted) setState(() => _stopped = true);
     },
@@ -82,7 +100,7 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
 
   void _onPageChanged() {
     if (!mounted) return;
-    if (_isCurrentPage) {
+    if (_isCurrentPage && _canPlay) {
       if (_videoPlayerController == null && !_downloading && !_loadFailed) {
         unawaited(_downloadAction());
       }
@@ -116,6 +134,15 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   bool _coordinating = false;
   void _checkAudible() {
     final player = _videoPlayerController;
+    if (mounted &&
+        player != null &&
+        (_layoutSize != player.value.size ||
+            _layoutRotation != player.value.rotationCorrection)) {
+      setState(() {
+        _layoutSize = player.value.size;
+        _layoutRotation = player.value.rotationCorrection;
+      });
+    }
     if (player == null ||
         !player.value.isPlaying ||
         _playback.isCurrent ||
@@ -127,7 +154,9 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
       () async {
         try {
           await player.pause();
-          if (await _playback.acquireAudible() &&
+          if (_isCurrentPage &&
+              _canPlay &&
+              await _playback.acquireAudible() &&
               _playback.isCurrent &&
               mounted &&
               identical(player, _videoPlayerController)) {
@@ -141,6 +170,8 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   }
 
   VideoPlayerController? _videoPlayerController;
+  Size? _layoutSize;
+  int _layoutRotation = 0;
 
   /// Position of [_videoPlayerController] for the live transcript; one per
   /// controller, so the transcript keeps its listener across rebuilds.
@@ -164,15 +195,17 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   MediaDownloadToken? _download;
   bool _loadFailed = false;
 
-  final _supportsVideoPlayer = PlatformInfos.supportsVideoPlayer;
+  final _supportsVideoPlayer =
+      EventVideoPlayer.debugCreatePlayer != null ||
+      PlatformInfos.supportsVideoPlayer;
 
   Future<void> _downloadAction() async {
+    if (_downloading || !_isCurrentPage || !_canPlay) return;
     if (!_supportsVideoPlayer) {
       widget.event.saveFile(context);
       return;
     }
 
-    if (_downloading) return;
     _downloading = true;
     if (mounted) {
       setState(() {
@@ -183,6 +216,8 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     try {
       if (!await _playback.acquireAudible() ||
           !_playback.isCurrent ||
+          !_isCurrentPage ||
+          !_canPlay ||
           !mounted) {
         if (mounted) setState(() => _stopped = true);
         return;
@@ -228,14 +263,16 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
 
       // Dispose the controllers if we already have them.
       await _disposeControllers();
-      if (!mounted || !_playback.isCurrent) {
+      if (!mounted || !_isCurrentPage || !_canPlay || !_playback.isCurrent) {
         if (mounted) setState(() => _stopped = true);
         return;
       }
       late VideoPlayerController videoPlayerController;
 
       // Create the VideoPlayerController from the contents of videoFile.
-      if (kIsWeb) {
+      if (EventVideoPlayer.debugCreatePlayer != null) {
+        videoPlayerController = EventVideoPlayer.debugCreatePlayer!(videoFile);
+      } else if (kIsWeb) {
         videoPlayerController = VideoPlayerController.networkUrl(
           Uri.dataFromBytes(videoFile.bytes, mimeType: videoFile.mimeType),
         );
@@ -250,8 +287,10 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
       _videoPlayerController = videoPlayerController;
       videoPlayerController.addListener(_checkAudible);
 
-      await videoPlayerController.initialize();
-      if (!mounted || !_playback.isCurrent) {
+      await videoPlayerController.initialize().timeout(
+        const Duration(seconds: 20),
+      );
+      if (!mounted || !_isCurrentPage || !_canPlay || !_playback.isCurrent) {
         await _disposeControllers();
         if (mounted) setState(() => _stopped = true);
         return;
@@ -264,7 +303,9 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
       // The viewer uses the same quiet transport as voice notes and rounds.
       // Keep the native controller and encrypted-media lease owned here.
       setState(() {});
-      if (await _playback.acquireAudible() &&
+      if (_isCurrentPage &&
+          _canPlay &&
+          await _playback.acquireAudible() &&
           _playback.isCurrent &&
           mounted &&
           identical(_videoPlayerController, videoPlayerController)) {
@@ -282,7 +323,9 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     final video = _videoPlayerController;
     final lease = _lease;
     _videoPlayerController = null;
+    _layoutSize = null;
     _lease = null;
+    video?.removeListener(_checkAudible);
     try {
       await video?.dispose();
     } finally {
@@ -404,6 +447,7 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   }
 
   Future<void> _toggle() => _perform((video) async {
+    if (!_isCurrentPage || !_canPlay) return;
     if (video.value.isPlaying) {
       await video.pause();
       if (_owns(video)) _playback.releaseAudible();
@@ -411,14 +455,16 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     }
     if (!await _playback.acquireAudible() ||
         !_playback.isCurrent ||
-        !_owns(video)) {
+        !_owns(video) ||
+        !_isCurrentPage ||
+        !_canPlay) {
       return;
     }
     if (video.value.position >= video.value.duration) {
       await video.seekTo(Duration.zero);
     }
     // Seeking may yield to a lock, account change or another player.
-    if (!_playback.isCurrent || !_owns(video)) return;
+    if (!_playback.isCurrent || !_owns(video) || !_canPlay) return;
     await video.play();
   });
 
@@ -459,8 +505,11 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
     final video = _videoPlayerController;
     final initialized = video?.value.isInitialized == true;
     final showing = shown != null && initialized;
+    final nativeSize = initialized ? video!.value.size : null;
     final intrinsic = initialized
-        ? video!.value.size
+        ? video!.value.rotationCorrection % 180 == 0
+              ? nativeSize!
+              : Size(nativeSize!.height, nativeSize.width)
         : Size(
             (info?.tryGet<int>('w') ?? 400).toDouble(),
             (info?.tryGet<int>('h') ?? 300).toDouble(),
@@ -472,10 +521,18 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
         bottom -
         NotionSize.touchTarget * 2 -
         NotionSpace.xl;
+    final sideBySide =
+        showing &&
+        constraints.maxWidth >= NotionSize.contentMaxWidth &&
+        constraints.maxWidth > constraints.maxHeight;
     final bounds = Size(
-      constraints.maxWidth - 2 * NotionSpace.inset,
+      ((sideBySide
+                  ? (constraints.maxWidth - NotionSpace.inset) / 2
+                  : constraints.maxWidth) -
+              2 * NotionSpace.inset)
+          .clamp(1.0, double.infinity),
       // The transcript takes the larger part of the height.
-      (showing ? room * .42 : room).clamp(1.0, double.infinity),
+      (showing && !sideBySide ? room * .42 : room).clamp(1.0, double.infinity),
     );
     final fitted =
         notionFitMedia(intrinsic.width, intrinsic.height, bounds) ?? bounds;
@@ -568,42 +625,57 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
               ),
       ),
     );
+    final framedMedia = widget.mediaFrame?.call(media) ?? media;
+    Widget transcriptView() => Padding(
+      padding: const EdgeInsets.fromLTRB(
+        NotionSpace.inset,
+        NotionSpace.md,
+        NotionSpace.inset,
+        0,
+      ),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxWidth: NotionSize.dialogMaxWidth,
+          ),
+          child: MediaSyncedTranscript(
+            key: ValueKey((widget.event.eventId, 'transcript')),
+            transcript: shown!,
+            position: _positionOf(video!),
+            duration: video.value.duration,
+            declaredDuration: declaredMediaDuration(widget.event),
+            onSeek: (position) => unawaited(_seek(position)),
+          ),
+        ),
+      ),
+    );
+    final picture = Center(
+      key: const ValueKey('viewer-video-media'),
+      child: NotionLayoutFlip(trigger: showing, child: framedMedia),
+    );
     return Padding(
       padding: EdgeInsets.only(bottom: bottom),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Center(
-            key: const ValueKey('viewer-video-media'),
-            child: NotionLayoutFlip(trigger: showing, child: media),
-          ),
-          if (showing)
+          if (sideBySide)
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: picture),
+                  Expanded(
+                    key: const ValueKey('viewer-video-transcript'),
+                    child: transcriptView(),
+                  ),
+                ],
+              ),
+            )
+          else
+            picture,
+          if (showing && !sideBySide)
             Expanded(
               key: const ValueKey('viewer-video-transcript'),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  NotionSpace.inset,
-                  NotionSpace.md,
-                  NotionSpace.inset,
-                  0,
-                ),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      maxWidth: NotionSize.dialogMaxWidth,
-                    ),
-                    child: NotionEntrance(
-                      child: MediaSyncedTranscript(
-                        transcript: shown,
-                        position: _positionOf(video!),
-                        duration: video.value.duration,
-                        declaredDuration: declaredMediaDuration(widget.event),
-                        onSeek: (position) => unawaited(_seek(position)),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+              child: transcriptView(),
             ),
           if (initialized)
             Padding(

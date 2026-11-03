@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/personal/media_transcript.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_media_loader.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
@@ -198,6 +199,7 @@ class RoundMiniPlayerController extends ChangeNotifier
               service.canExplicitlyReport(session.event);
         },
         event: session.event,
+        next: session.queue.isEmpty ? null : advance,
       );
 
   void _bind(RoundDetachedPlayback session) {
@@ -306,6 +308,7 @@ class RoundMiniPlayerController extends ChangeNotifier
           return;
         }
         if (session.position >= session.duration) await seek(Duration.zero);
+        session.finished = false;
         session.userInitiated = true;
         session.intent.begin(position: session.position, userInitiated: true);
         await session.video?.play();
@@ -389,7 +392,14 @@ class RoundMiniPlayerController extends ChangeNotifier
   /// The current detached item ended: continue its queue.
   Future<void> advance() async {
     final session = _current;
-    if (session != null) await _finish(session);
+    if (session == null || !_valid(session) || session.loading) return;
+    if (session.handle?.isCurrent != true &&
+        !await session.handle!.acquireAudible()) {
+      return;
+    }
+    if (_valid(session) && session.handle?.isCurrent == true) {
+      await _finish(session);
+    }
   }
 
   /// Ends [session] once (completion or a decoder error) and continues its
@@ -401,6 +411,17 @@ class RoundMiniPlayerController extends ChangeNotifier
     final token = session.queue.isNotEmpty && session.handle?.isCurrent == true
         ? _coordinator.beginContinuation()
         : null;
+    final stage = RoundStageController.shared;
+    final staged =
+        stage.isPresenting(session.video) || stage.isPresenting(session);
+    if (token == null && staged && _valid(session)) {
+      session.handle?.releaseAudible();
+      _notify();
+      return;
+    }
+    if (token != null && staged) {
+      stage.holdForContinuation(session.video ?? session);
+    }
     await _stopSession(session);
     if (token == null) return;
     await continueQueue(
@@ -492,7 +513,10 @@ class RoundMiniPlayerController extends ChangeNotifier
     } catch (_) {
       /* Ends the token below. */
     } finally {
-      if (!handedOff) token.end();
+      if (!handedOff) {
+        token.end();
+        if (enlarge) RoundStageController.shared.finishContinuation();
+      }
     }
   }
 
@@ -598,6 +622,22 @@ class RoundMiniPlayerController extends ChangeNotifier
       if (audio != null) {
         unawaited(audio.play().catchError((Object _) => _finish(session)));
       }
+      if (enlarge) {
+        final stage = RoundStageController.shared;
+        final video = session.video;
+        if (video != null) {
+          stage.presentContinuation(
+            video: video,
+            actions: _stageActions(session),
+          );
+        } else {
+          stage.presentContent(
+            owner: session,
+            builder: (_) =>
+                _ContinuationAudioStage(control: this, session: session),
+          );
+        }
+      }
       _notify();
       return RoundStartResult.started;
     } catch (_) {
@@ -634,6 +674,7 @@ class RoundMiniPlayerController extends ChangeNotifier
     session.audio = null;
     session.media = null;
     if (video != null) RoundStageController.shared.release(video);
+    RoundStageController.shared.releaseContent(session);
     video?.removeListener(_onProgress);
     _unbind(session);
     session.handle?.dispose();
@@ -686,6 +727,128 @@ class RoundMiniPlayerController extends ChangeNotifier
   }
 }
 
+/// A round playlist can contain voice notes too. Keep its fullscreen route
+/// and transcript while the existing detached engine owns that next note.
+class _ContinuationAudioStage extends StatefulWidget {
+  const _ContinuationAudioStage({required this.control, required this.session});
+
+  final RoundMiniPlayerController control;
+  final RoundDetachedPlayback session;
+
+  @override
+  State<_ContinuationAudioStage> createState() =>
+      _ContinuationAudioStageState();
+}
+
+class _ContinuationAudioStageState extends State<_ContinuationAudioStage> {
+  late final _position = MediaPositionListenable(
+    widget.control,
+    () => widget.session.position,
+  );
+
+  @override
+  Widget build(BuildContext context) => Material(
+    type: MaterialType.transparency,
+    child: SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(NotionSpace.md),
+        child: MediaTranscriptBuilder(
+          event: widget.session.event,
+          builder: (context, transcript) => ValueListenableBuilder<bool>(
+            valueListenable: MediaTranscriptPreference.visible,
+            builder: (context, visible, _) {
+              final shown = visible ? transcript : null;
+              return Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: NotionSize.dialogMaxWidth,
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Voice message',
+                              style: TextStyle(
+                                color: NotionMediaColors.onScrim,
+                              ),
+                            ),
+                          ),
+                          if (transcript != null) const MediaTranscriptToggle(),
+                          IconButton(
+                            tooltip: 'Close media player',
+                            color: NotionMediaColors.onScrim,
+                            onPressed: RoundStageController.shared.shrink,
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                      Expanded(
+                        child: shown == null
+                            ? const Center(
+                                child: Icon(
+                                  Icons.graphic_eq,
+                                  size: NotionSize.avatarLg,
+                                  color: NotionMediaColors.onScrim,
+                                ),
+                              )
+                            : MediaSyncedTranscript(
+                                transcript: shown,
+                                position: _position,
+                                duration: widget.session.duration,
+                                declaredDuration: declaredMediaDuration(
+                                  widget.session.event,
+                                ),
+                                onSeek: (position) =>
+                                    unawaited(widget.control.seek(position)),
+                              ),
+                      ),
+                      ListenableBuilder(
+                        listenable: widget.control,
+                        builder: (context, _) => widget.session.disposed
+                            ? const SizedBox.shrink()
+                            : NotionMediaPlaybackControls(
+                                playing: widget.session.playing,
+                                position: widget.session.position,
+                                duration: widget.session.duration,
+                                speed: widget.session.speed,
+                                onToggle: widget.control.toggle,
+                                onSeek: widget.control.seek,
+                                onSpeedCycle: () => widget.control.setSpeed(
+                                  RoundVideoView.nextSpeed(
+                                    widget.session.speed,
+                                  ),
+                                ),
+                                trailing: NotionMediaActionsButton(
+                                  actions: [
+                                    if (widget.session.queue.isNotEmpty)
+                                      NotionMediaAction(
+                                        label: 'Next message',
+                                        icon: Icons.skip_next,
+                                        onPressed: widget.control.advance,
+                                      ),
+                                    NotionMediaAction(
+                                      label: 'Stop playback',
+                                      icon: Icons.stop,
+                                      onPressed: widget.control.stop,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 /// Host in the unlocked app shell. Reopening navigates to this exact source.
 class RoundMiniPlayer extends StatelessWidget {
   final ValueChanged<Event> onOpenSource;
@@ -724,7 +887,10 @@ class RoundMiniPlayer extends StatelessWidget {
   ) {
     final session = control.current;
     // The enlarged stage already shows this playback.
-    if (session == null || stage.isStaged(session.video)) {
+    if (session == null ||
+        stage.isPresenting(session.video) ||
+        stage.isPresenting(session) ||
+        (stage.isOpen && session.enlarge && session.loading)) {
       return null;
     }
     final duration = session.duration;
