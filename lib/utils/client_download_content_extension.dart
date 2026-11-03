@@ -3,11 +3,19 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:math' show min;
+import 'dart:async';
+import 'dart:math' show max, min;
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
+
+// Weakly owned by the account client; only unfinished work lives here. Sharing
+// the complete read/download/store avoids racing a second SQL read and HTTP
+// request when the same picture appears in several visible widgets.
+typedef _MediaLoadKey = (Uri, bool, Duration, String?, Uri?, DatabaseApi);
+final _mediaLoads = Expando<Map<_MediaLoadKey, Future<Uint8List>>>();
 
 extension ClientDownloadContentExtension on Client {
   /// Downloads [mxc] (or its thumbnail), through the SQLCipher media cache
@@ -22,7 +30,20 @@ extension ClientDownloadContentExtension on Client {
     ThumbnailMethod? thumbnailMethod,
     bool rounded = false,
     bool databaseCache = true,
+    Duration timeout = const Duration(seconds: 30),
   }) async {
+    final account = userID;
+    final server = homeserver;
+    final cacheDatabase = database;
+    final token = accessToken;
+    void ensureCurrent() {
+      if (userID != account ||
+          homeserver != server ||
+          !identical(database, cacheDatabase)) {
+        throw StateError('Media account changed during load');
+      }
+    }
+
     // To stay compatible with previous storeKeys:
     final cacheKey = isThumbnail
         // ignore: deprecated_member_use
@@ -35,81 +56,203 @@ extension ClientDownloadContentExtension on Client {
           )
         : mxc;
 
-    if (databaseCache) {
-      final cachedData = await database.getFile(cacheKey);
-      if (cachedData != null) return cachedData;
-    }
-
-    final httpUri = isThumbnail
-        ? await mxc.getThumbnailUri(
-            this,
-            width: width,
-            height: height,
-            animated: animated,
-            method: thumbnailMethod,
-          )
-        : await mxc.getDownloadUri(this);
-
-    final response = await httpClient.get(
-      httpUri,
-      headers: accessToken == null
-          ? null
-          : {'authorization': 'Bearer $accessToken'},
+    final pending = _mediaLoads[this] ??= {};
+    final requestKey = (
+      cacheKey,
+      databaseCache,
+      timeout,
+      account,
+      server,
+      cacheDatabase,
     );
-    if (response.statusCode != 200) {
-      unexpectedResponse(response, response.bodyBytes);
-    }
-    var imageData = response.bodyBytes;
+    final imageData = await pending.putIfAbsent(requestKey, () {
+      late final Future<Uint8List> work;
+      work =
+          (() async {
+            if (databaseCache) {
+              final cachedData = await cacheDatabase.getFile(cacheKey);
+              ensureCurrent();
+              if (cachedData != null) return cachedData;
+            }
+
+            final abort = Completer<void>();
+            // Cold URI resolution may probe /versions. Its header wait uses
+            // the same deadline as the actual image transfer.
+            final response =
+                await (() async {
+                  final httpUri = isThumbnail
+                      ? await mxc.getThumbnailUri(
+                          this,
+                          width: width,
+                          height: height,
+                          animated: animated,
+                          method: thumbnailMethod,
+                        )
+                      : await mxc.getDownloadUri(this);
+                  ensureCurrent();
+                  // A late discovery reply must not start a second transfer
+                  // after this flight timed out and its caller retried.
+                  if (abort.isCompleted) {
+                    throw TimeoutException('Media download timed out', timeout);
+                  }
+                  return _abortableGet(
+                    httpClient,
+                    httpUri,
+                    token: token,
+                    abortTrigger: abort.future,
+                  );
+                })().timeout(
+                  timeout,
+                  onTimeout: () {
+                    if (!abort.isCompleted) abort.complete();
+                    throw TimeoutException('Media download timed out', timeout);
+                  },
+                );
+            ensureCurrent();
+            if (response.statusCode != 200) {
+              try {
+                unexpectedResponse(response, response.bodyBytes);
+              } on MatrixException catch (error) {
+                // The SDK's JSON error parser omits the HTTP response.
+                // Retain status so avatar/media retries respect HTTP 429
+                // even when the bridge sends a nonstandard error code.
+                error.response ??= response;
+                rethrow;
+              }
+            }
+            final bytes = response.bodyBytes;
+            // Cache the source, never the circular notification rendition under
+            // the same key used by ordinary images and encrypted attachments.
+            if (databaseCache) {
+              await cacheDatabase.storeFile(cacheKey, bytes, 0);
+            }
+            ensureCurrent();
+            return bytes;
+          })().whenComplete(() {
+            if (identical(pending[requestKey], work)) {
+              pending.remove(requestKey);
+            }
+          });
+      return work;
+    });
+    ensureCurrent();
 
     if (rounded) {
-      imageData = await _convertToCircularImage(
+      final circular = await convertToCircularImage(
         imageData,
         min(width ?? 64, height ?? 64).round(),
       );
+      ensureCurrent();
+      return circular;
     }
-
-    if (databaseCache) await database.storeFile(cacheKey, imageData, 0);
 
     return imageData;
   }
+
+  /// Transport-only adapter for SDK attachment callbacks. The caller owns the
+  /// deadline, and the SDK keeps authorization, ciphertext caching, hash
+  /// verification and decryption. Never substitute it for scanner downloads.
+  Future<Uint8List> downloadMediaBytes(
+    Uri resolvedUri, {
+    required Future<void> abortTrigger,
+    required bool Function() cancelled,
+  }) async {
+    final account = (userID, homeserver, database);
+    void guard() {
+      if (cancelled()) throw TimeoutException('Media download timed out');
+      if ((userID, homeserver, database) != account) {
+        throw StateError('Media account changed during load');
+      }
+    }
+
+    guard();
+    final response = await _abortableGet(
+      httpClient,
+      resolvedUri,
+      token: accessToken,
+      abortTrigger: abortTrigger,
+    );
+    guard();
+    if (response.statusCode >= 400) {
+      try {
+        unexpectedResponse(response, response.bodyBytes);
+      } on MatrixException catch (error) {
+        error.response ??= response;
+        rethrow;
+      }
+    }
+    return response.bodyBytes;
+  }
 }
 
-Future<Uint8List> _convertToCircularImage(
-  Uint8List imageBytes,
-  int size,
-) async {
-  final codec = await instantiateImageCodec(imageBytes);
-  final frame = await codec.getNextFrame();
-  final originalImage = frame.image;
+Future<http.Response> _abortableGet(
+  http.Client client,
+  Uri uri, {
+  required String? token,
+  required Future<void> abortTrigger,
+}) async {
+  final request = http.AbortableRequest('GET', uri, abortTrigger: abortTrigger);
+  if (token != null) request.headers['authorization'] = 'Bearer $token';
+  final response = await client.send(request);
+  return http.Response.fromStream(response);
+}
 
-  final recorder = PictureRecorder();
-  final canvas = Canvas(recorder);
+/// Center-cropped circular PNG with a cover-sized decode and disposed native
+/// resources. Notification fallbacks share this path with cached renditions.
+Future<Uint8List> convertToCircularImage(Uint8List imageBytes, int size) async {
+  final codec = await instantiateImageCodecWithSize(
+    await ImmutableBuffer.fromUint8List(imageBytes),
+    getTargetSize: (width, height) {
+      final scale = min(1.0, max(size / width, size / height));
+      return TargetImageSize(
+        width: max(1, (width * scale).ceil()),
+        height: max(1, (height * scale).ceil()),
+      );
+    },
+  );
+  Image? originalImage;
+  Picture? picture;
+  Image? circularImage;
+  try {
+    originalImage = (await codec.getNextFrame()).image;
 
-  final paint = Paint();
-  final rect = Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble());
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder);
 
-  final clipPath = Path()
-    ..addOval(
-      Rect.fromCircle(center: Offset(size / 2, size / 2), radius: size / 2),
+    final paint = Paint();
+    final rect = Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble());
+
+    final clipPath = Path()
+      ..addOval(
+        Rect.fromCircle(center: Offset(size / 2, size / 2), radius: size / 2),
+      );
+
+    canvas.clipPath(clipPath);
+
+    final side = min(originalImage.width, originalImage.height).toDouble();
+    canvas.drawImageRect(
+      originalImage,
+      Rect.fromLTWH(
+        (originalImage.width - side) / 2,
+        (originalImage.height - side) / 2,
+        side,
+        side,
+      ),
+      rect,
+      paint,
     );
 
-  canvas.clipPath(clipPath);
+    picture = recorder.endRecording();
+    circularImage = await picture.toImage(size, size);
 
-  canvas.drawImageRect(
-    originalImage,
-    Rect.fromLTWH(
-      0,
-      0,
-      originalImage.width.toDouble(),
-      originalImage.height.toDouble(),
-    ),
-    rect,
-    paint,
-  );
-
-  final picture = recorder.endRecording();
-  final circularImage = await picture.toImage(size, size);
-
-  final byteData = await circularImage.toByteData(format: ImageByteFormat.png);
-  return byteData!.buffer.asUint8List();
+    final byteData = await circularImage.toByteData(
+      format: ImageByteFormat.png,
+    );
+    return byteData!.buffer.asUint8List();
+  } finally {
+    circularImage?.dispose();
+    picture?.dispose();
+    originalImage?.dispose();
+    codec.dispose();
+  }
 }

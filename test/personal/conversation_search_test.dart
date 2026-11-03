@@ -153,6 +153,45 @@ void main() {
     });
     tearDown(() => search.dispose());
 
+    test(
+      'stored scan yields between pages and cancels before another read',
+      () async {
+        final frame = Completer<void>();
+        var reads = 0;
+        var yields = 0;
+        final sliced = ConversationSearchController(
+          rooms: () => [room],
+          loaded: () => const [],
+          jump: (_) async {},
+          pageSize: 2,
+          read: (_, start, limit) async {
+            reads++;
+            return [
+              room.message('\$slice$start', 'apple one'),
+              room.message('\$slice${start + 1}', 'apple two'),
+            ];
+          },
+          yieldSlice: () {
+            yields++;
+            return frame.future;
+          },
+        );
+        addTearDown(sliced.dispose);
+        sliced.open();
+        sliced.setQuery('apple');
+        await pumpEventQueue();
+        expect(reads, 1);
+        expect(yields, 1);
+        expect(sliced.hits, hasLength(2));
+        expect(sliced.scanning, isTrue);
+        sliced.close();
+        frame.complete();
+        await pumpEventQueue();
+        expect(reads, 1);
+        expect(sliced.hits, isEmpty);
+      },
+    );
+
     test('counts, steps older and newer and jumps each time', () async {
       search.open();
       await pumpEventQueue();

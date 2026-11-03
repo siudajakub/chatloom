@@ -223,7 +223,12 @@ class ConversationContentController extends ChangeNotifier {
   final _events = <(Object, String), Event>{};
   final _redactions = <(Object, String), Event>{};
   bool _disposed = false;
+  bool _loading = false;
   int _generation = 0;
+
+  /// Let a slow source wait independently, without flooding the database or
+  /// the network when a person has many merged conversations.
+  static const maxConcurrentSources = 2;
 
   /// Bumped by every recorded event; projections cache against it.
   int get revision => _revision;
@@ -236,7 +241,7 @@ class ConversationContentController extends ChangeNotifier {
   }) : _privacyGeneration = (privacyGeneration ?? (() => 0))(),
        privacyGeneration = privacyGeneration ?? (() => 0),
        sources = sources.map(ContentSourceState.new).toList();
-  bool get busy => sources.any((s) => s.busy);
+  bool get busy => _loading;
   bool get localEnd => sources.every((s) => s.localEnd);
   bool get remoteEnd => sources.every((s) => s.remoteEnd);
   List<Event> get events {
@@ -271,97 +276,140 @@ class ConversationContentController extends ChangeNotifier {
   }
 
   Future<void> load({bool remote = false, bool refresh = false}) async {
-    if (_disposed || busy || !unlocked()) return;
+    if (busy || !_current(_generation)) return;
     final generation = _generation;
-    for (final state in sources) {
-      if (!_current(generation)) return;
-      if (remote ? state.remoteEnd : state.localEnd && !refresh) continue;
-      state.busy = true;
-      state.error = null;
-      _notify();
-      try {
+    final pending = sources
+        .where((s) => !(remote ? s.remoteEnd : s.localEnd && !refresh))
+        .toList();
+    if (pending.isEmpty) return;
+    _loading = true;
+    for (final state in pending) {
+      state
+        ..busy = true
+        ..error = null;
+    }
+    _notify();
+    var next = 0;
+    Future<void> worker() async {
+      while (_current(generation) && next < pending.length) {
+        final state = pending[next++];
+        await _loadSource(state, generation, remote: remote, refresh: refresh);
+      }
+    }
+
+    try {
+      await Future.wait([
+        for (var i = 0; i < maxConcurrentSources && i < pending.length; i++)
+          worker(),
+      ]);
+    } finally {
+      for (final state in pending) {
+        state.busy = false;
+      }
+      _loading = false;
+      if (_current(generation)) _notify();
+    }
+  }
+
+  Future<void> _loadSource(
+    ContentSourceState state,
+    int generation, {
+    required bool remote,
+    required bool refresh,
+  }) async {
+    try {
+      if (!state.source.available) throw StateError('Source unavailable');
+      List<Event> page;
+      if (remote) {
+        final cursor = state.started
+            ? state.cursor
+            : state.source.initialCursor;
+        final batch = await state.source.older(cursor);
+        if (!_current(generation)) return;
         if (!state.source.available) throw StateError('Source unavailable');
-        List<Event> page;
-        if (remote) {
-          final cursor = state.started
-              ? state.cursor
-              : state.source.initialCursor;
-          final batch = await state.source.older(cursor);
-          if (!_current(generation)) return;
-          if (!state.source.available) throw StateError('Source unavailable');
-          page = batch.events;
-          // Retain useful events even if a broken server returns a cyclic token.
-          for (final event in page) {
-            _record(state.source, event);
-          }
-          if (batch.next != null &&
-              (batch.next == cursor || state.cursors.contains(batch.next))) {
-            throw StateError('History did not advance');
-          }
-          if (cursor != null) state.cursors.add(cursor);
-          state.started = true;
-          state.cursor = batch.next;
-          if (batch.next != null) state.cursors.add(batch.next!);
-          state.remoteEnd = batch.next == null;
-        } else {
-          // Each page re-reads the prefix, so the step grows: sparse media
-          // fills a screen in a few reads instead of dozens.
-          final limit = refresh
-              ? (state.localLimit == 0 ? 80 : state.localLimit)
-              : state.localLimit == 0
-              ? 80
-              : state.localLimit + state.localLimit.clamp(80, 640);
-          final batch = await state.source.local(limit);
-          page = batch.events;
-          if (!_current(generation)) return;
-          state.localLimit = limit;
-          // This is only a local boundary, never proof of server history EOF.
-          state.localEnd = batch.localComplete;
-        }
-        if (!state.source.available) throw StateError('Source unavailable');
+        page = batch.events;
+        // Retain useful events even if a broken server returns a cyclic token.
         for (final event in page) {
           _record(state.source, event);
         }
-        if (page.any((e) => e.type == EventTypes.RoomCreate))
-          state.remoteEnd = true;
-      } catch (_) {
-        if (_current(generation))
-          state.error = remote
-              ? 'Earlier history could not advance. Loaded items are kept. Retry.'
-              : 'Local history could not load. Loaded items are kept. Retry.';
-      } finally {
-        state.busy = false;
-        if (_current(generation)) _notify();
+        if (batch.next != null &&
+            (batch.next == cursor || state.cursors.contains(batch.next))) {
+          throw StateError('History did not advance');
+        }
+        if (cursor != null) state.cursors.add(cursor);
+        state.started = true;
+        state.cursor = batch.next;
+        if (batch.next != null) state.cursors.add(batch.next!);
+        state.remoteEnd = batch.next == null;
+      } else {
+        // Each page re-reads the prefix, so the step grows: sparse media
+        // fills a screen in a few reads instead of dozens.
+        final limit = refresh
+            ? (state.localLimit == 0 ? 80 : state.localLimit)
+            : state.localLimit == 0
+            ? 80
+            : state.localLimit + state.localLimit.clamp(80, 640);
+        final batch = await state.source.local(limit);
+        page = batch.events;
+        if (!_current(generation)) return;
+        state.localLimit = limit;
+        // This is only a local boundary, never proof of server history EOF.
+        state.localEnd = batch.localComplete;
       }
+      if (!state.source.available) throw StateError('Source unavailable');
+      if (!remote) {
+        for (final event in page) {
+          _record(state.source, event);
+        }
+      }
+      if (page.any((e) => e.type == EventTypes.RoomCreate)) {
+        state.remoteEnd = true;
+      }
+    } catch (_) {
+      if (_current(generation)) {
+        state.error = remote
+            ? 'Earlier history could not advance. Loaded items are kept. Retry.'
+            : 'Local history could not load. Loaded items are kept. Retry.';
+      }
+    } finally {
+      state.busy = false;
+      if (_current(generation)) _notify();
     }
   }
 
   Future<void> retryEncrypted() async {
     if (busy || !_current(_generation)) return;
     final generation = _generation;
-    for (final state in sources) {
-      final source = state.source;
-      if (source is! MatrixContentSource || !source.available) continue;
-      state.busy = true;
-      _notify();
-      try {
-        final entries = _events.entries
-            .where(
-              (e) =>
-                  e.key.$1 == state.identity &&
-                  e.value.type == EventTypes.Encrypted,
-            )
-            .take(80)
-            .toList();
-        for (final entry in entries) {
-          final event = await source.decrypt(entry.value);
-          if (!_current(generation)) return;
-          _record(source, event);
+    _loading = true;
+    try {
+      for (final state in sources) {
+        if (!_current(generation)) return;
+        final source = state.source;
+        if (source is! MatrixContentSource || !source.available) continue;
+        state.busy = true;
+        _notify();
+        try {
+          final entries = _events.entries
+              .where(
+                (e) =>
+                    e.key.$1 == state.identity &&
+                    e.value.type == EventTypes.Encrypted,
+              )
+              .take(80)
+              .toList();
+          for (final entry in entries) {
+            final event = await source.decrypt(entry.value);
+            if (!_current(generation)) return;
+            _record(source, event);
+          }
+        } finally {
+          state.busy = false;
+          if (_current(generation)) _notify();
         }
-      } finally {
-        state.busy = false;
-        if (_current(generation)) _notify();
       }
+    } finally {
+      _loading = false;
+      if (_current(generation)) _notify();
     }
   }
 
@@ -385,6 +433,37 @@ class ConversationContentController extends ChangeNotifier {
     if (!_current(_generation)) return;
     _record(source, event);
     _notify();
+  }
+
+  /// A fresh privacy scope retaining only data already accepted from the same
+  /// sources. Pending work stays with the old controller and cannot populate
+  /// this one. The owner must dispose the old controller after renewing it.
+  ConversationContentController renew() {
+    final renewed = ConversationContentController(
+      sources.map((s) => s.source).toList(),
+      unlocked: unlocked,
+      privacyGeneration: privacyGeneration,
+    );
+    if (_disposed ||
+        !unlocked() ||
+        sources.any((s) => s.identity != s.source.identity)) {
+      return renewed;
+    }
+    renewed._events.addAll(_events);
+    renewed._redactions.addAll(_redactions);
+    renewed._revision = _revision;
+    for (var i = 0; i < sources.length; i++) {
+      final previous = sources[i], next = renewed.sources[i];
+      next
+        ..localLimit = previous.localLimit
+        ..localEnd = previous.localEnd
+        ..remoteEnd = previous.remoteEnd
+        ..started = previous.started
+        ..cursor = previous.cursor
+        ..error = previous.error;
+      next.cursors.addAll(previous.cursors);
+    }
+    return renewed;
   }
 
   @override

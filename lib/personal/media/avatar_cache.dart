@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
@@ -35,6 +36,9 @@ class AvatarCache {
   static const List<int> buckets = [96, 256, 640];
 
   static Future<StickerMediaCache?>? _shared;
+  static int _generation = 0;
+  static final _loads =
+      <(Client, String?, Uri, int, bool), Future<Uint8List>>{};
 
   static Future<StickerMediaCache?> shared() => _shared ??= _open();
 
@@ -62,14 +66,16 @@ class AvatarCache {
       _shared = Future.value(cache);
 
   @visibleForTesting
-  static void debugResetShared() => _shared = null;
+  static void debugResetShared() {
+    _shared = null;
+    _resetPending();
+  }
 
   /// Logout / "clear cache".
   static Future<void> clearShared() async {
+    _resetPending();
     if (kIsWeb) return;
     try {
-      _queue.clear();
-      _prefetched.clear();
       final cache = await _shared;
       if (cache != null) return await cache.clear();
       final base = await getApplicationSupportDirectory();
@@ -104,18 +110,52 @@ class AvatarCache {
     required bool isThumbnail,
     required bool animated,
     required ThumbnailMethod thumbnailMethod,
-  }) async {
+  }) {
     final side = bucketFor(
       width == null || height == null
           ? (width ?? height)
           : (width > height ? width : height),
     );
+    final account = client.userID;
+    final key = (client, account, uri, side, isThumbnail);
+    final pending = _loads[key];
+    if (pending != null) return pending;
+    final generation = _generation;
+    final load = _load(client, uri, side, isThumbnail, account, generation);
+    _loads[key] = load;
+    void remove() {
+      if (identical(_loads[key], load)) _loads.remove(key);
+    }
+
+    unawaited(
+      load.then<void>((_) => remove(), onError: (Object _) => remove()),
+    );
+    return load;
+  }
+
+  static Future<Uint8List> _load(
+    Client client,
+    Uri uri,
+    int side,
+    bool isThumbnail,
+    String? account,
+    int generation,
+  ) async {
+    void checkCurrent() {
+      if (generation != _generation || client.userID != account) {
+        throw StateError('avatar_load_cancelled');
+      }
+    }
+
     Future<Uint8List> download() async {
+      checkCurrent();
       if (!isThumbnail) {
-        return client.downloadMxcCached(uri, databaseCache: false);
+        final bytes = await client.downloadMxcCached(uri, databaseCache: false);
+        checkCurrent();
+        return bytes;
       }
       try {
-        return await client.downloadMxcCached(
+        final bytes = await client.downloadMxcCached(
           uri,
           width: side,
           height: side,
@@ -124,18 +164,26 @@ class AvatarCache {
           animated: false,
           databaseCache: false,
         );
+        checkCurrent();
+        return bytes;
       } on MatrixException catch (e) {
         // Bridge direct media may serve originals while thumbnail generation
         // fails (including 5xx). A rate limit still backs off immediately.
-        if (e.error == MatrixError.M_LIMIT_EXCEEDED) rethrow;
-        return client.downloadMxcCached(uri, databaseCache: false);
+        if (e.error == MatrixError.M_LIMIT_EXCEEDED ||
+            e.response?.statusCode == 429) {
+          rethrow;
+        }
+        checkCurrent();
+        final bytes = await client.downloadMxcCached(uri, databaseCache: false);
+        checkCurrent();
+        return bytes;
       }
     }
 
     final cache = await shared();
-    final account = client.userID;
+    checkCurrent();
     if (cache == null || account == null) return download();
-    return cache.fetch(
+    final bytes = await cache.fetch(
       StickerMediaCache.keyFor(
         account,
         uri,
@@ -143,13 +191,34 @@ class AvatarCache {
       ),
       download,
     );
+    checkCurrent();
+    return bytes;
   }
 
   /// Keys already queued or stored by [prefetch] in this run.
-  static final _prefetched = <String>{};
-  static final _queue = <(Client, Uri, int)>[];
+  static final _prefetched = LinkedHashSet<String>();
+  static final _pending = <String>{};
+  static final _queue = <(Client, String, Uri, int, int)>[];
   static int _running = 0;
   static const int _parallel = 2;
+  static const int maxQueued = 64;
+  static const int maxRemembered = 512;
+
+  @visibleForTesting
+  static int get queuedCount => _queue.length;
+  @visibleForTesting
+  static int get rememberedCount => _prefetched.length;
+
+  static String _prefetchKey(String account, Uri uri, int side) =>
+      '$account\n$uri\n$side';
+
+  static void _resetPending() {
+    _generation++;
+    _queue.clear();
+    _pending.clear();
+    _prefetched.clear();
+    _loads.clear();
+  }
 
   /// Warms the disk cache for [uris] at [physicalSide] (inbox rows beyond
   /// the screen), a couple at a time, so a scroll shows them from disk.
@@ -160,15 +229,33 @@ class AvatarCache {
     if (kIsWeb || account == null) return;
     final side = bucketFor(physicalSide);
     for (final uri in uris) {
-      if (!_prefetched.add('$account\n$uri\n$side')) continue;
-      _queue.add((client, uri, side));
+      if (!uri.isScheme('mxc')) continue;
+      final key = _prefetchKey(account, uri, side);
+      if (_pending.contains(key)) continue;
+      if (_prefetched.remove(key)) {
+        _prefetched.add(key);
+        continue;
+      }
+      if (_queue.length == maxQueued) {
+        final (_, droppedAccount, droppedUri, droppedSide, _) = _queue.removeAt(
+          0,
+        );
+        _pending.remove(_prefetchKey(droppedAccount, droppedUri, droppedSide));
+      }
+      _pending.add(key);
+      _queue.add((client, account, uri, side, _generation));
     }
     _pump();
   }
 
   static void _pump() {
     while (_running < _parallel && _queue.isNotEmpty) {
-      final (client, uri, side) = _queue.removeAt(0);
+      final (client, account, uri, side, generation) = _queue.removeAt(0);
+      final key = _prefetchKey(account, uri, side);
+      if (client.userID != account || generation != _generation) {
+        _pending.remove(key);
+        continue;
+      }
       _running++;
       unawaited(
         loadAvatar(
@@ -180,11 +267,16 @@ class AvatarCache {
               animated: false,
               thumbnailMethod: ThumbnailMethod.crop,
             )
-            .then<void>((_) {})
-            .catchError((Object _) {
-              _prefetched.remove('${client.userID}\n$uri\n$side');
+            .then<void>((_) {
+              if (generation != _generation) return;
+              _prefetched.add(key);
+              if (_prefetched.length > maxRemembered) {
+                _prefetched.remove(_prefetched.first);
+              }
             })
+            .catchError((Object _) {})
             .whenComplete(() {
+              if (generation == _generation) _pending.remove(key);
               _running--;
               _pump();
             }),

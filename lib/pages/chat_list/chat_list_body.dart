@@ -19,12 +19,20 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
-class ChatListViewBody extends StatelessWidget {
+class ChatListViewBody extends StatefulWidget {
   final ChatListController controller;
   const ChatListViewBody(this.controller, {super.key});
 
   @override
+  State<ChatListViewBody> createState() => _ChatListViewBodyState();
+}
+
+class _ChatListViewBodyState extends State<ChatListViewBody> {
+  Object? _prefetchKey;
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final client = Matrix.of(context).client;
     final inbox = controller.inbox;
     return ListenableBuilder(
@@ -63,15 +71,29 @@ class ChatListViewBody extends StatelessWidget {
           for (final (index, room) in rooms.indexed) room.id: index,
         };
         controller.rowMemo.retain(rooms.length);
-        // Avatars of the rows a scroll reaches next come from disk.
-        AvatarCache.prefetch(
-          client,
-          rooms
-              .take(_avatarPrefetchRows)
-              .map(projection.avatarFor)
-              .whereType<Uri>(),
-          _avatarPrefetchSide * MediaQuery.devicePixelRatioOf(context),
-        );
+        // Resolve ahead-of-screen avatars once per selection/data change,
+        // after the current frame. Parent builds, deleted-preview notices and
+        // other presentation-only changes must not repeatedly scan 80 photos
+        // (the disk cache's byte deduplication happens after URI resolution).
+        final physicalSide =
+            _avatarPrefetchSide * MediaQuery.devicePixelRatioOf(context);
+        final prefetchKey = (inbox, inbox.generation, rooms, physicalSide);
+        if (_prefetchKey != prefetchKey) {
+          _prefetchKey = prefetchKey;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || _prefetchKey != prefetchKey || !inbox.active) {
+              return;
+            }
+            AvatarCache.prefetch(
+              client,
+              rooms
+                  .take(_avatarPrefetchRows)
+                  .map(projection.avatarFor)
+                  .whereType<Uri>(),
+              physicalSide,
+            );
+          });
+        }
         return NotionInboxPage(
           unreadCount: controller.unreadViewCount(),
           requestCount: controller.requestViewCount(),

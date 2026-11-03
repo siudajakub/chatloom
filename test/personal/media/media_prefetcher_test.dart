@@ -70,6 +70,7 @@ class _Ports implements MediaPrefetchPorts {
   final cancellations = <String, MediaPrefetchCancellation>{};
   final sizes = <String, int>{};
   Completer<void>? gate;
+  Completer<void>? preloadGate;
   int active = 0, maxActive = 0;
   int returnExtra = 0;
 
@@ -83,6 +84,7 @@ class _Ports implements MediaPrefetchPorts {
   @override
   Future<void> preloadRoundStates(Room room, Iterable<String> ids) async {
     preloadCalls.add(ids.toList());
+    await preloadGate?.future;
     for (final id in ids) {
       if (preloadable.containsKey(id)) states[id] = preloadable[id];
     }
@@ -277,6 +279,101 @@ void main() {
     expect(ports.downloads.length, 6); // 6 × 7 MB = 42 MB; the 7th exceeds 48
     expect(scope.spentBytes, 42 * _mb);
     scope.dispose();
+  });
+
+  test(
+    'a long continuous scroll retains only a bounded recent window',
+    () async {
+      final events = [for (var i = 0; i < 1000; i++) _voice(room, 'fling$i')];
+      final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+      await _settle();
+      ports.downloads.clear();
+      for (var i = 0; i <= 900; i++) {
+        scope.noteBuilt(i);
+      }
+      for (var i = 0; i < 5; i++) {
+        await _settle();
+      }
+      expect(
+        ports.downloads,
+        hasLength(
+          MediaPrefetcher.maxBuiltRange + 2 * MediaPrefetcher.windowMargin + 1,
+        ),
+      );
+      expect(
+        ports.downloads,
+        isNot(contains('mxc://example.invalid/fling100')),
+      );
+      expect(ports.downloads, contains('mxc://example.invalid/fling900'));
+      scope.dispose();
+    },
+  );
+
+  test('visible scroll work overtakes the initial offscreen backlog', () async {
+    final events = [for (var i = 0; i < 100; i++) _voice(room, 'priority$i')];
+    ports.gate = Completer<void>();
+    final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+    await _settle();
+    expect(ports.downloads, hasLength(2));
+    scope.noteBuilt(80);
+    await _settle();
+    ports.gate!.complete();
+    await _settle();
+    expect(ports.downloads[2], 'mxc://example.invalid/priority80');
+    scope.dispose();
+  });
+
+  test(
+    'privacy generation change during state preload cannot enqueue old work',
+    () async {
+      ports.preloadGate = Completer<void>();
+      ports.preloadable[r'$slow-round'] = null;
+      final events = [_round(room, 'slow-round')];
+      final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+      await _settle();
+      expect(ports.preloadCalls, hasLength(1));
+      // Lock and unlock while the state read is pending: active=true alone
+      // must not bring the old request back to life.
+      ports.surfaceGeneration++;
+      ports.preloadGate!.complete();
+      await _settle();
+      expect(prefetcher.queuedCount, 0);
+      expect(ports.downloads, isEmpty);
+      scope.dispose();
+    },
+  );
+
+  test('repeated flushes coalesce a pending state preload', () async {
+    ports.preloadGate = Completer<void>();
+    ports.preloadable[r'$slow-round'] = null;
+    final events = [_round(room, 'slow-round')];
+    final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+    await _settle();
+    for (var i = 0; i < 5; i++) {
+      scope.noteBuilt(0);
+      scope.refresh();
+      await _settle();
+    }
+    expect(ports.preloadCalls, hasLength(1));
+    ports.preloadGate!.complete();
+    await _settle();
+    expect(ports.downloads, ['mxc://example.invalid/slow-round']);
+    scope.dispose();
+  });
+
+  test('arrival bursts keep the prefetch queue bounded', () async {
+    ports.gate = Completer<void>();
+    final scope = prefetcher.attach(roomIds: {room.id}, events: () => []);
+    await _settle();
+    for (var i = 0; i < 1000; i++) {
+      client.onTimelineEvent.add(_voice(room, 'burst$i'));
+    }
+    await _settle();
+    expect(prefetcher.runningCount, MediaPrefetcher.maxConcurrent);
+    expect(prefetcher.queuedCount, MediaPrefetcher.maxQueuedJobs);
+    scope.dispose();
+    await _settle();
+    expect(ports.downloads, hasLength(2));
   });
 
   test('duplicates by mxc download once across events and scopes', () async {
@@ -597,10 +694,8 @@ void main() {
     networkClient
       ..homeserver = Uri.parse('https://hs.example.invalid')
       ..accessToken = 'fixture-token';
-    final networkRoom = Room(
-      id: '!room:example.invalid',
-      client: networkClient,
-    )..partial = false;
+    final networkRoom = Room(id: '!room:example.invalid', client: networkClient)
+      ..partial = false;
     final ports = _NetworkPorts(networkClient);
     final networkPrefetcher = MediaPrefetcher.test(networkClient, ports);
     final events = [_voice(networkRoom, 'net', size: ciphertext.length)];
@@ -663,10 +758,8 @@ void main() {
           (request) async => throw StateError('thumbnail hit the network'),
         ),
       );
-      final cachedRoom = Room(
-        id: '!room:example.invalid',
-        client: cachedClient,
-      )..partial = false;
+      final cachedRoom = Room(id: '!room:example.invalid', client: cachedClient)
+        ..partial = false;
       final thumbnail = Uint8List.fromList([7, 7, 7]);
       database.files['mxc://example.invalid/cached-thumb'] = thumbnail;
       final bytes = await RoundMediaLoader().thumbnail(

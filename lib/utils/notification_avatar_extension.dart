@@ -5,7 +5,6 @@
 
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:chatloom/personal/media/avatar_cache.dart';
 import 'package:chatloom/utils/client_download_content_extension.dart';
@@ -13,82 +12,27 @@ import 'package:matrix/matrix.dart';
 
 const notificationAvatarDimension = 128;
 
-/// Center-cropped circular PNG of [size] pixels.
-Future<Uint8List> _roundedSquare(Uint8List bytes, int size) async {
-  final codec = await ui.instantiateImageCodec(bytes);
-  final image = (await codec.getNextFrame()).image;
-  codec.dispose();
-  try {
-    final side = image.width < image.height ? image.width : image.height;
-    final source = ui.Rect.fromLTWH(
-      (image.width - side) / 2,
-      (image.height - side) / 2,
-      side.toDouble(),
-      side.toDouble(),
-    );
-    final target = ui.Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble());
-    final recorder = ui.PictureRecorder();
-    ui.Canvas(recorder)
-      ..clipPath(ui.Path()..addOval(target))
-      ..drawImageRect(
-        image,
-        source,
-        target,
-        ui.Paint()..filterQuality = ui.FilterQuality.medium,
-      );
-    final rounded = await recorder.endRecording().toImage(size, size);
-    try {
-      final data = await rounded.toByteData(format: ui.ImageByteFormat.png);
-      return data!.buffer.asUint8List();
-    } finally {
-      rounded.dispose();
-    }
-  } finally {
-    image.dispose();
-  }
-}
-
 extension NotificationAvatarExtension on Client {
   Future<Uint8List?> tryDownloadNotificationAvatar(Uri? avatar) async {
     if (avatar == null) return null;
     try {
       // The in-app avatar cache first: the picture the inbox already shows
       // is on disk, so a notification never waits on a bridge's media.
-      try {
-        final cached = await AvatarCache.loadAvatar(
-          this,
-          avatar,
-          width: notificationAvatarDimension,
-          height: notificationAvatarDimension,
-          isThumbnail: true,
-          animated: false,
-          thumbnailMethod: ThumbnailMethod.crop,
-        ).timeout(const Duration(seconds: 3));
-        return await _roundedSquare(cached, notificationAvatarDimension);
-      } on TimeoutException {
-        // The same network would time out again; show the letter avatar.
-        return null;
-      } catch (e) {
-        Logs().d('Avatar cache miss for notification', e);
-      }
-      try {
-        return await downloadMxcCached(
-          avatar,
-          thumbnailMethod: ThumbnailMethod.crop,
-          width: notificationAvatarDimension,
-          height: notificationAvatarDimension,
-          animated: false,
-          isThumbnail: true,
-          rounded: true,
-        ).timeout(const Duration(seconds: 3));
-      } on MatrixException {
-        // Some bridge and remote media has no thumbnail; scale the original
-        // (a full-size bitmap can exceed Android's notification limits).
-        final original = await downloadMxcCached(
-          avatar,
-        ).timeout(const Duration(seconds: 3));
-        return await _roundedSquare(original, notificationAvatarDimension);
-      }
+      final cached = await AvatarCache.loadAvatar(
+        this,
+        avatar,
+        width: notificationAvatarDimension,
+        height: notificationAvatarDimension,
+        isThumbnail: true,
+        animated: false,
+        thumbnailMethod: ThumbnailMethod.crop,
+      ).timeout(const Duration(seconds: 3));
+      // AvatarCache already handles unavailable cache and missing thumbnails.
+      // A second thumbnail/original chain would repeat a failed request and
+      // bypass its rate-limit handling. Rounding also caps the bitmap decode.
+      return await convertToCircularImage(cached, notificationAvatarDimension);
+    } on TimeoutException {
+      return null;
     } catch (e, s) {
       Logs().e('Unable to get avatar picture', e, s);
       return null;

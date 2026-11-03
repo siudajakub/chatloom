@@ -707,9 +707,8 @@ class Message extends StatelessWidget {
   }
 }
 
-/// Sender avatar. Loaded member state wins, so later profile changes show on
-/// the next row build; a one-shot member lookup is only the fallback while
-/// that state is missing. Rebuilding the row never starts a new request.
+/// Sender avatar. Profile updates rebuild only the avatar, including photos
+/// supplied later by bridge state or the same contact's other loaded rooms.
 class _SenderAvatar extends StatefulWidget {
   final Event event;
   final void Function() onMention;
@@ -721,11 +720,13 @@ class _SenderAvatar extends StatefulWidget {
 
 class _SenderAvatarState extends State<_SenderAvatar> {
   User? _fetched;
+  StreamSubscription? _profileUpdates;
   int _generation = 0;
 
   @override
   void initState() {
     super.initState();
+    _listen();
     _fetch();
   }
 
@@ -736,8 +737,27 @@ class _SenderAvatarState extends State<_SenderAvatar> {
         oldWidget.event.room.id != widget.event.room.id ||
         !identical(oldWidget.event.room.client, widget.event.room.client)) {
       _fetched = null;
+      _listen();
       _fetch();
     }
+  }
+
+  void _listen() {
+    _profileUpdates?.cancel();
+    final event = widget.event;
+    final user = User(event.senderId, room: event.room);
+    _profileUpdates = event.room.client.onRoomState.stream
+        .where((update) => affectsUserAvatar(user, update.roomId, update.state))
+        .listen((_) {
+          if (mounted) setState(() {});
+        });
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _profileUpdates?.cancel();
+    super.dispose();
   }
 
   User? get _member {

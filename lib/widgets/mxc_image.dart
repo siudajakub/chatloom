@@ -21,6 +21,8 @@ import 'package:http/http.dart' as http;
 import 'package:lottie/lottie.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart'
+    show RoundMediaPolicy, RoundVideoDescriptor;
 
 /// Where an [MxcImage] stands, for callers that draw their own progress.
 enum MxcImageLoad {
@@ -149,11 +151,20 @@ class MxcImage extends StatefulWidget {
   /// the largest copy wins. Lets the photo viewer start from the picture the
   /// user just tapped instead of an empty frame.
   static Uint8List? cachedPreviewOf(Event event) {
+    if (event.redacted ||
+        !RoundMediaPolicy.fromContent(event.content).canPlay ||
+        _MxcImageState._isRound(event)) {
+      // Round expiry needs an asynchronous SDK check. A synchronous viewer
+      // preview cannot establish that the old bytes are still authorized.
+      return null;
+    }
     final client = event.room.client;
+    final account = _MxcImageState._accountOf(client);
     final transactionId = event.transactionId;
     return _MxcImageState._imageDataCache.largestWhere(
       (key) =>
           identical(key.$1, client) &&
+          key.$12 == account &&
           (key.$4 == event.eventId ||
               (transactionId != null && key.$3 == transactionId)),
     );
@@ -201,11 +212,31 @@ typedef _ImageKey = (
   double?,
   bool,
   bool,
+  ThumbnailMethod,
+  MxcBytesLoader?,
+  Map<String, Object?>?,
+  _Account,
 );
+
+typedef _Account = (String?, Uri?, DatabaseApi);
+
+typedef _EventFlight = ({
+  Future<MatrixFile> future,
+  void Function() acquire,
+  void Function() release,
+});
 
 /// Identity of a source for the parsed-Lottie cache: the same sticker shown
 /// in two rows or scrolled back into view parses once.
-typedef _LottieKey = (Client, String, bool);
+typedef _LottieKey = (
+  Client,
+  String,
+  bool,
+  MxcBytesLoader?,
+  Map<String, Object?>?,
+  ThumbnailMethod,
+  _Account,
+);
 
 class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   static final _imageDataCache = BoundedByteCache<_ImageKey>(
@@ -213,6 +244,104 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     maxEntries: 512,
   );
   static final _lottieCache = LottieCompositionCache<_LottieKey>();
+  // A preview and its quoted/grid copy may mount in the same frame. The SDK
+  // caches ciphertext but does not share concurrent downloads/decryption.
+  // Limit sharing to the exact event instance, preserving its SDK access gate.
+  static final _eventLoads = Expando<Map<(bool, _Account), _EventFlight>>();
+  _EventFlight? _eventFlight;
+
+  void _releaseEvent() {
+    _eventFlight?.release();
+    _eventFlight = null;
+  }
+
+  Future<MatrixFile> _attachment(Event event, bool thumbnail) {
+    final pending = _eventLoads[event] ??= {};
+    final account = _accountOf(event.room.client);
+    final key = (thumbnail, account);
+    final flight = pending.putIfAbsent(key, () {
+      final client = event.room.client;
+      final abort = Completer<void>();
+      final done = Completer<MatrixFile>();
+      var consumers = 0;
+      late final _EventFlight shared;
+      final scanner = client.contentScannerConfig != null;
+      final deadline = Timer(const Duration(seconds: 30), () {
+        if (!abort.isCompleted) abort.complete();
+        if (!done.isCompleted) {
+          done.completeError(TimeoutException('Media download timed out'));
+        }
+      });
+      void settled() {
+        deadline.cancel();
+        if (pending[key] == shared) pending.remove(key);
+      }
+
+      shared = (
+        future: done.future,
+        acquire: () => consumers++,
+        release: () {
+          if (--consumers != 0) return;
+          deadline.cancel();
+          if (!abort.isCompleted) abort.complete();
+          if (!done.isCompleted) {
+            done.completeError(
+              TimeoutException('Media load no longer visible'),
+            );
+          }
+          // Reopening the view or remounting an explicit retry may start a
+          // new flight. Mounted automatic retries keep sharing the old one.
+          if (pending[key] == shared) pending.remove(key);
+        },
+      );
+      final underlying =
+          Future<MatrixFile>.sync(
+            () => event.downloadAndDecryptAttachment(
+              getThumbnail: thumbnail,
+              downloadCallback: scanner
+                  ? null
+                  : (uri) {
+                      if (abort.isCompleted) {
+                        throw TimeoutException('Media download timed out');
+                      }
+                      if (_accountOf(client) != account) {
+                        throw StateError('Media account changed during load');
+                      }
+                      return client.downloadMediaBytes(
+                        uri,
+                        abortTrigger: abort.future,
+                        cancelled: () => abort.isCompleted,
+                      );
+                    },
+            ),
+          ).then((file) {
+            if (_accountOf(event.room.client) != account) {
+              throw StateError('Media account changed during load');
+            }
+            return file;
+          });
+      unawaited(
+        underlying.then<void>(
+          (file) {
+            settled();
+            if (!done.isCompleted) done.complete(file);
+          },
+          onError: (Object error, StackTrace stack) {
+            settled();
+            if (!done.isCompleted) done.completeError(error, stack);
+          },
+        ),
+      );
+      return shared;
+    });
+    if (_eventFlight != flight) {
+      _releaseEvent();
+      _eventFlight = flight;
+      flight.acquire();
+    }
+    return flight.future;
+  }
+
   Uint8List? _imageData;
   LottieComposition? _lottie;
   Timer? _retryTimer;
@@ -222,6 +351,10 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   /// A terminal failure (unavailable, unsupported, undecryptable): a static
   /// fallback replaces the loader, so nothing animates forever.
   bool _failed = false;
+
+  /// Recoverable failure: show a static fallback while retries continue in
+  /// the background, instead of leaving the first-load spinner on screen.
+  bool _retrying = false;
 
   /// Bytes came from the memory cache before the first frame: render them
   /// directly, without the placeholder cross-fade.
@@ -238,6 +371,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   /// The capped decode in use (see [MxcImage.maxDecodeSide]).
   ImageProvider? _capped;
   Client? _dependencyClient;
+  _Account? _dependencyAccount;
   double? _dependencyDpr;
 
   /// Bytes last sniffed by [_loops] and the answer, so a rebuild does not
@@ -276,9 +410,37 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   Client _client() =>
       widget.client ?? widget.event?.room.client ?? Matrix.of(context).client;
 
+  bool get _sourceBlocked {
+    final event = widget.event;
+    return event != null &&
+        (event.redacted ||
+            !RoundMediaPolicy.fromContent(event.content).canPlay);
+  }
+
+  static _Account _accountOf(Client client) =>
+      (client.userID, client.homeserver, client.database);
+
+  bool get _accountChanged =>
+      _dependencyAccount != null &&
+      (widget.uri != null || widget.event != null) &&
+      _dependencyAccount != _accountOf(_client());
+
+  static bool _isRound(Event event) =>
+      RoundVideoDescriptor.fromContent(event.content) != null;
+
   _LottieKey? _lottieKey(Client client) {
     final source = widget.uri?.toString() ?? widget.event?.eventId;
-    return source == null ? null : (client, source, widget.isThumbnail);
+    return source == null
+        ? null
+        : (
+            client,
+            source,
+            widget.isThumbnail,
+            widget.loadBytes,
+            widget.encryption,
+            widget.thumbnailMethod,
+            _accountOf(client),
+          );
   }
 
   void _accept(
@@ -288,12 +450,17 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     LottieComposition? lottie,
   }) {
     if (!mounted || generation != _generation) return;
+    if (_sourceBlocked || _accountChanged) {
+      _fail(generation);
+      return;
+    }
     if (key != null) _imageDataCache.put(key, data);
     setState(() {
       _imageData = data;
       _lottie = lottie;
       _failures = 0;
       _failed = false;
+      _retrying = false;
     });
   }
 
@@ -322,11 +489,21 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     int generation,
     Client client,
   ) async {
+    if (!mounted || generation != _generation) return true;
+    if (_sourceBlocked || _accountChanged) {
+      _fail(generation);
+      return true;
+    }
     final lottieKey = _lottieKey(client);
     final composition =
         (lottieKey == null ? null : _lottieCache.get(lottieKey)) ??
         await LottieStickerData.decode(data);
     if (composition == null) return false;
+    if (!mounted || generation != _generation) return true;
+    if (_sourceBlocked || _accountChanged) {
+      _fail(generation);
+      return true;
+    }
     if (lottieKey != null) _lottieCache.put(lottieKey, composition);
     _accept(data, key, generation, lottie: composition);
     return true;
@@ -359,22 +536,47 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     final cacheKey = widget.cacheKey;
     if (cacheKey == null) return null;
     final dpr = MediaQuery.devicePixelRatioOf(context);
+    // Only a server-generated URI thumbnail varies with the display size.
+    // Event thumbnails are pre-generated files; originals and encrypted URI
+    // attachments also return the same bytes at every decode size.
+    final sized = _usesSizedThumbnail;
     return (
       client,
       widget.cacheName ?? '',
       cacheKey,
       widget.uri?.toString() ?? widget.event?.eventId,
-      widget.width == null ? null : widget.width! * dpr,
-      widget.height == null ? null : widget.height! * dpr,
+      !sized || widget.width == null ? null : widget.width! * dpr,
+      !sized || widget.height == null ? null : widget.height! * dpr,
       widget.isThumbnail,
       widget.animated,
+      widget.thumbnailMethod,
+      widget.loadBytes,
+      widget.encryption,
+      _accountOf(client),
     );
   }
+
+  bool get _usesSizedThumbnail =>
+      widget.uri != null && widget.encryption == null && widget.isThumbnail;
 
   Future<void> _load(int generation) async {
     final client = _client();
     final uri = widget.uri;
     final event = widget.event;
+    if (_sourceBlocked) {
+      _fail(generation);
+      return;
+    }
+    if (event != null && _isRound(event)) {
+      // Round expiry is asynchronous; even a memory hit must pass the same
+      // SDK gate as a fresh download. Ordinary pictures remain synchronous.
+      await client.authorizeAttachmentAccess?.call(event, widget.isThumbnail);
+      if (!mounted || generation != _generation) return;
+      if (_accountChanged) {
+        _fail(generation);
+        return;
+      }
+    }
     final key = _cacheKey(client);
     final cached = key == null ? null : _imageDataCache.get(key);
     if (cached != null) {
@@ -431,6 +633,9 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
         );
       } on MatrixException catch (e) {
         if (!widget.isThumbnail) rethrow;
+        // A throttled/overloaded server needs backoff; requesting the larger
+        // original immediately doubles the load and defeats that backoff.
+        if (_retriable(e) || e.response?.statusCode == 429) rethrow;
         // Some bridge and remote media has no thumbnail (404/unrecognized);
         // the original still loads.
         Logs().d('Thumbnail unavailable, loading original', e);
@@ -459,9 +664,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
         _fail(generation);
         return;
       }
-      final data = await event.downloadAndDecryptAttachment(
-        getThumbnail: useThumbnail,
-      );
+      final data = await _attachment(event, useThumbnail);
       if (!mounted || generation != _generation) return;
       if (data.detectFileType is MatrixImageFile && !lottieMime) {
         _accept(data.bytes, key, generation);
@@ -482,7 +685,9 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   /// server says about media (not found, forbidden, too large) is final.
   static bool _retriable(MatrixException e) {
     final status = e.response?.statusCode ?? 0;
-    return e.error == MatrixError.M_LIMIT_EXCEEDED || status >= 500;
+    return e.error == MatrixError.M_LIMIT_EXCEEDED ||
+        status == 429 ||
+        status >= 500;
   }
 
   Future<void> _tryLoad() async {
@@ -529,6 +734,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   void _scheduleRetry(int generation) {
     if (!mounted || generation != _generation) return;
     _report(MxcImageLoad.failed);
+    setState(() => _retrying = true);
     if (!_active) return;
     final multiplier = 1 << min(_failures++, 5);
     final delay = Duration(
@@ -543,16 +749,26 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
 
   void _resetImage() {
     _generation++;
+    _releaseEvent();
     _retryTimer?.cancel();
     _loading = false;
     _failures = 0;
     _failed = false;
+    _retrying = false;
     _imageData = null;
     _lottie = null;
     _fromCache = false;
     _shown = false;
     _swapped = false;
     _reported = MxcImageLoad.loading;
+    _dependencyAccount = widget.uri == null && widget.event == null
+        ? null
+        : _accountOf(_client());
+    if (_sourceBlocked) {
+      _failed = true;
+      _report(MxcImageLoad.failed);
+      return;
+    }
     if (widget.uri != null || widget.event != null) {
       final client = _client();
       final key = _cacheKey(client);
@@ -563,6 +779,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       // and list reorders. A Lottie sticker needs its parsed composition
       // too; without it the bytes are parsed once by the load below.
       if (cached != null &&
+          !(widget.event != null && _isRound(widget.event!)) &&
           (lottie != null || LottieStickerData.jsonBytes(cached) == null)) {
         _imageData = cached;
         _lottie = lottie;
@@ -588,7 +805,11 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     final owner =
         widget.client ?? widget.event?.room.client ?? Matrix.of(context).client;
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    if (_dependencyClient != owner || _dependencyDpr != dpr) {
+    final reload =
+        _dependencyClient != owner ||
+        _dependencyAccount != _accountOf(owner) ||
+        (_dependencyDpr != dpr && _usesSizedThumbnail);
+    if (reload) {
       _dependencyClient = owner;
       _dependencyDpr = dpr;
       _resetImage();
@@ -615,14 +836,18 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   void didUpdateWidget(MxcImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.uri != widget.uri ||
+        _accountChanged ||
         oldWidget.event != widget.event ||
         oldWidget.client != widget.client ||
         oldWidget.cacheKey != widget.cacheKey ||
         oldWidget.cacheName != widget.cacheName ||
-        oldWidget.width != widget.width ||
-        oldWidget.height != widget.height ||
+        (_usesSizedThumbnail &&
+            (oldWidget.width != widget.width ||
+                oldWidget.height != widget.height)) ||
         oldWidget.isThumbnail != widget.isThumbnail ||
         oldWidget.animated != widget.animated ||
+        oldWidget.thumbnailMethod != widget.thumbnailMethod ||
+        oldWidget.loadBytes != widget.loadBytes ||
         oldWidget.encryption != widget.encryption) {
       _resetImage();
     }
@@ -645,6 +870,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       unawaited(capped.evict().catchError((Object _) => false));
     }
     _generation++;
+    _releaseEvent();
     _retryTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -652,15 +878,19 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final data = _imageData;
+    // Protective metadata can change on the same Event instance. Never show
+    // its old decoded frame while the enclosing timeline rebuilds.
+    final blocked = _sourceBlocked || _accountChanged;
+    final data = blocked ? null : _imageData;
     final hasData = data != null && data.isNotEmpty;
     final lottie = _lottie;
     int? decodeSize(double? logical) {
       if (!widget.isThumbnail ||
           logical == null ||
           !logical.isFinite ||
-          logical <= 0)
+          logical <= 0) {
         return null;
+      }
       return max(1, (logical * MediaQuery.devicePixelRatioOf(context)).ceil());
     }
 
@@ -733,7 +963,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       height: widget.height,
       placeholder: widget.placeholder,
     );
-    if (_failed && !hasData) {
+    if ((_failed || _retrying || blocked) && !hasData) {
       // Static: the caller's placeholder (with a broken-image mark unless it
       // asked for the placeholder alone) or the broken-image tile.
       final custom = widget.placeholder;
@@ -814,6 +1044,9 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
                   animate: !NotionMotion.reduced(context),
                 )
               : Image(
+                  // Gapless playback sharpens the same source, never carries
+                  // a previous conversation's photo into a different source.
+                  key: ValueKey(_generation),
                   image: imageProvider(data),
                   width: widget.width,
                   height: widget.height,

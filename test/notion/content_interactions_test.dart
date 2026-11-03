@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'dart:typed_data';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/personal_hub.dart';
+import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
+import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -35,21 +36,37 @@ void main() {
         for (var i = 0; i < 30; i++) ThumbnailEvent(room, i, Uint8List(0)),
       ];
       final prefs = await SharedPreferences.getInstance();
+      final lock = AppLockController(pincode: '1234')..unlock('1234');
+      addTearDown(lock.dispose);
       await tester.pumpWidget(
         Provider<MatrixState>.value(
           value: ConversationMatrix(client, prefs),
           child: MaterialApp(
             localizationsDelegates: L10n.localizationsDelegates,
             supportedLocales: L10n.supportedLocales,
-            home: NotionConversationContentPage(
-              rooms: [room],
-              name: 'Fictional tabs',
-              initialMedia: true,
+            home: AppLockWidget(
+              isLoggedIn: true,
+              controller: lock,
+              child: NotionConversationContentPage(
+                rooms: [room],
+                name: 'Fictional tabs',
+                initialMedia: true,
+              ),
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
+      // Opening the media grid must not mount/layout the three hidden lists
+      // or extract every link in the loaded history.
+      expect(
+        find.byKey(const PageStorageKey('content-files'), skipOffstage: false),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const PageStorageKey('content-links'), skipOffstage: false),
+        findsNothing,
+      );
       await tester.drag(find.byType(CustomScrollView), const Offset(0, -350));
       await tester.pumpAndSettle();
       final before = tester
@@ -61,11 +78,42 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Files'));
       await tester.pumpAndSettle();
+      expect(
+        find.byKey(const PageStorageKey('content-files'), skipOffstage: false),
+        findsOneWidget,
+      );
       expect(find.text('No matches in the loaded history.'), findsOneWidget);
       await tester.ensureVisible(find.text('Media'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Media'));
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .state<ScrollableState>(find.byType(Scrollable).last)
+            .position
+            .pixels,
+        before,
+      );
+      // AppLock keeps this route mounted. A foreground epoch change must
+      // renew its history, retaining the visible tab and scroll position.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(find.text('Nothing here yet'), findsNothing);
+      expect(
+        tester
+            .state<ScrollableState>(find.byType(Scrollable).last)
+            .position
+            .pixels,
+        before,
+      );
+      // Lock/unlock without any lifecycle callback needs the same recovery.
+      lock.showLockScreen();
+      await tester.pump();
+      expect(PersonalPrivacy.surfaceUnlocked, isFalse);
+      expect(lock.unlock('1234'), isTrue);
+      await tester.pumpAndSettle();
+      expect(find.text('Nothing here yet'), findsNothing);
       expect(
         tester
             .state<ScrollableState>(find.byType(Scrollable).last)

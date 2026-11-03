@@ -108,7 +108,6 @@ List<Object?> chatListItemSignature(
   bool showNetworks = false,
 }) {
   final now = DateTime.now();
-  final own = room.client.userID;
   return [
     room,
     projection,
@@ -128,10 +127,8 @@ List<Object?> chatListItemSignature(
       chatLoomSilencedUnread(source),
       accountPushRuleState(source),
       source.membership,
-      source.typingUsers
-          .where((user) => user.id != own)
-          .map((user) => user.id)
-          .join(' '),
+      // Typing/presence update the mounted ConversationActivityBuilder,
+      // independently of this widget. They must not invalidate row reuse.
       if (source.lastEvent case final event?) ...[
         event,
         event.eventId,
@@ -158,13 +155,13 @@ List<Object?> chatListItemSignature(
 /// at once, so a preview never shows the text of a deleted message.
 abstract final class _PreviousPreviews {
   static const _cap = 64;
-  static final _found = <String, Event?>{};
-  static final _loading = <String>{};
-  static final _rows = <String, VoidCallback>{};
+  static final _found = <(Client, String, String), Event?>{};
+  static final _loading = <(Client, String, String)>{};
+  static final _rows = <(Client, String, String), VoidCallback>{};
   static final _watching = Expando<StreamSubscription<Event>>();
 
-  static String _key(Event deleted) =>
-      '${deleted.room.id}\u0000${deleted.eventId}';
+  static (Client, String, String) _key(Event deleted) =>
+      (deleted.room.client, deleted.room.id, deleted.eventId);
 
   /// The stand-in preview of [deleted], or null while it loads or when the
   /// stored timeline has none; [loaded] runs once a lookup finishes or the
@@ -198,17 +195,16 @@ abstract final class _PreviousPreviews {
 
     // Future.sync: a database that throws at once still settles later,
     // never inside this build.
-    Future.sync(() => room.client.database.getEventList(room, limit: 30))
-        .then(
-          (events) => settle(
-            previousPreviewEvent(
-              events,
-              deletedId: deleted.eventId,
-              previewTypes: room.client.roomPreviewLastEvents,
-            ),
-          ),
-          onError: (Object _) => settle(null),
-        );
+    Future.sync(() => room.client.database.getEventList(room, limit: 30)).then(
+      (events) => settle(
+        previousPreviewEvent(
+          events,
+          deletedId: deleted.eventId,
+          previewTypes: room.client.roomPreviewLastEvents,
+        ),
+      ),
+      onError: (Object _) => settle(null),
+    );
     return null;
   }
 
@@ -219,7 +215,8 @@ abstract final class _PreviousPreviews {
       final target = event.redacts ?? event.content['redacts'];
       final stale = [
         for (final entry in _found.entries)
-          if (entry.value?.eventId == target &&
+          if (identical(entry.key.$1, client) &&
+              entry.value?.eventId == target &&
               entry.value?.room.id == event.room.id)
             entry.key,
       ];

@@ -73,6 +73,10 @@ class StickerMediaCache {
   final AesGcmSecretKey _key;
   final DateTime Function() _now;
   final _inflight = <String, Future<Uint8List>>{};
+  final _reads = <Future<Uint8List?>>{};
+  final _writes = <Future<bool>>{};
+  int _generation = 0;
+  Future<void>? _clearing;
 
   /// Bytes on disk as of the last scan plus later writes (an estimate: an
   /// overwrite counts twice until the next eviction recounts).
@@ -219,7 +223,15 @@ class StickerMediaCache {
 
   /// The bytes of [key], or null (missing, expired, tampered, other key).
   /// A hit marks the file recently used. Never throws.
-  Future<Uint8List?> read(String key) async {
+  Future<Uint8List?> read(String key) {
+    if (_clearing != null) return Future.value();
+    final pending = _read(key, _generation);
+    _reads.add(pending);
+    unawaited(pending.then<void>((_) => _reads.remove(pending)));
+    return pending;
+  }
+
+  Future<Uint8List?> _read(String key, int generation) async {
     try {
       await _validate();
       final file = _entry(key);
@@ -240,7 +252,7 @@ class StickerMediaCache {
       if (now.difference(stat.modified) > touchInterval) {
         await file.setLastModified(now);
       }
-      return plain;
+      return generation == _generation ? plain : null;
     } catch (_) {
       return null;
     }
@@ -250,7 +262,15 @@ class StickerMediaCache {
   /// renamed once complete), then trims the cache to [maxBytes] when it is
   /// over. Empty or too large ([maxEntryBytes]) bytes are not kept. Never
   /// throws.
-  Future<bool> write(String key, Uint8List bytes) async {
+  Future<bool> write(String key, Uint8List bytes) {
+    if (_clearing != null) return Future.value(false);
+    final pending = _write(key, bytes, _generation);
+    _writes.add(pending);
+    unawaited(pending.then<void>((_) => _writes.remove(pending)));
+    return pending;
+  }
+
+  Future<bool> _write(String key, Uint8List bytes, int generation) async {
     if (bytes.isEmpty ||
         bytes.lengthInBytes > maxEntryBytes ||
         bytes.lengthInBytes > maxBytes) {
@@ -261,12 +281,17 @@ class StickerMediaCache {
       await _validate();
       final target = _entry(key);
       final sealed = await _seal(key, bytes);
+      if (generation != _generation) return false;
       final random = Random.secure();
       final suffix = base64UrlEncode(
         List<int>.generate(12, (_) => random.nextInt(256)),
       );
       partial = File('${directory.path}/.partial_$suffix');
       await partial.writeAsBytes(sealed);
+      if (generation != _generation) {
+        await _delete(partial);
+        return false;
+      }
       await partial.rename(target.path);
       await target.setLastModified(_now());
       _total += sealed.length;
@@ -288,18 +313,23 @@ class StickerMediaCache {
   /// download per key at a time: concurrent callers (two cells of the same
   /// sticker, the prefetch) share it. A failed download is not cached.
   Future<Uint8List> fetch(String key, Future<Uint8List> Function() download) {
+    final clearing = _clearing;
+    if (clearing != null) return clearing.then((_) => fetch(key, download));
     final pending = _inflight[key];
     if (pending != null) return pending;
     final result = Completer<Uint8List>();
+    final generation = _generation;
     _inflight[key] = result.future;
     () async {
       try {
         final cached = await read(key);
+        if (generation != _generation) throw StateError('media_cache_cleared');
         if (cached != null) {
           result.complete(cached);
           return;
         }
         final bytes = await download();
+        if (generation != _generation) throw StateError('media_cache_cleared');
         // Callers draw now; the write finishes under the same flight, so a
         // second request meanwhile does not download again.
         result.complete(bytes);
@@ -359,9 +389,22 @@ class StickerMediaCache {
   }
 
   /// Removes every cached file (only this cache's own names).
-  Future<void> clear() async {
-    await _clearFolder(directory);
-    _total = 0;
+  Future<void> clear() {
+    final clearing = _clearing;
+    if (clearing != null) return clearing;
+    // Invalidate pending reads/downloads immediately. Waiting for network
+    // would make logout depend on a stalled server; only disk work drains.
+    _generation++;
+    _inflight.clear();
+    return _clearing = () async {
+      try {
+        await Future.wait<Object?>([..._reads, ..._writes]);
+        await _clearFolder(directory);
+        _total = 0;
+      } finally {
+        _clearing = null;
+      }
+    }();
   }
 
   static Future<void> _clearFolder(Directory directory) async {
@@ -463,28 +506,57 @@ class StickerMediaCache {
     required bool animated,
     required ThumbnailMethod thumbnailMethod,
   }) async {
-    final cache = await shared();
     final account = client.userID;
-    if (cache == null || account == null) {
-      if (!isThumbnail) return client.downloadMxcCached(uri);
-      try {
-        return await client.downloadMxcCached(
-          uri,
-          width: width,
-          height: height,
-          thumbnailMethod: thumbnailMethod,
-          isThumbnail: true,
-          animated: animated,
-        );
-      } on MatrixException catch (e) {
-        if (_retriable(e)) rethrow;
-        return client.downloadMxcCached(uri);
+    StickerMediaCache? activeCache;
+    int? cacheGeneration;
+    void checkAccount() {
+      if (client.userID != account ||
+          (activeCache != null &&
+              activeCache._generation != cacheGeneration)) {
+        throw StateError('sticker_load_cancelled');
       }
     }
-    Future<Uint8List> original() => cache.fetch(
-      keyFor(account, uri, StickerMediaCache.original),
-      () => client.downloadMxcCached(uri, databaseCache: false),
-    );
+
+    Future<Uint8List> download({
+      bool thumbnail = false,
+      bool database = true,
+    }) async {
+      checkAccount();
+      final bytes = await client.downloadMxcCached(
+        uri,
+        width: thumbnail ? width : null,
+        height: thumbnail ? height : null,
+        thumbnailMethod: thumbnail ? thumbnailMethod : null,
+        isThumbnail: thumbnail,
+        animated: thumbnail ? animated : null,
+        databaseCache: database,
+      );
+      checkAccount();
+      return bytes;
+    }
+
+    final cache = await shared();
+    activeCache = cache;
+    cacheGeneration = cache?._generation;
+    checkAccount();
+    if (cache == null || account == null) {
+      if (!isThumbnail) return download();
+      try {
+        return await download(thumbnail: true);
+      } on MatrixException catch (e) {
+        if (_retriable(e)) rethrow;
+        return download();
+      }
+    }
+    Future<Uint8List> original() async {
+      final bytes = await cache.fetch(
+        keyFor(account, uri, StickerMediaCache.original),
+        () => download(database: false),
+      );
+      checkAccount();
+      return bytes;
+    }
+
     if (!isThumbnail) return original();
     final variant = thumbnailVariant(
       width: width,
@@ -492,17 +564,9 @@ class StickerMediaCache {
       method: thumbnailMethod,
       animated: animated,
     );
-    return cache.fetch(keyFor(account, uri, variant), () async {
+    final bytes = await cache.fetch(keyFor(account, uri, variant), () async {
       try {
-        return await client.downloadMxcCached(
-          uri,
-          width: width,
-          height: height,
-          thumbnailMethod: thumbnailMethod,
-          isThumbnail: true,
-          animated: animated,
-          databaseCache: false,
-        );
+        return await download(thumbnail: true, database: false);
       } on MatrixException catch (e) {
         if (_retriable(e)) rethrow;
         // Some bridge and remote media has no thumbnail (404/unrecognized):
@@ -511,6 +575,8 @@ class StickerMediaCache {
         return original();
       }
     });
+    checkAccount();
+    return bytes;
   }
 
   /// [MxcBytesLoader] that always loads the original (sticker cells; the
@@ -534,7 +600,9 @@ class StickerMediaCache {
   /// Rate limits and server errors are worth another try (as in MxcImage).
   static bool _retriable(MatrixException e) {
     final status = e.response?.statusCode ?? 0;
-    return e.error == MatrixError.M_LIMIT_EXCEEDED || status >= 500;
+    return e.error == MatrixError.M_LIMIT_EXCEEDED ||
+        status == 429 ||
+        status >= 500;
   }
 
   @override
@@ -569,8 +637,10 @@ class StickerPrefetch {
 
   static Future<bool> Function() _defaultAllowed(Client client) {
     final ports = ClientMediaPrefetchPorts(client);
+    final generation = ports.surfaceGeneration;
     return () async =>
         !PowerSaving.active.value &&
+        ports.surfaceGeneration == generation &&
         ports.surfaceActive &&
         await ports.networkAllowed();
   }
@@ -579,9 +649,19 @@ class StickerPrefetch {
   /// ([StickerMediaCache.prefersOriginal]) and are not cached yet, in
   /// order. Completes when done or cancelled.
   Future<void> run(Iterable<StickerItem> items) async {
-    final cache = await StickerMediaCache.shared();
     final account = client.userID;
-    if (cache == null || account == null || _cancelled) return;
+    final cache = await StickerMediaCache.shared();
+    if (cache == null ||
+        account == null ||
+        _cancelled ||
+        client.userID != account) {
+      return;
+    }
+    final generation = cache._generation;
+    bool wanted() =>
+        !_cancelled &&
+        cache._generation == generation &&
+        client.userID == account;
     if (!await _allowed()) return;
     final seen = <String>{};
     final queue = <Uri>[
@@ -590,7 +670,7 @@ class StickerPrefetch {
           item.uri!,
     ].take(maxItems).iterator;
     Future<void> worker() async {
-      while (!_cancelled && queue.moveNext()) {
+      while (wanted() && queue.moveNext()) {
         final uri = queue.current;
         final key = StickerMediaCache.keyFor(
           account,
@@ -598,15 +678,20 @@ class StickerPrefetch {
           StickerMediaCache.original,
         );
         if (await cache.contains(key)) continue;
-        if (_cancelled || !await _allowed()) {
+        if (!wanted() || !await _allowed() || !wanted()) {
           _cancelled = true;
           return;
         }
         try {
-          await cache.fetch(
-            key,
-            () => client.downloadMxcCached(uri, databaseCache: false),
-          );
+          await cache.fetch(key, () async {
+            if (!wanted()) throw StateError('sticker_prefetch_cancelled');
+            final bytes = await client.downloadMxcCached(
+              uri,
+              databaseCache: false,
+            );
+            if (!wanted()) throw StateError('sticker_prefetch_cancelled');
+            return bytes;
+          });
         } catch (_) {
           // The cell retries on its own when it is built.
         }

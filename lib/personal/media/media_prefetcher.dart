@@ -176,9 +176,14 @@ class MediaPrefetcher {
   static const initialCount = 20;
   static const initialScanLimit = 200;
   static const windowMargin = 10;
+
+  /// Bound work retained during a long fling, even if the list keeps building
+  /// without an idle frame. The most recently built rows win.
+  static const maxBuiltRange = 64;
+  static const maxQueuedJobs = 128;
   static const idleDelay = Duration(milliseconds: 300);
 
-  static const _arrival = 0, _initial = 1, _window = 2;
+  static const _arrival = 0, _window = 1, _initial = 2;
 
   static final _instances = <Client, MediaPrefetcher>{};
 
@@ -390,6 +395,19 @@ class MediaPrefetcher {
       return;
     }
     if (MediaInflight.contains(mxc)) return;
+    if (_queue.length >= maxQueuedJobs) {
+      var worst = 0;
+      for (var i = 1; i < _queue.length; i++) {
+        final a = _queue[i], b = _queue[worst];
+        if (a.priority > b.priority ||
+            (a.priority == b.priority && a.sequence < b.sequence)) {
+          worst = i;
+        }
+      }
+      if (priority > _queue[worst].priority) return;
+      final dropped = _queue.removeAt(worst);
+      _known.remove(dropped.mxc.toString());
+    }
     final job = _Job(mxc, event, thumbnail, size, priority, sequence, scope);
     _known[key] = job;
     _queue.add(job);
@@ -460,6 +478,8 @@ class MediaPrefetcher {
       scope._spent += bytes.length - reserved;
       reserved = 0;
       if (!cancellation.valid ||
+          (job.event.messageType == MessageTypes.Video &&
+              !_roundAllowed(job.event)) ||
           bytes.isEmpty ||
           bytes.length > limit ||
           bytes.length >= ports.maxCacheableBytes) {
@@ -481,6 +501,9 @@ class RoomPrefetchScope {
   final List<Event> Function() _events;
   bool _disposed = false;
   bool _initialDone = false;
+  bool _flushing = false;
+  bool _flushAgain = false;
+  int _windowRevision = 0;
   int _spent = 0;
   int? _min, _max;
   Timer? _timer;
@@ -500,6 +523,14 @@ class RoomPrefetchScope {
     if (_disposed || index < 0) return;
     if (_min == null || index < _min!) _min = index;
     if (_max == null || index > _max!) _max = index;
+    if (_max! - _min! > MediaPrefetcher.maxBuiltRange) {
+      if (index == _max) {
+        _min = _max! - MediaPrefetcher.maxBuiltRange;
+      } else {
+        _max = _min! + MediaPrefetcher.maxBuiltRange;
+      }
+    }
+    _windowRevision++;
     _lastBuilt = _clock.elapsed;
     _schedule();
   }
@@ -532,6 +563,23 @@ class RoomPrefetchScope {
   }
 
   Future<void> _flush() async {
+    if (_flushing) {
+      _flushAgain = true;
+      return;
+    }
+    _flushing = true;
+    try {
+      await _flushOnce();
+    } finally {
+      _flushing = false;
+      if (_flushAgain) {
+        _flushAgain = false;
+        _schedule();
+      }
+    }
+  }
+
+  Future<void> _flushOnce() async {
     if (_disposed || !_owner._surfaceUsable()) return;
     final events = _events();
     if (events.isEmpty) return;
@@ -571,6 +619,16 @@ class RoomPrefetchScope {
 
   Future<void> _enqueue(Iterable<Event> events, int priority) async {
     final owner = _owner;
+    final generation = owner.ports.surfaceGeneration;
+    final windowRevision = _windowRevision;
+    bool wanted() =>
+        !_disposed &&
+        !owner._closed &&
+        owner.ports.enabled &&
+        owner.ports.surfaceActive &&
+        owner.ports.surfaceGeneration == generation &&
+        (priority != MediaPrefetcher._window ||
+            windowRevision == _windowRevision);
     if (_disposed ||
         owner._closed ||
         !owner.ports.enabled ||
@@ -601,8 +659,9 @@ class RoomPrefetchScope {
       } catch (_) {
         // Unknown state stays unknown: those rounds are skipped below.
       }
-      if (_disposed) return;
+      if (!wanted()) return;
     }
+    if (!wanted()) return;
     for (final c in candidates) {
       if (c.round && !owner._roundAllowed(c.event)) continue;
       final thumbnail = c.thumbnail, thumbnailSize = c.thumbnailSize;

@@ -78,6 +78,14 @@ class InboxController extends ChangeNotifier {
 
   final _subscriptions = <StreamSubscription>[];
   final _changed = <String>{};
+  final _unreadStates = <String, (int, int, bool, Membership)>{};
+
+  static (int, int, bool, Membership) _unreadState(Room room) => (
+    room.notificationCount,
+    room.highlightCount,
+    room.markedUnread,
+    room.membership,
+  );
   bool _all = false, _touched = false, _detached = false;
   Timer? _timer;
   // Runs for [debounce] after each refresh: changes inside it are coalesced.
@@ -160,13 +168,14 @@ class InboxController extends ChangeNotifier {
     return _networks;
   }
 
+  /// Typing is owned by each visible row's ConversationActivityBuilder.
   /// Other users' read receipts change nothing an inbox row shows: unread
   /// counts move only with new events or the account's own receipts (some
   /// servers repeat `unread_notifications` in every room entry, so it is no
   /// signal by itself). The exception is a receipt on the room's last own
   /// message: it turns the row's ticks into "read". Another is an update in
   /// which the SDK replaced the room's last event (a preview placeholder).
-  bool _othersReceiptsOnly(String roomId, JoinedRoomUpdate update) {
+  bool _irrelevantEphemeralOnly(String roomId, JoinedRoomUpdate update) {
     final ephemeral = update.ephemeral;
     final own = client.userID;
     if (own == null ||
@@ -174,7 +183,8 @@ class InboxController extends ChangeNotifier {
         ephemeral.isEmpty ||
         !ephemeral.every(
           (event) =>
-              event.type == 'm.receipt' && !_mentions(event.content, own),
+              event.type == 'm.typing' ||
+              (event.type == 'm.receipt' && !_mentions(event.content, own)),
         ) ||
         !(update.timeline?.events?.isEmpty ?? true) ||
         !(update.state?.isEmpty ?? true) ||
@@ -184,12 +194,19 @@ class InboxController extends ChangeNotifier {
     }
     final room = client.getRoomById(roomId);
     final index = _index;
-    if (room != null && index != null && !index.isCurrent(room)) return false;
-    final last = room?.lastEvent;
+    if (room == null ||
+        index == null ||
+        !index.isCurrent(room) ||
+        _unreadStates[roomId] != _unreadState(room)) {
+      return false;
+    }
+    final receipts = ephemeral.where((event) => event.type == 'm.receipt');
+    if (receipts.isEmpty) return true;
+    final last = room.lastEvent;
     if (last == null || !OwnSenderResolver.of(client).isOwnEvent(last)) {
       return true;
     }
-    return !ephemeral.any((event) => event.content.containsKey(last.eventId));
+    return !receipts.any((event) => event.content.containsKey(last.eventId));
   }
 
   /// Whether a receipt content (`{event: {type: {user: …}}}`) names [user].
@@ -208,7 +225,7 @@ class InboxController extends ChangeNotifier {
     final ids = <String>{
       for (final entry
           in rooms?.join?.entries ?? <MapEntry<String, JoinedRoomUpdate>>[])
-        if (!_othersReceiptsOnly(entry.key, entry.value)) entry.key,
+        if (!_irrelevantEphemeralOnly(entry.key, entry.value)) entry.key,
       ...?rooms?.invite?.keys,
       ...?rooms?.leave?.keys,
       ...?rooms?.knock?.keys,
@@ -287,6 +304,10 @@ class InboxController extends ChangeNotifier {
     if (index != null && !all && changed.isNotEmpty) {
       if (index.updateRooms(changed, client.rooms)) {
         debugIncrementalUpdates++;
+        for (final id in changed) {
+          final room = client.getRoomById(id);
+          if (room != null) _unreadStates[id] = _unreadState(room);
+        }
         _networks = _computeNetworks(index);
       } else {
         _rebuild();
@@ -305,6 +326,11 @@ class InboxController extends ChangeNotifier {
       personal,
     ).buildIndex(client.rooms, previous: _index);
     _index = index;
+    _unreadStates
+      ..clear()
+      ..addEntries(
+        client.rooms.map((room) => MapEntry(room.id, _unreadState(room))),
+      );
     _networks = _computeNetworks(index);
     _scheduleMuteExpiry();
   }

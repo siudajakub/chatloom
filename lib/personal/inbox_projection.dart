@@ -550,6 +550,14 @@ class InboxProjection {
     );
     if (filter == InboxFilter.inbox) {
       final due = _dueRoomIds();
+      // The ordinary inbox is already filtered and sorted. Only completed
+      // reminders need the broader second selection below; avoid sorting
+      // every inbox-placement chat twice on each message/filter refresh.
+      if (due.isEmpty) {
+        return visible
+            .map((r) => index._representatives[r.representativeRoomId]!)
+            .toList(growable: false);
+      }
       final ids = visible.map((r) => r.entityId).toSet();
       for (final record in records) {
         if (record.technical ||

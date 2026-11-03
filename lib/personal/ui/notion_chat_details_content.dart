@@ -19,12 +19,68 @@ import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/size_string.dart';
 import 'package:chatloom/utils/url_launcher.dart';
+import 'package:chatloom/widgets/app_lock.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart'
     show RoundMediaPolicy, RoundVideoDescriptor;
+import 'package:provider/provider.dart';
+
+/// AppLock keeps routes mounted beneath its cover. Rebind their history to a
+/// new privacy epoch after resume/unlock; never reauthorize pending old work.
+abstract class _ContentPrivacyState<T extends StatefulWidget> extends State<T>
+    with WidgetsBindingObserver {
+  AppLockController? _privacyLock;
+  bool _privacyRefreshQueued = false;
+
+  void recoverPrivacyScope();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final lock = Provider.of<AppLock?>(context, listen: false)?.controller;
+    if (!identical(lock, _privacyLock)) {
+      _privacyLock?.removeListener(_schedulePrivacyRecovery);
+      _privacyLock = lock;
+      lock?.addListener(_schedulePrivacyRecovery);
+    }
+    _schedulePrivacyRecovery();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _schedulePrivacyRecovery();
+  }
+
+  void _schedulePrivacyRecovery() {
+    if (_privacyRefreshQueued) return;
+    _privacyRefreshQueued = true;
+    scheduleMicrotask(() {
+      _privacyRefreshQueued = false;
+      if (!mounted ||
+          !PersonalPrivacy.surfaceUnlocked ||
+          !PersonalPrivacy.surfaceForeground) {
+        return;
+      }
+      recoverPrivacyScope();
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _privacyLock?.removeListener(_schedulePrivacyRecovery);
+    super.dispose();
+  }
+}
 
 bool _thumbnailAllowed(Event event) =>
     event.showThumbnail &&
@@ -125,13 +181,16 @@ class NotionLocalSharedPreview extends StatefulWidget {
       _NotionLocalSharedPreviewState();
 }
 
-class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
+class _NotionLocalSharedPreviewState
+    extends _ContentPrivacyState<NotionLocalSharedPreview> {
   late ConversationContentController _history;
   late String _scopeKey;
+  late int _privacyEpoch;
   String _scope(List<Room> rooms) => rooms
       .map((r) => (identityHashCode(r.client), r.client.userID, r.id))
       .join('|');
   void _create({bool afterTransition = false}) {
+    _privacyEpoch = PersonalPrivacy.surfaceGeneration;
     _scopeKey = _scope(widget.rooms);
     final history = _history = ConversationContentController(
       widget.rooms.map(MatrixContentSource.new).toList(),
@@ -152,6 +211,18 @@ class _NotionLocalSharedPreviewState extends State<NotionLocalSharedPreview> {
       history.load();
       _updated();
     });
+  }
+
+  @override
+  void recoverPrivacyScope() {
+    if (_privacyEpoch == PersonalPrivacy.surfaceGeneration) return;
+    final previous = _history;
+    _history = previous.renew()..addListener(_updated);
+    previous.dispose();
+    _privacyEpoch = PersonalPrivacy.surfaceGeneration;
+    _waiting = false;
+    setState(() {});
+    _history.load(refresh: true);
   }
 
   /// True until the deferred first load starts; shows the loading line.
@@ -370,7 +441,7 @@ class NotionConversationContentPage extends StatefulWidget {
 }
 
 class _NotionConversationContentPageState
-    extends State<NotionConversationContentPage>
+    extends _ContentPrivacyState<NotionConversationContentPage>
     with SingleTickerProviderStateMixin {
   /// Local history is read until the open tab has this many items...
   static const _fillTarget = 48;
@@ -384,14 +455,19 @@ class _NotionConversationContentPageState
       TabController(length: _SharedTab.values.length, vsync: this)
         ..addListener(() {
           if (_tab.index != _tabs.index && mounted) {
-            setState(() => _tab = _SharedTab.values[_tabs.index]);
+            setState(() {
+              _tab = _SharedTab.values[_tabs.index];
+              _visitedTabs.add(_tab);
+            });
             _scheduleFill();
           }
         });
   late ConversationContentController _history;
   late String _scopeKey;
   late Client _account;
+  late int _privacyEpoch;
   _SharedTab _tab = _SharedTab.media;
+  final _visitedTabs = <_SharedTab>{_SharedTab.media};
   SharedSender _sender = SharedSender.everyone;
   final _subscriptions = <StreamSubscription>[];
   bool _remoteAllowed = false, _fillScheduled = false;
@@ -407,6 +483,7 @@ class _NotionConversationContentPageState
   }
 
   void _createHistory() {
+    _privacyEpoch = PersonalPrivacy.surfaceGeneration;
     _scopeKey = _scope(widget.rooms);
     _history = ConversationContentController(
       widget.rooms.map(MatrixContentSource.new).toList(),
@@ -415,7 +492,13 @@ class _NotionConversationContentPageState
           identical(Matrix.of(context).client, _account),
       privacyGeneration: () => PersonalPrivacy.surfaceGeneration,
     );
-    for (final state in _history.sources) {
+    _subscribeHistory();
+    _fill();
+  }
+
+  void _subscribeHistory() {
+    final history = _history;
+    for (final state in history.sources) {
       final source = state.source as MatrixContentSource;
       for (final stream in [
         source.room.client.onTimelineEvent.stream,
@@ -424,12 +507,31 @@ class _NotionConversationContentPageState
         _subscriptions.add(
           stream
               .where((e) => e.roomId == source.room.id)
-              .listen((e) => _history.accept(source, e)),
+              .listen((e) => history.accept(source, e)),
         );
       }
     }
-    _history.addListener(_updated);
-    _fill();
+    history.addListener(_updated);
+  }
+
+  @override
+  void recoverPrivacyScope() {
+    if (_privacyEpoch == PersonalPrivacy.surfaceGeneration ||
+        !identical(Matrix.of(context).client, _account)) {
+      return;
+    }
+    for (final sub in _subscriptions) {
+      unawaited(sub.cancel());
+    }
+    _subscriptions.clear();
+    final previous = _history;
+    _history = previous.renew();
+    previous.dispose();
+    _privacyEpoch = PersonalPrivacy.surfaceGeneration;
+    _autoSignature = null;
+    _subscribeHistory();
+    setState(() {});
+    _history.load(refresh: true);
   }
 
   void _updated() {
@@ -488,6 +590,9 @@ class _NotionConversationContentPageState
       _autoSignature = null;
       _query.clear();
       _tab = _SharedTab.media;
+      _visitedTabs
+        ..clear()
+        ..add(_SharedTab.media);
       _sender = SharedSender.everyone;
       _tabs.index = 0;
       _account = Matrix.of(context).client;
@@ -724,12 +829,28 @@ class _NotionConversationContentPageState
                             ? IndexedStack(
                                 index: _tab.index,
                                 children: [
-                                  _mediaGrid(events),
-                                  _voiceAndRounds(
-                                    events.where(sharedMessage).toList(),
-                                  ),
-                                  _files(events.where(sharedFile).toList()),
-                                  _links(events),
+                                  for (final tab in _SharedTab.values)
+                                    if (_visitedTabs.contains(tab))
+                                      TickerMode(
+                                        enabled: _tab == tab,
+                                        child: switch (tab) {
+                                          _SharedTab.media => _mediaGrid(
+                                            events,
+                                          ),
+                                          _SharedTab.messages =>
+                                            _voiceAndRounds(
+                                              events
+                                                  .where(sharedMessage)
+                                                  .toList(),
+                                            ),
+                                          _SharedTab.files => _files(
+                                            events.where(sharedFile).toList(),
+                                          ),
+                                          _SharedTab.links => _links(events),
+                                        },
+                                      )
+                                    else
+                                      const SizedBox.shrink(),
                                 ],
                               )
                             : _messages(events, terms),

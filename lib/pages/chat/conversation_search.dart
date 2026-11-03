@@ -30,7 +30,8 @@ class ConversationSearchController extends ChangeNotifier {
     this.older,
     this.pageSize = 200,
     this.maxStoredPerRoom = 2000,
-  });
+    Future<void> Function()? yieldSlice,
+  }) : _yieldSlice = yieldSlice ?? localSearchYield;
 
   /// The rooms of the conversation (one, or a person's sources).
   final List<Room> Function() rooms;
@@ -50,6 +51,7 @@ class ConversationSearchController extends ChangeNotifier {
   )?
   older;
   final int pageSize, maxStoredPerRoom;
+  final Future<void> Function() _yieldSlice;
 
   late final TextEditingController text = TextEditingController();
   late final FocusNode focus = FocusNode(debugLabel: 'Conversation search');
@@ -214,8 +216,14 @@ class ConversationSearchController extends ChangeNotifier {
 
   Future<void> _scanStore(int generation) async {
     _scanning = true;
+    var firstPage = true;
     for (final room in rooms()) {
       for (var start = 0; start < maxStoredPerRoom; start += pageSize) {
+        // A warm encrypted store may complete in microtasks. Give rendering
+        // and input a turn between pages, including between merged sources.
+        if (!firstPage) await _yieldSlice();
+        if (!_current(generation)) return;
+        firstPage = false;
         List<Event> page;
         try {
           page = await read(room, start, pageSize);

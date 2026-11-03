@@ -64,4 +64,55 @@ void main() {
       expect(usableAvatarUri(value), isNull);
     }
   });
+
+  test('current portal photo wins over older photos in other rooms', () {
+    final client = ConversationClient();
+    final old = ConversationRoom(client, '!old:example.invalid');
+    old.state(EventTypes.RoomAvatar, {'url': 'mxc://example.invalid/old'});
+    final current = ConversationRoom(client, '!current:example.invalid');
+    current.state(EventTypes.RoomAvatar, {
+      'url': 'mxc://example.invalid/current',
+    });
+    expect(
+      userAvatarUri(
+        current.unsafeGetUserFromMemoryOrFallback('@anna:example.invalid'),
+      ),
+      Uri.parse('mxc://example.invalid/current'),
+    );
+  });
+
+  test('avatar updates ignore group photos and unrelated members', () {
+    final client = ConversationClient();
+    final direct = ConversationRoom(client, '!direct:example.invalid');
+    final group = ConversationRoom(client, '!group:example.invalid');
+    group.state('m.bridge', {
+      'protocol': {'id': 'whatsapp'},
+      'bridgebot': '@bridge:example.invalid',
+      'com.beeper.room_type.v2': 'group',
+    }, key: 'fixture');
+    group.state(EventTypes.RoomAvatar, {'url': 'mxc://example.invalid/group'});
+    final user = direct.unsafeGetUserFromMemoryOrFallback(
+      '@anna:example.invalid',
+    );
+    expect(
+      affectsUserAvatar(user, group.id, group.getState(EventTypes.RoomAvatar)!),
+      isFalse,
+    );
+    expect(
+      affectsUserAvatar(
+        user,
+        direct.id,
+        direct.getState(EventTypes.RoomMember, client.userID)!,
+      ),
+      isFalse,
+    );
+    expect(
+      affectsUserAvatar(
+        user,
+        direct.id,
+        direct.getState(EventTypes.RoomMember, user.id)!,
+      ),
+      isTrue,
+    );
+  });
 }

@@ -41,6 +41,7 @@ class _Transport extends http.BaseClient {
   final media = <Uri>[];
   int running = 0, peak = 0;
   Completer<void>? gate;
+  void Function(int count)? onMedia;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -51,6 +52,7 @@ class _Transport extends http.BaseClient {
       );
     }
     media.add(request.url);
+    onMedia?.call(media.length);
     running++;
     peak = max(peak, running);
     try {
@@ -231,6 +233,46 @@ void main() {
       );
     });
 
+    test(
+      'clear invalidates a late download without waiting for network',
+      () async {
+        final cache = await open();
+        final started = Completer<void>();
+        final download = Completer<Uint8List>();
+        final pending = cache.fetch(key('late'), () {
+          started.complete();
+          return download.future;
+        });
+        final rejected = expectLater(pending, throwsStateError);
+        await started.future;
+        await cache.clear();
+        expect(files(cache), isEmpty);
+
+        // A new flight for the same key must not inherit the old account's
+        // data, and the old flight's finally must not erase the new one.
+        final freshDownload = Completer<Uint8List>();
+        final fresh = cache.fetch(key('late'), () => freshDownload.future);
+        download.complete(_bytes(10, 1));
+        await rejected;
+        expect(files(cache), isEmpty);
+        freshDownload.complete(_bytes(10, 2));
+        expect(await fresh, _bytes(10, 2));
+        await cache.clear();
+        expect(files(cache), isEmpty);
+      },
+    );
+
+    test('clear drains pending writes before returning', () async {
+      final cache = await open();
+      final writing = cache.write(key('pending'), _bytes(1000, 1));
+      await cache.clear();
+      expect(await writing, isFalse);
+      expect(files(cache), isEmpty);
+      expect(await cache.read(key('pending')), isNull);
+      expect(await cache.write(key('new'), _bytes(100, 2)), isTrue);
+      expect(await cache.read(key('new')), _bytes(100, 2));
+    });
+
     test('no usable key or folder: the cache is off', () async {
       Future<Directory> base() async => temp;
       expect(
@@ -324,13 +366,56 @@ void main() {
       await StickerPrefetch(client, allowed: () async => false).run(items);
       expect(transport.media, isEmpty);
       transport.gate = Completer();
+      final batchStarted = Completer<void>();
+      transport.onMedia = (count) {
+        if (count == 4) batchStarted.complete();
+      };
       final prefetch = StickerPrefetch(client, allowed: () async => true);
       final run = prefetch.run(items);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await batchStarted.future.timeout(const Duration(seconds: 5));
       prefetch.cancel();
       transport.gate!.complete();
       await run;
       expect(transport.media, hasLength(4));
+    });
+
+    test('cache clear stops the entire old prefetch run', () async {
+      final cache = await open();
+      StickerMediaCache.debugSetShared(cache);
+      transport.gate = Completer<void>();
+      final batchStarted = Completer<void>();
+      transport.onMedia = (count) {
+        if (count == 4) batchStarted.complete();
+      };
+      final prefetch = StickerPrefetch(client, allowed: () async => true);
+      final run = prefetch.run([for (var i = 0; i < 20; i++) _sticker(i)]);
+      await batchStarted.future.timeout(const Duration(seconds: 5));
+      expect(transport.media, hasLength(4));
+      await cache.clear();
+      transport.gate!.complete();
+      await run;
+      expect(transport.media, hasLength(4));
+      expect(files(cache), isEmpty);
+    });
+
+    test('original loader discards data after account change', () async {
+      StickerMediaCache.debugSetShared(await open());
+      transport.gate = Completer<void>();
+      final pending = StickerMediaCache.loadOriginal(
+        client,
+        Uri.parse('mxc://example.invalid/old-account'),
+        isThumbnail: false,
+        animated: false,
+        thumbnailMethod: ThumbnailMethod.scale,
+      );
+      final rejected = expectLater(pending, throwsStateError);
+      for (var i = 0; i < 100 && transport.media.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(transport.media, hasLength(1));
+      client.setUserId('@different:example.invalid');
+      transport.gate!.complete();
+      await rejected;
     });
   });
 

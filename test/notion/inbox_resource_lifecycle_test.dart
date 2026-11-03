@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'dart:async';
-
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat_list/chat_list.dart';
@@ -22,7 +20,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'conversation_test_support.dart';
 
 class _Client extends ConversationClient {
-  _Client([String owner = '@owner:example.invalid']) : super(owner);
+  _Client([super.owner = '@owner:example.invalid']);
   @override
   String get prevBatch => 'fictional cursor';
 }
@@ -40,6 +38,28 @@ class _Inbox extends ChatList {
   const _Inbox({super.key}) : super(activeChat: null);
   @override
   ChatListController createState() => _Controller();
+}
+
+class _PreviewDatabase extends ConversationDatabase {
+  final events = <Event>[];
+  int reads = 0;
+  @override
+  Future<List<Event>> getEventList(
+    Room room, {
+    int start = 0,
+    bool onlySending = false,
+    int? limit,
+  }) async {
+    reads++;
+    return events;
+  }
+}
+
+class _PreviewClient extends _Client {
+  _PreviewClient(this.previewDatabase, String owner) : super(owner);
+  final _PreviewDatabase previewDatabase;
+  @override
+  DatabaseApi get database => previewDatabase;
 }
 
 class _Controller extends ChatListController {
@@ -506,6 +526,137 @@ void main() {
     expect(find.byKey(const ValueKey('notion_inbox_failed')), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
+  });
+
+  testWidgets('typing updates the visible row without republishing the inbox', (
+    tester,
+  ) async {
+    final client = _Client();
+    final room = _Room(client, '!typing:example.invalid')
+      ..message(r'$typing-last', 'Last message', outgoing: true);
+    addTearDown(PersonalClient.of(client).dispose);
+    final controller = await mountInbox(tester, client);
+    final inbox = controller.inbox;
+    final generation = inbox.generation;
+    final updates = inbox.debugIncrementalUpdates;
+    final built = controller.rowMemo.debugBuilt;
+
+    Future<void> typing(List<String> users) async {
+      final event = BasicEvent(type: 'm.typing', content: {'user_ids': users});
+      room.ephemerals['m.typing'] = event;
+      client.onSync.add(
+        SyncUpdate(
+          nextBatch: 'fixture-typing',
+          rooms: RoomsUpdate(
+            join: {
+              room.id: JoinedRoomUpdate(ephemeral: [event]),
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    for (var i = 0; i < 5; i++) {
+      await typing(['@anna:example.invalid']);
+      expect(
+        tester.widget<NotionInboxRow>(find.byType(NotionInboxRow)).typing,
+        isTrue,
+      );
+      await typing([]);
+      expect(
+        tester.widget<NotionInboxRow>(find.byType(NotionInboxRow)).typing,
+        isFalse,
+      );
+    }
+    expect(inbox.generation, generation);
+    expect(inbox.debugIncrementalUpdates, updates);
+    expect(controller.rowMemo.debugBuilt, built);
+
+    // A status-only inbox publication during typing also reuses the row;
+    // its mounted activity builder already owns the live preview.
+    await typing(['@anna:example.invalid']);
+    inbox
+      ..markChanged(touch: true)
+      ..refresh();
+    await tester.pump();
+    expect(controller.rowMemo.debugBuilt, built);
+
+    // A repeated typing packet must still publish real unread changes.
+    room.count = 3;
+    await typing(['@anna:example.invalid']);
+    expect(inbox.generation, generation + 2);
+    expect(
+      tester.widget<NotionInboxRow>(find.byType(NotionInboxRow)).unreadCount,
+      3,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('deleted preview cache never crosses account boundaries', (
+    tester,
+  ) async {
+    final dbA = _PreviewDatabase();
+    final dbB = _PreviewDatabase();
+    final a = _PreviewClient(dbA, '@owner-a:example.invalid');
+    final b = _PreviewClient(dbB, '@owner-b:example.invalid');
+    addTearDown(PersonalClient.of(a).dispose);
+    addTearDown(PersonalClient.of(b).dispose);
+    addTearDown(() => AppSettings.hideRedactedEvents.setItem(false));
+    await AppSettings.hideRedactedEvents.setItem(true);
+
+    _Room deletedRoom(_Client client) {
+      final room = _Room(client, '!shared-preview:example.invalid');
+      room.sourceEvents.add(
+        Event(
+          room: room,
+          eventId: r'$shared-deleted-preview',
+          type: EventTypes.Message,
+          senderId: '@anna:example.invalid',
+          originServerTs: DateTime.utc(2026, 11, 1, 12),
+          content: {},
+          unsigned: {
+            'redacted_because': {
+              'type': EventTypes.Redaction,
+              'event_id': r'$shared-preview-redaction',
+              'sender': '@anna:example.invalid',
+              'origin_server_ts': DateTime.utc(
+                2026,
+                11,
+                1,
+                12,
+              ).millisecondsSinceEpoch,
+              'content': {},
+            },
+          },
+        ),
+      );
+      return room;
+    }
+
+    final roomA = deletedRoom(a);
+    final roomB = deletedRoom(b);
+    dbA.events.add(
+      Event(
+        room: roomA,
+        eventId: r'$only-account-a-can-read',
+        type: EventTypes.Message,
+        senderId: '@anna:example.invalid',
+        originServerTs: DateTime.utc(2026, 11, 1, 11),
+        content: {'msgtype': MessageTypes.Text, 'body': 'Only in account A'},
+      ),
+    );
+    await mountInbox(tester, a);
+    expect(find.textContaining('Only in account A'), findsOneWidget);
+    expect(dbA.reads, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await mountInbox(tester, b);
+    expect(find.textContaining('Only in account A'), findsNothing);
+    expect(dbB.reads, 1, reason: 'account B reads its own local history');
+    expect(roomA.id, roomB.id);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('a receipt on the last own message turns its ticks to read', (

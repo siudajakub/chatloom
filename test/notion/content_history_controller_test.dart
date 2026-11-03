@@ -12,7 +12,9 @@ class Source implements ContentSource {
   final rows = <Event>[];
   bool fails = false;
   int remoteCalls = 0;
+  int localCalls = 0;
   Completer<List<Event>>? gate;
+  Completer<ContentBatch>? remoteGate;
   ContentBatch batch = const ContentBatch([]);
   Source(this.room);
   @override
@@ -25,6 +27,7 @@ class Source implements ContentSource {
   String? get initialCursor => 'initial';
   @override
   Future<ContentBatch> local(int limit) async {
+    localCalls++;
     if (fails) throw StateError('offline');
     if (gate != null) return ContentBatch(await gate!.future);
     return ContentBatch([
@@ -37,6 +40,7 @@ class Source implements ContentSource {
   Future<ContentBatch> older(String? cursor) async {
     remoteCalls++;
     if (fails) throw StateError('offline');
+    if (remoteGate != null) return remoteGate!.future;
     return batch;
   }
 }
@@ -47,7 +51,7 @@ class SparseDatabase implements DatabaseApi {
   bool failUser = false;
   @override
   Future<User?> getUser(String id, Room room) async {
-    if (failUser) throw StateError("synthetic database failure");
+    if (failUser) throw StateError('synthetic database failure');
     return null;
   }
 
@@ -86,6 +90,139 @@ class SparseDatabase implements DatabaseApi {
 }
 
 void main() {
+  test(
+    'slow local source does not hold up other sources; at most two load',
+    () async {
+      final client = ConversationClient();
+      final sources = [
+        for (var i = 0; i < 4; i++)
+          Source(ConversationRoom(client, '!source$i:example.invalid'))
+            ..gate = Completer<List<Event>>(),
+      ];
+      final controller = ConversationContentController(
+        sources,
+        unlocked: () => true,
+      );
+      addTearDown(controller.dispose);
+      final pending = controller.load();
+      expect(sources.map((s) => s.localCalls), [1, 1, 0, 0]);
+      expect(controller.busy, isTrue);
+      sources[1].gate!.complete([
+        (sources[1].room as ConversationRoom).message(r'$fast', 'fast source'),
+      ]);
+      await pumpEventQueue();
+      expect(controller.events.single.body, 'fast source');
+      expect(sources.map((s) => s.localCalls), [1, 1, 1, 0]);
+      // A source finishing must not release the global load guard.
+      await controller.load();
+      await controller.retryEncrypted();
+      expect(sources.map((s) => s.localCalls), [1, 1, 1, 0]);
+      sources[2].gate!.complete([]);
+      await pumpEventQueue();
+      expect(sources.map((s) => s.localCalls), [1, 1, 1, 1]);
+      sources[3].gate!.complete([]);
+      sources[0].gate!.complete([]);
+      await pending;
+      expect(controller.busy, isFalse);
+      expect(controller.sources.any((s) => s.busy), isFalse);
+    },
+  );
+
+  test(
+    'remote sources load independently and record each event once',
+    () async {
+      final client = ConversationClient();
+      final slow = Source(ConversationRoom(client, '!slow:example.invalid'))
+        ..remoteGate = Completer<ContentBatch>();
+      final fast = Source(ConversationRoom(client, '!fast:example.invalid'));
+      fast.batch = ContentBatch([
+        (fast.room as ConversationRoom).message(r'$remote', 'available'),
+      ]);
+      final controller = ConversationContentController([
+        slow,
+        fast,
+      ], unlocked: () => true);
+      addTearDown(controller.dispose);
+      final pending = controller.load(remote: true);
+      await pumpEventQueue();
+      expect(controller.events.single.body, 'available');
+      expect(controller.revision, 1);
+      expect(controller.busy, isTrue);
+      slow.remoteGate!.completeError(StateError('offline fixture'));
+      await pending;
+      expect(controller.sources.first.error, isNotNull);
+      expect(controller.events.single.body, 'available');
+      expect(controller.busy, isFalse);
+    },
+  );
+
+  test(
+    'privacy change prevents queued source reads after in-flight loads',
+    () async {
+      final client = ConversationClient();
+      final sources = [
+        for (var i = 0; i < 3; i++)
+          Source(ConversationRoom(client, '!private$i:example.invalid'))
+            ..gate = Completer<List<Event>>(),
+      ];
+      var epoch = 0;
+      final controller = ConversationContentController(
+        sources,
+        unlocked: () => true,
+        privacyGeneration: () => epoch,
+      );
+      addTearDown(controller.dispose);
+      final pending = controller.load();
+      epoch++;
+      sources[0].gate!.complete([]);
+      sources[1].gate!.complete([]);
+      await pending;
+      expect(sources.map((s) => s.localCalls), [1, 1, 0]);
+      expect(controller.events, isEmpty);
+      expect(controller.busy, isFalse);
+      await controller.load();
+      expect(sources.map((s) => s.localCalls), [1, 1, 0]);
+    },
+  );
+
+  test(
+    'renew retains accepted pages but never adopts old pending work',
+    () async {
+      final client = ConversationClient();
+      final room = ConversationRoom(client, '!renew:example.invalid');
+      final source = Source(room)
+        ..rows.add(room.message(r'$accepted', 'accepted'));
+      var epoch = 0;
+      final previous = ConversationContentController(
+        [source],
+        unlocked: () => true,
+        privacyGeneration: () => epoch,
+      );
+      await previous.load();
+      source.remoteGate = Completer<ContentBatch>();
+      final pending = previous.load(remote: true);
+      expect(previous.busy, isTrue);
+      epoch++;
+      final renewed = previous.renew();
+      addTearDown(renewed.dispose);
+      previous.dispose();
+      expect(renewed.events.single.body, 'accepted');
+      expect(renewed.sources.single.localLimit, 80);
+      expect(renewed.busy, isFalse);
+      source.remoteGate!.complete(
+        ContentBatch([
+          room.message(r'$stale', 'stale old request'),
+        ], next: 'stale-cursor'),
+      );
+      await pending;
+      expect(renewed.events.map((e) => e.body), ['accepted']);
+      expect(renewed.sources.single.cursor, isNull);
+      source.rows.add(room.message(r'$new', 'new local data'));
+      await renewed.load(refresh: true);
+      expect(renewed.events.map((e) => e.body), contains('new local data'));
+    },
+  );
+
   test(
     'SDK history failure releases loading and retries the same database boundary',
     () async {
