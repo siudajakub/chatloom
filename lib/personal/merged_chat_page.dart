@@ -889,13 +889,14 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
     sendController.text = draft!['text'] as String;
     _inputEmpty = sendController.text.isEmpty;
+    _savedDraftText = sendController.text;
+    if (sendController.text.isEmpty) return;
     final target = draft['target'];
     if (target is Map) {
       try {
         final restored = SendTarget.fromJson(Map<String, dynamic>.from(target));
         if (group.members.contains(restored.conversation)) {
           _draftTarget = restored;
-          selectedNetwork = restored.conversation;
         } else {
           _needsNetworkChoice = true;
           problem =
@@ -911,7 +912,6 @@ class _MergedChatPageState extends State<_MergedChatView>
       problem =
           'This draft has no saved source. Choose a network before sending.';
     }
-    _savedDraftText = sendController.text;
   }
 
   /// A notification's source becomes the send source unless a draft, reply
@@ -1245,6 +1245,16 @@ class _MergedChatPageState extends State<_MergedChatView>
     );
   }
 
+  void _releaseEmptyDraftSource() {
+    if (sendController.text.isNotEmpty ||
+        replyEvent != null ||
+        editEvent != null) {
+      return;
+    }
+    _draftTarget = null;
+    selectedNetwork = null;
+  }
+
   void _notify(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(
@@ -1258,7 +1268,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   Future<void> _draft() async {
     if (_needsNetworkChoice || editEvent != null) return;
     final text = sendController.text;
-    final frozen = _draftTarget ??= target;
+    final frozen = text.isEmpty ? target : (_draftTarget ??= target);
     try {
       await personal.savePersonalDraft(
         'draft:person:${group.id}',
@@ -1616,6 +1626,7 @@ class _MergedChatPageState extends State<_MergedChatView>
       }
       replyEvent = null;
       editEvent = null;
+      if (sendController.text.isEmpty) _draftTarget = null;
     });
     unawaited(_draft());
   }
@@ -2041,11 +2052,18 @@ class _MergedChatPageState extends State<_MergedChatView>
   /// between empty and non-empty (send vs. record button).
   @override
   void onInputBarChanged(String text) {
+    if (text.isEmpty && editEvent == null && replyEvent == null) {
+      _releaseEmptyDraftSource();
+      if (_needsNetworkChoice) {
+        _needsNetworkChoice = false;
+        problem = null;
+      }
+    }
     if (_inputEmpty != text.isEmpty) {
       setState(() => _inputEmpty = text.isEmpty);
     }
     if (editEvent == null) {
-      _draftTarget ??= target;
+      if (text.isNotEmpty) _draftTarget ??= target;
       _draftTimer?.cancel();
       _draftTimer = Timer(const Duration(milliseconds: 500), _draft);
     }
@@ -2252,7 +2270,7 @@ class _MergedChatPageState extends State<_MergedChatView>
           _pendingText = '';
         }
         _inputEmpty = sendController.text.isEmpty;
-        if (sendController.text.isEmpty) _draftTarget = null;
+        _releaseEmptyDraftSource();
         sending = false;
       });
       // Telegram: sending brings you to your message.
@@ -2551,12 +2569,12 @@ class _MergedChatPageState extends State<_MergedChatView>
           sendController.clear();
           _inputEmpty = true;
           _savedDraftText = '';
-          _draftTarget = null;
         } else {
           await personal.savePersonalDraft(key, frozen, sendController.text);
         }
       }
       if (replyEvent == sourceReply) replyEvent = null;
+      _releaseEmptyDraftSource();
     } on PersonalCapabilityUnavailable catch (error) {
       _notify(error.reason);
     } catch (error) {
@@ -2697,6 +2715,7 @@ class _MergedChatPageState extends State<_MergedChatView>
       readRecording: readRecording,
       onAccepted: () => setState(() {
         if (identical(replyEvent, reply)) replyEvent = null;
+        _releaseEmptyDraftSource();
       }),
     );
   }
@@ -2760,7 +2779,12 @@ class _MergedChatPageState extends State<_MergedChatView>
       // The round's bubble is in the chat and shows its own delivery
       // (sending, sent, or "Not sent · Tap to retry"); no notice.
       if (identical(replyEvent, sourceReply)) {
-        setState(() => replyEvent = null);
+        setState(() {
+          replyEvent = null;
+          if (target.conversation == frozen.conversation) {
+            _releaseEmptyDraftSource();
+          }
+        });
       }
     } catch (error) {
       _notify(roundFailureMessage(error));
@@ -2912,7 +2936,7 @@ class _MergedChatPageState extends State<_MergedChatView>
             sendController.clear();
             _inputEmpty = true;
             replyEvent = null;
-            _draftTarget = null;
+            _releaseEmptyDraftSource();
           } else if (mounted) {
             await _draft();
           }

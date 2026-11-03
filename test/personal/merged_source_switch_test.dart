@@ -7,6 +7,7 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat_event_list.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/person_group_identity.dart';
@@ -41,7 +42,43 @@ class _Personal extends ConversationPersonal {
 /// Records typing notifications instead of sending them.
 class _Room extends ConversationRoom {
   final typing = <bool>[];
+  Timeline? timeline;
   _Room(super.client, super.id, {super.network});
+  @override
+  Future<Timeline> getTimeline({
+    void Function(int)? onChange,
+    void Function(int)? onRemove,
+    void Function(int)? onInsert,
+    void Function()? onNewEvent,
+    void Function()? onUpdate,
+    String? eventContextId,
+    int? limit = Room.defaultHistoryCount,
+  }) async => timeline = await super.getTimeline(
+    onChange: onChange,
+    onRemove: onRemove,
+    onInsert: onInsert,
+    onNewEvent: onNewEvent,
+    onUpdate: onUpdate,
+    eventContextId: eventContextId,
+    limit: limit,
+  );
+
+  void receive(String eventId) {
+    timeline!.events.insert(
+      0,
+      Event(
+        room: this,
+        eventId: eventId,
+        type: EventTypes.Message,
+        senderId: '@anna:example.invalid',
+        originServerTs: DateTime.now().add(const Duration(seconds: 1)),
+        status: EventStatus.synced,
+        content: {'msgtype': MessageTypes.Text, 'body': 'Fictional arrival'},
+      ),
+    );
+    timeline!.onUpdate!();
+  }
+
   @override
   Future<void> setTyping(bool isTyping, {int? timeout}) async =>
       typing.add(isTyping);
@@ -191,6 +228,166 @@ void main() {
         ),
       )
       .position;
+
+  _Room useInstagramSource() {
+    final instagram = _Room(
+      client,
+      '!switch-ig:example.invalid',
+      network: 'instagram',
+    );
+    instagram.message(r'$instagram-earlier', 'Fictional earlier', minute: 10);
+    messenger.message(r'$messenger-latest', 'Fictional latest', minute: 30);
+    group.value = PersonGroup(
+      id: 'switch-person',
+      name: 'Anna',
+      members: [personal.ref(instagram), personal.ref(messenger)],
+      defaultRoomId: instagram.id,
+    );
+    return instagram;
+  }
+
+  testWidgets('an empty saved draft follows the latest incoming source', (
+    tester,
+  ) async {
+    final instagram = useInstagramSource();
+    await personal.savePersonalDraft(
+      'draft:person:switch-person',
+      SendTarget(conversation: personal.ref(instagram)),
+      '',
+    );
+    await mountRoute(tester);
+    expect(chip(tester).network, 'messenger');
+    expect(editor(tester).decoration!.hintText, 'Message via Messenger');
+    await tester.enterText(find.byType(TextField), 'Fictional response');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send_button')));
+    await tester.pumpAndSettle();
+    expect(personal.sends.single.room, messenger);
+  });
+
+  testWidgets('a restored draft keeps its source until its text is cleared', (
+    tester,
+  ) async {
+    final instagram = useInstagramSource();
+    await personal.savePersonalDraft(
+      'draft:person:switch-person',
+      SendTarget(conversation: personal.ref(instagram)),
+      'Fictional saved draft',
+    );
+    await mountRoute(tester);
+    expect(chip(tester).network, 'instagram');
+    expect(editor(tester).controller!.text, 'Fictional saved draft');
+    messenger.receive(r'$messenger-after-draft');
+    await tester.pumpAndSettle();
+    expect(chip(tester).network, 'instagram');
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(chip(tester).network, 'messenger');
+    await tester.enterText(find.byType(TextField), 'Fictional replacement');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send_button')));
+    await tester.pumpAndSettle();
+    expect(personal.sends.single.room, messenger);
+  });
+
+  testWidgets('a manual source choice ends after sending its message', (
+    tester,
+  ) async {
+    final instagram = useInstagramSource();
+    await mountRoute(tester);
+    await choose(tester, 'Instagram');
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byType(TextField),
+      'Fictional selected message',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send_button')));
+    await tester.pumpAndSettle();
+    expect(personal.sends.single.room, instagram);
+    expect(editor(tester).controller!.text, isEmpty);
+    messenger.receive(r'$messenger-after-send');
+    await tester.pumpAndSettle();
+    expect(chip(tester).network, 'messenger');
+    await tester.enterText(find.byType(TextField), 'Fictional next response');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send_button')));
+    await tester.pumpAndSettle();
+    expect(personal.sends.last.room, messenger);
+  });
+
+  testWidgets('an empty saved draft ignores a removed source', (tester) async {
+    useInstagramSource();
+    await personal.savePersonalDraft(
+      'draft:person:switch-person',
+      SendTarget(conversation: personal.ref(telegram)),
+      '',
+    );
+    await mountRoute(tester);
+    expect(chip(tester).network, 'messenger');
+    expect(chip(tester).hint, ConversationSourceHint.none);
+    expect(
+      find.text(
+        'This draft belongs to a source outside this person. Choose a network before sending.',
+      ),
+      findsNothing,
+    );
+  });
+
+  testWidgets('erasing a draft from a removed source restores routing', (
+    tester,
+  ) async {
+    useInstagramSource();
+    await personal.savePersonalDraft(
+      'draft:person:switch-person',
+      SendTarget(conversation: personal.ref(telegram)),
+      'Fictional removed-source draft',
+    );
+    await mountRoute(tester);
+    expect(chip(tester).hint, ConversationSourceHint.choose);
+    expect(editor(tester).controller!.text, 'Fictional removed-source draft');
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(chip(tester).network, 'messenger');
+    expect(chip(tester).hint, ConversationSourceHint.none);
+    expect(
+      find.text(
+        'This draft belongs to a source outside this person. Choose a network before sending.',
+      ),
+      findsNothing,
+    );
+    await tester.enterText(find.byType(TextField), 'Fictional fresh response');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send_button')));
+    await tester.pumpAndSettle();
+    expect(personal.sends.single.room, messenger);
+  });
+
+  testWidgets('canceling an empty reply restores the latest source', (
+    tester,
+  ) async {
+    final instagram = useInstagramSource();
+    await mountRoute(tester);
+    final timeline = tester.widget<ChatEventList>(find.byType(ChatEventList));
+    final composer = timeline.controller as ConversationComposerHost;
+    composer.replyAction(replyTo: instagram.sourceEvents.first);
+    await tester.pumpAndSettle();
+    expect(chip(tester).network, 'instagram');
+    composer.cancelReplyEventAction();
+    await tester.pumpAndSettle();
+    expect(chip(tester).network, 'messenger');
+    await tester.enterText(
+      find.byType(TextField),
+      'Fictional unquoted response',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send_button')));
+    await tester.pumpAndSettle();
+    expect(personal.sends.single.room, messenger);
+    expect(personal.sends.single.reply, isNull);
+  });
 
   testWidgets(
     'a switch applies at once and keeps text, focus and scroll position',
