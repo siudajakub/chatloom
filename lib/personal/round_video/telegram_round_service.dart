@@ -44,7 +44,7 @@ import 'telegram_room_binding.dart';
 
 /// Round videos of one client: the shared capture, staging, encrypted
 /// outbox, upload and bubbles for every round network ([RoundSendRoute]:
-/// Telegram, Messenger), plus the Telegram-only parts (bridge trust prompt,
+/// Telegram, Messenger, Instagram), plus the Telegram-only parts (bridge trust prompt,
 /// silent sends, playback receipts, reverse media state, native forwards).
 class TelegramRoundService extends ChangeNotifier
     implements RoundPlaybackReceipts {
@@ -554,7 +554,7 @@ class TelegramRoundService extends ChangeNotifier
     try {
       await initialize();
       if (!context.mounted || !stillCurrent()) return null;
-      // Telegram only: Messenger has no fork identity to confirm.
+      // Telegram only: Meta routes have no fork identity to confirm.
       if (route.needsTrust && !await _ensureTrustedBridge(context, room)) {
         return null;
       }

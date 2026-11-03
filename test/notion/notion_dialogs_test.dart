@@ -405,6 +405,12 @@ void main() {
       bridgeFeatureLabel(BridgeFeature.roundVideo, network: 'telegram'),
       'Round videos',
     );
+    for (final network in ['instagram', 'instagramgo']) {
+      expect(
+        bridgeFeatureLabel(BridgeFeature.roundVideo, network: network),
+        'Round videos (sent as a square video on Instagram)',
+      );
+    }
   });
 
   test('every bridge feature has a readable name', () {

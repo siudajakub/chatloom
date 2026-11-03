@@ -179,18 +179,11 @@ void main() {
     expect(RoundSendRoute.forRoom(room), RoundSendRoute.messenger);
     expect(RoundAvailability.of(room).canRecord, isTrue);
     expect(roundChatNetworks, contains('facebookgo'));
-    expect(
-      code(_room(protocol: 'instagramgo')),
-      RoundGateCode.unsupportedNetwork,
-    );
+    expect(code(_room(protocol: 'instagramgo')), RoundGateCode.available);
   });
 
   test('gate matrix: network, bridges, ownership and encryption', () {
-    expect(
-      code(_room(protocol: 'instagram')),
-      RoundGateCode.unsupportedNetwork,
-      reason: 'Instagram shares the codebase but is excluded',
-    );
+    expect(code(_room(protocol: 'instagram')), RoundGateCode.available);
     expect(code(_room(protocol: 'whatsapp')), RoundGateCode.unsupportedNetwork);
     expect(
       code(_room(extraBridges: const {'second': 'whatsapp'})),
@@ -226,7 +219,6 @@ void main() {
     );
     expect(code(_room(receiver: null)), RoundGateCode.available);
     for (final room in [
-      _room(protocol: 'instagram'),
       _room(protocol: 'whatsapp'),
       _room(extraBridges: const {'second': 'facebook'}),
       _room(joinedMembers: const ['@someone-else:example.invalid']),
@@ -268,7 +260,7 @@ void main() {
     );
     expect(
       roundGateMessage(RoundGateCode.videoNotAllowed),
-      "This Messenger chat doesn't accept video messages.",
+      "This chat doesn't accept video messages.",
     );
   });
 
@@ -336,7 +328,7 @@ void main() {
       BridgeFeature.roundVideo,
       _room(protocol: 'instagram'),
     );
-    expect(instagram.result.allowed, isFalse);
+    expect(instagram.result.allowed, isTrue);
   });
 
   test('outgoing content picks the route by its marker', () {
@@ -359,19 +351,201 @@ void main() {
       RoundSendRoute.messenger,
     );
     expect(RoundSendRoute.forNetwork('facebook'), RoundSendRoute.messenger);
-    expect(RoundSendRoute.forNetwork('instagram'), isNull);
+    expect(RoundSendRoute.forNetwork('instagram'), RoundSendRoute.instagram);
+    expect(
+      RoundSendRoute.forContent(content('instagram')),
+      RoundSendRoute.instagram,
+    );
+    expect(
+      RoundSendRoute.forContent({
+        'msgtype': 'm.video',
+        'info': {roundVideoDisplayMarker: true},
+      }),
+      RoundSendRoute.messenger,
+      reason: 'Legacy Messenger rounds have no network marker',
+    );
   });
 
-  test('copy names both supported networks', () {
+  test('copy names all supported networks', () {
     expect(
       roundGateMessage(RoundGateCode.unsupportedNetwork),
-      'Round videos are only available in Telegram and Messenger chats.',
+      'Round videos are only available in Telegram, Messenger and Instagram chats.',
     );
     expect(
       roundGateMessage(RoundGateCode.notTelegram),
-      'Round videos are only available in Telegram and Messenger chats.',
+      'Round videos are only available in Telegram, Messenger and Instagram chats.',
     );
   });
+
+  for (final protocol in instagramProtocolIds) {
+    group(protocol, () {
+      test(
+        'offers the shared recorder through a distinct Instagram route',
+        () async {
+          final room = _room(protocol: protocol);
+          final route = RoundSendRoute.forRoom(room)!;
+          expect(route, RoundSendRoute.instagram);
+          expect(route.network, 'instagram');
+          expect(route.label, 'Instagram');
+          expect(route.needsTrust, isFalse);
+          expect(roundChatNetworks, contains(protocol));
+          expect(RoundAvailability.of(room).canRecord, isTrue);
+          expect(
+            RoundSendRoute.diagnoseRoom(room).code,
+            RoundGateCode.available,
+          );
+          expect(MessengerRoundGate.isMessengerRoom(room), isFalse);
+          expect(MessengerRoundGate.of(room)!.network, 'instagram');
+          expect(RoundSendRoute.messenger.bound(room), isNull);
+          final caps = (await route.preflight(room))!;
+          expect(caps.allowed, isTrue);
+          expect(caps.profile!.maxSizeBytes, 4000000);
+          expect(caps.profile!.maxSide, 640);
+          expect(caps.profile!.maxDurationMs, 60000);
+          expect(caps.silentAllowed, isFalse);
+          expect(
+            route.diagnose(room, silent: true).code,
+            RoundGateCode.silentUnsupported,
+          );
+        },
+      );
+
+      test('keeps identity, ownership, encryption and MP4 checks', () {
+        final denied = <(Room, RoundGateCode)>[
+          (
+            _room(protocol: protocol, encrypted: false),
+            RoundGateCode.notEncrypted,
+          ),
+          (
+            _room(protocol: protocol, joinedBot: false),
+            RoundGateCode.botNotJoined,
+          ),
+          (
+            _room(protocol: protocol, sender: '@forged:example.invalid'),
+            RoundGateCode.senderMismatch,
+          ),
+          (
+            _room(protocol: protocol, missingType: 'uk.half-shot.bridge'),
+            RoundGateCode.missingLegacyBridgeInfo,
+          ),
+          (
+            _room(protocol: protocol, missingType: bridgeFeaturesEventType),
+            RoundGateCode.missingRoomFeatures,
+          ),
+          (
+            _room(protocol: protocol, features: _features(video: null)),
+            RoundGateCode.videoNotAllowed,
+          ),
+          (
+            _room(
+              protocol: protocol,
+              joinedMembers: const ['@another:example.invalid'],
+            ),
+            RoundGateCode.foreignOwner,
+          ),
+          (
+            _room(
+              protocol: protocol,
+              extraBridges: const {'second': 'facebook'},
+            ),
+            RoundGateCode.ambiguousBridges,
+          ),
+        ];
+        for (final (room, expected) in denied) {
+          expect(code(room), expected);
+          expect(RoundAvailability.of(room).canRecord, isFalse);
+          final evidence = RoomCapabilities.evidenceForFeature(
+            BridgeFeature.roundVideo,
+            room,
+          );
+          expect(evidence.result.allowed, isFalse);
+          expect(evidence.reasonCode, 'round:${expected.name}');
+        }
+      });
+
+      test(
+        'MP4 limits remain current and an unreachable limit fails closed',
+        () async {
+          final room = _room(
+            protocol: protocol,
+            features: _features(
+              video: const {
+                'mime_types': {'video/mp4': 2},
+                'max_size': 3000000,
+                'max_width': 480,
+                'max_height': 320,
+                'max_duration': 15,
+              },
+            ),
+          );
+          final route = RoundSendRoute.instagram;
+          final profile = (await route.preflight(room))!.profile!;
+          expect(profile.maxSizeBytes, 3000000);
+          expect(profile.maxSide, 320);
+          expect(profile.recommendedSide, 320);
+          expect(profile.maxDurationMs, 15000);
+          expect(
+            RoomCapabilities.forFeature(
+              BridgeFeature.roundVideo,
+              room,
+              media: const BridgeMediaRequest(
+                mimeType: 'video/mp4',
+                sizeBytes: 4000000,
+                width: 320,
+                height: 320,
+                durationSeconds: 10,
+              ),
+            ).allowed,
+            isFalse,
+          );
+          (room.client as _Client).failConfig = true;
+          expect((await route.preflight(room))!.allowed, isFalse);
+          expect(route.uploadLimitUnreachable(room.client), isTrue);
+          expect(
+            route.diagnose(room, requireUploadLimit: true).code,
+            RoundGateCode.uploadLimitUnknown,
+          );
+        },
+      );
+
+      test(
+        'a frozen Instagram route cannot follow a protocol replacement',
+        () async {
+          final room = _room(protocol: protocol);
+          final route = RoundSendRoute.forRoom(room)!;
+          await route.preflight(room);
+          final identity = route.bound(room)!;
+          for (final type in ['m.bridge', 'uk.half-shot.bridge']) {
+            final previous = room.getState(type, 'fixture-state')!;
+            room.setState(
+              Event(
+                room: room,
+                type: type,
+                stateKey: previous.stateKey,
+                content: {
+                  ...previous.content,
+                  'protocol': {'id': 'facebook'},
+                },
+                senderId: _bot,
+                eventId: r'$changed',
+                originServerTs: DateTime.utc(2026),
+              ),
+            );
+          }
+          expect(route.bound(room), isNull);
+          expect(route.capabilities(room), isNull);
+          expect(await route.preflight(room), isNull);
+          expect(RoundSendRoute.forRoom(room), RoundSendRoute.messenger);
+          expect(
+            RoundSendRoute.messenger.bound(room)!.stateKey,
+            identity.stateKey,
+            reason:
+                'Network binding matters even with the same bot, key and login',
+          );
+        },
+      );
+    });
+  }
 
   test('report never carries identifiers or state contents', () {
     for (final room in [

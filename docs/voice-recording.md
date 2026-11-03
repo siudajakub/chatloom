@@ -52,6 +52,41 @@ reduction), while a switch the user set keeps its value.
 
 ## Per network
 
+### Round videos
+
+Telegram sends a native video note through the trusted ChatLoom round bridge.
+Messenger and Instagram use the same recorder, but send a square H.264/AAC MP4
+as an ordinary `m.video`. ChatLoom displays it as a circle; the recipient's
+native app receives a video. Conversation capabilities states this fallback
+for both `instagram`/`instagramgo` and `facebook`/`facebookgo` portals.
+
+The Meta routes require one matching bridge identity, a joined bridge bot,
+the user's own portal, a current `m.video` MP4 declaration, an encrypted room
+and file encryption. Capture first measures the server upload limit and
+combines it with the bridge's size, dimension and duration limits. Neither
+Meta route offers silent sends or Telegram's played-state/native-forward
+controls. The Telegram trust flow and native round marker remain unchanged.
+
+Both routes stage the recording in the encrypted durable outbox before any
+upload. The queue freezes the Matrix account/device, room, bridge login,
+bridge sender/state key, network and reply/thread. Retry rechecks that binding
+and the current limits; replacing an Instagram bridge with Messenger cannot
+redirect an unsent round. A retry after an uncertain response reuses the same
+transaction, encrypted files and content. The `pl.personal.chat.round_video`
+display marker and `pl.personal.chat.round_video.network` identify these
+videos locally; they request no native Instagram round or raven behavior.
+
+Contract evidence: the archived Instagram fork built on 31 October 2026
+(base `1e01f4d1`, source tree `52e38675`) declares MP4 video support up to
+25,000,000 bytes in `pkg/igconnector/capabilities.go`. Its
+`pkg/msgconv/igconv/from-matrix.go` converts `m.video` to `SendMediaRequest`.
+It publishes no native round extension. This source review does not verify
+the bridge currently running on a server; the client uses each room's actual
+feature state. Physical capture, native-app appearance and delivery on a real
+Instagram account remain separate acceptance checks.
+
+### Voice notes
+
 The recorder picks the codec from the room's bridge capabilities
 (`com.beeper.room_features`, the `org.matrix.msc3245.voice` MIME list):
 the format the network takes natively, Opus when nothing is declared.

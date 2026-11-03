@@ -70,7 +70,7 @@ void main() {
     expect(
       jsonEncode(descriptor.matrixInfoFor('facebook')),
       '{"mimetype":"video/mp4","size":1024,"w":384,"h":384,"duration":5000,'
-      '"pl.personal.chat.round_video":true}',
+      '"pl.personal.chat.round_video":true,"pl.personal.chat.round_video.network":"facebook"}',
     );
     expect(
       RoundVideoDescriptor.isTelegramRound(
@@ -86,7 +86,7 @@ void main() {
     );
   });
 
-  test('send targets: Telegram and Messenger, never a silent Messenger', () {
+  test('send targets: Telegram and Meta, silent only on Telegram', () {
     RoundSendTarget target(String network, {bool silent = false}) =>
         RoundSendTarget(
           accountId: 'a',
@@ -99,9 +99,32 @@ void main() {
     expect(target('telegram', silent: true).valid, isTrue);
     expect(target('facebook').valid, isTrue);
     expect(target('facebook', silent: true).valid, isFalse);
-    for (final other in ['instagram', 'whatsapp', 'signal', '']) {
+    expect(target('instagram').valid, isTrue);
+    expect(target('instagram', silent: true).valid, isFalse);
+    final restored = RoundSendTarget.fromJson(target('instagram').toJson());
+    expect(restored.network, 'instagram');
+    expect(restored.valid, isTrue);
+    for (final other in [
+      'instagramgo',
+      'facebookgo',
+      'whatsapp',
+      'signal',
+      '',
+    ]) {
       expect(target(other).valid, isFalse, reason: other);
     }
-    expect(roundSendNetworks, {'telegram', 'facebook'});
+    expect(roundSendNetworks, {'telegram', 'facebook', 'instagram'});
+  });
+
+  test('Instagram is a display round with no Telegram or raven contract', () {
+    final info = descriptor.matrixInfoFor('instagram');
+    final content = video(info);
+    expect(info[roundVideoDisplayMarker], isTrue);
+    expect(info[roundVideoNetworkMarker], 'instagram');
+    expect(info.containsKey(roundMessageMarker), isFalse);
+    expect(RoundVideoDescriptor.fromContent(content), isNotNull);
+    expect(RoundVideoDescriptor.isTelegramRound(content), isFalse);
+    expect(instagramRavenOf(content).present, isFalse);
+    expect(content.containsKey(telegramSendOptionsKey), isFalse);
   });
 }

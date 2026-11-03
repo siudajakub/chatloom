@@ -6,7 +6,7 @@ import 'package:matrix/matrix.dart';
 
 import 'telegram_round_service.dart';
 
-/// Keeps the bubbles of a Telegram chat's own round videos in line with the
+/// Keeps a chat's own Telegram, Messenger or Instagram round videos in line with the
 /// durable round queue when the chat opens ([TelegramRoundService
 /// .reconcileRoom]): accepted rounds drop their local copy, unsent ones say
 /// "Not sent · Tap to retry". Renders nothing: every round shows its

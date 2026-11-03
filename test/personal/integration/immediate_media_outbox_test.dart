@@ -816,7 +816,8 @@ Future<void> main() async {
     check(
       jsonEncode(messengerInfo) ==
               '{"mimetype":"video/mp4","size":512,"w":384,"h":384,'
-                  '"duration":4000,"pl.personal.chat.round_video":true}' &&
+                  '"duration":4000,"pl.personal.chat.round_video":true,'
+                  '"pl.personal.chat.round_video.network":"facebook"}' &&
           messengerContent['msgtype'] == 'm.video' &&
           !messengerContent.containsKey(telegramSendOptionsKey) &&
           !messengerContent.containsKey('m.relates_to') &&
@@ -841,6 +842,95 @@ Future<void> main() async {
     check(
       silentMessenger.state == ImmediateMediaState.failed,
       'A silent Messenger round was staged',
+    );
+    // Instagram shares capture/encrypted uploads/retry with Messenger but
+    // keeps its frozen network, reply and display metadata across restart.
+    const instagramTarget = RoundSendTarget(
+      accountId: 'a',
+      deviceId: 'd',
+      roomId: 'instagram-room',
+      network: 'instagram',
+      replyEventId: r'$instagram-reply',
+      bridgeAccountId: 'instagram-login',
+      bridgeStateKey: 'instagram-bridge',
+      bridgeSenderId: '@instagram:bridge.invalid',
+    );
+    final instagramStaged = await o.stage(
+      target: instagramTarget,
+      descriptor: descriptor,
+      profile: profile,
+      bytes: bytes,
+      thumbnailBytes: thumb,
+    );
+    check(
+      instagramStaged.state == ImmediateMediaState.staged,
+      'Instagram round was not durably staged',
+    );
+    loseAck = true;
+    final instagramUnknown = await o.dispatch(instagramStaged.actionId);
+    check(
+      instagramUnknown.state == ImmediateMediaState.unknown,
+      'Instagram lost ACK did not retain the attempt',
+    );
+    final instagramContent = jsonEncode(sentContents.last);
+    final instagramUploads = uploads;
+    final instagramEncryptions = encryptions;
+    final instagramDeliveries = delivered.length;
+    await database.close();
+    database = await PendingMediaStore.open(
+      path: path,
+      cipher: key,
+      factory: factory,
+    );
+    faults = FaultStore(database);
+    o = outbox();
+    final recoveredInstagram = await database.get(instagramStaged.actionId);
+    check(
+      jsonEncode(recoveredInstagram!.metadata['target']) ==
+          jsonEncode(instagramTarget.toJson()),
+      'Instagram restart changed the frozen account, bridge, network or reply',
+    );
+    final instagramRetried = await o.dispatch(instagramStaged.actionId);
+    final instagramFinal = sentContents.last;
+    final instagramInfo = instagramFinal['info'] as Map;
+    check(
+      instagramRetried.state == ImmediateMediaState.matrixAccepted &&
+          instagramRetried.transactionId == instagramUnknown.transactionId &&
+          jsonEncode(instagramFinal) == instagramContent &&
+          uploads == instagramUploads &&
+          encryptions == instagramEncryptions &&
+          delivered.length == instagramDeliveries,
+      'Instagram restart duplicated delivery or changed content, transaction or upload keys',
+    );
+    check(
+      instagramFinal['msgtype'] == 'm.video' &&
+          instagramInfo[roundVideoDisplayMarker] == true &&
+          instagramInfo[roundVideoNetworkMarker] == 'instagram' &&
+          instagramInfo['thumbnail_file'] is Map &&
+          instagramFinal['file'] is Map &&
+          !instagramFinal.containsKey('url') &&
+          !instagramInfo.containsKey(roundMessageMarker) &&
+          !instagramFinal.containsKey(telegramSendOptionsKey) &&
+          !instagramFinal.containsKey(instagramRavenKey) &&
+          (instagramFinal['m.relates_to']
+                  as Map)['m.in_reply_to']['event_id'] ==
+              instagramTarget.replyEventId &&
+          RoundVideoDescriptor.fromContent(instagramFinal) != null,
+      'Instagram round lost encrypted media/reply or acquired native Telegram/raven semantics',
+    );
+    final silentInstagram = await o.stage(
+      target: RoundSendTarget.fromJson({
+        ...instagramTarget.toJson(),
+        'silent': true,
+      }),
+      descriptor: descriptor,
+      profile: profile,
+      bytes: bytes,
+      thumbnailBytes: thumb,
+    );
+    check(
+      silentInstagram.state == ImmediateMediaState.failed,
+      'An unsupported silent Instagram round was staged',
     );
     stdout.writeln(
       'PASS SQLCipher media outbox offline stage, double tap, canonical encrypted '

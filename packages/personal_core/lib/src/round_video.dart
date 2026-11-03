@@ -4,14 +4,18 @@ import 'contracts.dart';
 const roundMessageMarker = 'fi.mau.telegram.round_message';
 
 /// Network-neutral display marker for a round sent where the network has no
-/// native round type (Messenger): an ordinary `m.video` that ChatLoom shows
+/// native round contract (Messenger/Instagram): an ordinary `m.video` that ChatLoom shows
 /// as a round. Bridges ignore unknown `info` keys; Telegram sends never
 /// carry it (they keep [roundMessageMarker], understood by the fork).
 const roundVideoDisplayMarker = 'pl.personal.chat.round_video';
 
+/// Original send network of a ChatLoom display round. This is display
+/// metadata only; retry authorization uses the durable [RoundSendTarget].
+const roundVideoNetworkMarker = 'pl.personal.chat.round_video.network';
+
 /// Networks a round can be sent to: `telegram` (native video note through
-/// the ChatLoom fork) and `facebook` (Messenger: a square video).
-const roundSendNetworks = {'telegram', 'facebook'};
+/// the ChatLoom fork), `facebook` and `instagram` (square videos).
+const roundSendNetworks = {'telegram', 'facebook', 'instagram'};
 const roundVideoCapabilityKey = 'pl.personal.chat.telegram.round_video';
 const telegramMediaCapabilitiesEventType =
     'pl.personal.chat.telegram.media_capabilities';
@@ -77,7 +81,8 @@ class RoundSendTarget {
       accountId.isNotEmpty &&
       deviceId.isNotEmpty &&
       roomId.isNotEmpty &&
-      (network == 'telegram' || (network == 'facebook' && !silent));
+      roundSendNetworks.contains(network) &&
+      (network == 'telegram' || !silent);
   @override
   String toString() => 'RoundSendTarget(redacted)';
 }
@@ -209,6 +214,7 @@ class RoundVideoDescriptor {
           'h': height,
           'duration': durationMs,
           roundVideoDisplayMarker: true,
+          roundVideoNetworkMarker: network,
         };
 
   /// Whether [content] is marked as a native Telegram round (the fork's

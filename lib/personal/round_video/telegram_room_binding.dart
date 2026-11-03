@@ -395,7 +395,7 @@ class TelegramRoomBinding {
   }
 }
 
-/// Ordered like [TelegramRoomBinding.diagnose]; the Messenger gate
+/// Ordered like [TelegramRoomBinding.diagnose]; the shared Meta gate
 /// (`MessengerRoundGate.diagnose`) reuses the shared codes. Only [available], [needsTrust]
 /// and [uploadLimitUnknown] can still lead to a recording.
 enum RoundGateCode {
@@ -405,7 +405,7 @@ enum RoundGateCode {
   noBridgeInfo,
   notTelegram,
 
-  /// Neither a Telegram nor a Messenger chat (Messenger gate).
+  /// Neither a Telegram, Messenger nor Instagram chat (Meta gate).
   unsupportedNetwork,
   missingLegacyBridgeInfo,
   missingRoomFeatures,
@@ -420,7 +420,7 @@ enum RoundGateCode {
   roundDenied,
   roundNotDeclared,
 
-  /// The Messenger bridge does not accept MP4 videos here (Messenger gate).
+  /// The Meta bridge does not accept MP4 videos here (Meta gate).
   videoNotAllowed,
   uploadLimitUnknown,
   profileIncomplete,

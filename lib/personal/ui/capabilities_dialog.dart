@@ -8,6 +8,8 @@ import 'package:personal_core/bridge_capabilities.dart';
 /// so the recipient sees a square video with the circle in it.
 const messengerRoundVideoLabel =
     'Round videos (sent as a square video on Messenger)';
+const instagramRoundVideoLabel =
+    'Round videos (sent as a square video on Instagram)';
 
 /// A person-readable name of a bridge feature (never the enum identifier).
 /// Features added later fall back to their identifier until named here.
@@ -16,6 +18,8 @@ String bridgeFeatureLabel(BridgeFeature feature, {String? network}) =>
     switch (feature.name) {
       'roundVideo' when messengerProtocolIds.contains(network) =>
         messengerRoundVideoLabel,
+      'roundVideo' when instagramProtocolIds.contains(network) =>
+        instagramRoundVideoLabel,
       'reply' => 'Replies',
       'reaction' => 'Reactions',
       'edit' => 'Editing messages',

@@ -121,25 +121,32 @@ abstract final class RoomCapabilities {
     int? pollOptions,
     int? longestPollOption,
   }) {
-    final messenger = feature == BridgeFeature.roundVideo
+    final meta = feature == BridgeFeature.roundVideo
         ? MessengerRoundGate.of(room, stateKey: stateKey)
         : null;
-    if (messenger != null) {
-      // Messenger has no round type: the round is an ordinary MP4 video,
+    final metaNetwork = feature == BridgeFeature.roundVideo
+        ? MessengerRoundGate.networkOf(room, stateKey: stateKey)
+        : null;
+    if (metaNetwork != null) {
+      // Meta routes send an ordinary MP4 video,
       // checked against the stock bridge's `m.video` declaration below.
-      final gate = MessengerRoundGate.diagnose(room, stateKey: stateKey);
-      if (gate.terminal) {
+      final gate = MessengerRoundGate.diagnose(
+        room,
+        stateKey: stateKey,
+        network: metaNetwork,
+      );
+      if (gate.terminal || meta == null) {
         return BridgeCapabilityEvidence(
           CapabilityResult(
             CapabilityStatus.unavailable,
             roundGateMessage(gate.code),
           ),
-          source: 'messenger.round',
+          source: '$metaNetwork.round',
           reasonCode: 'round:${gate.code.name}',
         );
       }
       feature = BridgeFeature.video;
-      stateKey ??= messenger.identity.stateKey;
+      stateKey ??= meta.identity.stateKey;
     } else if (feature == BridgeFeature.roundVideo) {
       final binding = TelegramRoomBinding.of(room, stateKey: stateKey);
       if (binding == null) {

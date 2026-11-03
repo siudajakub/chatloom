@@ -14,7 +14,7 @@ import 'telegram_room_binding.dart';
 enum RoundAvailabilityKind { available, needsTrust, unavailable }
 
 /// What the composer may offer for round video in one room: Telegram chats
-/// (native round) and Messenger chats (sent as a square video), nowhere
+/// (native round), Messenger and Instagram chats (sent as a square video), nowhere
 /// else. Never authorizes a send: `TelegramRoundService.captureAndSend`
 /// repeats every check.
 class RoundAvailability {
@@ -88,9 +88,9 @@ String roundGateTitle(RoundGateCode code) => switch (code) {
     'Confirm your Telegram bridge before sending the first round video.',
   RoundGateCode.notJoined => 'Join this chat to send round videos.',
   RoundGateCode.noBridgeInfo =>
-    "This chat isn't connected through a Telegram or Messenger bridge.",
+    "This chat isn't connected through a Telegram, Messenger or Instagram bridge.",
   RoundGateCode.notTelegram || RoundGateCode.unsupportedNetwork =>
-    'Round videos are only available in Telegram and Messenger chats.',
+    'Round videos are only available in Telegram, Messenger and Instagram chats.',
   RoundGateCode.missingLegacyBridgeInfo || RoundGateCode.missingRoomFeatures =>
     "The bridge hasn't published its features for this chat yet.",
   RoundGateCode.bridgeLacksRoundSupport =>
@@ -111,8 +111,7 @@ String roundGateTitle(RoundGateCode code) => switch (code) {
   RoundGateCode.roundDenied => "Round videos aren't allowed in this chat.",
   RoundGateCode.roundNotDeclared =>
     "The bridge hasn't enabled round videos for this chat.",
-  RoundGateCode.videoNotAllowed =>
-    "This Messenger chat doesn't accept video messages.",
+  RoundGateCode.videoNotAllowed => "This chat doesn't accept video messages.",
   RoundGateCode.uploadLimitUnknown =>
     "Couldn't confirm the server's upload limit.",
   RoundGateCode.profileIncomplete =>

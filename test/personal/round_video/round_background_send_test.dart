@@ -131,6 +131,27 @@ Room _room() {
   return room;
 }
 
+Room _instagramRoom(String protocol) {
+  final room = _room();
+  for (final type in ['m.bridge', 'uk.half-shot.bridge']) {
+    final info = room.getState(type, _key)!.content;
+    _state(room, type, {
+      ...info,
+      'protocol': {'id': protocol},
+    });
+  }
+  _state(room, bridgeFeaturesEventType, {
+    'id': 'fi.mau.instagram.capabilities.fixture',
+    'file': {
+      'm.video': {
+        'mime_types': {'video/mp4': 2},
+        'max_size': 25000000,
+      },
+    },
+  });
+  return room;
+}
+
 const _target = RoundSendTarget(
   accountId: _owner,
   deviceId: _device,
@@ -203,6 +224,74 @@ void main() {
     PersonalPrivacy.surfaceUnlocked = true;
     PersonalPrivacy.surfaceForeground = true;
   });
+
+  for (final protocol in ['instagram', 'instagramgo']) {
+    test(
+      '$protocol committed send retains privacy and frozen network guards',
+      () async {
+        final room = _instagramRoom(protocol);
+        final client = room.client;
+        final target = RoundSendTarget.fromJson({
+          ..._target.toJson(),
+          'network': 'instagram',
+        });
+        PersonalPrivacy.bind(client);
+        final service = TelegramRoundService.of(client);
+        addTearDown(() => PersonalPrivacy.forget(client));
+        final content = {
+          ..._finalContent(),
+          'info': _descriptor.matrixInfoFor('instagram'),
+        };
+        final authorize = client.authorizeOutgoingEvent!;
+        Future<void> send({required bool committed}) =>
+            PersonalPrivacy.withFrozenRoundReadCutoff(
+              room,
+              null,
+              () async => authorize(room, EventTypes.Message, content),
+              committedRound: committed,
+              stillCurrent: () =>
+                  service.debugTargetStillBound(target, _descriptor),
+            );
+        await service.debugGuard(target, _descriptor);
+        await send(committed: false);
+        PersonalPrivacy.surfaceForeground = false;
+        PersonalPrivacy.surfaceUnlocked = false;
+        await service.debugGuard(target, _descriptor);
+        expect(service.debugTargetStillBound(target, _descriptor), isTrue);
+        await send(committed: true);
+        await expectLater(
+          send(committed: false),
+          throwsA(isA<PersonalCapabilityUnavailable>()),
+        );
+
+        // Same room, bridge state key, bot and login; changing only the
+        // protocol must still refuse a previously committed Instagram round.
+        for (final type in ['m.bridge', 'uk.half-shot.bridge']) {
+          final info = room.getState(type, _key)!.content;
+          _state(room, type, {
+            ...info,
+            'protocol': {'id': 'facebook'},
+          });
+        }
+        expect(service.debugTargetStillBound(target, _descriptor), isFalse);
+        await expectLater(
+          service.debugGuard(target, _descriptor),
+          throwsA(
+            isA<ImmediateMediaRejected>().having(
+              (e) => e.code,
+              'code',
+              'frozenBridgeIdentityChanged',
+            ),
+          ),
+        );
+        await expectLater(
+          send(committed: true),
+          throwsA(isA<PersonalCapabilityUnavailable>()),
+        );
+        expect(PersonalPrivacy.committedRoundSend(room), isFalse);
+      },
+    );
+  }
 
   test('a committed round passes the checks before and after the upload '
       'while the app is in the background and locked', () async {

@@ -12,7 +12,7 @@ export 'messenger_round_gate.dart' show RoundRouteCapabilities;
 /// Where a round goes and what that network needs. The capture, staging,
 /// encrypted outbox and upload are shared; Telegram adds the bridge trust
 /// prompt, silent sends and its media controls (played, state, forward),
-/// which stay in [TelegramRoomBinding] and never apply to Messenger.
+/// which stay in [TelegramRoomBinding] and never apply to Meta routes.
 sealed class RoundSendRoute {
   const RoundSendRoute();
 
@@ -46,28 +46,36 @@ sealed class RoundSendRoute {
   });
 
   static const telegram = TelegramRoundRoute._();
-  static const messenger = MessengerRoundRoute._();
+  static const messenger = MetaRoundRoute._('facebook', 'Messenger');
+  static const instagram = MetaRoundRoute._('instagram', 'Instagram');
 
   static RoundSendRoute? forNetwork(String network) => switch (network) {
     'telegram' => telegram,
     'facebook' => messenger,
+    'instagram' => instagram,
     _ => null,
   };
 
   /// Telegram first (a valid but untrusted bridge still counts), then
-  /// Messenger. Null in every other chat.
+  /// Messenger or Instagram. Null in every other chat.
   static RoundSendRoute? forRoom(Room room) {
     if (TelegramRoomBinding.unverifiedCandidate(room) != null) return telegram;
-    if (MessengerRoundGate.of(room) != null) return messenger;
+    final meta = MessengerRoundGate.of(room);
+    if (meta != null) return forNetwork(meta.network);
     return null;
   }
 
   /// The route an outgoing round [content] was prepared for.
-  static RoundSendRoute forContent(Map<String, dynamic> content) =>
-      RoundVideoDescriptor.isTelegramRound(content) ? telegram : messenger;
+  static RoundSendRoute forContent(Map<String, dynamic> content) {
+    if (RoundVideoDescriptor.isTelegramRound(content)) return telegram;
+    final info = content['info'];
+    return info is Map && info[roundVideoNetworkMarker] == 'instagram'
+        ? instagram
+        : messenger; // Existing Messenger rounds predate the network marker.
+  }
 
   /// Why a round can or cannot be recorded in [room]: the Telegram gate,
-  /// and the Messenger gate when the chat is not a Telegram chat.
+  /// and the Meta gate when the chat is not a Telegram chat.
   static RoundGateReport diagnoseRoom(
     Room room, {
     bool silent = false,
@@ -135,25 +143,25 @@ final class TelegramRoundRoute extends RoundSendRoute {
   );
 }
 
-final class MessengerRoundRoute extends RoundSendRoute {
-  const MessengerRoundRoute._();
+final class MetaRoundRoute extends RoundSendRoute {
+  const MetaRoundRoute._(this.network, this.label);
   @override
-  String get network => 'facebook';
+  final String network;
   @override
-  String get label => 'Messenger';
+  final String label;
   @override
   bool get needsTrust => false;
   @override
   RoundBridgeIdentity? bound(Room room) =>
-      MessengerRoundGate.of(room)?.identity;
+      MessengerRoundGate.of(room, network: network)?.identity;
   @override
   RoundBridgeIdentity? candidate(Room room) => bound(room);
   @override
   RoundRouteCapabilities? capabilities(Room room) =>
-      MessengerRoundGate.of(room)?.capabilities(room);
+      MessengerRoundGate.of(room, network: network)?.capabilities(room);
   @override
   Future<RoundRouteCapabilities?> preflight(Room room) =>
-      MessengerRoundGate.preflight(room);
+      MessengerRoundGate.preflight(room, network: network);
   @override
   bool uploadLimitUnreachable(Client client) =>
       MessengerRoundGate.uploadLimitUnreachable(client);
@@ -164,6 +172,7 @@ final class MessengerRoundRoute extends RoundSendRoute {
     bool requireUploadLimit = false,
   }) => MessengerRoundGate.diagnose(
     room,
+    network: network,
     silent: silent,
     requireUploadLimit: requireUploadLimit,
   );

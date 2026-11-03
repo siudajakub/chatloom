@@ -8,19 +8,31 @@ import 'telegram_room_binding.dart';
 
 /// `m.bridge` protocol ids of the Messenger mode of mautrix-meta: bridgev2
 /// publishes its Beeper bridge type (`facebookgo`) there, older bridges the
-/// network id (`facebook`). Instagram (`instagram`/`instagramgo`, same
-/// codebase) is deliberately not accepted.
+/// network id (`facebook`).
 const messengerProtocolIds = {'facebook', 'facebookgo'};
+const instagramProtocolIds = {'instagram', 'instagramgo'};
+
+/// Canonical send network, independent of the bridgev2 protocol alias.
+String? metaRoundNetwork(String? protocol) =>
+    messengerProtocolIds.contains(protocol)
+    ? 'facebook'
+    : instagramProtocolIds.contains(protocol)
+    ? 'instagram'
+    : null;
 
 /// Networks ([PersonalClient.networkOf]) whose chats may offer round video.
-const roundChatNetworks = {'telegram', ...messengerProtocolIds};
+const roundChatNetworks = {
+  'telegram',
+  ...messengerProtocolIds,
+  ...instagramProtocolIds,
+};
 
-/// Messenger has no native round type: a round is sent as an ordinary
+/// Messenger and Instagram use the same gate: a round is sent as an ordinary
 /// square `m.video` through the stock bridge, marked for ChatLoom only
 /// ([roundVideoDisplayMarker]). There is no fork capability state, so the
 /// gate relies on the bridge's own declarations:
 ///
-/// * exactly one `m.bridge` in the room, `protocol.id == 'facebook'`, with a
+/// * exactly one `m.bridge` in the room, with a supported Meta protocol and a
 ///   matching `uk.half-shot.bridge`, both sent by the declared bot, which is
 ///   joined;
 /// * the portal is the user's own: no other Matrix user (outside the
@@ -29,11 +41,16 @@ const roundChatNetworks = {'telegram', ...messengerProtocolIds};
 /// * `com.beeper.room_features` from the same bot allows `m.video` as
 ///   `video/mp4`, within the measured server upload limit;
 /// * an encrypted room with file encryption on (same as Telegram);
-/// * no silent send (Messenger has no such option).
+/// * no silent send (neither bridge declares such an option).
+///
+/// The historical class name is retained for existing callers. [network]
+/// keeps a frozen route bound to its original network even if room state
+/// later replaces one Meta bridge with the other.
 class MessengerRoundBinding {
+  final String network;
   final RoundBridgeIdentity identity;
   final Map<String, dynamic> features;
-  const MessengerRoundBinding._(this.identity, this.features);
+  const MessengerRoundBinding._(this.network, this.identity, this.features);
 
   /// Current capabilities from room state and the last measured upload
   /// limit. Without a measurement nothing is allowed.
@@ -103,15 +120,35 @@ class MessengerRoundGate {
                 messengerProtocolIds.contains(protocol['id']);
           });
 
+  /// Declared Meta network for labels and diagnostics only; never authorizes.
+  static String? networkOf(Room room, {String? stateKey}) {
+    for (final entry
+        in (room.states['m.bridge'] ?? const <String, StrippedStateEvent>{})
+            .entries) {
+      if (stateKey != null && entry.key != stateKey) continue;
+      final protocol = entry.value.content['protocol'];
+      final id = protocol is Map ? protocol['id'] : null;
+      final network = metaRoundNetwork(id is String ? id : null);
+      if (network != null) return network;
+    }
+    return null;
+  }
+
   /// The bound Messenger bridge of [room], when every identity and
   /// declaration check passes (encryption and upload limit not included).
-  static MessengerRoundBinding? of(Room room, {String? stateKey}) =>
-      _evaluate(room, stateKey: stateKey).$2;
+  static MessengerRoundBinding? of(
+    Room room, {
+    String? stateKey,
+    String? network,
+  }) => _evaluate(room, stateKey: stateKey, network: network).$2;
 
   /// Measures the server's upload limit, then returns the current
   /// capabilities (null when the room is not a bound Messenger chat).
-  static Future<RoundRouteCapabilities?> preflight(Room room) async {
-    if (of(room) == null) return null;
+  static Future<RoundRouteCapabilities?> preflight(
+    Room room, {
+    String? network,
+  }) async {
+    if (of(room, network: network) == null) return null;
     try {
       final limit = (await room.client.getConfig(
         cacheLifetime: Duration.zero,
@@ -123,7 +160,7 @@ class MessengerRoundGate {
       _uploadLimits[room.client] = null;
       _unreachable[room.client] = true;
     }
-    return of(room)?.capabilities(room);
+    return of(room, network: network)?.capabilities(room);
   }
 
   static void forget(Client client) {
@@ -136,10 +173,15 @@ class MessengerRoundGate {
   static RoundGateReport diagnose(
     Room room, {
     String? stateKey,
+    String? network,
     bool silent = false,
     bool requireUploadLimit = false,
   }) {
-    final (report, binding) = _evaluate(room, stateKey: stateKey);
+    final (report, binding) = _evaluate(
+      room,
+      stateKey: stateKey,
+      network: network,
+    );
     if (binding == null) return report;
     final checks = Map<String, bool>.of(report.checks);
     RoundGateReport fail(RoundGateCode code) => RoundGateReport(
@@ -169,6 +211,7 @@ class MessengerRoundGate {
   static (RoundGateReport, MessengerRoundBinding?) _evaluate(
     Room room, {
     String? stateKey,
+    String? network,
   }) {
     final account = room.client.userID;
     if (account == null || room.membership != Membership.join) {
@@ -185,13 +228,17 @@ class MessengerRoundGate {
     final checks = <String, bool>{};
     RoundGateReport fail(RoundGateCode code) =>
         RoundGateReport(code, checks: checks, bridgeSources: keys.length);
-    bool isMessenger(StrippedStateEvent info) {
+    String? networkFor(StrippedStateEvent info) {
       final protocol = info.content['protocol'];
-      return protocol is Map && messengerProtocolIds.contains(protocol['id']);
+      final id = protocol is Map ? protocol['id'] : null;
+      return metaRoundNetwork(id is String ? id : null);
     }
 
-    checks['messenger'] = keys.any((key) => isMessenger(bridges[key]!));
-    if (!checks['messenger']!) {
+    checks['metaNetwork'] = keys.any((key) {
+      final declared = networkFor(bridges[key]!);
+      return declared != null && (network == null || declared == network);
+    });
+    if (!checks['metaNetwork']!) {
       return (fail(RoundGateCode.unsupportedNetwork), null);
     }
     checks['singleBridge'] = keys.length == 1;
@@ -270,6 +317,7 @@ class MessengerRoundGate {
     return (
       fail(RoundGateCode.available),
       MessengerRoundBinding._(
+        networkFor(info)!,
         RoundBridgeIdentity(
           accountId: receiver is String ? receiver : '',
           roomId: room.id,
