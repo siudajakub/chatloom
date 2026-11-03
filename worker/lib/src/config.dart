@@ -161,27 +161,31 @@ String transcriptionApiKey(
     case TranscriptionProvider.openai:
       return credentials['openaiApiKey'] as String? ?? '';
     case TranscriptionProvider.openrouter:
-      final file = path.join(
-        path.dirname(config.credentialsPath),
-        openRouterKeyFile,
-      );
-      final type = FileSystemEntity.typeSync(file, followLinks: false);
-      if (type == FileSystemEntityType.notFound) {
-        return credentials['openrouterApiKey'] as String? ?? '';
-      }
-      if (type != FileSystemEntityType.file) {
-        throw const WorkerFailure('credentials_permissions');
-      }
-      requirePrivateFile(file);
-      final bytes = File(file).readAsBytesSync();
-      final key = String.fromCharCodes(bytes).trim();
-      // A header value: printable ASCII without spaces.
-      if (bytes.length > 4096 ||
-          key.codeUnits.any((u) => u <= 0x20 || u > 0x7e)) {
-        throw const WorkerFailure('invalid_openrouter_key');
-      }
-      return key;
+      return openRouterApiKey(config, credentials);
   }
+}
+
+/// Shared server-only credential; summaries never place this key in the app.
+String openRouterApiKey(WorkerConfig config, Map<String, dynamic> credentials) {
+  final file = path.join(
+    path.dirname(config.credentialsPath),
+    openRouterKeyFile,
+  );
+  final type = FileSystemEntity.typeSync(file, followLinks: false);
+  if (type == FileSystemEntityType.notFound) {
+    return credentials['openrouterApiKey'] as String? ?? '';
+  }
+  if (type != FileSystemEntityType.file) {
+    throw const WorkerFailure('credentials_permissions');
+  }
+  requirePrivateFile(file);
+  final bytes = File(file).readAsBytesSync();
+  final key = String.fromCharCodes(bytes).trim();
+  // A header value: printable ASCII without spaces.
+  if (bytes.length > 4096 || key.codeUnits.any((u) => u <= 0x20 || u > 0x7e)) {
+    throw const WorkerFailure('invalid_openrouter_key');
+  }
+  return key;
 }
 
 /// Never silently opens SQLite when SQLCipher or its key is unavailable.

@@ -6,6 +6,8 @@ import 'package:crypto/crypto.dart';
 import 'package:personal_core/personal_core.dart';
 import 'ports.dart';
 import 'store.dart';
+import 'summary_jobs.dart';
+import 'summary_provider.dart';
 
 String stableId(String namespace, String id) =>
     '$namespace-${sha256.convert(utf8.encode(id))}';
@@ -47,6 +49,8 @@ class WorkerEngine {
   final WorkerStore store;
   final FeatureTransport transport;
   final Transcriber transcriber;
+  late final SummaryJobs _summaries;
+  bool get summariesConfigured => _summaries.configured;
   final DateTime Function() clock;
 
   /// Read-only scan of newly indexed local voice/round/video messages.
@@ -143,7 +147,16 @@ class WorkerEngine {
     this.liveSources,
     this.autoTranscription = false,
     this.maxConcurrentTranscripts = 2,
-  }) : clock = clock ?? DateTime.now;
+    ConversationSummarizer? summarizer,
+  }) : clock = clock ?? DateTime.now {
+    _summaries = SummaryJobs(
+      store,
+      transport.accountId,
+      summarizer,
+      clock: this.clock,
+      onChanged: _signal,
+    );
+  }
 
   /// True when this worker creates automatic jobs itself.
   bool get autoScanActive =>
@@ -167,6 +180,7 @@ class WorkerEngine {
   int get activeTranscripts => _activeTranscripts.length;
 
   void recover() {
+    _summaries.recover();
     store.transaction(() {
       for (final job in [
         for (final kind in ['transcript', 'schedule', 'reminder'])
@@ -204,6 +218,8 @@ class WorkerEngine {
     if (!{
       'transcript.request',
       'transcript.cancel',
+      'summary.request',
+      'summary.cancel',
       'schedule.create',
       'schedule.update',
       'schedule.cancel',
@@ -243,6 +259,10 @@ class WorkerEngine {
       }
       if (op.kind.startsWith('metadata.')) {
         _metadata(op);
+        return;
+      }
+      if (op.kind.startsWith('summary.')) {
+        _summaries.accept(op);
         return;
       }
       final previous = store.job(op.entityId);
@@ -454,8 +474,59 @@ class WorkerEngine {
 
   void _metadata(PersonalOperation op) {
     final old = store.metadata(op.entityId);
+    if (op.entityId.startsWith('summary-source:') &&
+        op.kind == 'metadata.put') {
+      final value = op.payload['value'];
+      if (value is! Map ||
+          value['summaryId'] is! String ||
+          !validSummaryId(value['summaryId'] as String) ||
+          value['index'] is! int ||
+          (value['index'] as int) < 0 ||
+          (value['index'] as int) >= SummaryUpload.maxParts ||
+          op.entityId !=
+              SummaryUpload.summaryPartEntity(
+                value['summaryId'] as String,
+                value['index'] as int,
+              ) ||
+          value['count'] is! int ||
+          (value['count'] as int) < 1 ||
+          (value['count'] as int) > SummaryUpload.maxParts ||
+          (value['index'] as int) >= (value['count'] as int) ||
+          value['sha256'] is! String ||
+          !RegExp(r'^[a-f0-9]{64}$').hasMatch(value['sha256'] as String) ||
+          value['text'] is! String ||
+          utf8.encode(value['text'] as String).length >
+              SummaryUpload.partBytes ||
+          utf8.encode(jsonEncode(value)).length > 24500) {
+        throw const WorkerFailure('invalid_summary_source');
+      }
+      if (_summaries.sourceAlreadyFinished(Map<String, dynamic>.from(value))) {
+        store.clearSummarySourceCopies(value['summaryId'] as String);
+        final revision = (old?['revision'] as int? ?? 0) + 1;
+        store.saveMetadata(op.entityId, revision, true, null);
+        _publish(op, 'metadata.result', {
+          'state': 'done',
+          'value': null,
+          'deleted': true,
+          'revision': revision,
+          'acceptedOpId': op.opId,
+        });
+        return;
+      }
+      _summaries.noteSource(Map<String, dynamic>.from(value));
+    }
     final revision = old?['revision'] as int? ?? 0;
     if (revision != op.baseRevision) {
+      if (op.entityId.startsWith('summary-source:')) {
+        _publish(op, 'metadata.result', {
+          'state': 'conflict',
+          'revision': revision,
+          'deleted': old?['deleted'] == true,
+          'acceptedOpId': op.opId,
+          'errorCode': 'conflict',
+        });
+        return;
+      }
       _publish(op, 'metadata.result', {
         'state': 'conflict',
         'revision': revision,
@@ -619,6 +690,7 @@ class WorkerEngine {
     if (_running) return;
     _running = true;
     try {
+      _summaries.tick();
       final pruned = _mediaPrunedAt;
       if (pruned == null ||
           clock().difference(pruned) > const Duration(hours: 1)) {
@@ -1798,6 +1870,7 @@ class WorkerEngine {
   }
 
   void cancelAll() {
+    _summaries.cancelAll();
     for (final c in _cancellations.values) {
       c.cancel();
     }
@@ -1810,6 +1883,7 @@ class WorkerEngine {
   }
 
   Future<void> waitForIdle() async {
+    await _summaries.waitForIdle();
     while (_activeTranscripts.isNotEmpty) {
       await Future.wait(_activeTranscripts.values.toList());
     }

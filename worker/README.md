@@ -115,6 +115,76 @@ The apps show a finished transcript in time with playback in their full-screen p
 * **Compatibility.** `timing` is optional: apps without support ignore it, apps with support estimate line times from the text and the media length when it is absent (labelled "Approximate timing"), and older workers never write it. A record that does not match the text (out of range, not covering it) is ignored. A new text without `timing` drops older timestamps in the apps' replica; a refusal (`conflict`) echoes neither text nor timestamps.
 * **Privacy.** Timestamps travel inside the same encrypted journal result as the text, are reused only with that text (byte-identical media), and are erased with it: a redacted source removes `timing` from the job, the tombstone and queued results.
 
+## Group conversation summaries
+
+An explicitly selected group conversation can be summarised from the app's
+three-dot menu. The app selects the last N user messages, the last N hours or
+days, or the complete history available to its Matrix session. It resolves
+edits/replies and uses existing transcripts; it does not download attachments,
+start transcriptions, mark the conversation as read, or send the summary to
+the group. A history pagination gap stops the request. Omitted media or other
+unreadable content is disclosed with the result instead of being invented.
+
+The provider key stays in the worker. Summaries use the same `openrouter_api_key`
+systemd credential (or private credentials JSON `openrouterApiKey`) as speech
+transcription, including when speech itself is configured for OpenAI. There is
+no key in the Flutter application and no additional service endpoint. A new
+worker heartbeat advertises `summary: ready|not_configured` and `summaryVersion: 1`;
+an older worker cannot silently accept an unsupported request. No automatic
+summary is generated.
+
+The app sends selected text and participant display names in authenticated,
+encrypted personal-journal metadata parts under a fresh `summary:` job ID.
+Each part holds at most 12,000 UTF-8 bytes. The `summary.request` manifest names
+the part count, total byte count and SHA-256 digest. The worker checks the own
+account, schema, chronological ordering, every part and the whole digest before
+making a provider request. Source input is capped at 400,000 UTF-8 bytes and
+10,000 included messages, with no silent truncation: choose a narrower range
+when the app reports that the selection is too large. The worker runs at most
+one summary at a time beside its existing transcription/sync work.
+
+The selected model is `google/gemini-3.1-flash-lite`: OpenRouter's public models
+API on 2026-11-03 listed a 1,048,576-token context and USD 0.25 per million input
+tokens / USD 1.50 per million output tokens. Requests require
+`provider: {data_collection: deny, zdr: true, require_parameters: true,
+max_price: {prompt: 0.25, completion: 1.5}}`, so routing refuses an endpoint
+without the requested privacy/parameter support or above the configured prices.
+Reasoning is disabled, temperature is 0.2, and brief/standard/detailed output is
+capped at 1,200/2,500/5,000 tokens. A conservative input-byte estimate plus the
+full output allowance must stay below USD 0.12 per request. Reported provider
+cost is used when it is valid and within that estimate; otherwise the result
+keeps the estimate. See the [public model catalogue](https://openrouter.ai/api/v1/models)
+and [provider routing documentation](https://openrouter.ai/docs/features/provider-routing).
+
+The system prompt treats chat text, names, quotes and transcripts as untrusted
+data. It distinguishes proposals from confirmed decisions, keeps uncertainty
+and disagreements, includes owners/deadlines only when explicit, and does not
+infer attachment contents. The output language is Polish by default, with
+English available. Detail levels change the intended length and structure.
+There are no provider tools, URL fetching, or automatic reply actions.
+
+Immediately before upload, the worker durably records `providerAttemptAt`.
+Every request is attempted once: timeouts, a lost connection, HTTP 408/5xx and
+crash recovery after that marker end `unknown`, with no automatic paid retry.
+An explicit new request uses a new job ID. Cancellation is durable in the app,
+can withdraw an unpublished manifest, and aborts a running worker request;
+it cannot reverse a charge the provider has already accepted. Late output
+cannot replace the cancelled state.
+
+Done, failed, uncertain and cancelled jobs erase source metadata and scrub
+transient source copies from command/outbox records while preserving command
+IDs for replay deduplication. Tombstones clear input from app replicas, and
+late input cannot restore a terminal job's source. Input uploaded without a
+manifest expires after 15 minutes; a manifest still waiting for input also
+fails after 15 minutes. These operations do not erase encrypted Matrix journal
+history or recall data already downloaded by another authorised device.
+
+Synthetic coverage is in `packages/personal_core/test/conversation_summary_test.dart`
+and `worker/test/conversation_summary_test.dart`. Provider calls use mock HTTP
+responses only. Model availability, ZDR routing, real-account history decryption
+and paid output quality still need a separately authorised live check; a local
+test or build does not establish those gates.
+
 ## Legacy import
 
 `bundle/bin/migrate SOURCE.sqlite EXPLICIT_MAPPING.json CONFIG` is a dry run. `--apply` creates an independent encrypted source backup, then imports only explicitly mapped completed results into the worker's encrypted jobs and journal outbox. It never connects to Matrix/OpenAI/Beeper or sends to anyone. Stop the old consumer before live migration, and stop the new worker while applying the import.

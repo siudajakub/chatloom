@@ -532,6 +532,46 @@ class WorkerStore {
   void acknowledgeTranscriptRedaction(String opId) =>
       db.execute('DELETE FROM transcript_publications WHERE op_id=?', [opId]);
 
+  /// Keep command ids for replay dedupe while erasing transient source copies
+  /// from durable command/outbox bodies after a summary no longer needs them.
+  /// Already published encrypted journal events remain in Matrix history.
+  void clearSummarySourceCopies(String summaryId) {
+    final prefix = 'summary-source:$summaryId:';
+    for (final table in ['commands', 'outbox', 'outbox_parked']) {
+      final rows = db.select(
+        'SELECT id,body FROM $table WHERE instr(body, ?) > 0',
+        ['"entityId":"$prefix'],
+      );
+      for (final row in rows) {
+        final body = jsonDecode(row['body'] as String) as Map<String, dynamic>;
+        final entity = body['entityId'];
+        if (entity is! String || !entity.startsWith(prefix)) continue;
+        if (table == 'commands') {
+          db.execute('UPDATE commands SET body=? WHERE id=?', [
+            jsonEncode({'redacted': true, 'kind': 'summary-source'}),
+            row['id'],
+          ]);
+          continue;
+        }
+        if (body['kind'] != 'metadata.result') continue;
+        final payload = body['payload'];
+        if (payload is! Map) continue;
+        body['payload'] = {
+          'state': 'done',
+          'deleted': true,
+          'value': null,
+          'revision': payload['revision'] ?? body['baseRevision'],
+          if (payload['acceptedOpId'] != null)
+            'acceptedOpId': payload['acceptedOpId'],
+        };
+        db.execute('UPDATE $table SET body=? WHERE id=?', [
+          jsonEncode(body),
+          row['id'],
+        ]);
+      }
+    }
+  }
+
   String? checkpoint(String id) {
     final rows = db.select('SELECT value FROM checkpoints WHERE id=?', [id]);
     return rows.isEmpty ? null : rows.first['value'] as String;

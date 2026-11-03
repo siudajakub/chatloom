@@ -8,6 +8,7 @@ import 'package:path/path.dart' as path;
 import 'package:personal_core/personal_core.dart';
 import 'package:personal_worker/src/config.dart';
 import 'package:personal_worker/src/engine.dart';
+import 'package:personal_worker/src/summary_provider.dart';
 import 'package:personal_worker/src/heartbeat_schedule.dart';
 import 'package:personal_worker/src/journal.dart';
 import 'package:personal_worker/src/journal_session_rotation.dart';
@@ -150,6 +151,9 @@ Future<void> main(List<String> arguments) async {
         recentSources: transport is LocalSourceTransport ? transport : null,
         liveSources: liveSources,
         autoTranscription: config.autoTranscription,
+        summarizer: OpenRouterConversationSummarizer(
+          openRouterApiKey(config, credentials),
+        ),
       );
       final devices = config.trustedDeviceIds.toSet()..add(transport.deviceId);
       final journal = WorkerJournal(
@@ -321,6 +325,10 @@ Future<void> main(List<String> arguments) async {
                 'autoTranscriptionLive': engine.liveScanActive,
                 // Answers `metadata.resync` (state of merged persons again).
                 'metadataResync': 1,
+                'summary': engine.summariesConfigured
+                    ? 'ready'
+                    : 'not_configured',
+                'summaryVersion': 1,
                 // Own devices whose commands this worker ignores (untrusted).
                 if (journal.untrustedDeviceIds case final ids
                     when ids.isNotEmpty)
