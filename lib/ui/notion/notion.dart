@@ -159,6 +159,9 @@ class NotionPropertyRow extends StatelessWidget {
 
 class NotionListRow extends StatelessWidget {
   final Widget? leading;
+
+  /// Icons keep the compact default; photo avatars need a square slot.
+  final double leadingWidth;
   final String title;
   final String? subtitle;
   final Widget? trailing;
@@ -166,6 +169,7 @@ class NotionListRow extends StatelessWidget {
   const NotionListRow({
     super.key,
     this.leading,
+    this.leadingWidth = NotionSize.iconLg,
     required this.title,
     this.subtitle,
     this.trailing,
@@ -224,7 +228,7 @@ class NotionListRow extends StatelessWidget {
                   : CrossAxisAlignment.center,
               children: [
                 if (leading != null) ...[
-                  SizedBox(width: 24, child: leading),
+                  SizedBox(width: leadingWidth, child: leading),
                   const SizedBox(width: 14),
                 ],
                 Expanded(child: text),

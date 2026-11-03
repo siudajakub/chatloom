@@ -47,6 +47,9 @@ class NotionInitialAvatar extends StatelessWidget {
       child: icon == null
           ? Text(
               initials(name),
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.clip,
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: foreground,

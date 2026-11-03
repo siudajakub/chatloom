@@ -3,14 +3,20 @@
 // Messenger, Telegram) a new reaction replaces the old one at once instead
 // of being refused. Fictional offline fixtures only.
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/events/message_reactions.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:matrix/src/models/timeline_chunk.dart';
@@ -19,21 +25,28 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'conversation_test_support.dart';
 
-Event _reaction(Event target, String id, String emoji, {int minute = 0}) =>
-    Event(
-      room: target.room,
-      eventId: id,
-      senderId: target.room.client.userID!,
-      originServerTs: DateTime.utc(2026, 10, 16, 17, minute),
-      type: EventTypes.Reaction,
-      content: {
-        'm.relates_to': {
-          'rel_type': RelationshipTypes.reaction,
-          'event_id': target.eventId,
-          'key': emoji,
-        },
-      },
-    );
+bool _emojiFontLoaded = false;
+
+Event _reaction(
+  Event target,
+  String id,
+  String emoji, {
+  int minute = 0,
+  String? senderId,
+}) => Event(
+  room: target.room,
+  eventId: id,
+  senderId: senderId ?? target.room.client.userID!,
+  originServerTs: DateTime.utc(2026, 10, 16, 17, minute),
+  type: EventTypes.Reaction,
+  content: {
+    'm.relates_to': {
+      'rel_type': RelationshipTypes.reaction,
+      'event_id': target.eventId,
+      'key': emoji,
+    },
+  },
+);
 
 Future<
   ({
@@ -48,6 +61,8 @@ _setUp(
   String id, {
   int? limit = 1,
   Map<String, String> own = const {},
+  Map<String, String> others = const {},
+  String peerName = 'Anna Example',
 }) async {
   final client = ConversationClient();
   final room = ConversationRoom(client, '!$id:example.invalid');
@@ -73,18 +88,42 @@ _setUp(
       _reaction(event, entry.key, entry.value, minute: ++minute),
     );
   }
+  room.state(EventTypes.RoomMember, {
+    'membership': 'join',
+    'displayname': peerName,
+  }, key: '@anna:example.invalid');
+  for (final entry in others.entries) {
+    timeline.addAggregatedEvent(
+      _reaction(
+        event,
+        entry.key,
+        entry.value,
+        senderId: '@anna:example.invalid',
+      ),
+    );
+  }
   late BuildContext context;
   await tester.pumpWidget(
     Provider<MatrixState>.value(
       value: ConversationMatrix(client, AppSettings.store),
-      child: MaterialApp(
-        theme: NotionTheme.build(Brightness.dark),
-        home: Scaffold(
-          body: Builder(
-            builder: (c) {
-              context = c;
-              return MessageReactions(event, timeline);
-            },
+      child: RepaintBoundary(
+        key: const ValueKey('reaction-capture'),
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: _emojiFontLoaded
+              ? NotionTheme.build(Brightness.dark).copyWith(
+                  textTheme: NotionTheme.build(Brightness.dark).textTheme.apply(
+                    fontFamilyFallback: const ['Noto Color Emoji'],
+                  ),
+                )
+              : NotionTheme.build(Brightness.dark),
+          home: Scaffold(
+            body: Builder(
+              builder: (c) {
+                context = c;
+                return MessageReactions(event, timeline);
+              },
+            ),
           ),
         ),
       ),
@@ -95,9 +134,148 @@ _setUp(
 
 void main() {
   setUpAll(() async {
+    if (Platform.environment['NOTION_CAPTURE_DIR'] != null) {
+      final loader = FontLoader('Roboto');
+      for (final name in ['Regular', 'Medium', 'Bold']) {
+        loader.addFont(rootBundle.load('assets/notion/fonts/Roboto-$name.ttf'));
+      }
+      await loader.load();
+      final icons = FontLoader('MaterialIcons');
+      icons.addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+      await icons.load();
+      final emojiFont = File(
+        '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+      );
+      if (emojiFont.existsSync()) {
+        final bytes = await emojiFont.readAsBytes();
+        await (FontLoader(
+          'Noto Color Emoji',
+        )..addFont(Future.value(bytes.buffer.asByteData()))).load();
+        _emojiFontLoaded = true;
+      }
+    }
     SharedPreferences.setMockInitialValues({});
     await AppSettings.init(loadWebConfigFile: false);
   });
+
+  testWidgets('own reaction tap opens people without changing the reaction', (
+    tester,
+  ) async {
+    final f = await _setUp(tester, 'inspect-own', own: {r'$own': '👍'});
+    await tester.tap(find.byType(NotionReactionChip));
+    await tester.pumpAndSettle();
+    expect(find.text('You'), findsOneWidget);
+    expect(find.text('Remove your reaction'), findsOneWidget);
+    expect(f.room.reactionsSent, 0);
+    expect(
+      ConversationMessageActions.ownReactions(f.event, f.timeline, '👍'),
+      hasLength(1),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'other reaction tap shows square avatars; explicit action adds once',
+    (tester) async {
+      tester.view.physicalSize = const Size(640, 1200);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final f = await _setUp(
+        tester,
+        'inspect-other',
+        others: {r'$other': '👍'},
+      );
+      await tester.tap(find.byType(NotionReactionChip));
+      await tester.pumpAndSettle();
+      expect(find.text('Anna Example'), findsOneWidget);
+      expect(f.room.reactionsSent, 0);
+      expect(
+        tester.getSize(find.byType(Avatar)),
+        const Size(NotionSize.avatar, NotionSize.avatar),
+      );
+      expect(
+        tester.getSize(find.byType(NotionInitialAvatar)),
+        const Size(NotionSize.avatar, NotionSize.avatar),
+      );
+      expect(find.text('AE'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Add your reaction'));
+      await tester.pumpAndSettle();
+      expect(f.room.sentEmoji, ['👍']);
+      expect(find.text('Anna Example'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('adding from the second emoji never adds the leftmost emoji', (
+    tester,
+  ) async {
+    final f = await _setUp(
+      tester,
+      'second-emoji',
+      others: {r'$thumb': '👍', r'$heart': '❤️'},
+    );
+    await tester.tap(find.byType(NotionReactionChip).at(1));
+    await tester.pumpAndSettle();
+    expect(f.room.reactionsSent, 0);
+    await tester.tap(find.text('Add your reaction'));
+    await tester.pumpAndSettle();
+    expect(f.room.sentEmoji, ['❤️']);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'tapped emoji is selected and switching changes only explicit add',
+    (tester) async {
+      tester.view.physicalSize = const Size(640, 1200);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const name = 'Alexandra Example With A Long Display Name';
+      final f = await _setUp(
+        tester,
+        'choose-emoji',
+        others: {r'$thumb': '👍', r'$heart': '❤️'},
+        peerName: name,
+      );
+      await tester.tap(find.byType(NotionReactionChip).at(1));
+      await tester.pumpAndSettle();
+      final heart = find.byKey(const ValueKey('reactors-filter-❤️'));
+      final thumb = find.byKey(const ValueKey('reactors-filter-👍'));
+      expect(tester.widget<NotionReactionChip>(heart).own, isTrue);
+      expect(tester.widget<NotionReactionChip>(thumb).own, isFalse);
+      expect(f.room.reactionsSent, 0);
+      expect(
+        tester.getSize(find.byType(Avatar)),
+        const Size(NotionSize.avatar, NotionSize.avatar),
+      );
+      expect(find.text('AN'), findsOneWidget);
+      expect(find.text(name), findsOneWidget);
+      final captureDirectory = Platform.environment['NOTION_CAPTURE_DIR'];
+      if (captureDirectory != null) {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(const ValueKey('reaction-capture')),
+        );
+        await tester.runAsync(() async {
+          final image = await boundary.toImage(pixelRatio: 1);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          final file = File('$captureDirectory/reactors-320.png');
+          await file.parent.create(recursive: true);
+          await file.writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+      }
+      await tester.tap(thumb);
+      await tester.pumpAndSettle();
+      expect(tester.widget<NotionReactionChip>(thumb).own, isTrue);
+      expect(f.room.reactionsSent, 0);
+      await tester.tap(find.text('Add your reaction'));
+      await tester.pumpAndSettle();
+      expect(f.room.sentEmoji, ['👍']);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('a new reaction replaces the old one at once', (tester) async {
     final f = await _setUp(tester, 'replace', own: {r'$thumbs': '👍'});

@@ -6,16 +6,19 @@
 import 'dart:math' as math;
 
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
+import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/avatar.dart';
+import 'package:chatloom/widgets/avatar_viewer.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 /// The reactions under a bubble: one pill per emoji (Messenger's compact
-/// chips, no square frame), most given first. Tap toggles your own
-/// reaction, long-press lists who reacted. A new chip springs in; a chip
+/// chips, no square frame), most given first. Tap or long-press lists who
+/// reacted; changing your reaction is an explicit action in that list.
+/// A new chip springs in; a chip
 /// whose last reaction was taken back pops out where it was, then the row
 /// closes up.
 class MessageReactions extends StatefulWidget {
@@ -244,19 +247,28 @@ class _MessageReactionsState extends State<MessageReactions>
                 '${r.key}, ${r.count} reactions${_pending.contains(r.key) ? ', waiting for source confirmation' : ''}',
             onTap: !visible
                 ? null
-                : () => ConversationMessageActions.react(
+                : () => _showReactors(
                     context,
-                    event,
-                    timeline,
-                    r.key,
-                    toggle: true,
+                    client: client,
+                    entry: r,
+                    entries: reactionList,
+                    event: event,
+                    timeline: timeline,
                     strict: strict,
                   ),
             onLongPress: !visible
                 ? null
                 : () {
                     NotionHaptics.longPress();
-                    _showReactors(context, client: client, entry: r);
+                    _showReactors(
+                      context,
+                      client: client,
+                      entry: r,
+                      entries: reactionList,
+                      event: event,
+                      timeline: timeline,
+                      strict: strict,
+                    );
                   },
           ),
       ],
@@ -314,27 +326,114 @@ Future<void> _showReactors(
   BuildContext context, {
   required Client client,
   required _ReactionEntry entry,
-}) => showNotionSheet<void>(
-  context: context,
-  title: entry.key.startsWith('mxc://') ? null : entry.key,
-  builder: (context) => ConstrainedBox(
-    constraints: BoxConstraints(
-      maxHeight: MediaQuery.sizeOf(context).height * .5,
-    ),
-    child: ListView(
-      shrinkWrap: true,
-      children: [
-        for (final reactor in entry.reactors)
-          NotionListRow(
-            leading: Avatar(
-              mxContent: reactor.avatarUrl,
-              name: reactor.calcDisplayname(),
-              client: client,
-              size: NotionSize.avatar,
+  required List<_ReactionEntry> entries,
+  required Event event,
+  required Timeline timeline,
+  required bool strict,
+}) {
+  var selected = entry;
+  return showNotionSheet<void>(
+    context: context,
+    title: 'Reactions',
+    builder: (sheetContext) => StatefulBuilder(
+      builder: (sheetContext, setSheetState) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * .5,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final candidate in entries)
+                    Padding(
+                      padding: const EdgeInsets.only(right: NotionSpace.xs),
+                      child: Semantics(
+                        selected: selected.key == candidate.key,
+                        child: NotionReactionChip(
+                          key: ValueKey('reactors-filter-${candidate.key}'),
+                          popIn: false,
+                          emoji: _ReactionGlyph(candidate.key),
+                          count: candidate.count,
+                          own: selected.key == candidate.key,
+                          semanticLabel:
+                              '${candidate.key}, ${candidate.count} reactions',
+                          onTap: () => setSheetState(() {
+                            selected = candidate;
+                          }),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
-            title: reactor.calcDisplayname(),
-          ),
-      ],
+            const SizedBox(height: NotionSpace.sm),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final reactor in selected.reactors)
+                    NotionListRow(
+                      leadingWidth: NotionSize.avatar,
+                      leading: Avatar(
+                        mxContent: userAvatarUri(reactor),
+                        name: reactor.calcDisplayname(),
+                        client: client,
+                        size: NotionSize.avatar,
+                      ),
+                      title: reactor.calcDisplayname(),
+                      subtitle:
+                          reactor.id == client.userID &&
+                              reactor.calcDisplayname() != 'You'
+                          ? 'You'
+                          : null,
+                      onTap: userAvatarUri(reactor) == null
+                          ? null
+                          : () => showAvatarViewer(
+                              sheetContext,
+                              client: client,
+                              uri: userAvatarUri(reactor),
+                              name: reactor.calcDisplayname(),
+                            ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: NotionSpace.sm),
+            NotionButton(
+              label: selected.reacted
+                  ? 'Remove your reaction'
+                  : 'Add your reaction',
+              icon: selected.reacted
+                  ? Icons.remove_circle_outline
+                  : Icons.add_reaction_outlined,
+              onPressed:
+                  ConversationMessageActions.canReact(
+                    event,
+                    timeline,
+                    selected.key,
+                    strict: strict,
+                    removing: selected.reacted,
+                  )
+                  ? () {
+                      Navigator.of(sheetContext).pop();
+                      ConversationMessageActions.react(
+                        context,
+                        event,
+                        timeline,
+                        selected.key,
+                        toggle: selected.reacted,
+                        strict: strict,
+                      );
+                    }
+                  : null,
+            ),
+          ],
+        ),
+      ),
     ),
-  ),
-);
+  );
+}
