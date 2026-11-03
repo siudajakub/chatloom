@@ -65,6 +65,7 @@ class WorkerJournal {
   DateTime? _heldCheckedAt;
   DateTime? _flushNotBefore;
   DateTime? _unparkedAt;
+  String? _publishedSummaryReadiness;
   bool _catchUp = true;
 
   /// The first catch-up replays every loaded event, as every pass did
@@ -422,6 +423,25 @@ class WorkerJournal {
       }
       if (eventId != null) {
         acknowledgePublishedReminderResult(store, body, eventId: eventId);
+        // A content-free receipt lets operators verify capability publication
+        // without opening the encrypted journal or submitting a paid job.
+        if (body['kind'] == 'worker.heartbeat') {
+          final payload = body['payload'];
+          if (payload is Map &&
+              payload['summaryVersion'] == 1 &&
+              const {'ready', 'not_configured'}.contains(payload['summary']) &&
+              payload['healthy'] == true &&
+              payload['verified'] == true) {
+            final readiness = payload['summary'] as String;
+            if (_publishedSummaryReadiness != readiness) {
+              stderr.writeln(
+                'Worker heartbeat published: summary $readiness, version 1, '
+                'healthy true, verified true',
+              );
+              _publishedSummaryReadiness = readiness;
+            }
+          }
+        }
         _entryFailures.remove(id);
         // Earlier failures of this pass were the entries', not the link's.
         for (final failed in failedThisPass) {
