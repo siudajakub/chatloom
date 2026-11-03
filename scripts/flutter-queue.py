@@ -192,6 +192,10 @@ def main():
         env = stable_env(flutter) if args.mode != 'run' else {**os.environ, **{
             k: v for k, v in stable_env(flutter).items() if k in ('TMPDIR',)}}
         limit = args.timeout or {'test': 900, 'run': 1800}.get(args.mode, 600)
+        # Private-storage checks (MediaAccess) reject group-writable folders;
+        # a shared-group umask (002 on the devbox) made every test temp dir
+        # 0775 and failed them there but not on the Mac (022).
+        os.umask(os.umask(0o022) | 0o022)
         process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True)
         try:
             returncode = process.wait(timeout=limit)
