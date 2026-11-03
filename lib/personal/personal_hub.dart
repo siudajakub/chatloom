@@ -16,6 +16,7 @@ import 'package:chatloom/personal/reminder_list.dart' show reminderWhen;
 import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/send_later.dart' show runSendLater;
 import 'package:chatloom/personal/storage/storage_failure.dart';
+import 'package:chatloom/personal/summary/conversation_summary.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
@@ -606,6 +607,11 @@ class RoomPersonalButton extends StatelessWidget {
       final p = PersonalClient.of(room.client);
       return conversationQuickActions(
         editing: isEditing?.call() == true,
+        canSummarize:
+            !room.isDirectChatForDisplay &&
+            room.membership == Membership.join &&
+            !room.isArchived &&
+            !PersonalPrivacy.isJournal(room),
         mute: room.membership == Membership.join
             ? conversationMuteState(
                 context,
@@ -639,6 +645,17 @@ class RoomPersonalButton extends StatelessWidget {
             ).displayName(room),
           ),
         ),
+      );
+      return;
+    }
+    if (kind == 'summary') {
+      await showGroupConversationSummary(
+        context,
+        room: room,
+        isCurrent: () =>
+            context.mounted &&
+            isCurrentSource?.call() != false &&
+            identical(Matrix.of(context).client, room.client),
       );
       return;
     }
@@ -772,6 +789,7 @@ class RoomPersonalButton extends StatelessWidget {
 List<NotionMenuEntry<String>> conversationQuickActions({
   bool editing = false,
   bool merged = false,
+  bool canSummarize = false,
   ConversationMuteState? mute,
 }) => [
   const NotionMenuEntry(
@@ -780,6 +798,13 @@ List<NotionMenuEntry<String>> conversationQuickActions({
     label: 'Search conversation',
     icon: Icons.search_outlined,
   ),
+  if (canSummarize)
+    const NotionMenuEntry(
+      key: ValueKey('menu-summary'),
+      value: 'summary',
+      label: 'Summarize conversation',
+      icon: Icons.summarize_outlined,
+    ),
   NotionMenuEntry(
     key: const ValueKey('menu-schedule'),
     value: 'schedule',

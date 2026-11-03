@@ -38,6 +38,11 @@ class WorkerReadiness {
   /// merged persons again); null for older workers.
   final bool? metadataResync;
 
+  /// Optional private conversation-summary service. Older workers never
+  /// imply support merely because their transcription service is ready.
+  final String? summary;
+  final int? summaryVersion;
+
   /// Own device ids whose journal commands the worker ignores as untrusted
   /// (not pinned, not verified or blocked); empty for older workers.
   final List<String> untrustedDevices;
@@ -55,6 +60,8 @@ class WorkerReadiness {
     this.autoTranscriptionLive,
     this.deviceKey,
     this.metadataResync,
+    this.summary,
+    this.summaryVersion,
     this.untrustedDevices = const [],
   });
 
@@ -98,6 +105,8 @@ class WorkerReadiness {
       metadataResync: payload['metadataResync'] is int
           ? (payload['metadataResync'] as int) >= 1
           : null,
+      summary: allowed(payload['summary'], {'ready', 'not_configured'}),
+      summaryVersion: count(payload['summaryVersion']),
       untrustedDevices: switch (payload['untrustedDevices']) {
         final List<Object?> ids => List.unmodifiable(
           ids.whereType<String>().where((id) => id.length <= 255).take(64),
@@ -127,6 +136,8 @@ class WorkerReadiness {
       other.autoTranscriptionLive == autoTranscriptionLive &&
       other.deviceKey == deviceKey &&
       other.metadataResync == metadataResync &&
+      other.summary == summary &&
+      other.summaryVersion == summaryVersion &&
       _sameList(other.untrustedDevices, untrustedDevices);
 
   static bool _sameList(List<String> a, List<String> b) {
@@ -151,6 +162,8 @@ class WorkerReadiness {
     autoTranscriptionLive,
     deviceKey,
     metadataResync,
+    summary,
+    summaryVersion,
     Object.hashAll(untrustedDevices),
   );
 

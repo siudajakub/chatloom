@@ -92,7 +92,9 @@ class SyncChanges {
   /// Legacy chat tags are no longer edited anywhere; their leftovers never
   /// ask the user for anything.
   static bool hidden(String entity) =>
-      entity.startsWith('label:') || entity.startsWith('labels:');
+      entity.startsWith('label:') ||
+      entity.startsWith('labels:') ||
+      entity.startsWith('summary-source:');
 
   static SyncChanges of(PersonalClient personal, {DateTime? now}) {
     final at = now ?? DateTime.now();
@@ -224,6 +226,11 @@ String syncEntityTitle(
   PersonalOperation? operation,
 }) {
   final kind = operation?.kind ?? '';
+  if (kind.startsWith('summary.') || entity.startsWith('summary:')) {
+    return kind == 'summary.cancel'
+        ? 'Stop a conversation summary'
+        : 'Conversation summary';
+  }
   if (kind.startsWith('transcript.')) {
     final payload = operation!.payload;
     final where = _conversationOf(

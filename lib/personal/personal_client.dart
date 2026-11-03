@@ -184,6 +184,7 @@ class PersonalClient extends ChangeNotifier {
   final _emptyTranscripts = <String, TranscriptionJob>{};
   final _emptySchedules = <String, Map<String, dynamic>>{};
   final _emptyReminders = <String, Map<String, dynamic>>{};
+  final _emptySummaries = <String, Map<String, dynamic>>{};
   final _emptyPending = <String, PersonalOperation>{};
   final _emptyConflicts = <String, Map<String, dynamic>>{};
   Map<String, Map<String, dynamic>> get values =>
@@ -195,6 +196,8 @@ class PersonalClient extends ChangeNotifier {
       _replica?.schedules ?? _emptySchedules;
   Map<String, Map<String, dynamic>> get reminders =>
       _replica?.reminders ?? _emptyReminders;
+  Map<String, Map<String, dynamic>> get summaries =>
+      _replica?.summaries ?? _emptySummaries;
   Map<String, PersonalOperation> get pending =>
       _replica?.pending ?? _emptyPending;
   Map<String, Map<String, dynamic>> get conflicts =>
@@ -1399,6 +1402,7 @@ class PersonalClient extends ChangeNotifier {
     String entityId,
     Map<String, dynamic> payload, {
     int? baseRevision,
+    Map<String, dynamic>? optimisticJob,
   }) async {
     await _ensureLocal();
     if (!ready) throw StateError('Private encrypted sync is not connected');
@@ -1407,6 +1411,7 @@ class PersonalClient extends ChangeNotifier {
       entityId,
       payload,
       baseRevision: baseRevision,
+      optimisticJob: optimisticJob,
     );
     _dispatch();
     return op;
@@ -1807,6 +1812,14 @@ class PersonalClient extends ChangeNotifier {
     await _ensureLocal();
     _installSync();
     final result = await _replica!.cancelTranscript(id);
+    _dispatch();
+    return result;
+  }
+
+  Future<TranscriptCancellation> cancelSummary(String id) async {
+    await _ensureLocal();
+    _installSync();
+    final result = await _replica!.cancelSummary(id);
     _dispatch();
     return result;
   }
