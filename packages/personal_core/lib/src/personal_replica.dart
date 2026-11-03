@@ -193,8 +193,10 @@ class PersonalReplica {
   final transcripts = <String, TranscriptionJob>{};
   final schedules = <String, Map<String, dynamic>>{};
   final reminders = <String, Map<String, dynamic>>{};
+  final summaries = <String, Map<String, dynamic>>{};
   final pending = <String, PersonalOperation>{};
   final transcriptCancellations = <String>{};
+  final summaryCancellations = <String>{};
 
   /// Automatic re-publications of one unconfirmed metadata change (a fresh
   /// operation id, see [reissue]) before only the user can resend it.
@@ -285,6 +287,11 @@ class PersonalReplica {
     } else {
       transcriptCancellations.remove(entity);
     }
+    if (record['summaryCancellationRequested'] == true) {
+      summaryCancellations.add(entity);
+    } else {
+      summaryCancellations.remove(entity);
+    }
     revisions[entity] = record['revision'] as int? ?? 0;
     final value = record['localValue'] ?? record['serverValue'];
     if (value is Map) {
@@ -337,6 +344,8 @@ class PersonalReplica {
           schedules[entity] = data;
         case 'reminder':
           reminders[entity] = data;
+        case 'summary':
+          summaries[entity] = data;
       }
     }
   }
@@ -809,6 +818,95 @@ class PersonalReplica {
     );
   }
 
+  Future<TranscriptCancellation> cancelSummary(
+    String entity,
+  ) => _serial(() async {
+    final record = _record(entity);
+    if (record['jobKind'] != 'summary' || record['job'] is! Map) {
+      throw StateError('Summary is unavailable');
+    }
+    final commands = Map<String, dynamic>.from(
+      record['commands'] as Map? ?? {},
+    );
+    final summaryCommands = commands.values
+        .map(
+          (value) => PersonalOperation.fromJson(
+            Map<String, dynamic>.from(value as Map),
+          ),
+        )
+        .where((op) => op.kind.startsWith('summary.'))
+        .toList();
+    final attempted = record['attempted'] as List? ?? const [];
+    final unattemptedRequests = summaryCommands
+        .where(
+          (op) => op.kind == 'summary.request' && !attempted.contains(op.opId),
+        )
+        .toList();
+    if (unattemptedRequests.isNotEmpty &&
+        summaryCommands.length == unattemptedRequests.length) {
+      for (final request in unattemptedRequests) {
+        commands.remove(request.opId);
+      }
+      record['commands'] = commands;
+      final onlyLocal =
+          (record['job'] as Map)['state'] == 'waitingSync' &&
+          unattemptedRequests.every(
+            (request) => request.baseRevision == record['revision'],
+          );
+      if (onlyLocal) {
+        record['job'] = {
+          ...Map<String, dynamic>.from(record['job'] as Map),
+          'state': 'cancelled',
+        };
+        record.remove('summaryCancellationRequested');
+        await _commit(entity, record);
+        return TranscriptCancellation.cancelledLocally;
+      }
+      // Another trusted device may have started the same source job. Withdraw
+      // our untouched request, but retain the real state and cancel remotely.
+      summaryCommands.clear();
+    }
+    if (_summaryFinished(record)) {
+      await _commit(entity, record);
+      return TranscriptCancellation.alreadyFinished;
+    }
+    record['summaryCancellationRequested'] = true;
+    _queueSummaryCancellation(entity, record);
+    await _commit(entity, record);
+    return summaryCommands.isEmpty ||
+            summaryCommands.any((op) => op.kind == 'summary.cancel')
+        ? TranscriptCancellation.queued
+        : TranscriptCancellation.waitingAcknowledgement;
+  });
+
+  bool _summaryFinished(Map<String, dynamic> record) => {
+    'done',
+    'cancelled',
+    'failed',
+    'unknown',
+  }.contains((record['job'] as Map?)?['state']);
+
+  void _queueSummaryCancellation(String entity, Map<String, dynamic> record) {
+    if (record['summaryCancellationRequested'] != true) return;
+    if (_summaryFinished(record)) {
+      record.remove('summaryCancellationRequested');
+      return;
+    }
+    final commands = record['commands'] as Map? ?? {};
+    if (commands.values.any(
+      (value) =>
+          value is Map &&
+          (value['kind'] as String? ?? '').startsWith('summary.'),
+    ))
+      return;
+    _add(
+      record,
+      _operation('summary.cancel', entity, {
+        'id': entity,
+      }, record['revision'] as int),
+    );
+  }
+
   /// Whether [opId] was applied: its bucket, or a marker from before buckets.
   Future<bool> _seenDurably(String opId) async {
     final ids = (await read(seenKeyOf(opId)))?['ids'];
@@ -899,6 +997,7 @@ class PersonalReplica {
         'transcript.result',
         'schedule.result',
         'reminder.result',
+        'summary.result',
       }.contains(result.kind)) {
         final previous = record['job'] as Map? ?? {};
         record['jobKind'] = result.kind.split('.').first;
@@ -909,7 +1008,8 @@ class PersonalReplica {
             ..._copy(payload),
             'state':
                 payload['actualState'] ??
-                (result.kind == 'transcript.result'
+                ((result.kind == 'transcript.result' ||
+                        result.kind == 'summary.result')
                     ? 'failed'
                     : previous['state'] ?? 'failed'),
           };
@@ -933,6 +1033,14 @@ class PersonalReplica {
       // A conflict ACK can report a newer processing revision. Requeue only
       // cancellation (never another paid request) at that durable revision.
       _queueTranscriptCancellation(entity, record);
+    }
+    if (result.kind == 'summary.result') {
+      if (payload['state'] == 'conflict' &&
+          payload['errorCode'] != 'conflict' &&
+          acknowledged?.kind == 'summary.cancel') {
+        record.remove('summaryCancellationRequested');
+      }
+      _queueSummaryCancellation(entity, record);
     }
     record['appliedResults'] = [
       ...applied.skip(applied.length > 31 ? applied.length - 31 : 0),

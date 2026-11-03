@@ -15,3 +15,4 @@ export 'src/own_identity.dart';
 export 'src/transcript_parts.dart';
 export 'src/transcript_timing.dart';
 export 'src/transcription.dart';
+export 'src/conversation_summary.dart';
