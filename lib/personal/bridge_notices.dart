@@ -36,6 +36,9 @@ final _failedMedia = RegExp(
 final _remoteError = RegExp(
   r'^An error occurred while processing an incoming [a-z ]+$',
 );
+final _historyNotice = RegExp(
+  r'^[^\r\n]+ sent message history(?: to [^\r\n]+)?(?: \(\d+ messages?\))?(?:, starting [^\r\n]+)?\.$',
+);
 
 /// The service line for [event] (pass the display event, so a placeholder
 /// that the network later replaced with the real message is a message
@@ -46,13 +49,23 @@ BridgeServiceNotice? bridgeServiceNotice(Event event) {
   if (event.type != EventTypes.Message ||
       event.messageType != MessageTypes.Notice ||
       event.redacted ||
-      event.senderId == event.room.client.userID ||
       !isBridgedRoom(event.room)) {
     return null;
   }
   final content = event.content;
   final body = event.body.trim();
   final network = bridgedNetworkLabel(event.room) ?? 'the network';
+  final action = content['com.beeper.action_message'];
+  if ((action is Map && action['type'] == 'message_history_notice') ||
+      (event.senderId != event.room.client.userID &&
+          network == 'WhatsApp' &&
+          _historyNotice.hasMatch(body))) {
+    return BridgeServiceNotice(
+      'Earlier messages were shared in $network.',
+      Icons.history,
+    );
+  }
+  if (event.senderId == event.room.client.userID) return null;
   if (content['fi.mau.whatsapp.undecryptable'] == true) {
     return const BridgeServiceNotice(
       'Waiting for this message. This can take a while.',

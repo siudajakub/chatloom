@@ -5,6 +5,7 @@
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
+import 'package:chatloom/personal/bridge_timeline.dart';
 import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/kept_messages.dart';
@@ -40,6 +41,7 @@ extension IsStateExtension on Event {
       }.contains(relationshipType) &&
       // always filter out m.key.* and other known but unimportant events
       !isKnownHiddenStates &&
+      !isBridgeTimelineNoise(this) &&
       // event types to hide: redaction and reaction events
       // if a reaction has been redacted we also want it to be hidden in the timeline
       !const {EventTypes.Reaction, EventTypes.Redaction}.contains(type) &&

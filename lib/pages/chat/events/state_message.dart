@@ -5,6 +5,7 @@
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_service_chip.dart';
+import 'package:chatloom/personal/bridge_timeline.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:flutter/gestures.dart';
@@ -24,6 +25,7 @@ class StateMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (isBridgeTimelineNoise(event)) return const SizedBox.shrink();
     // A ticker only once the row collapses or expands (UI-11): rows that
     // never toggle cost no controller, and reduced motion snaps.
     return NotionSizeReveal(
@@ -36,9 +38,11 @@ class StateMessage extends StatelessWidget {
             // Undecryptable messages are bubbles (UndecryptableMessage); a
             // redacted encrypted event is a plain state line like the rest.
             TextSpan(
-              text: event.calcLocalizedBodyFallback(
-                MatrixLocals(L10n.of(context)),
-              ),
+              text:
+                  bridgeStateText(event) ??
+                  event.calcLocalizedBodyFallback(
+                    MatrixLocals(L10n.of(context)),
+                  ),
             ),
             if (onExpand != null) ...[
               const TextSpan(text: '\n'),

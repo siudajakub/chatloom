@@ -21,6 +21,7 @@ import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/instagram_share.dart';
 import 'package:chatloom/personal/kept_messages.dart';
+import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/message_preview.dart';
@@ -763,7 +764,7 @@ class _SenderAvatarState extends State<_SenderAvatar> {
     final user = _member ?? _fetched ?? User(event.senderId, room: event.room);
     return Avatar(
       client: event.room.client,
-      mxContent: user.avatarUrl,
+      mxContent: userAvatarUri(user),
       name: user.calcDisplayname(),
       size: 28,
       onTap: () => showMemberActionsPopupMenu(

@@ -29,6 +29,7 @@ library;
 
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/personal/bridge_notices.dart';
+import 'package:chatloom/personal/bridge_timeline.dart';
 import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
@@ -233,15 +234,19 @@ String? personalPlainFastPath(Event event) {
   return body.trim();
 }
 
-String _fallback(Event event, MatrixLocalizations i18n) => _oneLine(
-  event.calcLocalizedBodyFallback(
-    i18n,
-    hideReply: true,
-    hideEdit: true,
-    plaintextBody: true,
-    removeMarkdown: true,
-  ),
-);
+String _fallback(Event event, MatrixLocalizations i18n) =>
+    isBridgeTimelineNoise(event)
+    ? 'Chat updated'
+    : bridgeStateText(event) ??
+          _oneLine(
+            event.calcLocalizedBodyFallback(
+              i18n,
+              hideReply: true,
+              hideEdit: true,
+              plaintextBody: true,
+              removeMarkdown: true,
+            ),
+          );
 
 /// A deleted message's preview: its kept text marked "Deleted: …" (Keep
 /// deleted messages), otherwise "Message deleted", "You deleted this
@@ -279,6 +284,8 @@ String personalPreview(
 }) {
   // "You deleted this message" already says who; never a "You: " prefix.
   if (isDeletedForDisplay(event)) return _deletedPreview(event, i18n);
+  final notice = bridgeServiceNotice(event);
+  if (notice != null) return notice.text;
   final label = _label(event);
   if (label == null) return _fallback(event, i18n ?? _defaultI18n);
   if (own) return 'You: $label';
