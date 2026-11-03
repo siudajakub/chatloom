@@ -32,7 +32,6 @@
  "lib/pages/chat/seen_by_row.dart::radius": 1,
  "lib/pages/chat/voice_record_button.dart::motion-duration": 1,
  "lib/pages/chat_details/participant_list_item.dart::edge-insets": 1,
- "lib/pages/image_viewer/image_viewer_view.dart::edge-insets": 2,
  "lib/pages/intro/intro_page.dart::edge-insets": 1,
  "lib/pages/key_verification/key_verification_dialog.dart::edge-insets": 3,
  "lib/pages/key_verification/key_verification_dialog.dart::font-size": 4,
