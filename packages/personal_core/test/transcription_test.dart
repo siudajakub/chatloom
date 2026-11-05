@@ -582,6 +582,67 @@ void main() {
     });
 
     group('Shared reels', () {
+      test('Instagram captions and XMA status preserve on-demand shares', () {
+        for (final extra in <Map<String, dynamic>>[
+          {'body': 'A shared clip\nhttps://www.instagram.com/reel/Cfixture/'},
+          {'body': 'https://instagram.com/author/reel/Cfixture/?igsh=fixture'},
+          {'body': 'https://instagr.am/p/Cfixture/'},
+          {'body': 'https://instagram.com/stories/author/123/'},
+          {
+            'formatted_body':
+                '<p><a href="https://instagram.com/reel/Cfixture/">Watch</a></p>',
+          },
+          {'fi.mau.instagram.xma_fetch_status': 'skip'},
+        ]) {
+          final content = {
+            ...media('m.video', info: {'mimetype': 'video/mp4'}),
+            ...extra,
+          };
+          expect(transcribableMediaKind(content), AutoTranscriptionKind.reel);
+          expect(
+            autoTranscriptionBlock(
+              TranscriptionPolicy.defaults,
+              candidate(kind: transcribableMediaKind(content)),
+              now: now,
+            ),
+            'kind_disabled',
+          );
+          // A share caption never overrides a real recording's markers.
+          expect(
+            transcribableMediaKind({
+              ...content,
+              'info': {'mimetype': 'video/mp4', roundMessageMarker: true},
+            }),
+            AutoTranscriptionKind.round,
+          );
+          expect(
+            transcribableMediaKind({
+              ...content,
+              'msgtype': 'm.audio',
+              'org.matrix.msc3245.voice': <String, dynamic>{},
+            }),
+            AutoTranscriptionKind.voice,
+          );
+        }
+        for (final body in [
+          'https://instagram.com/author/',
+          'https://instagram.com.example.org/reel/Cfixture/',
+          'https://example.org/instagram.com/reel/Cfixture/',
+          'https://t.me/fixture/123',
+          'instagram.com/reel/Cfixture/',
+          'https://instagram.com/reel/',
+          '${'x' * 65537} https://instagram.com/reel/Cfixture/',
+        ]) {
+          expect(
+            transcribableMediaKind({
+              ...media('m.video', info: {'mimetype': 'video/mp4'}),
+              'body': body,
+            }),
+            AutoTranscriptionKind.video,
+          );
+        }
+      });
+
       const reelUrl = 'https://www.instagram.com/reel/Cfixture/?igsh=x';
       Map<String, dynamic> share(
         String msgtype, {

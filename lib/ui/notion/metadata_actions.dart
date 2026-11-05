@@ -2,6 +2,7 @@
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:matrix/matrix.dart' show Room;
+import 'package:personal_core/personal_core.dart' show ChatPlacement;
 
 abstract final class NotionMetadataActions {
   static bool canEdit(PersonalClient personal, String entity) =>
@@ -14,6 +15,24 @@ abstract final class NotionMetadataActions {
   /// coalesces them. Only an unresolved conflict blocks them.
   static bool canWrite(PersonalClient personal, String entity) =>
       personal.ready && !personal.conflicts.containsKey('org:$entity');
+
+  static Future<void> moveTo(
+    PersonalClient personal,
+    String entity,
+    ChatPlacement destination,
+  ) async {
+    if (!canWrite(personal, entity)) {
+      throw StateError('Private changes are awaiting synchronization');
+    }
+    final metadata = InboxProjection(personal).metadataForEntity(entity);
+    await personal.put(
+      'org:$entity',
+      {
+        ...?personal.values['org:$entity'],
+        ...metadata.moveTo(destination).toJson(),
+      }.cast<String, dynamic>(),
+    );
+  }
 
   static Future<void> setPinned(
     PersonalClient personal,

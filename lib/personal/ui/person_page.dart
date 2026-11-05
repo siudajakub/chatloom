@@ -959,6 +959,22 @@ class _PersonPageState extends State<PersonPage> {
                 )
               : null,
         ),
+        NotionSettingsToggle(
+          title: 'Keep in Aside',
+          subtitle: 'Outside the main list. Only direct mentions notify.',
+          value: !metadata.ignored && metadata.placement == ChatPlacement.aside,
+          onChanged: editable
+              ? (value) => _change(
+                  () => updatePersonMetadata(
+                    personal,
+                    group,
+                    (current) => current.moveTo(
+                      value ? ChatPlacement.aside : ChatPlacement.inbox,
+                    ),
+                  ),
+                )
+              : null,
+        ),
         NotionListRow(
           leading: const Icon(Icons.archive_outlined),
           title: metadata.archived ? 'Unarchive chat' : 'Archive chat',

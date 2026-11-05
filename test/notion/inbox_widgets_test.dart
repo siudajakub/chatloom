@@ -3,6 +3,7 @@ import 'package:chatloom/personal/ui/notion_inbox_dock.dart';
 import 'package:chatloom/personal/ui/notion_inbox_page.dart';
 import 'package:chatloom/personal/ui/notion_inbox_pins.dart';
 import 'package:chatloom/personal/ui/notion_inbox_row.dart';
+import 'package:chatloom/personal/ui/notion_inbox_view_chips.dart';
 import 'package:chatloom/personal/ui/notion_search_controls.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
@@ -26,6 +27,44 @@ Widget host(Widget child, {double scale = 1}) => MaterialApp(
 
 Widget avatar() => const ColoredBox(color: Color(0xFF555555));
 void main() {
+  testWidgets(
+    'Aside is reachable from chips and the dock without changing network',
+    (tester) async {
+      final views = <InboxFilter>[];
+      final networks = <String?>[];
+      await tester.pumpWidget(
+        host(
+          Column(
+            children: [
+              NotionInboxViewChips(
+                selected: InboxFilter.inbox,
+                onViewSelected: views.add,
+              ),
+              const Spacer(),
+              NotionInboxDock(
+                onSettings: () {},
+                onSearch: () {},
+                networks: const ['whatsapp', 'telegram'],
+                selectedNetwork: 'whatsapp',
+                onNetworkSelected: networks.add,
+                onViewSelected: views.add,
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const ValueKey('notion_inbox_chip_aside')));
+      await tester.pumpAndSettle();
+      expect(views, [InboxFilter.aside]);
+      await tester.tap(find.text('WhatsApp'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Aside').last);
+      await tester.pumpAndSettle();
+      expect(views, [InboxFilter.aside, InboxFilter.aside]);
+      expect(networks, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
   for (final brightness in Brightness.values) {
     testWidgets('unread emphasis clears after reading in $brightness', (
       tester,
@@ -75,6 +114,7 @@ void main() {
             ? NotionTheme.build(brightness).scaffoldBackgroundColor
             : tint;
       }
+
       await row();
       final read = background();
       expect(

@@ -196,18 +196,26 @@ void main() {
       return WorkerConfig.read(file.path);
     }
 
-    test('defaults to Grok through OpenRouter', () {
-      expect(read({}).transcriptionModel, TranscriptionModel.grokStt);
-      expect(
-        read({'transcriptionProvider': 'openrouter'}).transcriptionModel,
-        TranscriptionModel.grokStt,
-      );
-      expect(
-        TranscriptionModel.grokStt.pricePerMinute,
-        closeTo(0.10 / 60, 1e-12),
-      );
-      expect(TranscriptionModel.grokStt.timestamps, isTrue);
-    });
+    test(
+      'defaults to GPT through OpenRouter without an implicit second call',
+      () {
+        expect(
+          read({}).transcriptionModel,
+          TranscriptionModel.openRouterGptTranscribe,
+        );
+        expect(read({}).transcriptionTimingModel, isNull);
+        expect(read({}).autoTranscriptionReels, isFalse);
+        expect(
+          read({'transcriptionProvider': 'openrouter'}).transcriptionModel,
+          TranscriptionModel.openRouterGptTranscribe,
+        );
+        expect(
+          TranscriptionModel.grokStt.pricePerMinute,
+          closeTo(0.10 / 60, 1e-12),
+        );
+        expect(TranscriptionModel.grokStt.timestamps, isTrue);
+      },
+    );
 
     test('rollback to OpenAI is a config change', () {
       expect(
@@ -258,9 +266,50 @@ void main() {
       }
     });
 
-    test('the deployment example selects Grok through OpenRouter', () {
-      final config = WorkerConfig.read('config.example.json');
-      expect(config.transcriptionModel, TranscriptionModel.grokStt);
+    test(
+      'the deployment example selects GPT and Scribe through OpenRouter',
+      () {
+        final config = WorkerConfig.read('config.example.json');
+        expect(
+          config.transcriptionModel,
+          TranscriptionModel.openRouterGptTranscribe,
+        );
+        expect(config.transcriptionTimingModel, TranscriptionModel.scribeV2);
+        expect(config.autoTranscriptionReels, isFalse);
+      },
+    );
+
+    test('timing model is explicit and refuses unsupported provider pairs', () {
+      final config = read({
+        'transcriptionModel': 'openai/gpt-transcribe',
+        'transcriptionTimingModel': 'elevenlabs/scribe-v2',
+        'autoTranscriptionReels': true,
+      });
+      expect(config.transcriptionTimingModel, TranscriptionModel.scribeV2);
+      expect(config.autoTranscriptionReels, isTrue);
+      for (final extra in <Map<String, Object?>>[
+        {'transcriptionTimingModel': 7},
+        {'transcriptionTimingModel': 'unknown'},
+        {
+          'transcriptionModel': 'gpt-transcribe',
+          'transcriptionTimingModel': 'elevenlabs/scribe-v2',
+        },
+        {
+          'transcriptionModel': 'x-ai/grok-stt-1.0',
+          'transcriptionTimingModel': 'elevenlabs/scribe-v2',
+        },
+      ]) {
+        expect(
+          () => read(extra),
+          throwsA(
+            isA<WorkerFailure>().having(
+              (e) => e.code,
+              'code',
+              'invalid_transcription_timing_model',
+            ),
+          ),
+        );
+      }
     });
   });
 

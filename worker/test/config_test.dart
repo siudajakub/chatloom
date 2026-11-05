@@ -14,6 +14,7 @@ void main() {
     // rooms come from the worker's own sync unless explicitly disabled.
     expect(config.autoTranscription, isFalse);
     expect(config.autoTranscriptionMatrix, isTrue);
+    expect(config.autoTranscriptionReels, isFalse);
   });
 
   test(

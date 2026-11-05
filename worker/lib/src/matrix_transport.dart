@@ -611,3 +611,133 @@ OwnRemoteIdentity ownRemoteIdentity(Client client) {
     },
   );
 }
+
+/// Separate from conversation source loading: dictation cannot read a contact
+/// room and never depends on that room's bridge/disappearing policy.
+class MatrixDictationSource implements PrivateDictationSource {
+  final Client client;
+  final String journalRoomId;
+  MatrixDictationSource(this.client, this.journalRoomId);
+
+  Future<Room> _journal() async {
+    final room = client.getRoomById(journalRoomId);
+    if (room == null ||
+        !room.encrypted ||
+        room.membership != Membership.join ||
+        !client.encryptionEnabled ||
+        room.getState(personalRoomMarker)?.content['schema'] !=
+            personalSchemaVersion) {
+      throw const WorkerFailure('journal_unavailable');
+    }
+    final members = await room.requestParticipants([
+      Membership.join,
+      Membership.invite,
+    ]);
+    if (members.isEmpty ||
+        members.any((member) => member.id != client.userID)) {
+      throw const WorkerFailure('journal_membership_changed');
+    }
+    return room;
+  }
+
+  @override
+  Future<bool?> dictationRedacted(String eventId) async {
+    try {
+      final room = await _journal();
+      final raw = await client
+          .getOneRoomEvent(room.id, eventId)
+          .timeout(const Duration(seconds: 10));
+      final event = await decryptStoredEvent(
+        client,
+        Event.fromMatrixEvent(raw, room),
+      );
+      if (event.type == EventTypes.Encrypted) return null;
+      return event.redacted;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Validates decrypted metadata before the first media byte is fetched.
+  static String? sourceRejection(
+    Event event, {
+    required String? owner,
+    required String dictationId,
+    required DateTime now,
+  }) {
+    if (event.type == EventTypes.Encrypted) return 'waiting_keys';
+    if (event.redacted) return 'source_redacted';
+    if (!RoundMediaPolicy.fromContent(event.content).canTranscribe ||
+        disappearingTimerLimits(event.room.getState(beeperDisappearingTimerKey)?.content)) {
+      return 'protected_media';
+    }
+    final info = event.infoMap;
+    final size = info['size'];
+    final duration = info['duration'];
+    if (owner == null ||
+        event.senderId != owner ||
+        event.type != EventTypes.Message ||
+        event.messageType != MessageTypes.Audio ||
+        event.content[DictationLimits.sourceMarker] != dictationId ||
+        event.content['file'] is! Map ||
+        size is! int ||
+        size < 1 ||
+        size > DictationLimits.maxBytes ||
+        duration is! int ||
+        duration < 1 ||
+        duration > DictationLimits.maxDuration.inMilliseconds) {
+      return 'invalid_dictation_source';
+    }
+    final age = now.difference(event.originServerTs);
+    if (age > DictationLimits.sourceLifetime ||
+        age < const Duration(minutes: -1)) {
+      return 'dictation_source_timeout';
+    }
+    return null;
+  }
+
+  @override
+  Future<AudioSource> loadDictation(
+    String eventId,
+    String dictationId,
+    Cancellation cancel,
+  ) async {
+    final room = await _journal();
+    cancel.check();
+    final raw = await client
+        .getOneRoomEvent(room.id, eventId)
+        .timeout(const Duration(seconds: 10));
+    if (raw.type != EventTypes.Encrypted) {
+      throw const WorkerFailure('dictation_source_unencrypted');
+    }
+    final event = await decryptStoredEvent(
+      client,
+      Event.fromMatrixEvent(raw, room),
+    );
+    if (event.type == EventTypes.Encrypted) {
+      throw const WorkerFailure('waiting_keys');
+    }
+    final rejection = sourceRejection(
+      event,
+      owner: client.userID,
+      dictationId: dictationId,
+      now: DateTime.now(),
+    );
+    if (rejection != null) throw WorkerFailure(rejection);
+    cancel.check();
+    final file = await event.downloadAndDecryptAttachment(
+      downloadCallback: (uri) => boundedMediaDownload(
+        client.httpClient,
+        uri,
+        accessToken: client.accessToken,
+        maxBytes: DictationLimits.maxBytes,
+        cancel: cancel,
+      ),
+    );
+    cancel.check();
+    if (file.bytes.length > DictationLimits.maxBytes) {
+      throw const WorkerFailure('source_too_large');
+    }
+    return AudioSource(file.bytes, file.mimeType);
+  }
+}

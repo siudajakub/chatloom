@@ -143,10 +143,11 @@ class ConversationMetadata {
       placement != ChatPlacement.ignored &&
       notificationMode != PersonalNotificationMode.muted &&
       ((!muted &&
+              placement != ChatPlacement.aside &&
               (notificationMode == PersonalNotificationMode.all ||
                   (notificationMode == null && !lowPriority))) ||
           mentioned ||
-          threadReplyToMe);
+          (threadReplyToMe && placement != ChatPlacement.aside));
 
   ConversationMetadata withLabel(String id, {bool add = true}) {
     if (id.isEmpty) throw ArgumentError('Invalid label');
@@ -177,6 +178,15 @@ class ConversationMetadata {
 
   ConversationMetadata setPlacement(ChatPlacement? value) =>
       _copy(placement: () => value);
+
+  /// An explicit move clears other visibility flags so the destination is
+  /// reachable. Notification preferences remain available when moving back.
+  ConversationMetadata moveTo(ChatPlacement destination) => _copy(
+    placement: () => destination,
+    ignored: false,
+    archived: false,
+    lowPriority: false,
+  );
   ConversationMetadata setNotificationMode(PersonalNotificationMode? value) =>
       _copy(notificationMode: () => value);
   ConversationMetadata setPin(int? order) => _copy(pinOrder: () => order);

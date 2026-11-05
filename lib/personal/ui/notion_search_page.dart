@@ -27,6 +27,7 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart' show ChatPlacement;
 
 /// The one place to find and start conversations (Telegram, Messenger):
 /// chats, people from the connected networks and recent messages.
@@ -415,6 +416,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
                   !record.technical &&
                   !record.isGroup &&
                   !record.metadata.ignored &&
+                  record.placement != ChatPlacement.aside &&
                   record.lastActivity != null,
             )
             .toList()
@@ -865,6 +867,8 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       if (record.isGroup) 'Group',
       if (record.metadata.archived) 'Archived',
       if (record.metadata.ignored) 'Ignored',
+      if (!record.metadata.ignored && record.placement == ChatPlacement.aside)
+        'Aside',
     ];
     return NotionInboxRow(
       avatar: notionInboxAvatar(widget.personal, projection, room),

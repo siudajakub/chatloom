@@ -16,3 +16,4 @@ export 'src/transcript_parts.dart';
 export 'src/transcript_timing.dart';
 export 'src/transcription.dart';
 export 'src/conversation_summary.dart';
+export 'src/dictation.dart';

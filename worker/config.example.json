@@ -10,6 +10,8 @@
   "allowConversationSends": false,
   "autoTranscription": false,
   "autoTranscriptionMatrix": true,
+  "autoTranscriptionReels": false,
   "transcriptionProvider": "openrouter",
-  "transcriptionModel": "x-ai/grok-stt-1.0"
+  "transcriptionModel": "openai/gpt-transcribe",
+  "transcriptionTimingModel": "elevenlabs/scribe-v2"
 }

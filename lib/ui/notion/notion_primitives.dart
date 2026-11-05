@@ -659,6 +659,7 @@ class NotionTextField extends StatelessWidget {
   final int? minLines;
   final int maxLines;
   final int? maxLength;
+  final bool expands;
 
   const NotionTextField({
     super.key,
@@ -684,6 +685,7 @@ class NotionTextField extends StatelessWidget {
     this.minLines,
     this.maxLines = 1,
     this.maxLength,
+    this.expands = false,
   });
 
   @override
@@ -703,8 +705,10 @@ class NotionTextField extends StatelessWidget {
       enabled: enabled,
       readOnly: readOnly,
       autocorrect: autocorrect,
-      minLines: minLines,
-      maxLines: obscureText ? 1 : maxLines,
+      minLines: expands ? null : minLines,
+      maxLines: expands ? null : (obscureText ? 1 : maxLines),
+      expands: expands,
+      textAlignVertical: expands ? TextAlignVertical.top : null,
       maxLength: maxLength,
       style: tokens.typography.callout,
       decoration: InputDecoration(

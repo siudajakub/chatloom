@@ -29,6 +29,15 @@ class CompactComposer extends StatefulWidget {
   /// shrinks and fades out (and grows back) while the primary action morphs,
   /// so the editor gains the room smoothly. Its slot is always in the row.
   final Widget? secondaryAction;
+
+  /// A third recording choice, for example voice-to-text. Like the second
+  /// action it yields its horizontal room when the composer has text.
+  final Widget? tertiaryAction;
+
+  /// Keep the editor wide on phones with three recording actions: the
+  /// source and recording/send controls share a separate row. This decision
+  /// depends only on available width, so typing never moves the Send button.
+  final bool useCompactActionToolbar;
   final double sourceWidth;
   final Widget? contextPreview;
 
@@ -60,6 +69,8 @@ class CompactComposer extends StatefulWidget {
     this.addAction,
     required this.primaryAction,
     this.secondaryAction,
+    this.tertiaryAction,
+    this.useCompactActionToolbar = false,
     this.sourceWidth = 0,
     this.contextPreview,
     this.actions,
@@ -99,6 +110,8 @@ class _CompactComposerState extends State<CompactComposer>
 
   /// The last [CompactComposer.secondaryAction], kept while its slot closes.
   Widget? _secondary;
+  Widget? _tertiary;
+  final _primaryKey = GlobalKey();
 
   bool get _hasActions =>
       widget.actions != null &&
@@ -111,12 +124,14 @@ class _CompactComposerState extends State<CompactComposer>
     _lastText = widget.collapseOnText?.text ?? '';
     widget.collapseOnText?.addListener(_textChanged);
     _secondary = widget.secondaryAction;
+    _tertiary = widget.tertiaryAction;
   }
 
   @override
   void didUpdateWidget(CompactComposer oldWidget) {
     super.didUpdateWidget(oldWidget);
     _secondary = widget.secondaryAction ?? _secondary;
+    _tertiary = widget.tertiaryAction ?? _tertiary;
     if (!identical(oldWidget.collapseOnText, widget.collapseOnText)) {
       oldWidget.collapseOnText?.removeListener(_textChanged);
       _lastText = widget.collapseOnText?.text ?? '';
@@ -202,16 +217,25 @@ class _CompactComposerState extends State<CompactComposer>
       );
       final rowChrome =
           _rowChrome + widget.inlineActions.length * NotionSize.touchTarget;
+      final toolbar =
+          widget.useCompactActionToolbar &&
+          constraints.maxWidth <
+              rowChrome +
+                  NotionSize.touchTarget * 2 +
+                  _fieldChrome +
+                  _editorMin;
       final inline =
+          !toolbar &&
           constraints.maxWidth >=
-          measuredSourceWidth + rowChrome + _fieldChrome + _editorMin;
+              measuredSourceWidth + rowChrome + _fieldChrome + _editorMin;
       final actions = widget.actions ?? const <ComposerAction>[];
       // The secondary action only takes room from the editor. It never moves
       // the source out of line: the composer would change height as the
       // first letter hides it. It shows only while the editor is empty.
-      final secondaryWidth = widget.secondaryAction == null
-          ? 0.0
-          : NotionSize.touchTarget;
+      final secondaryWidth = toolbar
+          ? -NotionSize.touchTarget
+          : (widget.secondaryAction == null ? 0.0 : NotionSize.touchTarget) +
+                (widget.tertiaryAction == null ? 0.0 : NotionSize.touchTarget);
       double roomBeside(double source) => math.max(
         0.0,
         constraints.maxWidth -
@@ -254,14 +278,28 @@ class _CompactComposerState extends State<CompactComposer>
             widget.contextPreview ?? const SizedBox.shrink(),
             Padding(
               padding: EdgeInsetsDirectional.only(
-                start: 52,
-                end: 52,
+                start: toolbar ? NotionSpace.xs : 52,
+                end: toolbar ? 0 : 52,
                 bottom: inline ? 0 : NotionSpace.xxs,
               ),
-              child: Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: inline ? const SizedBox.shrink() : widget.source,
-              ),
+              child: toolbar
+                  ? Row(
+                      children: [
+                        Expanded(
+                          child: Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: widget.source,
+                          ),
+                        ),
+                        _extraAction(tertiary: true),
+                        _extraAction(),
+                        _primaryAction(),
+                      ],
+                    )
+                  : Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: inline ? const SizedBox.shrink() : widget.source,
+                    ),
             ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -361,25 +399,32 @@ class _CompactComposerState extends State<CompactComposer>
                 ),
                 const SizedBox(width: NotionSpace.xxs),
                 // Always present so the editor keeps its index in this row.
-                _SecondaryAction(
-                  visible: widget.secondaryAction != null,
-                  child: _secondary,
-                ),
+                if (!toolbar) _extraAction(tertiary: true),
+                if (!toolbar) _extraAction(),
                 // Mic ↔ send and disabled → enabled morph with a small
                 // spring (key each state's widget).
-                SizedBox.square(
-                  dimension: NotionSize.touchTarget,
-                  child: NotionMorphSwitcher(
-                    bounce: true,
-                    child: widget.primaryAction,
-                  ),
-                ),
+                if (!toolbar) _primaryAction(),
               ],
             ),
           ],
         ),
       );
     },
+  );
+
+  Widget _extraAction({bool tertiary = false}) => _SecondaryAction(
+    visible: tertiary
+        ? widget.tertiaryAction != null
+        : widget.secondaryAction != null,
+    child: tertiary ? _tertiary : _secondary,
+  );
+
+  Widget _primaryAction() => KeyedSubtree(
+    key: _primaryKey,
+    child: SizedBox.square(
+      dimension: NotionSize.touchTarget,
+      child: NotionMorphSwitcher(bounce: true, child: widget.primaryAction),
+    ),
   );
 }
 

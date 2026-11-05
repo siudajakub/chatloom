@@ -159,6 +159,24 @@ abstract class Transcriber {
   );
 }
 
+/// Optional extension for a primary transcript followed by timing work.
+/// Await [onPrimaryResult] before starting the optional paid stage so the
+/// encrypted job ledger can recover completed text without another upload.
+abstract interface class StagedTranscriber {
+  Future<TranscriptionResult> transcribeStaged(
+    AudioSource audio,
+    String? language,
+    Cancellation cancel,
+    void Function(double duration, double cost) estimate,
+    Future<void> Function(TranscriptionResult result) onPrimaryResult,
+  );
+}
+
+/// Stable, nonsecret pipeline identity for transcript deduplication.
+abstract interface class TranscriberIdentity {
+  String get transcriptionCacheIdentity;
+}
+
 /// A newly indexed incoming voice/round message reported by a read-only
 /// source scan. Identifiers only: no sender, text, media or file paths.
 class RecentSourceItem {
@@ -207,4 +225,15 @@ abstract class RecentSourceScanner {
     int limit = 100,
     bool reels = false,
   });
+}
+
+/// Loads only a marked, encrypted audio attachment from the validated self-only
+/// journal. Implementations must never resolve an arbitrary destination room.
+abstract interface class PrivateDictationSource {
+  Future<AudioSource> loadDictation(
+    String eventId,
+    String dictationId,
+    Cancellation cancel,
+  );
+  Future<bool?> dictationRedacted(String eventId);
 }

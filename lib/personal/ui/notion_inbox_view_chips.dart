@@ -10,6 +10,7 @@ const notionInboxChipViews = [
   InboxFilter.inbox,
   InboxFilter.unread,
   InboxFilter.groups,
+  InboxFilter.aside,
 ];
 
 String notionInboxChipLabel(InboxFilter view) =>

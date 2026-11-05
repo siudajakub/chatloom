@@ -311,6 +311,7 @@ class NotionNetworkMenu extends StatelessWidget {
       for (final view in [
         InboxFilter.inbox,
         InboxFilter.groups,
+        InboxFilter.aside,
         InboxFilter.ignored,
         InboxFilter.technical,
       ])
@@ -319,6 +320,7 @@ class NotionNetworkMenu extends StatelessWidget {
           title: view == InboxFilter.inbox ? 'Main list' : inboxViewLabel(view),
           leading: Icon(switch (view) {
             InboxFilter.groups => Icons.group_outlined,
+            InboxFilter.aside => Icons.move_to_inbox_outlined,
             InboxFilter.ignored => Icons.visibility_off_outlined,
             InboxFilter.technical => Icons.build_outlined,
             _ => Icons.chat_bubble_outline,

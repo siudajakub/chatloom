@@ -777,6 +777,11 @@ class _NetworkDetailPageState extends State<NetworkDetailPage>
     (ChatPlacement.inbox, 'Main list', 'Together with your other chats'),
     (ChatPlacement.groups, 'Groups', 'In the Groups view of the network menu'),
     (
+      ChatPlacement.aside,
+      'Aside',
+      'Outside the main list; only direct mentions notify',
+    ),
+    (
       ChatPlacement.ignored,
       'Ignored',
       'Out of sight in Ignored, with no notifications',

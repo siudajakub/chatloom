@@ -64,6 +64,7 @@ Future<void> main(List<String> arguments) async {
           temporaryRoot: config.temporaryDirectory,
           requireCodecSandbox: config.requireCodecSandbox,
           model: config.transcriptionModel,
+          timingModel: config.transcriptionTimingModel,
         ),
         language: checkLanguage,
       );
@@ -145,12 +146,25 @@ Future<void> main(List<String> arguments) async {
           temporaryRoot: config.temporaryDirectory,
           requireCodecSandbox: config.requireCodecSandbox,
           model: config.transcriptionModel,
+          timingModel: config.transcriptionTimingModel,
         ),
+        dictationSource: MatrixDictationSource(client, config.journalRoomId),
+        dictationTranscriber:
+            openRouterApiKey(config, credentials).isEmpty ||
+                config.requireCodecSandbox
+            ? null
+            : SpeechTranscriber(
+                openRouterApiKey(config, credentials),
+                temporaryRoot: config.temporaryDirectory,
+                requireCodecSandbox: config.requireCodecSandbox,
+                model: TranscriptionModel.scribeV2,
+              ),
         // Automatic transcription scans only explicitly configured local
         // sources, and only with the private operator switch (default off).
         recentSources: transport is LocalSourceTransport ? transport : null,
         liveSources: liveSources,
         autoTranscription: config.autoTranscription,
+        autoTranscriptionReels: config.autoTranscriptionReels,
         summarizer: OpenRouterConversationSummarizer(
           openRouterApiKey(config, credentials),
         ),
@@ -178,8 +192,10 @@ Future<void> main(List<String> arguments) async {
         final transcription =
             'transcription ${config.transcriptionModel.provider.name} '
             '${config.transcriptionModel.name}, '
+            'timing ${config.transcriptionTimingModel?.name ?? 'none'}, '
             'key ${transcriptionKey.isEmpty ? 'missing' : 'present'}, '
-            'automatic ${config.autoTranscription ? 'on' : 'off'}';
+            'automatic ${config.autoTranscription ? 'on' : 'off'}, '
+            'reels ${config.autoTranscriptionReels ? 'allowed' : 'off'}';
         if (arguments[0] == 'check') {
           stdout.writeln('Worker check: $transcription');
           stdout.writeln(
@@ -329,6 +345,10 @@ Future<void> main(List<String> arguments) async {
                     ? 'ready'
                     : 'not_configured',
                 'summaryVersion': 1,
+                'dictation': engine.dictationConfigured
+                    ? 'ready'
+                    : 'not_configured',
+                'dictationVersion': 1,
                 // Own devices whose commands this worker ignores (untrusted).
                 if (journal.untrustedDeviceIds case final ids
                     when ids.isNotEmpty)

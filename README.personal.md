@@ -57,6 +57,8 @@ Settings zbiera wszystkie kategorie na pełnych podstronach, bez ukrytego menu. 
 
 Filtry w dolnym pasku rozdzielają kategorię rozmów od komunikatora. Telegram domyślnie przenosi grupy do Groups; Ignored ukrywa rozmowy i całkowicie wycisza je w ChatLoom, a Technical przechowuje rozpoznane rozmowy botów mostów (także botów `…bot:beeper.local` bez aktywnych portali) oraz puste pokoje, w których zostałeś sam. Settings → Chats & organization → Networks & chat rules udostępnia trwałe reguły dla obecnych i nowych grup. Szczegóły rozmowy → Visibility & notifications pozwalają je nadpisać. Tryby All messages / Mentions only / Muted dotyczą ChatLoom; ograniczenia powiadomień konta Matrix nadal obowiązują. Trwałe preferencje wymagają istniejącego prywatnego szyfrowanego magazynu i synchronizacji na Androidzie/macOS. [Opis i weryfikacja](docs/personal/chat-rules-2026-10-16.md).
 
+Aside to osobna zakładka na odkładane rozmowy: przytrzymaj czat → Move to Aside; powrót przez Move to Inbox. Nowe wiadomości i przypięcia nie przywracają go do głównej listy. Powiadamiają tylko bezpośrednie wzmianki; pełne wyciszenie czatu i ograniczenia konta nadal obowiązują. Ignored zachowuje dotychczasowe pełne wyciszenie. [Zasady kategorii](docs/aside-chats.md).
+
 Przed używaniem sync/zadań: połącz prywatny E2EEjournal, zweryfikuj własne sesje, skonfiguruj worker według [worker/README.md](worker/README.md). WorkerOnline oznacza aktualny heartbeat; czekanie na sync nie oznacza trwałego ACK. Dane i konflikty zachowują się lokalnie przy awarii; wyświetlane błędy nie kasują bazy/kluczy.
 
 ## Konfiguracja push

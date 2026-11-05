@@ -333,12 +333,33 @@ bool _metaShareHost(String host) {
 }
 
 /// Content keys mautrix-meta writes only on a shared post (an XMA
-/// attachment): `msgconv/from-meta.go` `xmaAttachmentToMatrix` and
-/// `igconv/xma.go` set them from the post's title and caption.
+/// attachment): title/caption metadata and Instagram's XMA fetch status.
 const _metaShareKeys = {
   'com.beeper.meta.full_post_title',
   'com.beeper.meta.caption_body_text',
+  'fi.mau.instagram.xma_fetch_status',
 };
+
+// Some bridge/index versions retain only the share's caption. Match a
+// concrete Instagram post path, never a profile URL or an arbitrary mention
+// of the host. Bound caption work before matching untrusted event content.
+final _instagramCaptionShare = RegExp(
+  r'''https?://(?:[a-z0-9-]+\.)*(?:instagram\.com|instagr\.am)/'''
+  r'''(?:[a-z0-9_.]+/)?(?:reels?|p|tv|stories)/[a-z0-9_-]+(?:[/\s?&#<>"')]|$)''',
+  caseSensitive: false,
+);
+
+bool _hasInstagramShareCaption(Map<String, dynamic> content) {
+  for (final key in const ['body', 'formatted_body']) {
+    final value = content[key];
+    if (value is String &&
+        value.length <= 65536 &&
+        _instagramCaptionShare.hasMatch(value)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /// True for media the Messenger or Instagram bridge delivered as a share of
 /// someone's reel, post, story or video (Instagram, Facebook, Threads), not
@@ -352,9 +373,12 @@ const _metaShareKeys = {
 /// a title or caption; on Instagram (`fetchXMA`) the target URL. A video
 /// recorded and sent directly is a plain attachment with neither. Other
 /// bridges' `external_url` (Telegram's `t.me` link of a public chat) is not
-/// a share and keeps its kind.
+/// a share and keeps its kind. If share metadata was omitted, a concrete
+/// Instagram post link in the bounded caption also identifies a share,
+/// matching the local adapter's fallback.
 bool isMetaShare(Map<String, dynamic> content) {
   if (_metaShareKeys.any(content.containsKey)) return true;
+  if (_hasInstagramShareCaption(content)) return true;
   final url = content['external_url'];
   if (url is! String || url.length > 2048) return false;
   final parsed = Uri.tryParse(url.trim());

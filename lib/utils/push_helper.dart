@@ -491,6 +491,7 @@ Future<PushOutcome?> _notificationVeto(
       event,
       projection.metadataFor(event.room),
       notificationMode: projection.notificationModeFor(event.room),
+      placement: projection.placementFor(event.room),
     ),
   )) {
     return PushOutcome.mentionsOnly;

@@ -146,13 +146,18 @@ void main() {
   late WorkerEngine engine;
   var now = DateTime.utc(2026, 10, 17, 12);
 
-  WorkerEngine build({bool auto = true, int concurrency = 2}) => WorkerEngine(
+  WorkerEngine build({
+    bool auto = true,
+    bool reels = false,
+    int concurrency = 2,
+  }) => WorkerEngine(
     store,
     transport,
     transcriber,
     clock: () => now,
     recentSources: scanner,
     autoTranscription: auto,
+    autoTranscriptionReels: reels,
     maxConcurrentTranscripts: concurrency,
   );
 
@@ -268,6 +273,7 @@ void main() {
   test(
     'Instagram reels are on demand unless the policy switches them on',
     () async {
+      engine = build(reels: true);
       scanner.pages.add(const RecentSourcePage(1, []));
       await engine.autoScan(force: true);
       expect(scanner.reelRequests.last, isFalse);
@@ -306,6 +312,102 @@ void main() {
       expect(await engine.autoScan(force: true), 1);
       expect(scanner.reelRequests.last, isTrue);
       expect(store.job(entity(r'$reel2'))!['mediaKind'], 'reel');
+    },
+  );
+
+  test(
+    'operator blocks stale reel policy, client auto and restarted jobs',
+    () async {
+      putPolicy(
+        const TranscriptionPolicy().withKind(AutoTranscriptionKind.reel, true),
+      );
+      store.setCheckpoint(WorkerEngine.autoScanCheckpoint, '1');
+      scanner.pages.add(
+        RecentSourcePage(2, [
+          item(
+            r'$reel',
+            kind: AutoTranscriptionKind.reel,
+            network: 'instagram',
+          ),
+          item(r'$voice', network: 'instagram'),
+          item(
+            r'$round',
+            kind: AutoTranscriptionKind.round,
+            network: 'instagram',
+          ),
+        ]),
+      );
+      expect(await engine.autoScan(force: true), 2);
+      expect(scanner.reelRequests.last, isFalse);
+      expect(store.job(entity(r'$reel')), isNull);
+      await runJobs();
+      expect(store.job(entity(r'$voice'))!['state'], 'done');
+      expect(store.job(entity(r'$round'))!['state'], 'done');
+
+      // A client asks on behalf of its stale policy; preflight identifies the
+      // reel before download. An explicit retry still works.
+      final source = SourceEventRef(
+        conversation: const ConversationRef(accountId: account, roomId: room),
+        eventId: r'$client-reel',
+      );
+      final id = transcriptEntityId(source);
+      transport.facts[source.eventId] = const MediaFacts(
+        kind: AutoTranscriptionKind.reel,
+        sizeBytes: 3,
+      );
+      void request(
+        String opId,
+        TranscriptionOrigin origin, {
+        int revision = 0,
+      }) {
+        engine.accept(
+          op(
+            opId,
+            'transcript.request',
+            id,
+            Map<String, dynamic>.from(
+              TranscriptionJob(
+                id: id,
+                source: source,
+                state: JobState.queued,
+                origin: origin,
+              ).toJson(),
+            ),
+            revision: revision,
+          ),
+        );
+      }
+
+      request('client-auto', TranscriptionOrigin.auto);
+      await runJobs();
+      expect(store.job(id)!['errorCode'], 'auto_skipped_kind');
+      expect(transport.loads, isNot(contains(source.eventId)));
+      request(
+        'manual',
+        TranscriptionOrigin.manual,
+        revision: store.job(id)!['revision'] as int,
+      );
+      await runJobs();
+      expect(store.job(id)!['state'], 'done');
+      expect(transport.loads, contains(source.eventId));
+
+      // A job persisted while both switches were on is stopped after restart
+      // even if fresh media facts are unavailable.
+      engine = build(reels: true);
+      scanner.pages.add(
+        RecentSourcePage(3, [
+          item(r'$persisted', kind: AutoTranscriptionKind.reel),
+        ]),
+      );
+      expect(await engine.autoScan(force: true), 1);
+      transport.facts[r'$persisted'] = null;
+      engine = build();
+      await runJobs();
+      expect(
+        store.job(entity(r'$persisted'))!['errorCode'],
+        'auto_skipped_kind',
+      );
+      expect(transport.loads, isNot(contains(r'$persisted')));
     },
   );
 

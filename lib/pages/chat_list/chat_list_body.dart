@@ -152,7 +152,9 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
           },
           pins: pins,
           loading: inbox.loading,
-          emptyMessage: controller.selectedNetwork != null
+          emptyMessage: controller.personalFilter == InboxFilter.aside
+              ? 'No chats in Aside${controller.selectedNetwork == null ? '' : ' from this network'}. Hold a chat and choose Move to Aside.'
+              : controller.selectedNetwork != null
               ? 'No chats from this network in the current view.'
               : controller.personalFilter != InboxFilter.inbox ||
                     controller.activeFilter != ActiveFilter.allChats

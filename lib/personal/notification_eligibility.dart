@@ -10,8 +10,12 @@ Future<bool> personalNotificationEligible(
   Event event,
   ConversationMetadata metadata, {
   PersonalNotificationMode? notificationMode,
+  ChatPlacement? placement,
 }) async {
-  if (metadata.ignored || metadata.placement == ChatPlacement.ignored) {
+  final effectivePlacement = placement ?? metadata.placement;
+  if (metadata.ignored ||
+      metadata.placement == ChatPlacement.ignored ||
+      effectivePlacement == ChatPlacement.ignored) {
     return false;
   }
   final mode =
@@ -28,13 +32,14 @@ Future<bool> personalNotificationEligible(
                     ? PersonalNotificationMode.mentionsOnly
                     : PersonalNotificationMode.all));
   if (mode == PersonalNotificationMode.muted) return false;
+  final aside = effectivePlacement == ChatPlacement.aside;
   // Own messages sent from a native app arrive as the owner's bridge ghost.
   // Only account/receiver evidence may suppress an alert (or a mention):
   // weaker DM-structure or name evidence never hides a contact's message.
   if (OwnSenderResolver.of(event.room.client).isStronglyOwnEvent(event)) {
     return false;
   }
-  if (mode == PersonalNotificationMode.all) return true;
+  if (mode == PersonalNotificationMode.all && !aside) return true;
   final room = event.room;
   final client = room.client;
   final account = client.userID;
@@ -43,6 +48,8 @@ Future<bool> personalNotificationEligible(
   final mentions = event.content['m.mentions'];
   final users = mentions is Map ? mentions['user_ids'] : null;
   if (users is List && users.contains(account)) return true;
+  // Aside allows explicit mentions only, not ordinary thread replies.
+  if (aside) return false;
   final relation = event.content['m.relates_to'];
   if (relation is! Map || relation['rel_type'] != RelationshipTypes.thread) {
     return false;

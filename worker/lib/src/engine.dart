@@ -7,6 +7,7 @@ import 'package:personal_core/personal_core.dart';
 import 'ports.dart';
 import 'store.dart';
 import 'summary_jobs.dart';
+import 'dictation_jobs.dart';
 import 'summary_provider.dart';
 
 String stableId(String namespace, String id) =>
@@ -50,6 +51,8 @@ class WorkerEngine {
   final FeatureTransport transport;
   final Transcriber transcriber;
   late final SummaryJobs _summaries;
+  late final DictationJobs _dictations;
+  bool get dictationConfigured => _dictations.configured;
   bool get summariesConfigured => _summaries.configured;
   final DateTime Function() clock;
 
@@ -68,6 +71,10 @@ class WorkerEngine {
   /// Private operator switch (`autoTranscription` in the worker config).
   /// Off by default: the synced user policy alone never starts a scan.
   final bool autoTranscription;
+
+  /// Shared reels need operator approval as well as the synced per-kind
+  /// switch. Off by default, including policies saved by older clients.
+  final bool autoTranscriptionReels;
 
   /// Round-robin source audit over every transcript job (redaction
   /// detection): [sourceAuditBatch] probes at most this often.
@@ -146,9 +153,19 @@ class WorkerEngine {
     this.recentSources,
     this.liveSources,
     this.autoTranscription = false,
+    this.autoTranscriptionReels = false,
     this.maxConcurrentTranscripts = 2,
     ConversationSummarizer? summarizer,
+    Transcriber? dictationTranscriber,
+    PrivateDictationSource? dictationSource,
   }) : clock = clock ?? DateTime.now {
+    _dictations = DictationJobs(
+      store,
+      dictationSource,
+      dictationTranscriber,
+      clock: this.clock,
+      onChanged: _signal,
+    );
     _summaries = SummaryJobs(
       store,
       transport.accountId,
@@ -181,6 +198,7 @@ class WorkerEngine {
 
   void recover() {
     _summaries.recover();
+    _dictations.recover();
     store.transaction(() {
       for (final job in [
         for (final kind in ['transcript', 'schedule', 'reminder'])
@@ -190,6 +208,20 @@ class WorkerEngine {
         // never reached the provider (still downloading, measuring or
         // converting) is simply queued again.
         final paid = job['providerAttemptAt'] != null;
+        if (job['kind'] == 'transcript' && job['pendingResult'] is Map) {
+          job
+            ..remove('providerAttemptAt')
+            ..['state'] = 'waitingSync'
+            ..['errorCode'] = 'source_status_unknown'
+            ..['audits'] = 0
+            ..['auditAt'] = clock()
+                .add(parkedSourceRetry)
+                .toUtc()
+                .toIso8601String();
+          store.saveJob(job);
+          _result(job, 'recovery');
+          continue;
+        }
         job['state'] = job['kind'] == 'transcript' && paid
             ? 'unknown'
             : 'queued';
@@ -216,6 +248,8 @@ class WorkerEngine {
 
   void accept(PersonalOperation op) {
     if (!{
+      'dictation.request',
+      'dictation.cancel',
       'transcript.request',
       'transcript.cancel',
       'summary.request',
@@ -259,6 +293,10 @@ class WorkerEngine {
       }
       if (op.kind.startsWith('metadata.')) {
         _metadata(op);
+        return;
+      }
+      if (op.kind.startsWith('dictation.')) {
+        _dictations.accept(op);
         return;
       }
       if (op.kind.startsWith('summary.')) {
@@ -332,6 +370,7 @@ class WorkerEngine {
           return;
         }
         previous['state'] = 'cancelled';
+        previous.remove('pendingResult');
         previous['acceptedOpId'] = op.opId;
         previous['revision'] = revision + 1;
         _cancellations[op.entityId]?.cancel();
@@ -691,6 +730,7 @@ class WorkerEngine {
     _running = true;
     try {
       _summaries.tick();
+      _dictations.tick();
       final pruned = _mediaPrunedAt;
       if (pruned == null ||
           clock().difference(pruned) > const Duration(hours: 1)) {
@@ -1252,6 +1292,12 @@ class WorkerEngine {
         _setState(job, 'cancelled', 'auto_disabled');
         return;
       }
+      if (automatic &&
+          _jobKind(job) == AutoTranscriptionKind.reel &&
+          !autoPolicy().kindEnabled(AutoTranscriptionKind.reel)) {
+        _setState(job, 'cancelled', 'auto_skipped_kind');
+        return;
+      }
       _cancellations[id] = cancel;
       job.remove('retryAt');
       if (quiet) {
@@ -1335,56 +1381,89 @@ class WorkerEngine {
       // earlier transcript in the same language without a provider request.
       final mediaKey =
           '$mediaCheckpointPrefix${await mediaDigest(audio.bytes)}:'
-          '${job['language'] ?? ''}';
+          '${job['language'] ?? ''}'
+          '${transcriber is TranscriberIdentity ? ':${sha256.convert(utf8.encode((transcriber as TranscriberIdentity).transcriptionCacheIdentity))}' : ''}';
       cancel.check();
       final reused = _reusableTranscript(mediaKey, id);
-      final result =
-          reused ??
-          await transcriber.transcribe(
+      Future<TranscriptionResult> invokeTranscriber(
+        void Function(double, double) estimate,
+      ) {
+        final provider = transcriber;
+        if (provider is StagedTranscriber) {
+          return (provider as StagedTranscriber).transcribeStaged(
             audio,
             job['language'] as String?,
             cancel,
-            (duration, cost) {
+            estimate,
+            (primary) async {
+              cancel.check();
               final current = currentAttempt();
-              if (current == null || cancel.cancelled) return;
-              if (automatic) {
-                // Measured locally, before any upload: limits throw here so
-                // nothing reaches the provider and nothing is charged.
-                final policy = autoPolicy();
-                if (!autoTranscription || !policy.auto) {
-                  throw const WorkerFailure('auto_disabled');
-                }
-                // The user may have switched this kind off while the job
-                // was queued or downloading.
-                final kind = _jobKind(current);
-                if (kind != null && !policy.kindEnabled(kind)) {
-                  throw const WorkerFailure('auto_skipped_kind');
-                }
-                if (duration > policy.maxSeconds) {
-                  throw const WorkerFailure('auto_skipped_duration');
-                }
-                if (autoSpent(excluding: id) + cost > policy.dailyBudgetUsd) {
-                  throw const WorkerFailure('auto_skipped_budget');
-                }
-                // Keep the estimate durable for budget accounting, but skip the
-                // separate journal publication; the final result carries it.
-                // From here on the provider may be paid (see [recover]).
-                current['durationSeconds'] = duration;
-                current['estimatedCostUsd'] = cost;
-                current['providerAttemptAt'] = clock()
-                    .toUtc()
-                    .toIso8601String();
-                providerReached = true;
-                store.saveJob(current);
-                return;
+              if (current == null) throw const WorkerFailure('cancelled');
+              final reserved = current['estimatedCostUsd'];
+              // A crash may follow an alignment upload whose response never
+              // arrives. Keep the reserved pipeline estimate conservatively.
+              final cost =
+                  reserved is num && reserved > primary.estimatedCostUsd
+                  ? reserved.toDouble()
+                  : primary.estimatedCostUsd;
+              current['pendingResult'] = {
+                'text': primary.text,
+                'durationSeconds': primary.durationSeconds,
+                'estimatedCostUsd': cost,
+                'timing': ?primary.timing,
+              };
+              store.saveJob(current);
+            },
+          );
+        }
+        return provider.transcribe(
+          audio,
+          job['language'] as String?,
+          cancel,
+          estimate,
+        );
+      }
+
+      final result =
+          reused ??
+          await invokeTranscriber((duration, cost) {
+            final current = currentAttempt();
+            if (current == null || cancel.cancelled) return;
+            if (automatic) {
+              // Measured locally, before any upload: limits throw here so
+              // nothing reaches the provider and nothing is charged.
+              final policy = autoPolicy();
+              if (!autoTranscription || !policy.auto) {
+                throw const WorkerFailure('auto_disabled');
               }
+              // The user may have switched this kind off while the job
+              // was queued or downloading.
+              final kind = _jobKind(current);
+              if (kind != null && !policy.kindEnabled(kind)) {
+                throw const WorkerFailure('auto_skipped_kind');
+              }
+              if (duration > policy.maxSeconds) {
+                throw const WorkerFailure('auto_skipped_duration');
+              }
+              if (autoSpent(excluding: id) + cost > policy.dailyBudgetUsd) {
+                throw const WorkerFailure('auto_skipped_budget');
+              }
+              // Keep the estimate durable for budget accounting, but skip the
+              // separate journal publication; the final result carries it.
+              // From here on the provider may be paid (see [recover]).
               current['durationSeconds'] = duration;
               current['estimatedCostUsd'] = cost;
               current['providerAttemptAt'] = clock().toUtc().toIso8601String();
               providerReached = true;
-              _setState(current, 'processing', null);
-            },
-          );
+              store.saveJob(current);
+              return;
+            }
+            current['durationSeconds'] = duration;
+            current['estimatedCostUsd'] = cost;
+            current['providerAttemptAt'] = clock().toUtc().toIso8601String();
+            providerReached = true;
+            _setState(current, 'processing', null);
+          });
       cancel.check();
       if (currentAttempt() == null) return;
       final redacted = await _probeSource(source);
@@ -1406,6 +1485,7 @@ class WorkerEngine {
         ..remove('retries')
         ..remove('waitingKeysSince')
         ..remove('providerAttemptAt')
+        ..remove('pendingResult')
         ..remove('timing');
       if (redacted == null) {
         latest['pendingResult'] = values;
@@ -1639,14 +1719,18 @@ class WorkerEngine {
     return null;
   }
 
-  /// Current synced policy. Absent or deleted = defaults (automatic on);
-  /// unreadable = disabled.
+  /// Current effective policy, constrained by the operator's reel switch.
+  /// Absent or deleted = defaults (automatic on); unreadable = disabled.
+  /// The synced policy is preserved; a stale client cannot re-enable reels
+  /// against the operator's setting. Every scan and pre-upload gate uses it.
   TranscriptionPolicy autoPolicy() {
     final stored = store.metadata(transcriptionPolicyEntity);
-    if (stored == null || stored['deleted'] == true) {
-      return TranscriptionPolicy.defaults;
-    }
-    return TranscriptionPolicy.fromValue(stored['value']);
+    final policy = stored == null || stored['deleted'] == true
+        ? TranscriptionPolicy.defaults
+        : TranscriptionPolicy.fromValue(stored['value']);
+    return autoTranscriptionReels
+        ? policy
+        : policy.withKind(AutoTranscriptionKind.reel, false);
   }
 
   /// Estimated cost of automatic jobs created within the rolling window,
@@ -1871,6 +1955,7 @@ class WorkerEngine {
 
   void cancelAll() {
     _summaries.cancelAll();
+    _dictations.cancelAll();
     for (final c in _cancellations.values) {
       c.cancel();
     }
@@ -1884,6 +1969,7 @@ class WorkerEngine {
 
   Future<void> waitForIdle() async {
     await _summaries.waitForIdle();
+    await _dictations.waitForIdle();
     while (_activeTranscripts.isNotEmpty) {
       await Future.wait(_activeTranscripts.values.toList());
     }

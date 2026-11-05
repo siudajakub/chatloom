@@ -65,6 +65,35 @@ PersonalOperation metadataAck(PersonalOperation command, int revision) =>
 void main() {
   setUp(() => id = 0);
   test(
+    'Aside placement survives durable queue, restart, ACK and another replica',
+    () async {
+      final store = MemoryStore();
+      final r = replica(store);
+      const key = 'org:fixture';
+      final value = ConversationMetadata(
+        entityId: 'fixture',
+      ).moveTo(ChatPlacement.aside).toJson().cast<String, dynamic>();
+      await r.queueMetadata(key, value);
+      final restarted = replica(store);
+      expect(
+        ConversationMetadata.fromJson(restarted.values[key]!).placement,
+        ChatPlacement.aside,
+      );
+      final command = (await restarted.markPublishing(
+        restarted.pending.keys.single,
+      ))!;
+      final ack = metadataAck(command, 1);
+      await restarted.acceptResult(ack);
+      expect(replica(store).pending, isEmpty);
+      final other = replica(MemoryStore());
+      await other.acceptResult(ack);
+      final synced = ConversationMetadata.fromJson(other.values[key]!);
+      expect(synced.placement, ChatPlacement.aside);
+      expect(synced.shouldNotify(), isFalse);
+      expect(synced.shouldNotify(mentioned: true), isTrue);
+    },
+  );
+  test(
     'network defaults and chat exceptions survive restart, ACK and conflict',
     () async {
       final store = MemoryStore();

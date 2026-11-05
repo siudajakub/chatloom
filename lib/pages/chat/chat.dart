@@ -17,9 +17,10 @@ import 'package:chatloom/pages/chat/chat_timeline_preload.dart';
 import 'package:chatloom/pages/chat/chat_view.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart'
     show ConversationSourceChip;
+import 'package:chatloom/pages/chat/composer_dictation.dart';
 import 'package:chatloom/pages/chat/composer_keyboard.dart';
-import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/composer_send_later.dart';
+import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
 import 'package:chatloom/pages/chat/conversation_navigation.dart';
@@ -158,7 +159,12 @@ class ChatController extends State<ChatPageWithRoom>
     implements
         ConversationTimelineSource,
         ConversationComposerHost,
+        ComposerDictationSendReceiptHost,
         ComposerSendLaterHost {
+  int _durableComposerSends = 0;
+  @override
+  int get durableComposerSends => _durableComposerSends;
+
   @override
   Room get room => sendingClient.getRoomById(roomId) ?? widget.room;
 
@@ -1796,6 +1802,7 @@ class ChatController extends State<ChatPageWithRoom>
           editEventId: frozenEdit?.eventId,
           threadRootEventId: frozenThread,
         );
+        _durableComposerSends++;
         await draft;
       } catch (_) {
         await draft;
@@ -1806,6 +1813,13 @@ class ChatController extends State<ChatPageWithRoom>
 
     final personal = PersonalClient.of(frozenRoom.client);
     final durable = Completer<void>();
+    var acknowledged = false;
+    void acknowledge() {
+      if (acknowledged) return;
+      acknowledged = true;
+      _durableComposerSends++;
+    }
+
     Future<bool>? draft;
     final outcome = personal.sendImmediate(
       frozenRoom,
@@ -1814,6 +1828,7 @@ class ChatController extends State<ChatPageWithRoom>
       editEventId: frozenEdit?.eventId,
       threadId: frozenThread,
       onDurable: (attempt) {
+        acknowledge();
         PersonalPerformanceProbe.currentSpan?.mark('durable');
         final saved = draft = _consumeSent(sent);
         // Once the draft no longer holds the text, an identical message
@@ -1830,7 +1845,11 @@ class ChatController extends State<ChatPageWithRoom>
     // the network phase finishes in the background.
     await Future.any<void>([
       durable.future,
-      outcome.then<void>((_) {}, onError: (Object _) {}),
+      outcome.then<void>((result) {
+        // A previously delivered attempt may be accepted without a new
+        // persistence callback. Confirm it before returning to the modal.
+        if (result.state == ImmediateSendState.accepted) acknowledge();
+      }, onError: (Object _) {}),
     ]);
     unawaited(_finishSend(personal, sent, outcome, () => draft));
     // The next part of a split text, once this one is durable.

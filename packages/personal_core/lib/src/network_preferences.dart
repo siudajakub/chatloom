@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-enum ChatPlacement { inbox, groups, ignored }
+enum ChatPlacement { inbox, groups, ignored, aside }
 
 enum PersonalNotificationMode { all, mentionsOnly, muted }
 

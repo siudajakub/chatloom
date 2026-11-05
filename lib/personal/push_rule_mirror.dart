@@ -16,7 +16,7 @@
 ///   "Muted";
 /// * a chat or person muted "until I unmute" (no end time).
 ///
-/// Timed mutes, mentions-only, low priority, message requests and network
+/// Aside, timed mutes, mentions-only, low priority, message requests and network
 /// notification defaults stay local: a server rule cannot expire, and
 /// "mentions only" cannot be judged by the server in encrypted chats.
 /// A merged person applies to each of its source rooms.

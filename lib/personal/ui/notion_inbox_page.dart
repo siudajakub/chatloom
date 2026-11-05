@@ -96,7 +96,10 @@ class NotionInboxPage extends StatelessWidget {
         36;
     final showPins = pins.isNotEmpty;
     final emptyText =
-        emptyMessage ?? 'No chats yet. Use Search to find people.';
+        emptyMessage ??
+        (selectedView == InboxFilter.aside
+            ? 'No chats in Aside. Hold a chat and choose Move to Aside.'
+            : 'No chats yet. Use Search to find people.');
     // One backdrop read for the glass header and dock (DESIGN.md "Glass").
     return BackdropGroup(
       child: Scaffold(

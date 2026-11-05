@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'ports.dart';
+import 'transcript_alignment.dart';
 import 'transcript_timestamps.dart';
 
 const transcriptionMaxBytes = 25000000;
@@ -56,15 +57,26 @@ bool _noAudioStream(String stderr) =>
 /// are part of the job contract that installed apps read (any `openai_`
 /// code reads "Transcription service unavailable", and the transient ones
 /// are shown as still pending).
-class SpeechTranscriber implements Transcriber {
+class SpeechTranscriber
+    implements Transcriber, StagedTranscriber, TranscriberIdentity {
   /// The key of [model]'s provider.
   final String apiKey;
 
   /// The provider model; with [TranscriptionModel.timestamps] the same
   /// request also returns segment and word timestamps (`verbose_json`).
-  /// The worker passes the config's model (default Grok through
-  /// OpenRouter); callers that pass none get `gpt-transcribe`.
+  /// The worker passes its configured model; callers that pass none get
+  /// direct OpenAI `gpt-transcribe` for backwards compatibility.
   final TranscriptionModel model;
+
+  /// Optional second pass using the same provider key. Its text never
+  /// replaces the primary transcript; only trustworthy matching word times
+  /// are retained. A failed timing pass still returns the paid primary text.
+  final TranscriptionModel? timingModel;
+
+  @override
+  String get transcriptionCacheIdentity =>
+      'alignment-v1:${model.provider.name}/${model.name}:'
+      '${timingModel?.provider.name ?? "none"}/${timingModel?.name ?? "none"}';
   final String temporaryRoot;
   final String ffmpeg;
   final String ffprobe;
@@ -78,6 +90,7 @@ class SpeechTranscriber implements Transcriber {
     this.apiKey, {
     required this.temporaryRoot,
     this.model = TranscriptionModel.gptTranscribe,
+    this.timingModel,
     String? ffmpeg,
     String? ffprobe,
     this.processTimeout = const Duration(minutes: 10),
@@ -239,6 +252,15 @@ class SpeechTranscriber implements Transcriber {
     String? language,
     Cancellation cancel,
     void Function(double, double) estimate,
+  ) => transcribeStaged(audio, language, cancel, estimate, (_) async {});
+
+  @override
+  Future<TranscriptionResult> transcribeStaged(
+    AudioSource audio,
+    String? language,
+    Cancellation cancel,
+    void Function(double, double) estimate,
+    Future<void> Function(TranscriptionResult) onPrimaryResult,
   ) async {
     if (apiKey.isEmpty) throw const WorkerFailure('openai_key_missing');
     // Isolation is optional hardening; when requested, never pretend that the
@@ -254,7 +276,15 @@ class SpeechTranscriber implements Transcriber {
       // The media's only in-memory copy is released once it is on disk.
       await input.writeAsBytes(audio.takeBytes(), flush: true);
       final duration = await _probeDuration(input, cancel);
-      final cost = duration / 60 * model.pricePerMinute;
+      if (timingModel != null &&
+          (timingModel!.provider != model.provider ||
+              !timingModel!.timestamps)) {
+        throw const WorkerFailure('invalid_timing_model');
+      }
+      final cost =
+          duration /
+          60 *
+          (model.pricePerMinute + (timingModel?.pricePerMinute ?? 0));
       // Pre-upload gate: automatic-job limits throw here, before conversion
       // or any provider request; the finally block removes the plaintext.
       estimate(duration, cost);
@@ -307,13 +337,28 @@ class SpeechTranscriber implements Transcriber {
       if (chunks.isEmpty) throw const WorkerFailure('empty_audio');
       final texts = <String>[];
       final stamps = <ChunkTimestamps?>[];
+      final durations = <Duration>[];
+      // Probe all converted chunks before paid work. Offsets must describe
+      // the actual local split, never a secondary model's claimed duration.
+      if (timingModel != null) {
+        for (final chunk in chunks) {
+          durations.add(
+            Duration(
+              microseconds:
+                  ((await _probeDuration(chunk, cancel)) *
+                          Duration.microsecondsPerSecond)
+                      .round(),
+            ),
+          );
+        }
+      }
       for (final chunk in chunks) {
         cancel.check();
         if (await chunk.length() > transcriptionMaxBytes) {
           throw const WorkerFailure('audio_chunk_too_large');
         }
         try {
-          final answer = await _upload(chunk, language, cancel);
+          final answer = await _upload(chunk, language, cancel, model);
           texts.add(answer.text);
           stamps.add(answer.timestamps);
         } on PaidRequestUnknown {
@@ -327,13 +372,46 @@ class SpeechTranscriber implements Transcriber {
           rethrow;
         }
       }
+      // Finish every primary chunk first: a secondary failure must never
+      // trigger a whole-job retry and charge for GPT again.
+      if (timingModel case final secondary?) {
+        // The engine checkpoints this text in its encrypted result ledger.
+        // If checkpointing fails, do not begin another paid request.
+        await onPrimaryResult(
+          TranscriptionResult(texts.join('\n\n'), duration, cost),
+        );
+        for (var i = 0; i < chunks.length; i++) {
+          cancel.check();
+          try {
+            final answer = await _uploadOnce(
+              chunks[i],
+              language,
+              cancel,
+              secondary,
+            );
+            stamps[i] = answer.text == null || answer.timestamps == null
+                ? null
+                : alignTranscriptWords(
+                    texts[i],
+                    answer.text!,
+                    answer.timestamps!,
+                    durations[i],
+                  );
+            if (stamps[i] == null) break;
+          } catch (_) {
+            // Includes paid uncertainty: do not retry timing or the job.
+            // Cancellation still aborts rather than publishing stale work.
+            cancel.check();
+            stamps[i] = null;
+            break;
+          }
+        }
+      }
       return TranscriptionResult(
         texts.join('\n\n'),
         duration,
         cost,
-        // Timestamps come with the text of the same requests, never from a
-        // second one; a transcript without them is still complete.
-        timing: model.timestamps
+        timing: model.timestamps || timingModel != null
             ? transcriptTimingRecord(texts, stamps, separator: '\n\n')
             : null,
       );
@@ -351,9 +429,10 @@ class SpeechTranscriber implements Transcriber {
     File file,
     String? language,
     Cancellation cancel,
+    TranscriptionModel selectedModel,
   ) async {
     for (var attempt = 1; ; attempt++) {
-      final outcome = await _uploadOnce(file, language, cancel);
+      final outcome = await _uploadOnce(file, language, cancel, selectedModel);
       if (outcome.text case final text?) {
         return (text: text, timestamps: outcome.timestamps);
       }
@@ -381,16 +460,26 @@ class SpeechTranscriber implements Transcriber {
       Duration? retryAfter,
     })
   >
-  _uploadOnce(File file, String? language, Cancellation cancel) async {
+  _uploadOnce(
+    File file,
+    String? language,
+    Cancellation cancel,
+    TranscriptionModel selectedModel,
+  ) async {
     final client = clientFactory();
     cancel.listen(client.close);
     try {
       cancel.check();
-      final request = switch (model.provider) {
-        TranscriptionProvider.openai => await _openAiRequest(file, language),
+      final request = switch (selectedModel.provider) {
+        TranscriptionProvider.openai => await _openAiRequest(
+          file,
+          language,
+          selectedModel,
+        ),
         TranscriptionProvider.openrouter => await _openRouterRequest(
           file,
           language,
+          selectedModel,
         ),
       };
       final response = await client
@@ -445,7 +534,9 @@ class SpeechTranscriber implements Transcriber {
       }
       final trimmed = text.trim();
       ChunkTimestamps? timestamps;
-      if (model.timestamps && value is Map) {
+      if (selectedModel.timestamps &&
+          value is Map &&
+          (selectedModel != timingModel || validAlignmentAnswer(value))) {
         try {
           timestamps = chunkTimestamps(value, trimmed);
         } catch (_) {
@@ -483,11 +574,15 @@ class SpeechTranscriber implements Transcriber {
   }
 
   /// OpenAI: a multipart form with the MP3 chunk.
-  Future<http.BaseRequest> _openAiRequest(File file, String? language) async {
+  Future<http.BaseRequest> _openAiRequest(
+    File file,
+    String? language,
+    TranscriptionModel selectedModel,
+  ) async {
     final request = http.MultipartRequest('POST', _openAiTranscriptions)
       ..headers['Authorization'] = 'Bearer $apiKey'
-      ..fields['model'] = model.name;
-    if (model.timestamps) {
+      ..fields['model'] = selectedModel.name;
+    if (selectedModel.timestamps) {
       // One request: text plus segment and word times (whisper-1). The
       // multipart form repeats the array field, so the second value is
       // its own part (a plain field part, no file name).
@@ -523,19 +618,20 @@ class SpeechTranscriber implements Transcriber {
   Future<http.BaseRequest> _openRouterRequest(
     File file,
     String? language,
+    TranscriptionModel selectedModel,
   ) async {
     final request = http.Request('POST', _openRouterTranscriptions)
       ..headers['Authorization'] = 'Bearer $apiKey'
       ..headers['Content-Type'] = 'application/json';
     request.bodyBytes = utf8.encode(
       jsonEncode({
-        'model': model.name,
+        'model': selectedModel.name,
         'input_audio': {
           'data': base64Encode(await file.readAsBytes()),
           'format': 'mp3',
         },
         if (language != null && language.isNotEmpty) 'language': language,
-        if (model.timestamps) ...{
+        if (selectedModel.timestamps) ...{
           'response_format': 'verbose_json',
           'timestamp_granularities': ['segment', 'word'],
         } else

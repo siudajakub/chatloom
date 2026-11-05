@@ -43,7 +43,8 @@ class InboxProjection {
 
   PersonalNotificationMode notificationModeFor(Room room) {
     final metadata = metadataFor(room);
-    if (placementFor(room) == ChatPlacement.ignored)
+    final placement = placementFor(room);
+    if (placement == ChatPlacement.ignored)
       return PersonalNotificationMode.muted;
     final source = metadataForEntity(room.id);
     final kind = classifier.classify(room);
@@ -53,6 +54,13 @@ class InboxProjection {
         (kind.isGroup ? policy.groupNotifications : null) ??
         policy.notifications;
     if (explicit == PersonalNotificationMode.muted) return explicit!;
+    // Aside caps even an explicit "All messages" choice. A stricter mute
+    // stays in force; leaving Aside restores the saved notification choice.
+    if (placement == ChatPlacement.aside) {
+      return explicit == null && inherited == PersonalNotificationMode.muted
+          ? PersonalNotificationMode.muted
+          : PersonalNotificationMode.mentionsOnly;
+    }
     // An active (possibly timed) mute from the inbox menu outranks the other
     // choices but never loosens a fully muted network default.
     if (metadata.muted || source.muted) {

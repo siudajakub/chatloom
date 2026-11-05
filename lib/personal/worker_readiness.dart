@@ -38,8 +38,12 @@ class WorkerReadiness {
   /// merged persons again); null for older workers.
   final bool? metadataResync;
 
-  /// Optional private conversation-summary service. Older workers never
-  /// imply support merely because their transcription service is ready.
+  /// Private Scribe drafts need an explicit capability; an older heartbeat
+  /// or the incoming-transcription capability does not imply support.
+  final String? dictation;
+  final int? dictationVersion;
+
+  /// Optional private conversation-summary service.
   final String? summary;
   final int? summaryVersion;
 
@@ -60,6 +64,8 @@ class WorkerReadiness {
     this.autoTranscriptionLive,
     this.deviceKey,
     this.metadataResync,
+    this.dictation,
+    this.dictationVersion,
     this.summary,
     this.summaryVersion,
     this.untrustedDevices = const [],
@@ -105,6 +111,8 @@ class WorkerReadiness {
       metadataResync: payload['metadataResync'] is int
           ? (payload['metadataResync'] as int) >= 1
           : null,
+      dictation: allowed(payload['dictation'], {'ready', 'not_configured'}),
+      dictationVersion: count(payload['dictationVersion']),
       summary: allowed(payload['summary'], {'ready', 'not_configured'}),
       summaryVersion: count(payload['summaryVersion']),
       untrustedDevices: switch (payload['untrustedDevices']) {
@@ -136,6 +144,8 @@ class WorkerReadiness {
       other.autoTranscriptionLive == autoTranscriptionLive &&
       other.deviceKey == deviceKey &&
       other.metadataResync == metadataResync &&
+      other.dictation == dictation &&
+      other.dictationVersion == dictationVersion &&
       other.summary == summary &&
       other.summaryVersion == summaryVersion &&
       _sameList(other.untrustedDevices, untrustedDevices);
@@ -162,7 +172,7 @@ class WorkerReadiness {
     autoTranscriptionLive,
     deviceKey,
     metadataResync,
-    summary,
+    Object.hash(dictation, dictationVersion, summary),
     summaryVersion,
     Object.hashAll(untrustedDevices),
   );

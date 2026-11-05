@@ -36,6 +36,8 @@ Future<String> checkTranscription(
     'model': transcriber is SpeechTranscriber
         ? transcriber.model.name
         : transcriptionModel,
+    if (transcriber is SpeechTranscriber && transcriber.timingModel != null)
+      'timingModel': transcriber.timingModel!.name,
     'language': ?language,
     'durationSeconds': result.durationSeconds,
     'estimatedCostUsd': result.estimatedCostUsd,

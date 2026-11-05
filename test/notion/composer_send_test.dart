@@ -7,6 +7,7 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat/chat_event_list.dart';
+import 'package:chatloom/pages/chat/composer_dictation.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
 import 'package:chatloom/pages/chat/input_bar.dart';
@@ -15,6 +16,7 @@ import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -25,6 +27,28 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'conversation_test_support.dart';
+
+/// An outbox attempt delivered before this UI session needs no new durable
+/// write. Its accepted result must still close dictation without a retry.
+class _AlreadyAcceptedPersonal extends ConversationPersonal {
+  _AlreadyAcceptedPersonal(super.client);
+
+  @override
+  Future<ImmediateSendResult> sendImmediate(
+    Room room,
+    String text, {
+    Event? replyTo,
+    String? editEventId,
+    String? threadId,
+    ImmediateDurable? onDurable,
+  }) => super.sendImmediate(
+    room,
+    text,
+    replyTo: replyTo,
+    editEventId: editEventId,
+    threadId: threadId,
+  );
+}
 
 PersonGroup _group(PersonalClient p, Room a, Room b) => PersonGroup(
   id: 'send-person',
@@ -125,6 +149,95 @@ void main() {
     await AppSettings.init(loadWebConfigFile: false);
   });
 
+  for (final merged in [false, true]) {
+    testWidgets(
+      '${merged ? "merged" : "ordinary"} dictation accepts an already delivered outbox attempt once',
+      (tester) async {
+        final client = ConversationClient();
+        final a = ConversationRoom(client, '!accepted-a:example.invalid');
+        final b = ConversationRoom(client, '!accepted-b:example.invalid');
+        a.message(r'$accepted-fixture', 'Fictional message');
+        final personal = _AlreadyAcceptedPersonal(client);
+        PersonalClient.debugUse(client, personal);
+        addTearDown(personal.dispose);
+        await _mount(
+          tester,
+          merged
+              ? MergedChatPage(
+                  personal: personal,
+                  group: _group(personal, a, b),
+                )
+              : ChatPageWithRoom(room: a),
+          client,
+        );
+        final host = merged
+            ? _host(tester)
+            : tester.state<ChatController>(find.byType(ChatPageWithRoom));
+        final session = ComposerDictationSession(
+          host: host,
+          currentHost: () => host,
+          activeClient: () => client,
+          mounted: () => host.inputFocus.context != null,
+        );
+        final result = session.send('Reviewed transcript');
+        await tester.pumpAndSettle();
+        expect(await result, isTrue);
+        expect(
+          (host as ComposerDictationSendReceiptHost).durableComposerSends,
+          1,
+        );
+        expect(personal.sends.single.text, 'Reviewed transcript');
+        expect(_editorText(tester), isEmpty);
+        expect(await session.send('Reviewed transcript'), isFalse);
+        expect(personal.sends, hasLength(1));
+        session.dispose();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      '${merged ? "merged" : "ordinary"} dictation stays discoverable without a ready worker',
+      (tester) async {
+        PlatformInfos.debugPlatformCanRecord = true;
+        addTearDown(() => PlatformInfos.debugPlatformCanRecord = null);
+        await tester.binding.setSurfaceSize(const Size(390, 844));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final client = ConversationClient();
+        final a = ConversationRoom(client, '!dictation-a:example.invalid');
+        final b = ConversationRoom(client, '!dictation-b:example.invalid');
+        a.message(r'$dictation-fixture', 'Fictional message');
+        final personal = ConversationPersonal(client);
+        PersonalClient.debugUse(client, personal);
+        addTearDown(personal.dispose);
+        await _mount(
+          tester,
+          merged
+              ? MergedChatPage(
+                  personal: personal,
+                  group: _group(personal, a, b),
+                )
+              : ChatPageWithRoom(room: a),
+          client,
+        );
+        final dictation = find.byKey(const ValueKey('composer-dictation'));
+        expect(dictation, findsOneWidget);
+        expect(tester.getSize(dictation), const Size.square(48));
+        await tester.tap(dictation);
+        await tester.pumpAndSettle();
+        expect(find.text('Dictation unavailable'), findsOneWidget);
+        expect(personal.sends, isEmpty);
+        expect(_editorText(tester), isEmpty);
+        await tester.tap(find.text('Got it'));
+        await tester.pumpAndSettle();
+        expect(dictation, findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+      },
+    );
+  }
+
   group('composer send', () {
     testWidgets(
       'the composer is empty while the network send is still pending',
@@ -153,6 +266,11 @@ void main() {
         await _flush(tester);
         // Durable in the outbox, the bridge is still busy: Telegram clears.
         expect(gate.isCompleted, isFalse);
+        expect(
+          (_host(tester) as ComposerDictationSendReceiptHost)
+              .durableComposerSends,
+          1,
+        );
         expect(_editorText(tester), isEmpty);
         expect(_host(tester).replyEvent, isNull);
         expect(personal.sends.single.reply, same(original));
@@ -162,6 +280,11 @@ void main() {
         await tester.tap(find.byKey(const Key('send_button')));
         await _flush(tester);
         expect(personal.sends.map((s) => s.text), ['First message', 'Second']);
+        expect(
+          (_host(tester) as ComposerDictationSendReceiptHost)
+              .durableComposerSends,
+          2,
+        );
         expect(_editorText(tester), isEmpty);
         gate.complete();
         await tester.pumpAndSettle();
@@ -227,6 +350,11 @@ void main() {
       await tester.tap(find.byKey(const Key('send_button')));
       await tester.pumpAndSettle();
       expect(_editorText(tester), 'Keep me');
+      expect(
+        (_host(tester) as ComposerDictationSendReceiptHost)
+            .durableComposerSends,
+        0,
+      );
       expect(find.textContaining('it was not sent'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
@@ -281,6 +409,12 @@ void main() {
         await _flush(tester);
         expect(gate.isCompleted, isFalse);
         expect(personal.sends.single.text, 'Sent while the bridge is slow');
+        expect(
+          tester
+              .state<ChatController>(find.byType(ChatPageWithRoom))
+              .durableComposerSends,
+          1,
+        );
         expect(_editorText(tester), isEmpty);
         await _type(tester, 'Next one');
         gate.complete();

@@ -194,6 +194,7 @@ class PersonalReplica {
   final schedules = <String, Map<String, dynamic>>{};
   final reminders = <String, Map<String, dynamic>>{};
   final summaries = <String, Map<String, dynamic>>{};
+  final dictations = <String, Map<String, dynamic>>{};
   final pending = <String, PersonalOperation>{};
   final transcriptCancellations = <String>{};
   final summaryCancellations = <String>{};
@@ -346,6 +347,8 @@ class PersonalReplica {
           reminders[entity] = data;
         case 'summary':
           summaries[entity] = data;
+        case 'dictation':
+          dictations[entity] = data;
       }
     }
   }
@@ -907,6 +910,96 @@ class PersonalReplica {
     );
   }
 
+  Future<TranscriptCancellation> cancelDictation(
+    String entity,
+  ) => _serial(() async {
+    final record = _record(entity);
+    if (record['jobKind'] != 'dictation' || record['job'] is! Map) {
+      throw StateError('Dictation is unavailable');
+    }
+    final commands = Map<String, dynamic>.from(
+      record['commands'] as Map? ?? {},
+    );
+    final dictationCommands = commands.values
+        .map(
+          (value) => PersonalOperation.fromJson(
+            Map<String, dynamic>.from(value as Map),
+          ),
+        )
+        .where((op) => op.kind.startsWith('dictation.'))
+        .toList();
+    final attempted = record['attempted'] as List? ?? const [];
+    final unattemptedRequests = dictationCommands
+        .where(
+          (op) =>
+              op.kind == 'dictation.request' && !attempted.contains(op.opId),
+        )
+        .toList();
+    if (unattemptedRequests.isNotEmpty &&
+        dictationCommands.length == unattemptedRequests.length) {
+      for (final request in unattemptedRequests) {
+        commands.remove(request.opId);
+      }
+      record['commands'] = commands;
+      final onlyLocal =
+          (record['job'] as Map)['state'] == 'waitingSync' &&
+          unattemptedRequests.every(
+            (request) => request.baseRevision == record['revision'],
+          );
+      if (onlyLocal) {
+        record['job'] = {
+          ...Map<String, dynamic>.from(record['job'] as Map),
+          'state': 'cancelled',
+        };
+        record.remove('dictationCancellationRequested');
+        await _commit(entity, record);
+        return TranscriptCancellation.cancelledLocally;
+      }
+      // Another trusted device may have started the same source job. Withdraw
+      // our untouched request, but retain the real state and cancel remotely.
+      dictationCommands.clear();
+    }
+    if (_dictationFinished(record)) {
+      await _commit(entity, record);
+      return TranscriptCancellation.alreadyFinished;
+    }
+    record['dictationCancellationRequested'] = true;
+    _queueDictationCancellation(entity, record);
+    await _commit(entity, record);
+    return dictationCommands.isEmpty ||
+            dictationCommands.any((op) => op.kind == 'dictation.cancel')
+        ? TranscriptCancellation.queued
+        : TranscriptCancellation.waitingAcknowledgement;
+  });
+
+  bool _dictationFinished(Map<String, dynamic> record) => {
+    'done',
+    'cancelled',
+    'failed',
+    'unknown',
+  }.contains((record['job'] as Map?)?['state']);
+
+  void _queueDictationCancellation(String entity, Map<String, dynamic> record) {
+    if (record['dictationCancellationRequested'] != true) return;
+    if (_dictationFinished(record)) {
+      record.remove('dictationCancellationRequested');
+      return;
+    }
+    final commands = record['commands'] as Map? ?? {};
+    if (commands.values.any(
+      (value) =>
+          value is Map &&
+          (value['kind'] as String? ?? '').startsWith('dictation.'),
+    ))
+      return;
+    _add(
+      record,
+      _operation('dictation.cancel', entity, {
+        'id': entity,
+      }, record['revision'] as int),
+    );
+  }
+
   /// Whether [opId] was applied: its bucket, or a marker from before buckets.
   Future<bool> _seenDurably(String opId) async {
     final ids = (await read(seenKeyOf(opId)))?['ids'];
@@ -998,6 +1091,7 @@ class PersonalReplica {
         'schedule.result',
         'reminder.result',
         'summary.result',
+        'dictation.result',
       }.contains(result.kind)) {
         final previous = record['job'] as Map? ?? {};
         record['jobKind'] = result.kind.split('.').first;
@@ -1009,7 +1103,8 @@ class PersonalReplica {
             'state':
                 payload['actualState'] ??
                 ((result.kind == 'transcript.result' ||
-                        result.kind == 'summary.result')
+                        result.kind == 'summary.result' ||
+                        result.kind == 'dictation.result')
                     ? 'failed'
                     : previous['state'] ?? 'failed'),
           };
@@ -1041,6 +1136,14 @@ class PersonalReplica {
         record.remove('summaryCancellationRequested');
       }
       _queueSummaryCancellation(entity, record);
+    }
+    if (result.kind == 'dictation.result') {
+      if (payload['state'] == 'conflict' &&
+          payload['errorCode'] != 'conflict' &&
+          acknowledged?.kind == 'dictation.cancel') {
+        record.remove('dictationCancellationRequested');
+      }
+      _queueDictationCancellation(entity, record);
     }
     record['appliedResults'] = [
       ...applied.skip(applied.length > 31 ? applied.length - 31 : 0),

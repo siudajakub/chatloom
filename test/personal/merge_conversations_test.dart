@@ -452,6 +452,7 @@ void main() {
       'Mute…',
       'Archive',
       'Merge…',
+      'Move to Aside',
       'Ignore chat',
     ]);
     personal.values['person:p'] = PersonGroup(
@@ -466,6 +467,7 @@ void main() {
       'Mute…',
       'Archive',
       'Unmerge',
+      'Move to Aside',
       'Ignore chat',
     ]);
     final groupMenu = chatMenuItems(
@@ -551,6 +553,7 @@ void main() {
       'Mute…',
       'Archive',
       'Merge…',
+      'Move to Aside',
       'Ignore chat',
     ]);
     expect(
@@ -808,6 +811,7 @@ void main() {
       'Mute…',
       'Archive',
       'Merge…',
+      'Move to Aside',
       'Ignore chat',
     ]) {
       expect(find.text(label), findsOneWidget);

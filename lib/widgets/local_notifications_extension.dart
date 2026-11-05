@@ -63,6 +63,7 @@ extension LocalNotificationsExtension on MatrixState {
       event,
       projection.metadataFor(event.room),
       notificationMode: projection.notificationModeFor(event.room),
+      placement: projection.placementFor(event.room),
     )) {
       return;
     }

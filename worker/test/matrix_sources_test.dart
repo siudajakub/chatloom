@@ -175,6 +175,47 @@ void main() {
     },
   );
 
+  test(
+    'caption-only Instagram shares stay manual through Matrix sync',
+    () async {
+      for (final extra in <Map<String, dynamic>>[
+        {'body': 'Shared clip\nhttps://instagram.com/reel/Cfixture/'},
+        {
+          'formatted_body':
+              '<a href="https://instagram.com/p/Cfixture/">Shared clip</a>',
+        },
+        {'fi.mau.instagram.xma_fetch_status': 'skip'},
+      ]) {
+        final event = message(r'$share' + extra.keys.first, {
+          ...video(),
+          ...extra,
+        });
+        feed.observe(event);
+        final item = (await feed.drain()).single;
+        expect(item.kind, AutoTranscriptionKind.reel);
+        expect(
+          autoTranscriptionBlock(
+            TranscriptionPolicy.defaults,
+            AutoTranscriptionCandidate(
+              kind: item.kind,
+              network: item.network,
+              roomId: item.roomId,
+              outgoing: false,
+              timestamp: item.timestamp,
+            ),
+            now: now,
+          ),
+          'kind_disabled',
+        );
+        // This classification affects automatic work, not explicit requests.
+        expect(
+          MatrixFeatureTransport.transcriptionSourceRejection(event),
+          isNull,
+        );
+      }
+    },
+  );
+
   test('silent loops, text, edits, journal, local and disappearing chats '
       'are ignored', () async {
     feed.observe(message(r'$gif', video(info: {'fi.mau.gif': true})));

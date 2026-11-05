@@ -41,6 +41,7 @@ enum ChatMenuAction {
   unmerge,
   notifications,
   ignore,
+  aside,
   deleteChat,
 }
 

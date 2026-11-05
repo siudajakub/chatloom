@@ -196,6 +196,8 @@ class PersonalClient extends ChangeNotifier {
       _replica?.schedules ?? _emptySchedules;
   Map<String, Map<String, dynamic>> get reminders =>
       _replica?.reminders ?? _emptyReminders;
+  Map<String, Map<String, dynamic>> get dictations =>
+      _replica?.dictations ?? const {};
   Map<String, Map<String, dynamic>> get summaries =>
       _replica?.summaries ?? _emptySummaries;
   Map<String, PersonalOperation> get pending =>
@@ -1479,6 +1481,8 @@ class PersonalClient extends ChangeNotifier {
     _ownMediaWatch = client.onTimelineEvent.stream.listen((event) {
       if (_disposed ||
           event.type != EventTypes.Message ||
+          event.content.containsKey(DictationLimits.sourceMarker) ||
+          PersonalPrivacy.isJournal(event.room) ||
           !event.eventId.startsWith(r'$')) {
         return;
       }
@@ -1597,6 +1601,8 @@ class PersonalClient extends ChangeNotifier {
   /// null for anything else, including protected media and silent loops.
   static AutoTranscriptionKind? autoTranscriptionKind(Event e) {
     if (e.redacted ||
+        e.content.containsKey(DictationLimits.sourceMarker) ||
+        PersonalPrivacy.isJournal(e.room) ||
         e.type != EventTypes.Message ||
         !e.eventId.startsWith(r'$')) {
       return null;
@@ -1635,6 +1641,10 @@ class PersonalClient extends ChangeNotifier {
   /// `disappearing` (the chat has a disappearing-message timer) and
   /// `before_enabled` while this device's window start is not known yet.
   String? autoTranscriptionBlockFor(Event e, DateTime now) {
+    if (e.content.containsKey(DictationLimits.sourceMarker) ||
+        PersonalPrivacy.isJournal(e.room)) {
+      return 'private_dictation';
+    }
     if (!autoTranscriptionAvailable) return 'worker_off';
     final kind = autoTranscriptionKind(e);
     // Older workers were only ever asked for voice notes and rounds.
@@ -1824,6 +1834,22 @@ class PersonalClient extends ChangeNotifier {
     return result;
   }
 
+  Future<TranscriptCancellation> cancelDictation(String id) async {
+    await _ensureLocal();
+    _installSync();
+    final result = await _replica!.cancelDictation(id);
+    _dispatch();
+    return result;
+  }
+
+  /// Validates the private journal immediately before an attachment operation.
+  Future<Room> dictationJournal() async {
+    if (!ready) throw StateError('Private encrypted sync is not connected');
+    await _validate();
+    _checkActive();
+    return journal!;
+  }
+
   Future<void> transcribe(Event e, {String? language}) =>
       _requestTranscript(e, language: language);
 
@@ -1834,6 +1860,8 @@ class PersonalClient extends ChangeNotifier {
   }) async {
     final round = RoundVideoDescriptor.fromContent(e.content);
     if (e.redacted ||
+        e.content.containsKey(DictationLimits.sourceMarker) ||
+        PersonalPrivacy.isJournal(e.room) ||
         !e.eventId.startsWith(r'$') ||
         transcribableKind(e) == null ||
         (round != null &&

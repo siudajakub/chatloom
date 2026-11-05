@@ -236,17 +236,28 @@ class _ChatPreferencesPageState extends State<ChatPreferencesPage> {
           'inherit': 'Network default',
           'inbox': 'Main list',
           if (projection.classifier.classify(room).isGroup) 'groups': 'Groups',
+          'aside': 'Aside · mentions only',
         },
         onChanged: enabled && !ignored
             ? (value) => _save(
                 key,
-                metadata
-                    .setPlacement(preferenceEnum(ChatPlacement.values, value))
+                (value == 'aside' || value == 'inbox'
+                        ? metadata.moveTo(
+                            preferenceEnum(ChatPlacement.values, value)!,
+                          )
+                        : metadata.setPlacement(
+                            preferenceEnum(ChatPlacement.values, value),
+                          ))
                     .toJson()
                     .cast<String, dynamic>(),
               )
             : null,
       ),
+      if (placement == ChatPlacement.aside)
+        const Text(
+          'Only in Aside. New messages stay here; only direct mentions notify. '
+          'Muted chat and account rules still apply.',
+        ),
       // Moved from "Colours & avatar" (CS-06): it decides where the chat
       // appears, like "Show chat in".
       SwitchListTile(

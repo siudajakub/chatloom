@@ -31,7 +31,7 @@ The production ordinary and merged timelines use these presentation-only contrac
 - `conversation_grouping.dart`: `ConversationGroupingItem(accountId, sourceId, senderId, outgoing, timestamp, threadId?, deliveryState, boundary)` and `conversationGroupPosition(item:, older:, newer:)`. Neighbours are chronological; ordinary reverse-list names must be translated by the adapter. Matrix sent/synced share the sent presentation state.
 - `conversation_bubble.dart`: `ConversationBubble(body:, outgoing:, groupPosition:, avatar?, heading?, footer?, reactions?, media:, selected:, backgroundColor?, surfaceBuilder?)`. `surfaceBuilder` wraps the complete fill outside clipping; gestures must not wrap only its text child. Avatar/heading/metadata stay outside that transform. `ConversationBubbleColors` is a theme extension with light/dark defaults.
 - `conversation_message_gestures.dart`: `ConversationMessageGestures(child:, identity:, onReply?, onLike?, enabled:, swipeRightToLeft:, quickLikeEnabled:, interactiveContent:, likeEmoji:)`. `onLike` returns true only for a newly accepted intent, not delivery. Selection and interactive content disable quick mutations; mouse double click belongs to selection. `ConversationMotion.reduced` observes both accessibility flags through the motion widgets.
-- `compact_composer.dart`: `CompactComposer(input:, source:, addAction?, primaryAction:, sourceWidth: 0, contextPreview?, actions?, actionsEnabled:, collapseOnText?, onExpandedChanged?, collapseToken?, inputOverlay?)`; caller owns the controller/editor/focus. Only the source slot moves across breakpoints. `ConversationSourceChip(network:, label?, locked:, onPressed?, available:, compact: true, hint:)` never changes routing. `conversationComposerMaxLines` caps the remaining viewport at 1–4 lines. See the 2026-10-17 composer section below.
+- `compact_composer.dart`: `CompactComposer(input:, source:, addAction?, primaryAction:, secondaryAction?, tertiaryAction?, useCompactActionToolbar: false, sourceWidth: 0, contextPreview?, actions?, inlineActions: const [], actionsEnabled: true, collapseOnText?, onExpandedChanged?, collapseToken?, inputOverlay?)`; caller owns the controller/editor/focus. `secondaryAction` and `tertiaryAction` are optional 48 dp slots before the primary action. With `useCompactActionToolbar`, narrow layouts put source and recording/send controls in a row above the editor; the width decision stays stable when typing hides optional actions. Otherwise the source alone moves across breakpoints. `ConversationSourceChip(network:, label?, locked:, onPressed?, available:, compact: true, hint:)` never changes routing. `conversationComposerMaxLines` caps the remaining viewport at 1–4 lines. See the composer sections below.
 - `conversation_source_picker.dart`: options carry the full `ConversationRef`, display title/subtitle, availability/reason. `showConversationSourcePicker` returns `ConversationRef?`; cancel is null. The controller must revalidate its frozen account/group/reply/source after await. Routes and tap regions preserve active editor composition.
 - `conversation_message_actions.dart`: the shared SDK reaction adapter is used by double tap, menu and reaction chips. `strict:false` preserves ordinary unverified policy, `strict:true` preserves merged policy. Never bypass it with direct SDK mutation. It guards unresolved source-event intentions, synced add evidence and originating-timeline/redaction removal evidence. Client-lifetime bookkeeping is not a durable reaction outbox or exactly-once guarantee.
 
@@ -94,6 +94,57 @@ Transcription: `NotionTranscribeSplitButton` (label segment + language segment w
 ### Composer update after UX review — 2026-10-17
 
 Attach menu order: Image, Video, File | Take a photo, Record a video (mobile) | Location (mobile), Poll | Record a round video silently (last, only when available). Trays: Attach · Emoji (+ "Send from another account" in an ordinary multi-account chat); round video is a button beside the mic, not a tray action, and "Record a round video silently" is inside the Attach popup when `silent_send` is allowed (no bare mute icon). When the open tray would leave the editor under 120dp, the inline source chip and its divider shrink to 0 with the tray animation (clipped, no taps, excluded from semantics); the editor keeps its ancestors and child index. The overflow is a themed `MenuAnchor` with 48dp `MenuItemButton`s and a `NotionIconButton` "More actions" trigger. While the mic is held, an `OverlayPortal` draws a 36×72 lock pill (lock over chevron-up, follows `lockProgress`) above the mic and a 1.6× mic fill (`VoiceRecordLayout`). `RecordingDot` lives in `voice_record_button.dart`. All recording clocks use `m:ss` (`notionAudioTime`). `NotionSendButton(tooltip:)` defaults to "Send message"; the voice row uses "Send voice message". Composer field radius is `NotionRadius.field`/`fieldAll` (26).
+
+## Composer dictation and compact action toolbar — 2026-11-05
+
+This updates the recording layout described above. Ordinary and merged chat
+use `tertiaryAction` for **Dictate a message** (**Dyktuj wiadomość**), with
+`secondaryAction` retaining round video and `primaryAction` retaining voice
+or Send. Dictation is offered when voice recording is possible, the composer
+is empty and not editing, and no voice hold is active. An unavailable or busy
+worker produces an explanation on tap before recording starts.
+
+`ChatInputRow` opts into `useCompactActionToolbar` on recording-capable
+platforms. At narrow widths the source chip, dictation, round (when available)
+and primary action sit above the Attach/Emoji/editor row. Wider layouts keep
+the actions beside the editor. Both optional slots use the existing
+`NotionSizeReveal`; hiding them when text appears does not move the editor's
+ancestors or change its child index. Toolbar selection depends on available
+width, not whether those slots currently have a child, so typing keeps Send
+in the same row.
+
+`dictation_dialog.dart` provides these direct-import contracts:
+
+- `showDictationDialog(context, room:, transcribe:, onSend:, canSend:, validateText?, onCancel?)`
+  opens a non-barrier-dismissible `showNotionCustomDialog` route.
+  `DictationTranscribe` receives `(localPath, durationMs, fileName)` and returns
+  `Future<String>`. It transcribes a private draft; it must not send audio to
+  the conversation. `onSend(text)` returns `Future<bool>`: true acknowledges
+  acceptance by the existing durable send path, not remote delivery.
+  `canSend()` revalidates the captured destination; `validateText(text)`
+  returns an optional user-visible error. `onCancel()` cancels private work
+  on discard or unexpected disposal.
+- `DictationPanel(phase:, controller:, onClose:, onPrimary:, duration: Duration.zero, paused: false, error?, onResume?)`
+  is the data/callback presentation used by the live dialog and synthetic
+  captures. `DictationPhase` is starting/recording/transcribing/review/error/sending.
+  The caller owns its text controller and side effects.
+
+The panel reuses `NotionDialogFrame`, `NotionIconButton`, `NotionButton` and
+`NotionTextField`, with the incumbent `context.notion` type/colour roles and
+`NotionSpace`/`NotionSize` tokens. It has a bounded, keyboard-aware height;
+short windows and large text can scroll to every control. The review editor
+uses `NotionTextField(expands: true)`: this optional parameter defaults to
+false, overrides line bounds with null and top-aligns text in a bounded
+height. No new palette, shape or motion rules accompany dictation.
+
+Only explicit **Send message** sends reviewed text. Failed sends keep the
+editor; closing or Back asks to discard existing recording/text, and does not
+send. Backgrounding pauses recording; resuming capture is explicit. The
+session freezes account, source conversation, reply/thread, initial draft
+and privacy generation, and rejects changes before sending. A privacy lock
+invalidates Send even if the app is subsequently unlocked. See
+[`voice-dictation.md`](../voice-dictation.md) for provider, privacy, limits and
+rollout boundaries.
 
 ## Undecryptable messages and encryption health — 2026-10-18
 

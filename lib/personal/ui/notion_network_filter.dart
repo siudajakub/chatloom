@@ -20,6 +20,7 @@ class NotionAccountNetworkSelection {
 
 String inboxViewLabel(InboxFilter filter) => switch (filter) {
   InboxFilter.groups => 'Groups',
+  InboxFilter.aside => 'Aside',
   InboxFilter.ignored => 'Ignored',
   InboxFilter.technical => 'Technical',
   InboxFilter.inbox => 'Messages',

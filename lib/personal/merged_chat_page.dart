@@ -14,6 +14,7 @@ import 'package:chatloom/pages/chat/chat_input_row.dart';
 import 'package:chatloom/pages/chat/chat_message_actions.dart';
 import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/pages/chat/composer_dictation.dart';
 import 'package:chatloom/pages/chat/composer_keyboard.dart';
 import 'package:chatloom/pages/chat/composer_send_later.dart';
 import 'package:chatloom/pages/chat/conversation_drop_target.dart';
@@ -212,8 +213,13 @@ class _MergedChatPageState extends State<_MergedChatView>
     implements
         ConversationTimelineSource,
         ConversationComposerHost,
+        ComposerDictationSendReceiptHost,
         ConversationSourceHintHost,
         ComposerSendLaterHost {
+  int _durableComposerSends = 0;
+  @override
+  int get durableComposerSends => _durableComposerSends;
+
   late final PersonalClient personal = widget.personal;
   PersonGroup get group => widget.group;
 
@@ -2178,6 +2184,13 @@ class _MergedChatPageState extends State<_MergedChatView>
     // Tap → durable → bubble → server ack (`send.*` probe points).
     final probe = PersonalPerformanceProbe.span('send');
     final durable = Completer<void>();
+    var acknowledged = false;
+    void acknowledge() {
+      if (acknowledged) return;
+      acknowledged = true;
+      _durableComposerSends++;
+    }
+
     Future<bool>? draft;
     Future<ImmediateSendResult>? outcome;
     try {
@@ -2192,6 +2205,7 @@ class _MergedChatPageState extends State<_MergedChatView>
           replyTo: replyAtSend,
           editEventId: editAtSend?.eventId,
           onDurable: (attempt) {
+            acknowledge();
             probe.mark('durable');
             final saved = draft = _consumeSent(sent);
             // The draft no longer holds the text: an identical message typed
@@ -2217,7 +2231,9 @@ class _MergedChatPageState extends State<_MergedChatView>
       // Free the composer as soon as the message is durable.
       await Future.any<void>([
         durable.future,
-        outcome.then<void>((_) {}, onError: (Object _) {}),
+        outcome.then<void>((result) {
+          if (result.state == ImmediateSendState.accepted) acknowledge();
+        }, onError: (Object _) {}),
       ]);
     } catch (_) {
       _notify(

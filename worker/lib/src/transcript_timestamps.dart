@@ -33,7 +33,8 @@ enum TranscriptionProvider {
 /// `response_format=verbose_json`. `x-ai/grok-stt-1.0` through OpenRouter:
 /// USD 0.10 per hour of audio (OpenRouter models API, 2026-10-31), answers
 /// `verbose_json` with segments and words in the same request (five real
-/// answers checked on 2026-10-31). Timestamps never cost a second request.
+/// answers checked on 2026-10-31). OpenRouter GPT and Scribe prices were
+/// checked against its transcription model catalogue on 2026-11-05.
 class TranscriptionModel {
   final TranscriptionProvider provider;
   final String name;
@@ -46,8 +47,7 @@ class TranscriptionModel {
     this.timestamps,
   );
 
-  /// xAI's Grok speech-to-text through OpenRouter: the default (J,
-  /// 2026-10-31).
+  /// xAI's Grok speech-to-text through OpenRouter, retained for compatibility.
   static const grokStt = TranscriptionModel._(
     TranscriptionProvider.openrouter,
     'x-ai/grok-stt-1.0',
@@ -66,15 +66,33 @@ class TranscriptionModel {
     0.006,
     true,
   );
-  static const all = [grokStt, gptTranscribe, whisper1];
+  static const openRouterGptTranscribe = TranscriptionModel._(
+    TranscriptionProvider.openrouter,
+    'openai/gpt-transcribe',
+    0.0045,
+    false,
+  );
+  static const scribeV2 = TranscriptionModel._(
+    TranscriptionProvider.openrouter,
+    'elevenlabs/scribe-v2',
+    0.0000611111111111 * 60,
+    true,
+  );
+  static const all = [
+    grokStt,
+    gptTranscribe,
+    whisper1,
+    openRouterGptTranscribe,
+    scribeV2,
+  ];
 
   /// The model of a config that names neither a provider nor a model.
-  static const standard = grokStt;
+  static const standard = openRouterGptTranscribe;
 
   /// The model of a config that names only [provider].
   static TranscriptionModel defaultFor(TranscriptionProvider provider) =>
       switch (provider) {
-        TranscriptionProvider.openrouter => grokStt,
+        TranscriptionProvider.openrouter => openRouterGptTranscribe,
         TranscriptionProvider.openai => gptTranscribe,
       };
 

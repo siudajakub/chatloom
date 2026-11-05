@@ -11,6 +11,7 @@ import 'package:chatloom/pages/chat/recording_input_row.dart';
 import 'package:chatloom/pages/chat/recording_view_model.dart';
 import 'package:chatloom/pages/chat/voice_record_button.dart';
 import 'package:chatloom/personal/capabilities.dart';
+import 'package:chatloom/personal/dictation/dictation_service.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/round_video/messenger_round_gate.dart'
     show roundChatNetworks;
@@ -28,11 +29,13 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 import 'chat.dart' show AddPopupMenuActions;
+import 'composer_dictation.dart';
 import 'composer_menu.dart';
 import 'composer_recipient_notice.dart';
 import 'composer_send_later.dart';
 import 'conversation_source.dart';
 import 'conversation_source_picker.dart' show ConversationSourceHintHost;
+import 'dictation_dialog.dart';
 import 'input_bar.dart';
 
 /// Which record buttons the composer shows: the voice mic while the editor
@@ -95,6 +98,7 @@ class ChatInputRow extends StatefulWidget {
 class _ChatInputRowState extends State<ChatInputRow> {
   final VoiceRecordHold _hold = VoiceRecordHold();
   bool _holding = false;
+  bool _dictationOpen = false;
 
   ConversationComposerHost get controller => widget.controller;
 
@@ -363,6 +367,88 @@ class _ChatInputRowState extends State<ChatInputRow> {
     );
   }
 
+  bool get _polish => Localizations.localeOf(context).languageCode == 'pl';
+
+  /// The third recording choice is always discoverable beside voice and
+  /// round video. An unavailable worker explains itself on tap without
+  /// starting a recording or publishing a private audio draft.
+  Widget? _dictationAction(({bool voice, bool round}) record) {
+    if (!record.voice || _holding) return null;
+    return NotionIconButton(
+      key: const ValueKey('composer-dictation'),
+      icon: Icons.edit_note_outlined,
+      label: _polish ? 'Dyktuj wiadomość' : 'Dictate a message',
+      onPressed: _dictationOpen ? null : _openDictation,
+    );
+  }
+
+  Future<void> _openDictation() async {
+    if (_dictationOpen || _holding || !controller.composerEnabled) return;
+    final host = controller;
+    if (host.editEvent != null || host.sendController.text.trim().isNotEmpty) {
+      return;
+    }
+    final service = DictationService.of(host.sendingClient);
+    if (!service.available || service.busy) {
+      await showNotionDialog<void>(
+        context: context,
+        title: _polish
+            ? 'Dyktowanie jest niedostępne'
+            : 'Dictation unavailable',
+        message: service.busy
+            ? (_polish
+                  ? 'Trwa już przygotowywanie innej transkrypcji. Spróbuj za chwilę.'
+                  : 'Another transcript is being prepared. Try again shortly.')
+            : (_polish
+                  ? 'Dyktowanie wymaga aktywnego workera z ElevenLabs Scribe v2. Sprawdź połączenie i konfigurację transkrypcji.'
+                  : 'Dictation needs an active worker with ElevenLabs Scribe v2. Check your connection and transcription configuration.'),
+        actions: (dialogContext) => [
+          NotionButton(
+            label: _polish ? 'Rozumiem' : 'Got it',
+            onPressed: () => Navigator.of(dialogContext).pop(),
+          ),
+        ],
+      );
+      return;
+    }
+    final session = ComposerDictationSession(
+      host: host,
+      currentHost: () => controller,
+      activeClient: () => Matrix.of(context).client,
+      mounted: () => mounted,
+    );
+    if (!session.valid) {
+      session.dispose();
+      return;
+    }
+    setState(() => _dictationOpen = true);
+    host.hideEmojiPicker();
+    host.inputFocus.unfocus();
+    try {
+      await showDictationDialog(
+        context,
+        room: session.room,
+        canSend: () => session.valid,
+        transcribe: (path, durationMs, fileName) {
+          if (!session.valid) {
+            throw const DictationException('cancelled');
+          }
+          return service.transcribeFile(
+            path: path,
+            durationMs: durationMs,
+            fileName: fileName,
+          );
+        },
+        validateText: (text) => session.validateText(text, polish: _polish),
+        onSend: session.send,
+        onCancel: service.cancel,
+      );
+    } finally {
+      session.dispose();
+      if (mounted) setState(() => _dictationOpen = false);
+    }
+  }
+
   /// Each state is keyed so the composer morphs between them (mic ↔ send).
   /// A disabled send button stays the same widget and springs when it
   /// becomes enabled.
@@ -525,6 +611,8 @@ class _ChatInputRowState extends State<ChatInputRow> {
                       : null,
                   source: controller.buildComposerSource(context),
                   secondaryAction: _roundAction(record),
+                  tertiaryAction: _dictationAction(record),
+                  useCompactActionToolbar: PlatformInfos.platformCanRecord,
                   primaryAction: _primary(recordingViewModel, record),
                 ),
               ),

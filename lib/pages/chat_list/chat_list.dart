@@ -75,9 +75,9 @@ enum ActiveFilter { allChats, unread, groups, messages }
 /// The long-press menu of an inbox row, in order (Telegram, Messenger):
 /// Mark as read/unread, Pin/Unpin, Move down/up (an unread chat only),
 /// Mute…/Unmute, Archive/Unarchive, Merge…
-/// (Unmerge on a merged person), Ignore/Restore. Notification settings are
-/// the last row of the Mute menu. Disabled entries explain themselves by
-/// staying visible (private sync not ready, a change awaiting
+/// (Unmerge on a merged person), Move to Aside/Inbox, Ignore/Restore.
+/// Notification settings are the last row of the Mute menu. Disabled entries
+/// explain themselves by staying visible (private sync not ready, a change awaiting
 /// acknowledgement, a network group that cannot merge).
 List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
   PersonalClient owner,
@@ -92,6 +92,7 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
   final metadata = projection.metadataFor(room);
   final pinned = metadata.isPinned;
   final ignored = projection.placementFor(room) == ChatPlacement.ignored;
+  final aside = projection.placementFor(room) == ChatPlacement.aside;
   final unread = inboxSources(owner, room).any(personalRoomUnread);
   final canWrite = joined && canEditChatPreferences(owner, 'org:$entity');
   // Only a chat the unread rule raises (unread, unmuted, unpinned) can move
@@ -172,6 +173,12 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
         'Merge…',
         enabled: owner.ready && InboxProjection.mergeable(room),
       ),
+    ChatMenuItem(
+      ChatMenuAction.aside,
+      aside ? Icons.inbox_outlined : Icons.move_to_inbox_outlined,
+      aside ? 'Move to Inbox' : 'Move to Aside',
+      enabled: canWrite,
+    ),
     ChatMenuItem(
       ChatMenuAction.ignore,
       ignored ? Icons.visibility_outlined : Icons.visibility_off_outlined,
@@ -900,6 +907,42 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
                         .toJson(),
                   }.cast<String, dynamic>(),
                 ),
+        );
+        return;
+      case ChatMenuAction.aside:
+        final projection = InboxProjection(owner);
+        final target = projection.entityFor(room);
+        if (!canEditChatPreferences(owner, 'org:$target')) return;
+        final before = projection.metadataForEntity(target);
+        final destination = projection.placementFor(room) == ChatPlacement.aside
+            ? ChatPlacement.inbox
+            : ChatPlacement.aside;
+        _runChange(
+          owner,
+          account,
+          () => NotionMetadataActions.moveTo(owner, target, destination),
+          failure: 'Couldn’t move the chat. Check private sync and try again.',
+          done: destination == ChatPlacement.aside
+              ? 'Moved to Aside · mentions only'
+              : 'Moved to Inbox',
+          undo: () async {
+            if (!NotionMetadataActions.canWrite(owner, target)) {
+              throw StateError('Private changes are awaiting synchronization');
+            }
+            final current = InboxProjection(owner).metadataForEntity(target);
+            await owner.put(
+              'org:$target',
+              {
+                ...?owner.values['org:$target'],
+                ...current
+                    .setPlacement(before.placement)
+                    .setIgnored(before.ignored)
+                    .setArchived(before.archived)
+                    .setLowPriority(before.lowPriority)
+                    .toJson(),
+              }.cast<String, dynamic>(),
+            );
+          },
         );
         return;
     }

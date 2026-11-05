@@ -92,6 +92,7 @@ Future<void> showKeptDeletionNotification(
     event,
     projection.metadataFor(room),
     notificationMode: projection.notificationModeFor(room),
+    placement: projection.placementFor(room),
   )) {
     return;
   }

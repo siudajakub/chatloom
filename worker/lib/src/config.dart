@@ -28,13 +28,17 @@ class WorkerConfig {
   /// Lets the operator keep automatic work to local sources only.
   final bool autoTranscriptionMatrix;
 
+  /// Operator permission for automatic shared reels, additionally requiring
+  /// the synced user's kind permission. Manual transcription is unaffected.
+  final bool autoTranscriptionReels;
+
   /// The provider and speech model (`transcriptionProvider` and
-  /// `transcriptionModel` in the config). Default: `x-ai/grok-stt-1.0`
-  /// through OpenRouter, whose one request also returns segment and word
-  /// timestamps for the live transcript view. `openai` keeps
-  /// `gpt-transcribe` (its default, no timestamps) or `whisper-1`; switching
-  /// back is a config change.
+  /// `transcriptionModel` in the config). Default: GPT through OpenRouter.
   final TranscriptionModel transcriptionModel;
+
+  /// Optional second OpenRouter request for word timestamps. Absent means
+  /// one paid transcription only, preserving existing operator configs.
+  final TranscriptionModel? transcriptionTimingModel;
   WorkerConfig({
     required this.stateDirectory,
     required this.temporaryDirectory,
@@ -48,7 +52,9 @@ class WorkerConfig {
     this.localSourceSocket,
     this.autoTranscription = false,
     this.autoTranscriptionMatrix = true,
+    this.autoTranscriptionReels = false,
     this.transcriptionModel = TranscriptionModel.standard,
+    this.transcriptionTimingModel,
   });
   factory WorkerConfig.read(String filename) {
     final value =
@@ -78,6 +84,10 @@ class WorkerConfig {
       value['transcriptionProvider'],
       value['transcriptionModel'],
     );
+    final timingModel = transcriptionTimingModelOf(
+      model,
+      value['transcriptionTimingModel'],
+    );
     return WorkerConfig(
       stateDirectory: state,
       temporaryDirectory: temporary,
@@ -90,6 +100,8 @@ class WorkerConfig {
       autoTranscriptionMatrix:
           value['autoTranscriptionMatrix'] as bool? ?? true,
       transcriptionModel: model,
+      transcriptionTimingModel: timingModel,
+      autoTranscriptionReels: value['autoTranscriptionReels'] as bool? ?? false,
       journalRoomId: value['journalRoomId'] as String? ?? '',
       trustedDeviceIds: (value['trustedDeviceIds'] as List? ?? [])
           .cast<String>(),
@@ -115,7 +127,7 @@ Map<String, dynamic> readCredentials(WorkerConfig config) {
 
 /// The model a config selects with `transcriptionProvider` and
 /// `transcriptionModel`, both optional: neither selects
-/// [TranscriptionModel.standard] (Grok through OpenRouter), a provider alone
+/// [TranscriptionModel.standard] (GPT through OpenRouter), a provider alone
 /// its default model, a model alone that model and its provider. A model of
 /// another provider, or an unknown name, refuses to start.
 TranscriptionModel transcriptionModelOf(
@@ -139,6 +151,20 @@ TranscriptionModel transcriptionModelOf(
       : null;
   if (model == null) throw const WorkerFailure('invalid_transcription_model');
   return model;
+}
+
+/// Dual transcription is explicit and uses the same OpenRouter credential.
+/// Reject mixed providers or unsupported pairings before opening a session.
+TranscriptionModel? transcriptionTimingModelOf(
+  TranscriptionModel primary,
+  Object? name,
+) {
+  if (name == null) return null;
+  if (primary != TranscriptionModel.openRouterGptTranscribe ||
+      name != TranscriptionModel.scribeV2.name) {
+    throw const WorkerFailure('invalid_transcription_timing_model');
+  }
+  return TranscriptionModel.scribeV2;
 }
 
 /// File next to the credentials JSON that holds the OpenRouter key: the

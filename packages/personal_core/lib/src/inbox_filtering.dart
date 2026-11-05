@@ -19,6 +19,7 @@ enum InboxFilter {
   /// Message requests from people the user has not accepted yet (Instagram,
   /// Messenger). They also stay in their usual views, tagged.
   requests,
+  aside,
 }
 
 class InboxRecord {
@@ -92,6 +93,10 @@ List<InboxRecord> projectInbox(
     if (filter == InboxFilter.technical) return false;
     if (ignored && filter != InboxFilter.ignored) return false;
     if (!ignored && filter == InboxFilter.ignored) return false;
+    // Aside is a destination, not a group/unread/archive overlay. Pins and
+    // new activity must never bring these chats back into the main views.
+    final aside = placement == ChatPlacement.aside;
+    if (!ignored && aside != (filter == InboxFilter.aside)) return false;
     final inInbox =
         placement == ChatPlacement.inbox &&
         !record.metadata.archived &&
@@ -117,6 +122,7 @@ List<InboxRecord> projectInbox(
             record.isGroup &&
             !record.labelKeys.any(hiddenLabelKeys.contains),
       InboxFilter.ignored => ignored,
+      InboxFilter.aside => aside,
       InboxFilter.technical => false,
       InboxFilter.label =>
         labelKey != null && record.labelKeys.contains(labelKey),
