@@ -39,10 +39,16 @@ jobs:
         run: flutter pub get --enforce-lockfile
       - name: Analyze application
         run: flutter analyze lib --no-fatal-infos
+      - name: Synthetic paste native regressions
+        run: |
+          mkdir -p build/macos-tests
+          xcrun swiftc macos/Runner/SyntheticPaste.swift scripts/macos/tests/main.swift -o build/macos-tests/synthetic-paste
+          build/macos-tests/synthetic-paste
       - name: Desktop and recorder regressions
         run: >-
           flutter test --no-pub
           test/personal/macos_desktop_test.dart
+          test/notion/composer_clipboard_test.dart
           test/personal/round_video/macos_round_backend_test.dart
           test/personal/round_video/round_capture_controller_test.dart
           test/personal/round_video/round_capture_profile_test.dart

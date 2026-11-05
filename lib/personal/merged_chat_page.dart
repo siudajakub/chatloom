@@ -2593,15 +2593,32 @@ class _MergedChatPageState extends State<_MergedChatView>
   /// selected source, like an ordinary chat; text is pasted at the caret
   /// (also while a send is in flight).
   Future<void> _pasteFromClipboard() async {
+    final owner = personal;
+    final personId = group.id;
+    final source = target.conversation;
+    final sourceReply = replyEvent;
+    final sourceEdit = editEvent;
+    final privacyGeneration = PersonalPrivacy.surfaceLockGeneration;
     final editorValue = sendController.value;
-    final media = composerEnabled ? await readClipboardMedia() : null;
-    if (!mounted) return;
+    if (!PersonalPrivacy.surfaceUnlocked) return;
+    final clipboard = await readComposerClipboard(allowMedia: composerEnabled);
+    if (!mounted ||
+        !identical(personal, owner) ||
+        group.id != personId ||
+        target.conversation != source ||
+        !identical(replyEvent, sourceReply) ||
+        !identical(editEvent, sourceEdit) ||
+        !PersonalPrivacy.surfaceUnlocked ||
+        PersonalPrivacy.surfaceLockGeneration != privacyGeneration) {
+      return;
+    }
+    final media = clipboard.media;
     if (media != null) {
       await _attachMedia(() async => media);
       return;
     }
-    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    if (text == null || !mounted || sendController.value != editorValue) {
+    final text = clipboard.text;
+    if (text == null || sendController.value != editorValue) {
       return;
     }
     onInputBarChanged(insertComposerText(sendController, text));

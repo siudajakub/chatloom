@@ -2188,20 +2188,35 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   Future<void> _handleClipboardImagePaste() async {
+    final target = room;
     final frozen = _captureAttachmentContext();
+    final sourceReply = replyEvent;
+    final sourceEdit = editEvent;
+    final privacyGeneration = PersonalPrivacy.surfaceLockGeneration;
     final editorValue = sendController.value;
-    await _pickAttachments(() async {
-      // Files, then an image; text first when the Mac copy is text first.
-      final media = await readClipboardMedia();
-      frozen.validate();
-      if (media != null) return media;
-      final textData = await Clipboard.getData('text/plain');
-      frozen.validate();
-      if (textData?.text != null && sendController.value == editorValue) {
-        onInputBarChanged(insertComposerText(sendController, textData!.text!));
-      }
-      return [];
-    });
+    if (!PersonalPrivacy.surfaceUnlocked) return;
+    final clipboard = await readComposerClipboard();
+    if (!mounted ||
+        !identical(room, target) ||
+        !identical(Matrix.of(context).client, target.client) ||
+        !identical(replyEvent, sourceReply) ||
+        !identical(editEvent, sourceEdit) ||
+        !PersonalPrivacy.surfaceUnlocked ||
+        PersonalPrivacy.surfaceLockGeneration != privacyGeneration) {
+      return;
+    }
+    final media = clipboard.media;
+    if (media != null) {
+      if (!frozen.isCurrent()) return;
+      await _pickAttachments(() async => media);
+      return;
+    }
+    // Plain text never enters the attachment picker: unfocusing the field
+    // changes its selection/composing state and used to discard this paste.
+    final text = clipboard.text;
+    if (text != null && sendController.value == editorValue) {
+      onInputBarChanged(insertComposerText(sendController, text));
+    }
   }
 
   Future<void> openVideoCameraAction() => _pickAttachments(() async {

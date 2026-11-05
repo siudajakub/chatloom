@@ -11,6 +11,10 @@ class MainFlutterWindow: NSWindow {
   private var powerChannel: FlutterMethodChannel?
   private var powerObserver: NSObjectProtocol?
 
+  override func sendEvent(_ event: NSEvent) {
+    super.sendEvent(SyntheticPaste.normalize(event))
+  }
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame

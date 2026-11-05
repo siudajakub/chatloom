@@ -19,16 +19,22 @@ abstract final class MacDesktopWindow {
   /// Window chrome and pasteboard queries (`WindowChrome.swift`).
   static const channel = MethodChannel('pl.personal.chat/window');
 
-  /// Whether the pasteboard holds media first (files, or an image ahead of
-  /// any text). True when the native side cannot tell, so a paste behaves
-  /// as before.
-  static Future<bool> pasteboardPrefersMedia() async {
+  /// Reads the text and its type priority in one native call. Dictation
+  /// tools can restore the previous clipboard immediately after posting ⌘V.
+  static Future<({bool prefersMedia, String? text})?> readPasteboard() async {
     try {
-      return await channel.invokeMethod<bool>('pasteboardPrefersMedia') ?? true;
+      final value = await channel.invokeMapMethod<String, dynamic>(
+        'readPasteboard',
+      );
+      if (value == null) return null;
+      return (
+        prefersMedia: value['prefersMedia'] == true,
+        text: value['text'] as String?,
+      );
     } on PlatformException {
-      return true;
+      return null;
     } on MissingPluginException {
-      return true;
+      return null;
     }
   }
 

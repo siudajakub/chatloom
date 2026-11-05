@@ -103,8 +103,14 @@ final class WindowChrome {
         window.backgroundColor = WindowChrome.color(argb: argb)
       }
       result(nil)
-    case "pasteboardPrefersMedia":
-      result(WindowChrome.pasteboardPrefersMedia(NSPasteboard.general))
+    case "readPasteboard":
+      let board = NSPasteboard.general
+      let media = WindowChrome.pasteboardPrefersMedia(board)
+      let snapshot: [String: Any] = [
+        "prefersMedia": media,
+        "text": media ? NSNull() : (board.string(forType: .string) as Any? ?? NSNull()),
+      ]
+      result(snapshot)
     default:
       result(FlutterMethodNotImplemented)
     }

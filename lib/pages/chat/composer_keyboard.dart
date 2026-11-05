@@ -111,15 +111,31 @@ class ComposerBackAction extends Action<DismissIntent> {
   }
 }
 
-/// Media that ⌘V attaches, or null to paste text: files first, then an
-/// image. On the Mac a copy that is text first pastes its text: Numbers,
-/// Excel and Word put a picture rendering beside the copied text.
-Future<List<XFile>?> readClipboardMedia() async {
-  if (PlatformInfos.isMacOS &&
-      !await MacDesktopWindow.pasteboardPrefersMedia()) {
-    final text = await Clipboard.getData(Clipboard.kTextPlain);
-    if (text?.text?.isNotEmpty == true) return null;
+/// One paste request: text is retained, never fetched a second time after
+/// attachment checks. On macOS both type priority and text are captured
+/// together, before a dictation tool can restore the previous clipboard.
+Future<({String? text, List<XFile>? media})> readComposerClipboard({
+  bool allowMedia = true,
+}) async {
+  final snapshot = PlatformInfos.isMacOS
+      ? await MacDesktopWindow.readPasteboard()
+      : null;
+  if (snapshot != null &&
+      !snapshot.prefersMedia &&
+      snapshot.text?.isNotEmpty == true) {
+    return (text: snapshot.text, media: null);
   }
+  if (allowMedia) {
+    final media = await _readClipboardMedia();
+    if (media != null) return (text: null, media: media);
+  }
+  final text = snapshot != null
+      ? snapshot.text
+      : (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+  return (text: text, media: null);
+}
+
+Future<List<XFile>?> _readClipboardMedia() async {
   final files = await Pasteboard.files();
   if (files.isNotEmpty) return files.map(XFile.new).toList();
   final image = await Pasteboard.image;
