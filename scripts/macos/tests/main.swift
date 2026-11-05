@@ -34,4 +34,26 @@ for value in [
 }
 let shifted = SyntheticPaste.normalize(event(.keyDown, 9, command | 0x20000))
 precondition(shifted.modifierFlags.rawValue == UInt(command | 0x20000 | 0x8))
+
+// Exercise the production window entry point that AppKit calls before
+// sendEvent. This needs no global key posting or Accessibility permission.
+class PasteReceiver: NSView {
+  var received: NSEvent?
+  override var acceptsFirstResponder: Bool { true }
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    received = event
+    return true
+  }
+}
+_ = NSApplication.shared
+let window = SyntheticPasteWindow(
+  contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+  styleMask: [.titled], backing: .buffered, defer: false)
+window.isReleasedWhenClosed = false
+let receiver = PasteReceiver(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+window.contentView = receiver
+precondition(window.makeFirstResponder(receiver))
+precondition(window.performKeyEquivalent(with: event(.keyDown, 9, command)))
+precondition(receiver.received?.modifierFlags.rawValue == UInt(command | 0x8))
+window.close()
 print("Synthetic paste modifier regressions PASS")

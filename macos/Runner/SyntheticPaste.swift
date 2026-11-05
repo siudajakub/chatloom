@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import Cocoa
 
+/// AppKit tries key equivalents before dispatching ordinary window events.
+/// Flutter consumes ⌘V on that earlier path, so both entry points need the
+/// same normalization. Super retains all standard responder/menu routing.
+class SyntheticPasteWindow: NSWindow {
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    return super.performKeyEquivalent(with: SyntheticPaste.normalize(event))
+  }
+
+  override func sendEvent(_ event: NSEvent) {
+    super.sendEvent(SyntheticPaste.normalize(event))
+  }
+}
+
 enum SyntheticPaste {
   /// Some dictation/clipboard tools post ⌘V with only the generic Command
   /// flag. Flutter reads the left/right device bits, so it misses that ⌘.

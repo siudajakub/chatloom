@@ -1,7 +1,7 @@
 import Cocoa
 import FlutterMacOS
 
-class MainFlutterWindow: NSWindow {
+class MainFlutterWindow: SyntheticPasteWindow {
   private var windowChrome: WindowChrome?
   private var desktopChannel: FlutterMethodChannel?
   private var wakeObserver: NSObjectProtocol?
@@ -10,10 +10,6 @@ class MainFlutterWindow: NSWindow {
   // battery-lifecycle (BP-08): Low Power Mode -> lite mode.
   private var powerChannel: FlutterMethodChannel?
   private var powerObserver: NSObjectProtocol?
-
-  override func sendEvent(_ event: NSEvent) {
-    super.sendEvent(SyntheticPaste.normalize(event))
-  }
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
