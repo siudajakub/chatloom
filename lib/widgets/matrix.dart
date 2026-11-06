@@ -607,7 +607,7 @@ class MatrixState extends State<Matrix> {
         ..seed(WidgetsBinding.instance.lifecycleState);
     }
 
-    if (PlatformInfos.isMobile) {
+    if (PlatformInfos.isAndroid) {
       backgroundPush = BackgroundPush(
         this,
         onFcmError: (errorMsg, {Uri? link}) async {

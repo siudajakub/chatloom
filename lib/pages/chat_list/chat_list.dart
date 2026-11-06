@@ -15,6 +15,7 @@ import 'package:chatloom/pages/chat_list/chat_list_item.dart'
 import 'package:chatloom/pages/chat_list/chat_list_view.dart';
 import 'package:chatloom/pages/chat_list/inbox_controller.dart';
 import 'package:chatloom/pages/chat_list/inbox_keyboard_navigation.dart';
+import 'package:chatloom/pages/chat_list/room_thread_preview.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart'
     show BridgeDirectory;
 import 'package:chatloom/personal/conversation_classification.dart';
@@ -607,7 +608,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   }
 
   void _initReceiveSharingIntent() {
-    if (!PlatformInfos.isMobile) return;
+    if (!PlatformInfos.supportsIncomingShares) return;
 
     // For sharing images coming from outside the app while the app is in the memory
     _intentFileStreamSubscription = ReceiveSharingIntent.instance
@@ -759,6 +760,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     final projection = InboxProjection(owner);
     final l10n = L10n.of(context);
     final title = projection.displayName(room);
+    final group = projection.groupFor(room);
+    final sources = group == null ? [room] : projection.activeSourcesOf(group);
     Widget avatar() => notionInboxAvatar(
       owner,
       InboxProjection(owner),
@@ -770,12 +773,22 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       anchor: anchor,
       title: title,
       avatar: avatar(),
-      items: chatMenuItems(
-        owner,
-        room,
-        pinLabel: l10n.pin,
-        unpinLabel: l10n.unpin,
+      preview: RoomThreadPreview(
+        sources: sources,
+        isCurrent: () => _sameInbox(owner, account),
+        changes: owner,
+        sourceLabel: (source) =>
+            notionNetworkLabel(projection.classifier.classify(source).network),
       ),
+      items: [
+        const ChatMenuItem(ChatMenuAction.open, Icons.open_in_new, 'Open chat'),
+        ...chatMenuItems(
+          owner,
+          room,
+          pinLabel: l10n.pin,
+          unpinLabel: l10n.unpin,
+        ),
+      ],
     );
     if (action == null || !mounted) return;
     if (!_sameInbox(owner, account) || !identical(room.client, owner.client)) {
@@ -784,6 +797,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     String entity() => InboxProjection(owner).entityFor(room);
 
     switch (action) {
+      case ChatMenuAction.open:
+        await onChatTap(room);
+        return;
       case ChatMenuAction.read:
       case ChatMenuAction.unread:
         applyRowAction(room, action, owner: owner, account: account);

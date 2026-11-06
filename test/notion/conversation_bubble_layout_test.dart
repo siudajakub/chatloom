@@ -6,15 +6,15 @@ import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/events/html_message.dart';
 import 'package:chatloom/pages/chat/events/image_bubble.dart';
+import 'package:chatloom/pages/chat/events/inline_reel_video.dart';
 import 'package:chatloom/pages/chat/events/instagram_share_preview.dart';
 import 'package:chatloom/pages/chat/events/link_preview.dart';
 import 'package:chatloom/pages/chat/events/message_content.dart';
-import 'package:chatloom/pages/chat/events/video_player.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:matrix/src/models/timeline_chunk.dart';
@@ -23,6 +23,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 class _UnusedDatabase implements DatabaseApi {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _BubbleClient extends Client {
+  _BubbleClient() : super('bubble layout', database: _UnusedDatabase());
+  @override
+  String get userID => '@owner:example.invalid';
 }
 
 Widget _host(
@@ -53,8 +59,9 @@ Widget _host(
   ),
 );
 
-Finder _fill(String key) =>
-    find.descendant(of: find.byKey(Key(key)), matching: find.byType(ClipRRect));
+Finder _fill(String key) => find
+    .descendant(of: find.byKey(Key(key)), matching: find.byType(ClipRRect))
+    .first;
 
 /// Max fill width of an incoming bubble in [_host] (see ConversationBubble).
 double _incomingMax(double width, {bool media = false, double scale = 1}) {
@@ -81,7 +88,7 @@ void main() {
   });
 
   setUp(() {
-    client = Client('bubble layout', database: _UnusedDatabase());
+    client = _BubbleClient();
     room = Room(id: '!room:example.invalid', client: client);
   });
 
@@ -337,7 +344,7 @@ void main() {
           compact: true,
         );
         expect(find.byType(InstagramSharePreview), findsOneWidget);
-        expect(find.text('Open in Instagram'), findsOneWidget);
+        expect(find.text('Open reel in Instagram'), findsOneWidget);
         expect(
           tester.widget<HtmlMessage>(find.byType(HtmlMessage)).html,
           contains('Watch this'),
@@ -401,7 +408,7 @@ void main() {
       await icons.load();
       await pumpMedia(tester, media(reel()), compact: true);
       expect(
-        tester.getSize(find.byType(EventVideoPlayer)).width,
+        tester.getSize(find.byType(InlineReelVideo)).width,
         closeTo(_standardMedia(390) * 2 / 3, .01),
       );
       expect(find.byType(HtmlMessage), findsNothing);
@@ -420,7 +427,7 @@ void main() {
       final frame = tester.getSize(
         find
             .descendant(
-              of: find.byType(EventVideoPlayer),
+              of: find.byType(InlineReelVideo),
               matching: find.byType(SizedBox),
             )
             .first,
@@ -434,8 +441,9 @@ void main() {
       expect(tester.getRect(_fill('media')).width, closeTo(standard, .01));
       expect(
         find.textContaining('instagram.com/reel', findRichText: true),
-        findsOneWidget,
+        findsNothing,
       );
+      expect(find.text('Open reel in Instagram'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 

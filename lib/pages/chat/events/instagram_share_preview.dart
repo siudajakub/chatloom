@@ -1,22 +1,36 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:convert';
-import 'dart:typed_data';
+import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/events/image_bubble.dart';
-import 'package:chatloom/pages/chat/events/video_player.dart';
+import 'package:chatloom/pages/chat/events/inline_reel_video.dart';
+import 'package:chatloom/pages/chat/events/link_preview.dart';
+import 'package:chatloom/pages/chat/events/reel_caption.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/instagram_share.dart';
+import 'package:chatloom/personal/reel_metadata.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/url_launcher.dart';
+import 'package:chatloom/widgets/mxc_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
-/// All requests, including metadata, start only on an explicit tap.
+/// Link-media requests start only on explicit Play; Matrix-provided posters
+/// respect the existing thumbnail preference.
 class InstagramSharePreview extends StatefulWidget {
   final InstagramShare share;
   final Event? event;
-  const InstagramSharePreview({super.key, required this.share, this.event});
+  final Color? linkColor;
+  const InstagramSharePreview({
+    super.key,
+    required this.share,
+    this.event,
+    this.linkColor,
+  });
+  @visibleForTesting
+  static Future<Object?> Function(String url, bool download, int index)?
+  debugRequest;
   @override
   State<InstagramSharePreview> createState() => _InstagramSharePreviewState();
 }
@@ -25,7 +39,44 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
   bool _busy = false;
   bool _failed = false;
   List<Event> _assets = [];
+  ReelMetadata? _metadata;
   int _generation = 0;
+
+  BridgedLinkPreview? get _preview {
+    for (final preview in BridgedLinkPreview.fromContent(
+      widget.event?.content ?? {},
+    )) {
+      if (InstagramShare.fromUrl(preview.url)?.url == widget.share.url) {
+        return preview;
+      }
+    }
+    return null;
+  }
+
+  Widget? _poster() {
+    final preview = _preview;
+    final original = widget.event;
+    if (original == null ||
+        preview?.image == null ||
+        !AppSettings.showThumbnailsInTimeline.value) {
+      return null;
+    }
+    final event = Event(
+      type: EventTypes.Message,
+      room: original.room,
+      eventId: '${original.eventId}/reel-poster',
+      senderId: original.senderId,
+      originServerTs: original.originServerTs,
+      content: {
+        'msgtype': MessageTypes.Image,
+        'body': 'reel-preview.jpg',
+        'url': preview!.image.toString(),
+        'file': ?preview.imageEncryption,
+      },
+    );
+    return MxcImage(event: event, fit: BoxFit.cover);
+  }
+
   @override
   void didUpdateWidget(covariant InstagramSharePreview oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -33,6 +84,7 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
         oldWidget.event?.eventId != widget.event?.eventId) {
       _generation++;
       _assets = [];
+      _metadata = null;
       _busy = false;
       _failed = false;
     }
@@ -51,48 +103,65 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
       _failed = false;
     });
     try {
-      final bridges = discoverBridges(
-        client.rooms,
-      ).where((b) => b.network == 'instagram').toList();
-      if (bridges.length != 1) {
-        throw StateError('Instagram bridge unavailable');
-      }
-      final api = BridgeDirectory.of(client).api;
-      if (api == null) {
-        throw StateError('Instagram bridge unavailable');
-      }
-      final bridge = bridges.single;
-      final url = widget.share.url.toString();
-      var transport = api.transport;
-      if (transport is BeeperProvisioningTransport) {
-        transport = BeeperProvisioningTransport(
-          httpClient: transport.httpClient,
-          homeserver: transport.homeserver,
-          userId: transport.userId,
-          accessToken: transport.accessToken,
-          overrideUrl: transport.overrideUrl,
-          timeout: const Duration(seconds: 75),
+      Future<Object?> request(bool download, int index) {
+        final custom = InstagramSharePreview.debugRequest;
+        if (custom != null) {
+          return custom(widget.share.url.toString(), download, index);
+        }
+        final bridges = discoverBridges(
+          client.rooms,
+        ).where((b) => b.network == 'instagram').toList();
+        if (bridges.length != 1) {
+          throw StateError('Instagram bridge unavailable');
+        }
+        final api = BridgeDirectory.of(client).api;
+        if (api == null) {
+          throw StateError('Instagram bridge unavailable');
+        }
+        final bridge = bridges.single;
+        var transport = api.transport;
+        if (transport is BeeperProvisioningTransport) {
+          transport = BeeperProvisioningTransport(
+            httpClient: transport.httpClient,
+            homeserver: transport.homeserver,
+            userId: transport.userId,
+            accessToken: transport.accessToken,
+            overrideUrl: transport.overrideUrl,
+            timeout: const Duration(seconds: 75),
+          );
+        }
+        return transport.send(
+          bridge,
+          BridgeProvisioningRequest(
+            'POST',
+            '/v3/chatloom/link_media',
+            body: {
+              'url': widget.share.url.toString(),
+              'index': index,
+              'download': download,
+            },
+          ),
         );
       }
-      Future<Object?> request(bool download, int index) => transport.send(
-        bridge,
-        BridgeProvisioningRequest(
-          'POST',
-          '/v3/chatloom/link_media',
-          body: {'url': url, 'index': index, 'download': download},
-        ),
-      );
+
       final metadataKey = Uri(
         scheme: 'chatloom-link',
         host: 'instagram',
-        path: '${original.eventId}/${widget.share.url.path}',
+        path: 'v2/${original.eventId}/${widget.share.url.path}',
       );
       final db = client.database;
       Object? response;
       final cached = await db.getFile(metadataKey);
       if (cached != null) {
         try {
-          response = jsonDecode(utf8.decode(cached));
+          final envelope = jsonDecode(utf8.decode(cached));
+          if (envelope is Map &&
+              envelope['fetched_at'] is int &&
+              DateTime.now().millisecondsSinceEpoch -
+                      (envelope['fetched_at'] as int) <
+                  const Duration(days: 1).inMilliseconds) {
+            response = envelope['media'];
+          }
         } catch (_) {
           await db.deleteFile(metadataKey);
         }
@@ -107,8 +176,18 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
       if (response is! Map || response['assets'] is! List) {
         throw StateError('Invalid media');
       }
+      final metadata = ReelMetadata.fromInstagramResponse(
+        widget.share,
+        response,
+        fallbackCaption: _preview?.description,
+      );
       final metadataBytes = Uint8List.fromList(
-        utf8.encode(jsonEncode(response)),
+        utf8.encode(
+          jsonEncode({
+            'media': response,
+            'fetched_at': DateTime.now().millisecondsSinceEpoch,
+          }),
+        ),
       );
       if (metadataBytes.length < db.maxFileSize) {
         await db.storeFile(
@@ -171,8 +250,13 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
           original.redacted) {
         return;
       }
-      setState(() => _assets = assets);
-      await showImageViewer(context, assets.first, mediaEvents: assets);
+      setState(() {
+        _assets = assets;
+        _metadata = metadata;
+      });
+      if (assets.first.messageType != MessageTypes.Video) {
+        await showImageViewer(context, assets.first, mediaEvents: assets);
+      }
     } catch (_) {
       if (mounted && generation == _generation) {
         setState(() => _failed = true);
@@ -189,6 +273,34 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
+      if (_assets.isEmpty &&
+          _preview?.image != null &&
+          AppSettings.showThumbnailsInTimeline.value)
+        AspectRatio(
+          aspectRatio: (_preview?.imageAspectRatio ?? 9 / 16).clamp(
+            9 / 16,
+            16 / 9,
+          ),
+          child: ClipRRect(
+            borderRadius: NotionRadius.mdAll,
+            child: NotionTapTarget(
+              onTap: _busy ? null : _open,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _poster()!,
+                  const Center(
+                    child: Icon(
+                      Icons.play_circle,
+                      size: NotionSize.iconLg,
+                      color: NotionMediaColors.onScrim,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       if (_assets.isEmpty)
         Padding(
           padding: NotionBubble.padding,
@@ -196,7 +308,7 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
             label: _failed
                 ? 'Retry Instagram media'
                 : widget.share.reel
-                ? 'Download reel'
+                ? 'Play reel'
                 : 'Download Instagram media',
             busy: _busy,
             onPressed: widget.event == null ? null : _open,
@@ -210,29 +322,38 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
           ),
         ),
       if (_assets.isNotEmpty)
-        ConversationMessageChromeTap(
-          child: NotionTapTarget(
-            onTap: () =>
-                showImageViewer(context, _assets.first, mediaEvents: _assets),
-            child: AbsorbPointer(
-              child: _assets.first.messageType == MessageTypes.Video
-                  ? EventVideoPlayer(_assets.first)
-                  : ImageBubble(_assets.first),
+        if (_assets.first.messageType == MessageTypes.Video)
+          InlineReelVideo(
+            key: ValueKey(_assets.first.eventId),
+            event: _assets.first,
+            original: widget.event,
+            poster: _poster(),
+            playOnMount: true,
+          )
+        else
+          ConversationMessageChromeTap(
+            child: NotionTapTarget(
+              onTap: () =>
+                  showImageViewer(context, _assets.first, mediaEvents: _assets),
+              child: AbsorbPointer(child: ImageBubble(_assets.first)),
             ),
           ),
-        ),
       if (_assets.length > 1)
         Padding(
           padding: NotionBubble.padding,
           child: Text('${_assets.length} items · tap to view album'),
         ),
-      Padding(
-        padding: NotionBubble.padding,
-        child: NotionButton.ghost(
-          label: 'Open in Instagram',
+      if (_assets.length > 1)
+        NotionButton.ghost(
+          label: 'View album',
           onPressed: () =>
-              UrlLauncher(context, widget.share.url.toString()).launchUrl(),
+              showImageViewer(context, _assets.first, mediaEvents: _assets),
         ),
+      ReelCaption(
+        metadata:
+            _metadata ??
+            ReelMetadata(url: widget.share.url, caption: _preview?.description),
+        linkColor: widget.linkColor,
       ),
     ],
   );

@@ -13,25 +13,27 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 abstract class PlatformInfos {
   static bool get isWeb => kIsWeb;
+
   /// Linux is no app target any more; it stays only because `flutter test`
   /// and the devbox run on a Linux host, which counts as desktop there.
   static bool get isLinux => !kIsWeb && Platform.isLinux;
   static bool get isMacOS => !kIsWeb && Platform.isMacOS;
 
-  /// Always false on ChatLoom's targets. Kept only for the fail-closed
-  /// storage builders (`flutter_matrix_dart_sdk_database/`), which change
-  /// together with their storage tests.
   static bool get isIOS => !kIsWeb && Platform.isIOS;
   static bool get isAndroid => !kIsWeb && Platform.isAndroid;
 
-  static bool get isCupertinoStyle => isMacOS;
+  static bool get isCupertinoStyle => isIOS || isMacOS;
 
-  static bool get isMobile => isAndroid;
+  static bool get isMobile => isAndroid || isIOS;
 
   static bool get isDesktop => isLinux || isMacOS;
 
+  /// iOS background delivery and notification setup require a separate port.
   /// The private macOS client intentionally runs without system notifications.
-  static bool get supportsSystemNotifications => !isMacOS;
+  static bool get supportsSystemNotifications => !isMacOS && !isIOS;
+
+  /// The first iOS runner has no share extension or SwiftPM sharing plugin.
+  static bool get supportsIncomingShares => isAndroid;
 
   static bool get usesTouchscreen => !isMobile;
 

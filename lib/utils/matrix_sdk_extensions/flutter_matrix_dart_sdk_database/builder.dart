@@ -18,7 +18,6 @@ import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:path_provider_foundation/path_provider_foundation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:universal_html/html.dart' as html;
 
@@ -37,9 +36,8 @@ Future<DatabaseApi> flutterMatrixSdkDatabaseBuilder(String clientName) async {
     try {
       // Send error notification:
       final l10n = await lookupL10n(AppConfig.appLocale);
-      // We expect that the database cannot be open on iOS 2.8.0 due to that
-      // the team ID has changed and te app can no longer access the database
-      // key in the iOS keychain. This should be removed from 2.9.0 on.
+      // iOS startup reports storage errors in the application UI; this first
+      // port does not initialize a background notification service there.
       if (!PlatformInfos.isIOS) {
         ClientManager.sendInitNotification(
           l10n.initAppError,
@@ -59,12 +57,7 @@ Future<DatabaseApi> flutterMatrixSdkDatabaseBuilder(String clientName) async {
 Future<Directory?> getFileStorageLocation() async {
   try {
     late final Directory temporaryDirectory;
-    if (PlatformInfos.isIOS) {
-      final containerPath = await PathProviderFoundation().getContainerPath(
-        appGroupIdentifier: 'group.im.fluffychat.app',
-      );
-      temporaryDirectory = Directory(containerPath!);
-    } else if (PlatformInfos.isLinux) {
+    if (PlatformInfos.isLinux) {
       temporaryDirectory = await getApplicationCacheDirectory();
     } else {
       temporaryDirectory = await getTemporaryDirectory();
@@ -143,17 +136,9 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
 }
 
 Future<String> _getDatabaseDirectory() async {
-  if (PlatformInfos.isIOS) {
-    final containerPath = await PathProviderFoundation().getContainerPath(
-      appGroupIdentifier: 'group.im.fluffychat.app',
-    );
-    if (containerPath == null) {
-      Logs().w('No container path found for iOS app!');
-      return (await getLibraryDirectory()).path;
-    }
-    return containerPath;
-  }
-  if (PlatformInfos.isMacOS) {
+  // Each iOS install uses its own sandbox. No inherited FluffyChat App Group
+  // or entitlement is consulted, and no other application's files are read.
+  if (PlatformInfos.isIOS || PlatformInfos.isMacOS) {
     return (await getLibraryDirectory()).path;
   }
   return (await getApplicationSupportDirectory()).path;
