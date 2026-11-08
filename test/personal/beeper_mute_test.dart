@@ -77,6 +77,21 @@ void main() {
       expect(room.hasNewMessages, isTrue);
       expect(personalRoomUnread(room), isTrue);
     });
+
+    test('restored fully-read muted chat stays read before receipts load', () {
+      final room = ConversationRoom(_Client(), '!a:example.invalid');
+      _mute(room, -1);
+      room.lastEvent = room.message(r'$read', 'synthetic');
+      room.roomAccountData['m.fully_read'] = BasicEvent(
+        type: 'm.fully_read',
+        content: {'event_id': r'$read'},
+      );
+      expect(room.hasNewMessages, isTrue);
+      expect(personalRoomUnread(room), isFalse);
+
+      room.lastEvent = room.message(r'$new', 'new synthetic', minute: 41);
+      expect(personalRoomUnread(room), isTrue);
+    });
   });
 
   group('release', () {
