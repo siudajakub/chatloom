@@ -93,12 +93,25 @@ class HiddenMessages extends ChangeNotifier {
   /// Starts loading [client]'s hides (idempotent). Hosts call it when they
   /// open; the rows are refiltered when it finishes.
   void load(Client client) {
-    final existing = _accounts[client];
-    if (existing != null) {
-      existing.retry(this);
-      return;
+    unawaited(ensureLoaded(client));
+  }
+
+  /// Waits until device-local hides are applied; retries a failed store read.
+  Future<void> ensureLoaded(Client client, {bool requireSuccess = false}) {
+    final account = _accounts[client] ?? _account(client);
+    if (account == null) {
+      return requireSuccess
+          ? Future<void>.error(StateError('Hidden messages are unavailable'))
+          : Future<void>.value();
     }
-    _account(client);
+    account.retry(this);
+    final ready = account.ready;
+    if (!requireSuccess) return ready;
+    return ready.then((_) {
+      if (_disposed || !account.active || !account._loaded) {
+        throw StateError('Hidden messages could not be loaded');
+      }
+    });
   }
 
   _HiddenAccount? _account(Client client) {
@@ -247,7 +260,18 @@ class HiddenMessages extends ChangeNotifier {
   }
 
   @visibleForTesting
-  void debugReset(Client client) => _accounts[client] = null;
+  void debugReset(Client client) {
+    _accounts[client]?.active = false;
+    _accounts[client] = null;
+  }
+
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 }
 
 class _HiddenAccount {
@@ -257,6 +281,8 @@ class _HiddenAccount {
 
   // Insertion order = hide order (oldest first).
   final keys = <String>{};
+  Future<void> ready = Future<void>.value();
+  bool active = true;
   bool _loaded = false;
   bool _loading = false;
   Future<void>? _writing;
@@ -274,12 +300,13 @@ class _HiddenAccount {
       return;
     }
     _loading = true;
-    unawaited(() async {
+    ready = () async {
       var ok = false;
       try {
         // After the current build pass.
         await Future<void>.microtask(() {});
         final value = await storage.read();
+        if (!active || registry._disposed) return;
         final stored = value?['keys'];
         if (stored is List) {
           // Hides made while loading stay the newest.
@@ -300,12 +327,12 @@ class _HiddenAccount {
         // [HiddenMessages.load] reads it again.
       }
       _loading = false;
-      if (!ok) return;
+      if (!ok || !active || registry._disposed) return;
       final hadPending = _dirty;
       _loaded = true;
       if (keys.isNotEmpty) registry._changed();
       if (hadPending) persist();
-    }());
+    }();
   }
 
   /// Writes the account's record, one write at a time; a change during a
