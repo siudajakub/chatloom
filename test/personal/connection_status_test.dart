@@ -9,6 +9,19 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
 
+class _UnusedDatabase implements DatabaseApi {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _CachedClient extends Client {
+  _CachedClient()
+    : super('cached startup fixture', database: _UnusedDatabase());
+
+  @override
+  String get prevBatch => 'cached-sync-token';
+}
+
 class _Harness {
   _Harness({this.network = true, this.firstSync = false});
 
@@ -32,7 +45,9 @@ class _Harness {
   );
 
   void listen() => monitor.addListener(() {
-    if (seen.isEmpty || seen.last != monitor.value) seen.add(monitor.value);
+    if ((seen.isEmpty ? ConnectionPhase.online : seen.last) != monitor.value) {
+      seen.add(monitor.value);
+    }
     if (lastingSeen.isEmpty || lastingSeen.last != monitor.lasting) {
       lastingSeen.add(monitor.lasting);
     }
@@ -59,6 +74,78 @@ class _Harness {
 }
 
 void main() {
+  test('freshness notifies immediately without changing the header', () {
+    fakeAsync((async) {
+      final h = _Harness();
+      final freshness = <bool>[];
+      h.monitor.addListener(() => freshness.add(h.monitor.awaitingFreshSync));
+      h.monitor.resumed(catchingUp: true);
+      expect(h.monitor.value, ConnectionPhase.online);
+      expect(freshness, [true]);
+      h.monitor.caughtUp();
+      expect(h.monitor.value, ConnectionPhase.online);
+      expect(freshness, [true, false]);
+      async.elapse(const Duration(seconds: 2));
+      expect(freshness, [
+        true,
+        false,
+      ], reason: 'no delayed or duplicate update');
+      h.monitor.dispose();
+    });
+  });
+
+  test('a cached client without a startup request does not stay updating', () {
+    fakeAsync((async) {
+      final monitor = ConnectionStatusMonitor.forClient(_CachedClient());
+      monitor.addListener(() {});
+      async.elapse(const Duration(seconds: 40));
+      expect(monitor.raw, ConnectionPhase.online);
+      expect(monitor.value, ConnectionPhase.online);
+      expect(async.pendingTimers, isEmpty);
+      monitor.dispose();
+    });
+  });
+
+  test('cached startup stays updating until the first fresh response', () {
+    fakeAsync((async) {
+      final client = _CachedClient();
+      final firstResponse = Completer<void>();
+      client.firstSyncReceived = firstResponse.future;
+      final monitor = ConnectionStatusMonitor.forClient(client);
+      monitor.addListener(() {});
+      expect(monitor.raw, ConnectionPhase.updating);
+      async.elapse(const Duration(seconds: 4));
+      expect(monitor.value, ConnectionPhase.updating);
+      client.onSyncStatus.add(const SyncStatusUpdate(SyncStatus.finished));
+      firstResponse.complete();
+      async.flushMicrotasks();
+      expect(monitor.value, ConnectionPhase.online);
+      monitor.dispose();
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
+
+  test('resolved initial sync error does not claim the cache is fresh', () {
+    fakeAsync((async) {
+      final client = _CachedClient();
+      final firstResponse = Completer<void>();
+      client.firstSyncReceived = firstResponse.future;
+      final monitor = ConnectionStatusMonitor.forClient(client);
+      monitor.addListener(() {});
+      client.onSyncStatus.add(const SyncStatusUpdate(SyncStatus.error));
+      firstResponse.complete();
+      async.flushMicrotasks();
+      expect(monitor.awaitingFreshSync, isTrue);
+      expect(monitor.raw, ConnectionPhase.updating);
+      client.onSyncStatus.add(const SyncStatusUpdate(SyncStatus.finished));
+      async.flushMicrotasks();
+      expect(monitor.awaitingFreshSync, isFalse);
+      expect(monitor.value, ConnectionPhase.online);
+      monitor.dispose();
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
+
   test('raw phases follow the sync loop', () {
     ConnectionPhase raw(
       SyncStatus? status, {
@@ -233,6 +320,36 @@ void main() {
     });
   });
 
+  test('recovering processing gets its full grace after failures', () {
+    fakeAsync((async) {
+      final h = _Harness()..listen();
+      h.fail(async);
+      h.fail(async);
+      async.elapse(const Duration(milliseconds: 900));
+      h.emit(SyncStatus.processing);
+      async.elapse(const Duration(milliseconds: 200));
+      expect(h.monitor.value, ConnectionPhase.online);
+      h.emit(SyncStatus.finished);
+      expect(h.seen, isEmpty, reason: 'a quick recovery must not flash');
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
+
+  test('a new connection problem gets its full grace after updating', () {
+    fakeAsync((async) {
+      final h = _Harness()..listen();
+      h.emit(SyncStatus.processing);
+      async.elapse(const Duration(milliseconds: 1400));
+      h.fail(async);
+      h.fail(async);
+      async.elapse(const Duration(milliseconds: 200));
+      expect(h.monitor.value, ConnectionPhase.online);
+      h.succeed();
+      expect(h.seen, isEmpty);
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
+
   test('starts from the current status and stops without listeners', () {
     fakeAsync((async) {
       final h = _Harness()..current = const SyncStatusUpdate(SyncStatus.error);
@@ -263,6 +380,20 @@ void main() {
   });
 
   group('app lifecycle', () {
+    test('a skipped catch-up drops processing from the previous session', () {
+      fakeAsync((async) {
+        final h = _Harness()..listen();
+        h.emit(SyncStatus.processing);
+        h.monitor.background();
+        h.monitor.resumed(catchingUp: true);
+        async.elapse(const Duration(seconds: 2));
+        expect(h.monitor.value, ConnectionPhase.updating);
+        h.monitor.caughtUp();
+        expect(h.monitor.value, ConnectionPhase.online);
+        expect(async.pendingTimers, isEmpty);
+      });
+    });
+
     test('errors in the background never count and the return is clean', () {
       fakeAsync((async) {
         // While in the background Android reports a blocked network as none.

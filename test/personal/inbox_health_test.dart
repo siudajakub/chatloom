@@ -78,13 +78,14 @@ class _FakeBridges extends BridgeHealthMonitor {
 ConnectionStatusMonitor _connection(
   StreamController<SyncStatusUpdate> statuses, {
   bool network = true,
+  Duration updatingGrace = Duration.zero,
 }) => ConnectionStatusMonitor(
   statuses: () => statuses.stream,
   current: () => null,
   firstSync: () => false,
   hasNetwork: () async => network,
   offlineGrace: Duration.zero,
-  updatingGrace: Duration.zero,
+  updatingGrace: updatingGrace,
 );
 
 void main() {
@@ -327,7 +328,11 @@ void main() {
     );
     final statuses = StreamController<SyncStatusUpdate>.broadcast();
     addTearDown(statuses.close);
-    final connection = _connection(statuses, network: false);
+    final connection = _connection(
+      statuses,
+      network: false,
+      updatingGrace: const Duration(seconds: 2),
+    );
     final bridges = _FakeBridges(client, management)
       ..fake = [_bridge(BridgeHealthState.loggedOut)];
     final pushChanges = ValueNotifier(0);
@@ -378,6 +383,17 @@ void main() {
     expect(find.text('Sign in'), findsOneWidget);
     expect(find.text('2 more'), findsOneWidget);
 
+    // Resume catch-up may replace cached bridge reports. Keep local push
+    // and encryption evidence visible while waiting for fresh server state.
+    connection.resumed(catchingUp: true);
+    await tester.pumpAndSettle();
+    expect(connection.value, ConnectionPhase.online);
+    expect(find.text('WhatsApp is signed out'), findsNothing);
+    expect(find.text('Notifications are off'), findsOneWidget);
+    connection.caughtUp();
+    await tester.pumpAndSettle();
+    expect(find.text('WhatsApp is signed out'), findsOneWidget);
+
     // A passing connection problem is the header line's alone.
     statuses
       ..add(const SyncStatusUpdate(SyncStatus.error))
@@ -385,7 +401,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(connection.value, ConnectionPhase.waitingForNetwork);
     expect(find.text('No internet connection'), findsNothing);
-    expect(find.text('WhatsApp is signed out'), findsOneWidget);
+    expect(find.text('WhatsApp is signed out'), findsNothing);
+    expect(find.text('Notifications are off'), findsOneWidget);
     // A lasting one outranks everything as one compact row without "N more"
     // and hides the (stale) bridge problem.
     await tester.pump(const Duration(seconds: 30));
