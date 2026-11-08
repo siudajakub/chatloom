@@ -1,5 +1,14 @@
 # Notion dark v2 design system
 
+## Media resource controls
+
+The existing voice/round settings page contains Data saver and Storage &
+cache. Deferred image originals show a static Load image action; tiny quote
+thumbnails retain their enclosing message action. Cached frames and separate
+thumbnails stay usable. Attachment previews offer Economy beside HD without
+changing Standard or resizing the preview. Cache actions preserve history,
+keys and pending sends. Exact limits: `docs/media-resource-policy.md`.
+
 ## Inbox startup and freshness
 
 The inbox first restores rooms, account data, private metadata, hidden

@@ -55,11 +55,8 @@ Future<MatrixFile> downloadAttachmentCancellable(
   void Function(int bytes)? onDownloadProgress,
   Future<VideoFileCache?> Function()? videoCache,
 }) async {
-  void progress(int bytes) {
-    if (token.cancelled) throw const MediaDownloadCancelled();
-    onDownloadProgress?.call(bytes);
-  }
-
+  VideoFileCache? activeVideoCache;
+  int? videoGeneration;
   final client = event.room.client;
   final mxc = event.attachmentMxcUrl;
   final account = client.userID;
@@ -82,9 +79,16 @@ Future<MatrixFile> downloadAttachmentCancellable(
         (canPersist &&
             !RoundMediaPolicy.fromContent(event.content).canPersist) ||
         (protectedDatabase != null &&
-            protectedDatabase.mediaCacheGeneration != cacheGeneration)) {
+            protectedDatabase.mediaCacheGeneration != cacheGeneration) ||
+        (activeVideoCache != null &&
+            activeVideoCache.generation != videoGeneration)) {
       throw const MediaDownloadCancelled();
     }
+  }
+
+  void progress(int bytes) {
+    checkCancellation();
+    onDownloadProgress?.call(bytes);
   }
 
   checkCancellation();
@@ -99,6 +103,8 @@ Future<MatrixFile> downloadAttachmentCancellable(
           VideoFileCache.appliesTo(event)
       ? await (videoCache ?? VideoFileCache.shared)()
       : null;
+  activeVideoCache = cache;
+  videoGeneration = cache?.generation;
   final key = cache == null ? null : VideoFileCache.keyFor(account!, mxc!);
   checkCancellation();
   final sqlCache =
@@ -161,7 +167,8 @@ Future<MatrixFile> downloadAttachmentCancellable(
                   return cached;
                 }
               }
-              return downloaded = await abortableGet(
+              checkCancellation();
+              final bytes = await abortableGet(
                 client.httpClient,
                 uri,
                 token: token,
@@ -169,6 +176,11 @@ Future<MatrixFile> downloadAttachmentCancellable(
                 onError: client.unexpectedResponse,
                 onDownloadProgress: progress,
               );
+              // The SDK may store the callback's result before returning
+              // control to this wrapper. Revoke late transfers here too.
+              checkCancellation();
+              downloaded = bytes;
+              return bytes;
             },
     );
     checkCancellation();
@@ -179,12 +191,8 @@ Future<MatrixFile> downloadAttachmentCancellable(
       // Finish the atomic store before playback can be reopened. Otherwise
       // an immediate second tap can miss a background partial write.
       await _storeCached(cache, key!, transferred, reel: reel);
-      if (protectedDatabase != null &&
-          protectedDatabase.mediaCacheGeneration != cacheGeneration) {
-        // Disk I/O does not share SQLCipher's serial transaction queue.
-        // Remove a stale write that completed after Clear cache/logout.
-        await _removeCached(cache, key, reel: reel);
-      }
+      // The file cache serializes writes and clear, and discards writes from
+      // an older generation. Deleting by key here could erase a newer retry.
     }
     if (sqlCache != null && transferred != null && !fromCache) {
       await _storeSqlCached(sqlCache, sqlKey!, transferred);

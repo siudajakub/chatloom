@@ -19,6 +19,7 @@ import 'package:chatloom/personal/media/gallery_batch.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
+import 'package:chatloom/personal/media/photo_encoder.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
@@ -198,8 +199,8 @@ class _SendPreviewRoute extends PageRoute<AttachmentSendResult> {
 ///
 /// It never asks whether to compress (J, 2026-10-24): photos and videos
 /// are compressed on the device before upload ([MediaProfile.standard]),
-/// unless the small "HD" chip in the header is on for this send
-/// ([MediaProfile.hd]; per send, never remembered). The exact original
+/// with Economy or HD available in the header for this send
+/// ([MediaProfile.economy], [MediaProfile.hd]; never remembered). The exact original
 /// goes out only from the attach menu's "File" entry ([sendAsFiles]).
 class SendFileDialog extends StatefulWidget {
   final Room room;
@@ -292,8 +293,13 @@ class _Item {
 class SendFileDialogState extends State<SendFileDialog> {
   /// The "HD" chip: this send only, off every time the preview opens.
   bool hd = false;
+  bool economy = false;
 
-  MediaProfile get _profile => hd ? MediaProfile.hd : MediaProfile.standard;
+  MediaProfile get _profile => hd
+      ? MediaProfile.hd
+      : economy
+      ? MediaProfile.economy
+      : MediaProfile.standard;
   bool _sending = false;
   int _accepted = 0;
   String? _problem;
@@ -537,7 +543,18 @@ class SendFileDialogState extends State<SendFileDialog> {
         file.path,
         quality: 70,
       );
-      return await XFile(framePath).readAsBytes();
+      final bytes = await XFile(framePath).readAsBytes();
+      // Retain a bounded preview, rather than a full-resolution frame for
+      // each visited video in a large selection.
+      final small = await encodePhoto(
+        MatrixImageFileResizeArguments(
+          bytes: bytes,
+          maxDimension: MediaQuality.photoEconomyMaxSide,
+          fileName: 'video-preview.jpg',
+          calcBlurhash: false,
+        ),
+      );
+      return small?.bytes;
     } catch (_) {
       return null;
     } finally {
@@ -603,11 +620,7 @@ class SendFileDialogState extends State<SendFileDialog> {
         final size = await xfile.length();
         if (!mounted) return;
         final asDocument = widget.sendAsFiles && item.kind != _Kind.other;
-        final transcode =
-            item.kind == _Kind.video &&
-            !widget.sendAsFiles &&
-            PlatformInfos.supportsVideoTranscode &&
-            xfile.path.isNotEmpty;
+        final transcode = item.kind == _Kind.video && !widget.sendAsFiles;
         if (!transcode && size > maxUploadSize) {
           throw FileTooBigMatrixException(size, maxUploadSize);
         }
@@ -684,7 +697,8 @@ class SendFileDialogState extends State<SendFileDialog> {
           file,
           txid: _transactionIds[i],
           inReplyTo: _to.replyTo,
-          // The long side also selects the JPEG quality (q80, HD q85) and
+          // The long side also selects the JPEG quality (Economy q72,
+          // standard q80, HD q85) and
           // is stored with the bubble, so Retry keeps the same profile.
           shrinkImageMaxDimension:
               !widget.sendAsFiles && file is MatrixImageFile
@@ -857,7 +871,19 @@ class SendFileDialogState extends State<SendFileDialog> {
                         : null,
                     showHd: !widget.sendAsFiles && _hasMedia,
                     hd: hd,
-                    onHd: _locked ? null : () => setState(() => hd = !hd),
+                    economy: economy,
+                    onHd: _locked
+                        ? null
+                        : () => setState(() {
+                            hd = !hd;
+                            economy = false;
+                          }),
+                    onEconomy: _locked
+                        ? null
+                        : () => setState(() {
+                            economy = !economy;
+                            hd = false;
+                          }),
                   ),
                   Expanded(
                     child: Stack(
@@ -1068,7 +1094,8 @@ class _PreviewHeader extends StatelessWidget {
 
   /// The "HD" chip (Telegram), for photos and videos.
   final bool showHd, hd;
-  final VoidCallback? onHd;
+  final bool economy;
+  final VoidCallback? onHd, onEconomy;
 
   const _PreviewHeader({
     required this.title,
@@ -1080,7 +1107,9 @@ class _PreviewHeader extends StatelessWidget {
     required this.removeLabel,
     this.showHd = false,
     this.hd = false,
+    this.economy = false,
     this.onHd,
+    this.onEconomy,
   });
 
   @override
@@ -1112,6 +1141,18 @@ class _PreviewHeader extends StatelessWidget {
                 ),
               ),
               if (showHd) _HdChip(hd: hd, onPressed: onHd),
+              if (showHd)
+                Semantics(
+                  toggled: economy,
+                  child: NotionIconButton(
+                    icon: Icons.data_saver_on_rounded,
+                    label: economy
+                        ? 'Economy on: photos up to 1280 px, video up to 480p'
+                        : 'Send with less data',
+                    selected: economy,
+                    onPressed: onEconomy,
+                  ),
+                ),
               if (onEdit != null)
                 NotionIconButton(
                   icon: Icons.edit_outlined,

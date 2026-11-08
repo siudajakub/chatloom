@@ -244,6 +244,57 @@ void main() {
   });
 
   group('profiles: automatic by default, HD per send', () {
+    test(
+      'economy reduces transfer without changing default or voice quality',
+      () {
+        final image = photo(
+          PhotoFormat.jpeg,
+          4000,
+          3000,
+          8000000,
+          maxSide: MediaProfile.economy.photoMaxSide,
+        );
+        expect((image.width, image.height, image.quality), (1280, 960, 72));
+        expect(MediaProfile.ofPhotoMaxSide(1280), MediaProfile.economy);
+        final video = VideoPlan.decide(
+          width: 3840,
+          height: 2160,
+          durationMs: 60000,
+          bytes: 400000000,
+          bitrate: 50000000,
+          frameRate: 60,
+          profile: MediaProfile.economy,
+        );
+        expect((video.width, video.height, video.fps), (854, 480, 30));
+        expect(video.targetSizeMb, 8);
+        expect(MediaProfile.economy.videoAudioBitrate, 96000);
+        expect(MediaQuality.voiceOpusBitrate, 64000);
+      },
+    );
+
+    test('economy still protects transparency and screenshot text', () {
+      final transparent = photo(
+        PhotoFormat.png,
+        2400,
+        1800,
+        2000000,
+        maxSide: 1280,
+        alpha: true,
+      );
+      expect(transparent.action, PhotoAction.png);
+      expect((transparent.width, transparent.height), (1280, 960));
+      final screenshot = photo(
+        PhotoFormat.png,
+        1200,
+        900,
+        800000,
+        maxSide: 1280,
+      );
+      expect(screenshot.action, PhotoAction.jpeg);
+      expect(screenshot.quality, 80);
+      expect(screenshot.fullChroma, isTrue);
+    });
+
     test('the default profile is the sweet spot, HD is Telegram HD', () {
       expect(MediaProfile.standard.photoMaxSide, 2048);
       expect(MediaProfile.standard.photoJpegQuality, 80);

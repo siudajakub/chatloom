@@ -6,7 +6,9 @@ import 'dart:typed_data';
 
 import 'package:chatloom/personal/media/media_inflight.dart';
 import 'package:chatloom/personal/media/media_prefetcher.dart';
+import 'package:chatloom/personal/media/protected_matrix_database.dart';
 import 'package:chatloom/personal/round_video/round_media_loader.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -45,6 +47,11 @@ class _Database implements DatabaseApi {
       throw StateError('fixture must not access account storage');
 }
 
+class _GenerationDatabase extends _Database implements ProtectedMatrixDatabase {
+  @override
+  int mediaCacheGeneration = 0;
+}
+
 class _Ports implements MediaPrefetchPorts {
   @override
   bool enabled = true;
@@ -53,6 +60,7 @@ class _Ports implements MediaPrefetchPorts {
   @override
   int surfaceGeneration = 0;
   bool network = true;
+  bool cellular = false;
   @override
   int maxCacheableBytes = 10 * 1000 * 1000;
 
@@ -71,11 +79,25 @@ class _Ports implements MediaPrefetchPorts {
   final sizes = <String, int>{};
   Completer<void>? gate;
   Completer<void>? preloadGate;
+  Completer<void>? networkGate;
   int active = 0, maxActive = 0;
   int returnExtra = 0;
+  int receivedBeforeFailure = 0;
+  bool failDownload = false;
 
   @override
   Future<bool> networkAllowed() async => network;
+  @override
+  Future<MediaPrefetchNetwork> networkPolicy() async {
+    if (networkGate case final Completer<void> pending) {
+      await pending.future;
+    }
+    return !network
+        ? MediaPrefetchNetwork.blocked
+        : cellular
+        ? MediaPrefetchNetwork.cellularOrUnknown
+        : MediaPrefetchNetwork.wifiOrEthernet;
+  }
 
   @override
   bool isRoundStateKnown(Event event) => states.containsKey(event.eventId);
@@ -96,7 +118,8 @@ class _Ports implements MediaPrefetchPorts {
   }
 
   @override
-  Future<bool> isCached(Uri mxc) async => cached.contains(mxc.toString());
+  Future<bool> isCached(Uri mxc) async =>
+      cached.contains(mxc.toString()) || stored.containsKey(mxc.toString());
 
   @override
   Future<void> store(Uri mxc, Uint8List ciphertext) async {
@@ -125,6 +148,10 @@ class _Ports implements MediaPrefetchPorts {
         await Future<void>.delayed(Duration.zero);
       }
       if (!cancellation.valid && gate == null) return null;
+      if (failDownload) {
+        cancellation.received(receivedBeforeFailure);
+        throw const MediaPrefetchAborted('fixture');
+      }
       final size = thumbnail
           ? event.thumbnailInfoMap['size'] as int
           : event.infoMap['size'] as int;
@@ -216,16 +243,21 @@ void main() {
     MediaPrefetcher.closeFor(client);
   });
 
-  test('open chat prefetches the newest 20 qualifying voice notes, '
+  test('open chat prefetches the newest six qualifying voice notes, '
       'two at a time, without receipts', () async {
     final events = [for (var i = 0; i < 25; i++) _voice(room, 'v$i')];
     final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
     await _settle();
-    expect(ports.downloads.length, 20);
+    expect(ports.downloads.length, MediaPrefetcher.initialCount);
     expect(ports.downloads.first, 'mxc://example.invalid/v0');
-    expect(ports.stored.length, 20);
+    expect(ports.stored.length, MediaPrefetcher.initialCount);
     expect(ports.maxActive, lessThanOrEqualTo(MediaPrefetcher.maxConcurrent));
-    expect(ports.maxBytes.values.toSet(), {MediaPrefetcher.maxItemBytes});
+    expect(
+      ports.maxBytes.values.every(
+        (limit) => limit <= MediaPrefetcher.maxItemBytes && limit > 0,
+      ),
+      isTrue,
+    );
     expect(ports.authorized.first, r'$v0:false');
     // The prefetcher only reaches the network through the download port: no
     // receipt, read marker, typing or event send ever leaves the client.
@@ -257,28 +289,249 @@ void main() {
     expect(initial, isNot(contains('mxc://example.invalid/sending')));
     expect(initial, isNot(contains('mxc://example.invalid/limited')));
     expect(initial, isNot(contains('mxc://example.invalid/cached')));
-    // Newest 20 candidates include the cached one, which costs no download.
-    expect(initial.length, 19);
-    // Scrolled to rows 35–37: window 25..47 (clamped), nearest centre first.
+    // The cached candidate consumes no network budget.
+    expect(initial.length, MediaPrefetcher.initialCount - 1);
+    // Scrolled to rows 35–37: window 32..40, nearest centre first.
     scope.noteBuilt(35);
     scope.noteBuilt(37);
     await _settle();
     final later = ports.downloads.skip(initial.length).toList();
     expect(later.first, 'mxc://example.invalid/w31'); // index 36
-    expect(later, contains('mxc://example.invalid/w39')); // index 44
+    expect(later, contains('mxc://example.invalid/w35')); // index 40
+    expect(later, isNot(contains('mxc://example.invalid/w39')));
     expect(later, isNot(contains('mxc://example.invalid/w0')));
     scope.dispose();
   });
 
-  test('per-chat budget stops at 48 MB of network', () async {
+  test('per-chat budget stays below 16 MiB of network', () async {
     final events = [
       for (var i = 0; i < 10; i++) _voice(room, 'b$i', size: 7 * _mb),
     ];
     final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
     await _settle();
-    expect(ports.downloads.length, 6); // 6 × 7 MB = 42 MB; the 7th exceeds 48
-    expect(scope.spentBytes, 42 * _mb);
+    expect(ports.downloads.length, 2);
+    expect(scope.spentBytes, 14 * _mb);
     scope.dispose();
+  });
+
+  test('cellular prefetch is serial, small and capped at 2 MiB', () async {
+    ports.cellular = true;
+    final events = [
+      for (var i = 0; i < 12; i++) _voice(room, 'mobile$i', size: 512 * 1024),
+    ];
+    final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+    await _settle();
+    expect(ports.downloads, hasLength(MediaPrefetcher.cellularInitialCount));
+    expect(ports.maxActive, 1);
+    scope.noteBuilt(5);
+    await _settle();
+    expect(ports.downloads, hasLength(4));
+    expect(scope.spentBytes, MediaPrefetcher.cellularBudgetBytes);
+    expect(
+      ports.maxBytes.values.every(
+        (limit) => limit <= MediaPrefetcher.cellularMaxItemBytes,
+      ),
+      isTrue,
+    );
+    scope.dispose();
+  });
+
+  test('large rounds still prefetch a small thumbnail on cellular', () async {
+    ports.cellular = true;
+    ports.states[r'$large-round'] = null;
+    final events = [
+      _round(room, 'large-round', size: 20 * _mb, thumbnailSize: 300),
+    ];
+    final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+    await _settle();
+    expect(ports.downloads, ['mxc://example.invalid/large-round-thumb']);
+    expect(scope.spentBytes, 300);
+    scope.dispose();
+  });
+
+  test(
+    'failed transfers count and repeated scrolls do not retry them',
+    () async {
+      ports
+        ..failDownload = true
+        ..receivedBeforeFailure = 600;
+      final events = [_voice(room, 'failed')];
+      final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+      await _settle();
+      expect(scope.spentBytes, 600);
+      scope.noteBuilt(0);
+      scope.refresh();
+      await _settle();
+      expect(ports.downloads, hasLength(1));
+      expect(scope.spentBytes, 600);
+      expect(ports.stored, isEmpty);
+      scope.dispose();
+    },
+  );
+
+  test('successful downloads are reused on repeated scrolls', () async {
+    final events = [_voice(room, 'once')];
+    final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+    await _settle();
+    scope.noteBuilt(0);
+    scope.refresh();
+    await _settle();
+    expect(ports.downloads, hasLength(1));
+    expect(scope.spentBytes, 1000);
+    scope.dispose();
+  });
+
+  test('attached music does not use the voice-note prefetch budget', () async {
+    final music = _voice(room, 'music');
+    music.content.remove('org.matrix.msc3245.voice');
+    final events = [music, _voice(room, 'voice')];
+    final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+    await _settle();
+    expect(ports.downloads, ['mxc://example.invalid/voice']);
+    scope.dispose();
+  });
+
+  test(
+    'surface changes abort stalled work and resume existing scopes',
+    () async {
+      final events = [_voice(room, 'resume')];
+      ports.gate = Completer<void>();
+      final scope = prefetcher.attach(roomIds: {room.id}, events: () => events);
+      await _settle();
+      final cancellation = ports.cancellations.values.single;
+      ports
+        ..surfaceActive = false
+        ..surfaceGeneration += 1;
+      MediaPrefetcher.surfaceChanged();
+      await _settle();
+      expect(cancellation.valid, isFalse);
+      expect(prefetcher.runningCount, 0);
+      expect(ports.stored, isEmpty);
+      ports
+        ..gate = null
+        ..surfaceActive = true
+        ..surfaceGeneration += 1;
+      MediaPrefetcher.surfaceChanged();
+      await _settle();
+      expect(ports.stored.keys, ['mxc://example.invalid/resume']);
+      expect(ports.downloads, hasLength(2));
+      scope.dispose();
+    },
+  );
+
+  test(
+    'a cache clear during transfer cannot repopulate cleared media',
+    () async {
+      final database = _GenerationDatabase();
+      final guardedClient = Client(
+        'cache generation fixture',
+        database: database,
+      );
+      final guardedRoom = Room(
+        id: '!guarded:example.invalid',
+        client: guardedClient,
+      )..partial = false;
+      final guardedPorts = _Ports()..gate = Completer<void>();
+      final guardedPrefetcher = MediaPrefetcher.test(
+        guardedClient,
+        guardedPorts,
+      );
+      final events = [_voice(guardedRoom, 'old-generation')];
+      final scope = guardedPrefetcher.attach(
+        roomIds: {guardedRoom.id},
+        events: () => events,
+      );
+      await _settle();
+      expect(guardedPorts.downloads, hasLength(1));
+      database.mediaCacheGeneration++;
+      guardedPorts.gate!.complete();
+      await _settle();
+      expect(guardedPorts.stored, isEmpty);
+      expect(guardedPorts.cancellations.values.single.valid, isFalse);
+      scope.dispose();
+      MediaPrefetcher.closeFor(guardedClient);
+    },
+  );
+
+  for (final phase in ['network', 'state', 'download']) {
+    test(
+      'clear during $phase waits for new activity before prefetch',
+      () async {
+        final held = Completer<void>();
+        switch (phase) {
+          case 'network':
+            ports.networkGate = held;
+          case 'state':
+            ports.preloadGate = held;
+          case 'download':
+            ports.gate = held;
+        }
+        ports.preloadable[r'$clear'] = null;
+        final events = [_round(room, 'clear')];
+        final scope = prefetcher.attach(
+          roomIds: {room.id},
+          events: () => events,
+        );
+        scope.noteBuilt(0);
+        await _settle();
+        final before = ports.downloads.length;
+        expect(before, phase == 'download' ? 1 : 0);
+        // Also revoke an already scheduled resume and a pending scroll timer.
+        MediaPrefetcher.surfaceChanged();
+        scope.noteBuilt(0);
+        MediaPrefetcher.cacheCleared(client.database);
+        ports
+          ..networkGate = null
+          ..preloadGate = null
+          ..gate = null;
+        held.complete();
+        await _settle();
+        expect(ports.downloads, hasLength(before));
+        expect(ports.stored, isEmpty);
+        expect(prefetcher.queuedCount, 0);
+        expect(prefetcher.runningCount, 0);
+        scope.noteBuilt(0);
+        await _settle();
+        expect(ports.downloads, hasLength(before + 1));
+        expect(ports.stored.keys, ['mxc://example.invalid/clear']);
+        scope.dispose();
+      },
+    );
+  }
+
+  test('network classifier blocks unknown transports under Wi-Fi only', () {
+    for (final networks in [
+      <ConnectivityResult>[],
+      [ConnectivityResult.none],
+      [ConnectivityResult.mobile],
+      [ConnectivityResult.vpn],
+      [ConnectivityResult.wifi, ConnectivityResult.mobile],
+    ]) {
+      expect(
+        mediaPrefetchNetwork(networks, wifiOnly: true),
+        MediaPrefetchNetwork.blocked,
+      );
+    }
+    expect(
+      mediaPrefetchNetwork([ConnectivityResult.wifi], wifiOnly: true),
+      MediaPrefetchNetwork.wifiOrEthernet,
+    );
+    expect(
+      mediaPrefetchNetwork([ConnectivityResult.ethernet], wifiOnly: true),
+      MediaPrefetchNetwork.wifiOrEthernet,
+    );
+    expect(
+      mediaPrefetchNetwork([ConnectivityResult.vpn], wifiOnly: false),
+      MediaPrefetchNetwork.cellularOrUnknown,
+    );
+    expect(
+      mediaPrefetchNetwork([ConnectivityResult.mobile], wifiOnly: false),
+      MediaPrefetchNetwork.cellularOrUnknown,
+    );
+    expect(
+      mediaPrefetchNetwork([ConnectivityResult.none], wifiOnly: false),
+      MediaPrefetchNetwork.blocked,
+    );
   });
 
   test(
@@ -509,6 +762,44 @@ void main() {
     expect(seen, [r'$gate:true']);
   });
 
+  test(
+    'scanner media never starts automatic transfers; cached play works',
+    () async {
+      client.contentScannerConfig = MatrixContentScannerConfig(
+        downloadUri: Uri.parse('https://scanner.invalid/download/'),
+        downloadThumbnailUri: Uri.parse('https://scanner.invalid/thumbnail/'),
+        downloadEncryptedUri: Uri.parse(
+          'https://scanner.invalid/download_encrypted',
+        ),
+      );
+      final ports = ClientMediaPrefetchPorts(client);
+      expect(await ports.networkPolicy(), MediaPrefetchNetwork.blocked);
+      expect(await ports.networkAllowed(), isFalse);
+      final event = _voice(room, 'scanner');
+      final cancellation = MediaPrefetchCancellation(() => true);
+      expect(
+        await ports.download(
+          event,
+          event.attachmentMxcUrl!,
+          thumbnail: false,
+          maxBytes: 1024,
+          cancellation: cancellation,
+        ),
+        isNull,
+      );
+      expect(requests, isEmpty);
+      expect(cancellation.receivedBytes, 0);
+      final bytes = Uint8List.fromList([1, 2, 3]);
+      (client.database as _Database).files[event.attachmentMxcUrl.toString()] =
+          bytes;
+      final cached = await event.downloadAndDecryptAttachment(
+        fromLocalStoreOnly: true,
+      );
+      expect(cached.bytes, bytes);
+      expect(requests, isEmpty);
+    },
+  );
+
   test('backgrounded app does not start work', () async {
     ports.surfaceActive = false;
     final events = [_voice(room, 'bg')];
@@ -638,6 +929,23 @@ void main() {
         ),
         isNull,
       );
+    });
+
+    test('counts bytes discarded after an oversized response', () async {
+      final cancellation = MediaPrefetchCancellation(() => true);
+      final bytes = await readBoundedBody(
+        http.StreamedResponse(
+          Stream.fromIterable([
+            [1, 2],
+            [3, 4],
+          ]),
+          200,
+        ),
+        maxBytes: 3,
+        cancellation: cancellation,
+      );
+      expect(bytes, isNull);
+      expect(cancellation.receivedBytes, 4);
     });
 
     test('cancellation and idle timeout abort the stream', () async {
@@ -776,6 +1084,9 @@ class _NetworkPorts extends ClientMediaPrefetchPorts {
   bool get enabled => true;
   @override
   Future<bool> networkAllowed() async => true;
+  @override
+  Future<MediaPrefetchNetwork> networkPolicy() async =>
+      MediaPrefetchNetwork.wifiOrEthernet;
   @override
   bool get surfaceActive => true;
   @override

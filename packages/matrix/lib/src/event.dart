@@ -825,12 +825,28 @@ class Event extends MatrixEvent {
     if (![EventTypes.Message, EventTypes.Sticker].contains(type)) {
       throw ("This event has the type '$type' and so it can't contain an attachment.");
     }
+    final client = room.client;
+    final database = client.database;
+    final account = (client.userID, client.homeserver);
+    final cacheGeneration = client.attachmentCacheGeneration;
+    final generation = cacheGeneration?.call();
+    void ensureCurrent() {
+      if (!identical(client, room.client) ||
+          !identical(database, client.database) ||
+          account != (client.userID, client.homeserver) ||
+          !identical(cacheGeneration, client.attachmentCacheGeneration) ||
+          generation != client.attachmentCacheGeneration?.call()) {
+        throw StateError('Attachment context changed during download');
+      }
+    }
+
     await room.client.authorizeAttachmentAccess?.call(this, getThumbnail);
+    ensureCurrent();
     if (!status.isSent && cacheAttachment) {
       final localFile = await _getCachedFile(getThumbnail: getThumbnail);
+      ensureCurrent();
       if (localFile != null) return localFile;
     }
-    final database = room.client.database;
     final mxcUrl = attachmentOrThumbnailMxcUrl(getThumbnail: getThumbnail);
     if (mxcUrl == null) {
       throw "This event hasn't any attachment or thumbnail.";
@@ -853,6 +869,7 @@ class Event extends MatrixEvent {
     Uint8List? uint8list;
     if (storeable) {
       uint8list = await room.client.database.getFile(mxcUrl);
+      ensureCurrent();
     }
 
     // Download the file
@@ -885,6 +902,7 @@ class Event extends MatrixEvent {
           );
         }
       }
+      ensureCurrent();
       storeable = storeable && uint8list.lengthInBytes < database.maxFileSize;
       if (storeable) {
         await database.storeFile(
@@ -927,6 +945,7 @@ class Event extends MatrixEvent {
     }
 
     final useThumbnail = getThumbnail && hasThumbnail;
+    ensureCurrent();
     final filename = content.tryGet<String>('filename') ?? body;
 
     return MatrixFile(

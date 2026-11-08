@@ -61,6 +61,16 @@ class ProtectedMatrixDatabase extends MatrixSdkDatabase {
   /// Cheap presence check used by the media prefetcher (no BLOB read).
   Future<bool> hasFile(Uri mxcUri) => _media.hasFile(mxcUri);
 
+  /// Storage settings leave history, keys and pending sends untouched.
+  Future<({int downloaded, int outgoing})> mediaCacheUsage() => _media.usage();
+
+  Future<void> setMediaCacheBudget(int bytes) => _media.setBudget(bytes);
+
+  Future<void> clearDownloadedMedia() {
+    _mediaCacheGeneration++;
+    return _media.clearDownloaded();
+  }
+
   @override
   Future<bool> deleteFile(Uri mxcUri) => _media.deleteFile(mxcUri);
 

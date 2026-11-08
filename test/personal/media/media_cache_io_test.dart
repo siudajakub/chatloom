@@ -392,4 +392,54 @@ void main() {
     now = now.add(const Duration(days: 31));
     expect(await media.getFile(unsent), isNull);
   });
+
+  test(
+    'selective clear keeps retry copies and separates their usage',
+    () async {
+      final media = cache();
+      await media.initialize();
+      final pending = Uri.parse('cache://file/pending-fixture');
+      await media.storeFile(pending, Uint8List(200), 0);
+      await media.storeFile(mxc('photo'), Uint8List(100), 0);
+      expect(await media.usage(), (downloaded: 100, outgoing: 200));
+      await media.clearDownloaded();
+      expect(await media.getFile(pending), hasLength(200));
+      expect(await media.getFile(mxc('photo')), isNull);
+      expect(await media.usage(), (downloaded: 0, outgoing: 200));
+    },
+  );
+
+  test(
+    'budget changes trim downloads while preserving all pending sends',
+    () async {
+      final media = cache();
+      await media.initialize();
+      final pending = Uri.parse('cache://thumbnail/pending-fixture');
+      await media.storeFile(pending, Uint8List(200), 0);
+      await media.storeFile(mxc('old'), Uint8List(300), 0);
+      now = now.add(const Duration(seconds: 1));
+      await media.storeFile(mxc('new'), Uint8List(300), 0);
+      await media.setBudget(600);
+      expect(await media.getFile(pending), hasLength(200));
+      expect(await media.getFile(mxc('old')), isNull);
+      expect(await media.getFile(mxc('new')), hasLength(300));
+      await media.setBudget(100);
+      expect(await media.getFile(pending), hasLength(200));
+      expect(await media.usage(), (downloaded: 0, outgoing: 200));
+    },
+  );
+
+  test(
+    'loading a saved budget leaves existing downloads until a write',
+    () async {
+      final media = cache();
+      await media.initialize();
+      await media.storeFile(mxc('a'), Uint8List(400), 0);
+      await media.storeFile(mxc('b'), Uint8List(400), 0);
+      await media.setBudget(500, trim: false);
+      expect(await media.usage(), (downloaded: 800, outgoing: 0));
+      await media.storeFile(mxc('c'), Uint8List(300), 0);
+      expect((await media.usage()).downloaded, lessThanOrEqualTo(500));
+    },
+  );
 }

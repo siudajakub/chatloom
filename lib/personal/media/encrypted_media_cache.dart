@@ -24,7 +24,8 @@ import '../storage/database_policy.dart';
 class EncryptedMediaCache {
   final Database _cacheDatabase;
   final int maxFileSize;
-  final int maxCacheBytes;
+  int _maxCacheBytes;
+  int get maxCacheBytes => _maxCacheBytes;
   final Duration retention;
   final Duration pruneInterval;
   final Duration touchInterval;
@@ -78,12 +79,13 @@ class EncryptedMediaCache {
   EncryptedMediaCache(
     this._cacheDatabase, {
     this.maxFileSize = 10 * 1000 * 1000,
-    this.maxCacheBytes = 128 * 1024 * 1024,
+    int maxCacheBytes = 128 * 1024 * 1024,
     this.retention = const Duration(days: 30),
     this.pruneInterval = const Duration(hours: 1),
     this.touchInterval = const Duration(hours: 12),
     DateTime Function()? now,
-  }) : _now = now ?? DateTime.now;
+  }) : _maxCacheBytes = maxCacheBytes,
+       _now = now ?? DateTime.now;
 
   Future<void> initialize() => preserveOnStorageFailure(() async {
     await _cacheDatabase.execute(
@@ -104,6 +106,47 @@ class EncryptedMediaCache {
     await _cacheDatabase.delete('personal_media_cache');
     _cachedBytesBound = 0;
   });
+
+  /// Storage settings clear downloaded media only. The SDK's retry copies
+  /// are durable send state, not disposable downloads.
+  Future<void> clearDownloaded() => preserveOnStorageFailure(() async {
+    await _cacheDatabase.delete(
+      'personal_media_cache',
+      where: 'media_key NOT LIKE ?',
+      whereArgs: ['$outgoingPrefix%'],
+    );
+    _cachedBytesBound = null;
+  });
+
+  /// Logical BLOB bytes, without reading their payload or counting the
+  /// whole SQLCipher database (which also holds history and keys).
+  Future<({int downloaded, int outgoing})> usage() =>
+      preserveOnStorageFailure(() async {
+        final rows = await _cacheDatabase.rawQuery(
+          'SELECT COALESCE(SUM(CASE WHEN media_key LIKE ? '
+          'THEN 0 ELSE length(bytes) END), 0) AS downloaded, '
+          'COALESCE(SUM(CASE WHEN media_key LIKE ? '
+          'THEN length(bytes) ELSE 0 END), 0) AS outgoing '
+          'FROM personal_media_cache',
+          ['$outgoingPrefix%', '$outgoingPrefix%'],
+        );
+        return (
+          downloaded: rows.single['downloaded']! as int,
+          outgoing: rows.single['outgoing']! as int,
+        );
+      });
+
+  /// Applying a saved setting at open does not purge existing media. An
+  /// explicit change may trim immediately; subsequent stores always obey it.
+  Future<void> setBudget(int bytes, {bool trim = true}) =>
+      preserveOnStorageFailure(() async {
+        if (bytes <= 0) throw ArgumentError.value(bytes, 'bytes');
+        _maxCacheBytes = bytes;
+        _cachedBytesBound = null;
+        if (trim) {
+          await _cacheDatabase.transaction(_evict);
+        }
+      });
 
   Future<void> storeFile(Uri mxcUri, Uint8List bytes, int time) =>
       preserveOnStorageFailure(() async {
@@ -127,48 +170,54 @@ class EncryptedMediaCache {
             _cachedBytesBound = bound + bytes.length;
             return;
           }
-          debugEvictionScans++;
-          // length() of a BLOB comes from the record header; accessed_at
-          // (stored after the BLOB) is what makes this a full read.
-          final sizes = await tx.rawQuery(
-            'SELECT media_key, length(bytes) AS size FROM personal_media_cache '
-            'ORDER BY accessed_at DESC, media_key ASC',
-          );
-          var total = 0;
-          for (final row in sizes) {
-            total += row['size']! as int;
-          }
-          if (total <= maxCacheBytes) {
-            _cachedBytesBound = total;
-            return;
-          }
-          // This device's copies of unsent files ([outgoingPrefix]) are
-          // never evicted: they are the only source for Retry, and the send
-          // (or a Delete) removes them.
-          var retained = 0;
-          for (final row in sizes) {
-            if ((row['media_key']! as String).startsWith(outgoingPrefix)) {
-              retained += row['size']! as int;
-            }
-          }
-          for (final row in sizes) {
-            final size = row['size']! as int;
-            final rowKey = row['media_key']! as String;
-            if (rowKey.startsWith(outgoingPrefix)) continue;
-            // The file just stored is never evicted to make room for itself.
-            if (rowKey == key || retained + size <= evictToBytes) {
-              retained += size;
-              continue;
-            }
-            await tx.delete(
-              'personal_media_cache',
-              where: 'media_key = ?',
-              whereArgs: [rowKey],
-            );
-          }
-          _cachedBytesBound = retained;
+          await _evict(tx, keep: key);
         });
       });
+
+  Future<void> _evict(Transaction tx, {String? keep}) async {
+    debugEvictionScans++;
+    // length() of a BLOB comes from the record header; accessed_at
+    // (stored after the BLOB) is what makes this a full read.
+    final sizes = await tx.rawQuery(
+      'SELECT media_key, length(bytes) AS size FROM personal_media_cache '
+      'ORDER BY accessed_at DESC, media_key ASC',
+    );
+    var total = 0;
+    for (final row in sizes) {
+      total += row['size']! as int;
+    }
+    if (total <= maxCacheBytes) {
+      _cachedBytesBound = total;
+      return;
+    }
+    // This device's copies of unsent files ([outgoingPrefix]) are
+    // never evicted: they are the only source for Retry, and the send
+    // (or a Delete) removes them.
+    var retained = 0;
+    for (final row in sizes) {
+      final rowKey = row['media_key']! as String;
+      if (rowKey.startsWith(outgoingPrefix) || rowKey == keep) {
+        retained += row['size']! as int;
+      }
+    }
+    for (final row in sizes) {
+      final size = row['size']! as int;
+      final rowKey = row['media_key']! as String;
+      // Reserve the just-written file before considering older entries;
+      // otherwise equal-timestamp key ordering could exceed the budget.
+      if (rowKey.startsWith(outgoingPrefix) || rowKey == keep) continue;
+      if (retained + size <= evictToBytes) {
+        retained += size;
+        continue;
+      }
+      await tx.delete(
+        'personal_media_cache',
+        where: 'media_key = ?',
+        whereArgs: [rowKey],
+      );
+    }
+    _cachedBytesBound = retained;
+  }
 
   Future<Uint8List?> getFile(Uri mxcUri) => preserveOnStorageFailure(() async {
     final now = _now();

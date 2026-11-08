@@ -172,7 +172,9 @@ class LinkPreviewAttachment extends StatelessWidget {
                 client: event.room.client,
                 cacheKey: 'linkpreview:$image',
                 cacheName: event.room.id,
-                isThumbnail: preview.imageEncryption == null,
+                // Encryption changes the transport, not the preview's role:
+                // keep its data-saver gate and bounded decode dimensions.
+                isThumbnail: true,
                 width: width,
                 height: height,
                 fit: BoxFit.cover,

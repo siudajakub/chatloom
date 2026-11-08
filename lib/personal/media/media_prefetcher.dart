@@ -36,13 +36,17 @@
 /// new arrivals in attached rooms first. At most [MediaPrefetcher.maxConcurrent]
 /// downloads, deduplicated by `mxc://`, each capped at
 /// [MediaPrefetcher.maxItemBytes] (under the cache `maxFileSize`), and at most
-/// [MediaPrefetcher.scopeBudgetBytes] of network per open chat. Limited or
-/// protected media, unknown sizes, unsent/redacted events and rounds whose
+/// [MediaPrefetcher.scopeBudgetBytes] of network per open chat on Wi-Fi or
+/// Ethernet. Explicitly enabled cellular/unknown transport uses one worker,
+/// smaller files and a separate 2 MiB ceiling. Limited or
+/// protected media, unknown-size bodies, unsent/redacted events and rounds whose
 /// verified media state is not loaded or expired are never fetched. Work stops
 /// when the scope is disposed, the app is not resumed, the privacy lock engages
 /// (`PersonalPrivacy.surfaceGeneration` changes), the account logs out, the
 /// setting `personalAutoDownloadVoiceRounds` is off, or (with
 /// `personalAutoDownloadWifiOnly`) the device is not on Wi-Fi/Ethernet.
+/// Scanner-managed media is left to explicit playback: the SDK scanner path
+/// cannot bound or abort encrypted transfers and does not report progress.
 library;
 
 import 'dart:async';
@@ -75,13 +79,43 @@ class MediaPrefetchAborted implements Exception {
 class MediaPrefetchCancellation {
   final bool Function() _stillWanted;
   final _abort = Completer<void>();
+  int _received = 0;
   MediaPrefetchCancellation(this._stillWanted);
 
   bool get valid => !_abort.isCompleted && _stillWanted();
   Future<void> get onAbort => _abort.future;
+  int get receivedBytes => _received;
+
+  /// Body bytes received, including bytes discarded after an error or cap.
+  void received(int count) => _received += math.max(0, count);
+
+  /// Complete responses and cumulative progress must not double-count chunks.
+  void receivedTotal(int count) => _received = math.max(_received, count);
   void cancel() {
     if (!_abort.isCompleted) _abort.complete();
   }
+}
+
+/// Connectivity describes the transport, not whether Wi-Fi is metered.
+enum MediaPrefetchNetwork { blocked, wifiOrEthernet, cellularOrUnknown }
+
+@visibleForTesting
+MediaPrefetchNetwork mediaPrefetchNetwork(
+  Iterable<ConnectivityResult> networks, {
+  required bool wifiOnly,
+}) {
+  final available = networks.where((n) => n != ConnectivityResult.none).toSet();
+  if (available.isEmpty) return MediaPrefetchNetwork.blocked;
+  final local =
+      available.contains(ConnectivityResult.wifi) ||
+      available.contains(ConnectivityResult.ethernet);
+  // A simultaneous cellular transport may carry traffic after a handover.
+  if (local && !available.contains(ConnectivityResult.mobile)) {
+    return MediaPrefetchNetwork.wifiOrEthernet;
+  }
+  return wifiOnly
+      ? MediaPrefetchNetwork.blocked
+      : MediaPrefetchNetwork.cellularOrUnknown;
 }
 
 /// Side effects of the prefetcher, injectable for tests.
@@ -91,6 +125,7 @@ abstract class MediaPrefetchPorts {
 
   /// Wi-Fi-only policy; true when downloads may use the current network.
   Future<bool> networkAllowed();
+  Future<MediaPrefetchNetwork> networkPolicy();
 
   /// App resumed, privacy surface unlocked/foreground, account logged in.
   bool get surfaceActive;
@@ -111,7 +146,7 @@ abstract class MediaPrefetchPorts {
   Future<void> store(Uri mxc, Uint8List ciphertext);
 
   /// Returns ciphertext to store, or null when nothing should be stored
-  /// (e.g. the content-scanner fallback already stored it through the SDK).
+  /// (for example, automatic transfers are unavailable with a scanner).
   Future<Uint8List?> download(
     Event event,
     Uri mxc, {
@@ -153,8 +188,8 @@ class _Job {
 class _Candidate {
   final Event event;
   final bool round;
-  final Uri mxc;
-  final int size;
+  final Uri? mxc;
+  final int? size;
   final Uri? thumbnail;
   final int? thumbnailSize;
   const _Candidate(
@@ -168,14 +203,20 @@ class _Candidate {
 }
 
 /// Per-client prefetch queue. Use [MediaPrefetcher.of] and [attach].
-class MediaPrefetcher {
+class MediaPrefetcher with WidgetsBindingObserver {
   static const maxConcurrent = 2;
   static const maxItemBytes = 8 * 1024 * 1024;
   static const maxThumbnailBytes = 2 * 1024 * 1024;
-  static const scopeBudgetBytes = 48 * 1024 * 1024;
-  static const initialCount = 20;
+  static const scopeBudgetBytes = 16 * 1024 * 1024;
+  static const initialCount = 6;
   static const initialScanLimit = 200;
-  static const windowMargin = 10;
+  static const windowMargin = 3;
+  static const cellularBudgetBytes = 2 * 1024 * 1024;
+  static const cellularMaxItemBytes = 512 * 1024;
+  static const cellularMaxThumbnailBytes = 128 * 1024;
+  static const cellularInitialCount = 3;
+  static const cellularWindowMargin = 1;
+  static const retryDelay = Duration(minutes: 2);
 
   /// Bound work retained during a long fling, even if the list keeps building
   /// without an idle frame. The most recently built rows win.
@@ -189,7 +230,11 @@ class MediaPrefetcher {
 
   static MediaPrefetcher of(Client client) => _instances.putIfAbsent(
     client,
-    () => MediaPrefetcher._(client, ClientMediaPrefetchPorts(client)),
+    () => MediaPrefetcher._(
+      client,
+      ClientMediaPrefetchPorts(client),
+      observeEnvironment: true,
+    ),
   );
 
   /// In-flight prefetch of [mxc] (any account); play paths may await it and
@@ -199,20 +244,49 @@ class MediaPrefetcher {
   /// Aborts everything for [client] (logout / account removal).
   static void closeFor(Client client) => _instances.remove(client)?._close();
 
+  /// Called by the privacy surface immediately, including during a stalled
+  /// response that would otherwise notice the lock only at its next chunk.
+  static void surfaceChanged() {
+    for (final instance in _instances.values.toList()) {
+      instance._environmentChanged();
+    }
+  }
+
+  /// Revokes background work before downloaded media is cleared. A fresh
+  /// scroll or arrival may start work again; clearing never reseeds it.
+  static void cacheCleared(DatabaseApi database) {
+    for (final instance in _instances.values.toList()) {
+      if (identical(instance.client.database, database)) {
+        instance._cacheCleared();
+      }
+    }
+  }
+
   final Client client;
   final MediaPrefetchPorts ports;
   final Duration idle;
+  final bool observeEnvironment;
   final _scopes = <RoomPrefetchScope>{};
   final _queue = <_Job>[];
   final _running = <String, _Job>{};
   final _known = <String, _Job>{};
+  final _retryAfter = <String, DateTime>{};
   StreamSubscription<Event>? _arrivals;
   StreamSubscription<LoginState>? _login;
+  StreamSubscription<List<ConnectivityResult>>? _connectivity;
+  bool _observing = false;
+  int _environmentRevision = 0;
+  MediaPrefetchNetwork _network = MediaPrefetchNetwork.blocked;
   int _sequence = 0;
   bool _closed = false;
   int? _generation;
 
-  MediaPrefetcher._(this.client, this.ports, {this.idle = idleDelay}) {
+  MediaPrefetcher._(
+    this.client,
+    this.ports, {
+    this.idle = idleDelay,
+    this.observeEnvironment = false,
+  }) {
     _login = client.onLoginStateChanged.stream.listen((state) {
       if (state == LoginState.loggedOut &&
           identical(_instances[client], this)) {
@@ -243,6 +317,14 @@ class MediaPrefetcher {
       return scope;
     }
     _scopes.add(scope);
+    if (observeEnvironment && !_observing) {
+      _observing = true;
+      WidgetsBinding.instance.addObserver(this);
+      _connectivity = Connectivity().onConnectivityChanged.listen(
+        (_) => _environmentChanged(),
+        onError: (Object _) => _environmentChanged(),
+      );
+    }
     _arrivals ??= client.onTimelineEvent.stream.listen(_arrived);
     scope._schedule();
     return scope;
@@ -272,12 +354,67 @@ class MediaPrefetcher {
     if (_scopes.isEmpty) {
       unawaited(_arrivals?.cancel());
       _arrivals = null;
+      _stopObserving();
+    }
+  }
+
+  void _stopObserving() {
+    if (!_observing) return;
+    _observing = false;
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_connectivity?.cancel());
+    _connectivity = null;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) =>
+      _environmentChanged();
+
+  void _environmentChanged() {
+    if (_closed) return;
+    if (ports case final ClientMediaPrefetchPorts production) {
+      production.invalidateNetwork();
+    }
+    final revision = ++_environmentRevision;
+    _generation = ports.surfaceGeneration;
+    _dropAll();
+    final pending = [
+      for (final job in _running.values)
+        if (MediaInflight.of(job.mxc) case final Future<void> work) work,
+    ];
+    unawaited(
+      Future.wait(pending).then((_) {
+        if (_closed ||
+            revision != _environmentRevision ||
+            !ports.surfaceActive) {
+          return;
+        }
+        for (final scope in _scopes) {
+          scope.refresh();
+        }
+      }),
+    );
+  }
+
+  void _cacheCleared() {
+    if (_closed) return;
+    // Revoke asynchronous enqueues, flushes and a pending resume callback.
+    _environmentRevision++;
+    _generation = ports.surfaceGeneration;
+    _dropAll();
+    for (final scope in _scopes) {
+      scope._timer?.cancel();
+      scope._timer = null;
+      scope._flushAgain = false;
+      scope._min = scope._max = null;
+      scope._windowRevision++;
     }
   }
 
   void _close() {
     if (_closed) return;
     _closed = true;
+    _stopObserving();
     for (final scope in _scopes.toList()) {
       scope._disposed = true;
       scope._timer?.cancel();
@@ -334,7 +471,11 @@ class MediaPrefetcher {
     final round =
         type == MessageTypes.Video &&
         RoundVideoDescriptor.fromContent(event.content) != null;
-    if (!round && type != MessageTypes.Audio) return null;
+    if (!round &&
+        (type != MessageTypes.Audio ||
+            !event.content.containsKey('org.matrix.msc3245.voice'))) {
+      return null;
+    }
     if (!RoundMediaPolicy.fromContent(event.content).canPersist) return null;
     // Chats with a disappearing-message timer (mautrix bridgev2 room state)
     // are never prefetched; anything but an explicit "off" counts as on,
@@ -344,14 +485,13 @@ class MediaPrefetcher {
     final size = event.infoMap['size'];
     final storable = ports.maxCacheableBytes;
     // Unknown size: the SDK would neither read nor write the cache for it.
-    if (mxc == null ||
-        !mxc.isScheme('mxc') ||
-        size is! int ||
-        size <= 0 ||
-        size > maxItemBytes ||
-        size >= storable) {
-      return null;
-    }
+    final bodyAllowed =
+        mxc != null &&
+        mxc.isScheme('mxc') &&
+        size is int &&
+        size > 0 &&
+        size <= maxItemBytes &&
+        size < storable;
     Uri? thumbnail;
     int? thumbnailSize;
     if (round && event.hasThumbnail) {
@@ -367,7 +507,15 @@ class MediaPrefetcher {
         thumbnailSize = value;
       }
     }
-    return _Candidate(event, round, mxc, size, thumbnail, thumbnailSize);
+    if (!bodyAllowed && thumbnail == null) return null;
+    return _Candidate(
+      event,
+      round,
+      bodyAllowed ? mxc : null,
+      bodyAllowed ? size : null,
+      thumbnail,
+      thumbnailSize,
+    );
   }
 
   bool _roundAllowed(Event event) =>
@@ -382,6 +530,8 @@ class MediaPrefetcher {
     int priority,
   ) {
     final key = mxc.toString();
+    final retryAfter = _retryAfter[key];
+    if (retryAfter != null && DateTime.now().isBefore(retryAfter)) return;
     final existing = _known[key];
     final sequence = _sequence++;
     if (existing != null) {
@@ -415,12 +565,18 @@ class MediaPrefetcher {
 
   void _pump() {
     if (_queue.isEmpty || !_surfaceUsable()) return;
-    while (_running.length < maxConcurrent && _queue.isNotEmpty) {
+    final concurrency = _network == MediaPrefetchNetwork.cellularOrUnknown
+        ? 1
+        : maxConcurrent;
+    while (_running.length < concurrency && _queue.isNotEmpty) {
       var best = 0;
       for (var i = 1; i < _queue.length; i++) {
         final a = _queue[i], b = _queue[best];
         if (a.priority < b.priority ||
-            (a.priority == b.priority && a.sequence < b.sequence)) {
+            (a.priority == b.priority && a.thumbnail && !b.thumbnail) ||
+            (a.priority == b.priority &&
+                a.thumbnail == b.thumbnail &&
+                a.sequence < b.sequence)) {
           best = i;
         }
       }
@@ -439,19 +595,32 @@ class MediaPrefetcher {
 
   Future<void> _run(_Job job) async {
     final generation = ports.surfaceGeneration;
+    final database = client.database;
+    final cacheGeneration = database is ProtectedMatrixDatabase
+        ? database.mediaCacheGeneration
+        : 0;
     bool wanted() =>
         !job.cancelled &&
         !_closed &&
         job.owners.isNotEmpty &&
         ports.enabled &&
         ports.surfaceActive &&
-        ports.surfaceGeneration == generation;
+        ports.surfaceGeneration == generation &&
+        identical(client.database, database) &&
+        (database is! ProtectedMatrixDatabase ||
+            database.mediaCacheGeneration == cacheGeneration);
     final cancellation = job.cancellation = MediaPrefetchCancellation(wanted);
     final scope = job.charged;
     var reserved = 0;
+    var attempted = false;
+    var stored = false;
     try {
       if (!cancellation.valid) return;
-      if (!await ports.networkAllowed() || !cancellation.valid) return;
+      final network = await ports.networkPolicy();
+      if (network == MediaPrefetchNetwork.blocked || !cancellation.valid) {
+        return;
+      }
+      final cellular = network == MediaPrefetchNetwork.cellularOrUnknown;
       if (job.event.messageType == MessageTypes.Video &&
           !_roundAllowed(job.event)) {
         return;
@@ -459,10 +628,16 @@ class MediaPrefetcher {
       await ports.authorize(job.event, job.thumbnail);
       if (!cancellation.valid) return;
       if (await ports.isCached(job.mxc) || !cancellation.valid) return;
-      if (scope._spent + job.size > scopeBudgetBytes) return;
-      reserved = job.size;
+      final budget = cellular ? cellularBudgetBytes : scopeBudgetBytes;
+      final itemLimit = job.thumbnail
+          ? (cellular ? cellularMaxThumbnailBytes : maxThumbnailBytes)
+          : (cellular ? cellularMaxItemBytes : maxItemBytes);
+      if (job.size > itemLimit || scope._spent + job.size > budget) return;
+      // The remaining budget also caps a response whose advertised size lies.
+      final limit = math.min(itemLimit, budget - scope._spent);
+      reserved = limit;
       scope._spent += reserved;
-      final limit = job.thumbnail ? maxThumbnailBytes : maxItemBytes;
+      attempted = true;
       final bytes = await ports.download(
         job.event,
         job.mxc,
@@ -470,13 +645,8 @@ class MediaPrefetcher {
         maxBytes: limit,
         cancellation: cancellation,
       );
-      if (bytes == null) {
-        scope._spent -= reserved;
-        return;
-      }
-      // Charge what actually crossed the network.
-      scope._spent += bytes.length - reserved;
-      reserved = 0;
+      if (bytes == null) return;
+      cancellation.receivedTotal(bytes.length);
       if (!cancellation.valid ||
           (job.event.messageType == MessageTypes.Video &&
               !_roundAllowed(job.event)) ||
@@ -486,10 +656,19 @@ class MediaPrefetcher {
         return;
       }
       await ports.store(job.mxc, bytes);
+      stored = true;
     } catch (_) {
-      // Best effort: the play path downloads on demand. Release the budget
-      // reserved for a download that did not produce bytes.
-      scope._spent -= reserved;
+      // Best effort: the explicit play path still downloads on demand.
+    } finally {
+      // Failed, capped, scanner-managed and cancelled bodies count as well.
+      scope._spent += cancellation.receivedBytes - reserved;
+      if (attempted && !stored && !job.cancelled) {
+        _retryAfter.remove(job.mxc.toString());
+        _retryAfter[job.mxc.toString()] = DateTime.now().add(retryDelay);
+        if (_retryAfter.length > maxQueuedJobs) {
+          _retryAfter.remove(_retryAfter.keys.first);
+        }
+      }
     }
   }
 }
@@ -514,7 +693,8 @@ class RoomPrefetchScope {
 
   bool get disposed => _disposed;
 
-  /// Network bytes charged to this scope (cache hits are free).
+  /// Received body bytes, including discarded/failed transfers. While work
+  /// runs this also reserves its response cap (cache hits are free).
   int get spentBytes => _spent;
 
   /// Call from the list's itemBuilder with the row's index into `events()`.
@@ -581,6 +761,16 @@ class RoomPrefetchScope {
 
   Future<void> _flushOnce() async {
     if (_disposed || !_owner._surfaceUsable()) return;
+    final revision = _owner._environmentRevision;
+    final network = await _owner.ports.networkPolicy();
+    if (_disposed ||
+        revision != _owner._environmentRevision ||
+        !_owner._surfaceUsable() ||
+        network == MediaPrefetchNetwork.blocked) {
+      return;
+    }
+    _owner._network = network;
+    final cellular = network == MediaPrefetchNetwork.cellularOrUnknown;
     final events = _events();
     if (events.isEmpty) return;
     if (!_initialDone) {
@@ -589,23 +779,39 @@ class RoomPrefetchScope {
       // rounds also get their media states preloaded in one batch.
       final scan = math.min(events.length, MediaPrefetcher.initialScanLimit);
       var end = 0, found = 0;
-      while (end < scan && found < MediaPrefetcher.initialCount) {
-        if (_owner._candidate(events[end++]) != null) found++;
+      final count = cellular
+          ? MediaPrefetcher.cellularInitialCount
+          : MediaPrefetcher.initialCount;
+      while (end < scan && found < count) {
+        final candidate = _owner._candidate(events[end++]);
+        if (candidate != null &&
+            (!cellular ||
+                (candidate.size != null &&
+                    candidate.size! <= MediaPrefetcher.cellularMaxItemBytes) ||
+                (candidate.thumbnailSize != null &&
+                    candidate.thumbnailSize! <=
+                        MediaPrefetcher.cellularMaxThumbnailBytes))) {
+          found++;
+        }
       }
       await _enqueue(events.sublist(0, end), MediaPrefetcher._initial);
     }
+    if (revision != _owner._environmentRevision) return;
     final min = _min, max = _max;
     _min = _max = null;
     if (min == null || max == null || _disposed) return;
-    final from = math.max(0, min - MediaPrefetcher.windowMargin);
-    final to = math.min(events.length - 1, max + MediaPrefetcher.windowMargin);
+    final margin = cellular
+        ? MediaPrefetcher.cellularWindowMargin
+        : MediaPrefetcher.windowMargin;
+    final from = math.max(0, min - margin);
+    final to = math.min(events.length - 1, max + margin);
     if (from > to) return;
     final centre = (min + max) / 2;
     final order = [for (var i = from; i <= to; i++) i]
       ..sort((a, b) => (a - centre).abs().compareTo((b - centre).abs()));
     // Far-away window work from the previous position is no longer wanted.
     _owner._queue.removeWhere((job) {
-      if (job.priority != MediaPrefetcher._window ||
+      if (job.priority == MediaPrefetcher._arrival ||
           !job.owners.contains(this)) {
         return false;
       }
@@ -620,6 +826,7 @@ class RoomPrefetchScope {
   Future<void> _enqueue(Iterable<Event> events, int priority) async {
     final owner = _owner;
     final generation = owner.ports.surfaceGeneration;
+    final revision = owner._environmentRevision;
     final windowRevision = _windowRevision;
     bool wanted() =>
         !_disposed &&
@@ -627,6 +834,7 @@ class RoomPrefetchScope {
         owner.ports.enabled &&
         owner.ports.surfaceActive &&
         owner.ports.surfaceGeneration == generation &&
+        owner._environmentRevision == revision &&
         (priority != MediaPrefetcher._window ||
             windowRevision == _windowRevision);
     if (_disposed ||
@@ -635,6 +843,10 @@ class RoomPrefetchScope {
         !owner.ports.surfaceActive) {
       return;
     }
+    final network = await owner.ports.networkPolicy();
+    if (!wanted() || network == MediaPrefetchNetwork.blocked) return;
+    owner._network = network;
+    final cellular = network == MediaPrefetchNetwork.cellularOrUnknown;
     final candidates = <_Candidate>[];
     final unknown = <Room, List<String>>{};
     for (final event in events) {
@@ -665,10 +877,18 @@ class RoomPrefetchScope {
     for (final c in candidates) {
       if (c.round && !owner._roundAllowed(c.event)) continue;
       final thumbnail = c.thumbnail, thumbnailSize = c.thumbnailSize;
-      if (thumbnail != null && thumbnailSize != null) {
+      if (thumbnail != null &&
+          thumbnailSize != null &&
+          (!cellular ||
+              thumbnailSize <= MediaPrefetcher.cellularMaxThumbnailBytes)) {
         owner._add(this, c.event, thumbnail, thumbnailSize, true, priority);
       }
-      owner._add(this, c.event, c.mxc, c.size, false, priority);
+      final mxc = c.mxc, size = c.size;
+      if (mxc != null &&
+          size != null &&
+          (!cellular || size <= MediaPrefetcher.cellularMaxItemBytes)) {
+        owner._add(this, c.event, mxc, size, false, priority);
+      }
     }
     owner._pump();
   }
@@ -679,20 +899,44 @@ class RoomPrefetchScope {
 class ClientMediaPrefetchPorts implements MediaPrefetchPorts {
   final Client client;
   static const idleTimeout = Duration(seconds: 20);
+  static const networkCacheTime = Duration(seconds: 2);
+  Future<List<ConnectivityResult>>? _networkCheck;
+  DateTime? _networkCheckedAt;
   ClientMediaPrefetchPorts(this.client);
+
+  void invalidateNetwork() {
+    _networkCheck = null;
+    _networkCheckedAt = null;
+  }
 
   @override
   bool get enabled => AppSettings.personalAutoDownloadVoiceRounds.value;
 
   @override
-  Future<bool> networkAllowed() async {
-    if (!AppSettings.personalAutoDownloadWifiOnly.value) return true;
+  Future<bool> networkAllowed() async =>
+      await networkPolicy() != MediaPrefetchNetwork.blocked;
+
+  @override
+  Future<MediaPrefetchNetwork> networkPolicy() async {
+    if (client.contentScannerConfig != null) {
+      return MediaPrefetchNetwork.blocked;
+    }
     try {
-      final networks = await Connectivity().checkConnectivity();
-      return networks.contains(ConnectivityResult.wifi) ||
-          networks.contains(ConnectivityResult.ethernet);
+      final checkedAt = _networkCheckedAt;
+      if (checkedAt == null ||
+          DateTime.now().difference(checkedAt) >= networkCacheTime) {
+        _networkCheckedAt = DateTime.now();
+        _networkCheck = Connectivity().checkConnectivity().timeout(
+          const Duration(seconds: 2),
+        );
+      }
+      final networks = await _networkCheck!;
+      return mediaPrefetchNetwork(
+        networks,
+        wifiOnly: AppSettings.personalAutoDownloadWifiOnly.value,
+      );
     } catch (_) {
-      return false;
+      return MediaPrefetchNetwork.blocked;
     }
   }
 
@@ -756,18 +1000,12 @@ class ClientMediaPrefetchPorts implements MediaPrefetchPorts {
     required MediaPrefetchCancellation cancellation,
   }) async {
     if (client.contentScannerConfig != null) {
-      // Scanner flow is SDK-only; it stores the ciphertext itself.
-      await event.downloadAndDecryptAttachment(
-        getThumbnail: thumbnail,
-        cacheAttachment: true,
-        onDownloadProgress: (bytes) {
-          if (!cancellation.valid) throw const MediaPrefetchAborted('cancel');
-          if (bytes > maxBytes) throw const MediaPrefetchAborted('cap');
-        },
-      );
+      // Preserve the scanner for user-started playback. Its encrypted POST
+      // neither exposes byte progress nor supports AbortableRequest, so it
+      // cannot meet background prefetch's budget and cancellation contract.
       return null;
     }
-    final uri = await mxc.getDownloadUri(client);
+    final uri = await mxc.getDownloadUri(client).timeout(idleTimeout);
     final token = client.accessToken;
     if (!uri.hasScheme || token == null || !cancellation.valid) return null;
     // Same request as the SDK's _downloadAttachmentBytes (no scanner).
@@ -776,7 +1014,15 @@ class ClientMediaPrefetchPorts implements MediaPrefetchPorts {
       uri,
       abortTrigger: cancellation.onAbort,
     )..headers['authorization'] = 'Bearer $token';
-    final response = await client.httpClient.send(request);
+    final response = await client.httpClient
+        .send(request)
+        .timeout(
+          idleTimeout,
+          onTimeout: () {
+            cancellation.cancel();
+            throw const MediaPrefetchAborted('headers_timeout');
+          },
+        );
     return readBoundedBody(
       response,
       maxBytes: maxBytes,
@@ -826,6 +1072,7 @@ Future<Uint8List?> readBoundedBody(
   subscription = response.stream.listen(
     (chunk) {
       if (done.isCompleted) return;
+      cancellation.received(chunk.length);
       if (!cancellation.valid) return finish(null);
       builder.add(chunk);
       if (builder.length > maxBytes) return finish(null);

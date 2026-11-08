@@ -4,13 +4,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:chatloom/pages/chat/recording_output_cleanup.dart';
+import 'package:chatloom/personal/media/media_preparation_exception.dart';
 import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/photo_encoder.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:cross_file/cross_file.dart';
+import 'package:flutter/foundation.dart';
 import 'package:light_compressor_v2/light_compressor_v2.dart';
 import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';
@@ -34,6 +35,10 @@ class PendingVideoFile extends MatrixVideoFile {
 /// One video is compressed at a time (memory, the hardware codec): picking
 /// ten clips keeps at most one prepared copy in memory.
 Future<void> _videoTail = Future<void>.value();
+
+/// Allows synthetic codec-channel tests on the Linux build host.
+@visibleForTesting
+bool? debugVideoTranscodeSupported;
 
 /// The handle of one video's preparation, so the "×" on its bubble can
 /// stop it (MD-17): the codec is cancelled when this video holds it,
@@ -60,8 +65,8 @@ extension PrepareVideo on XFile {
   /// - the source is probed first (size, rotation, bitrate, frame rate);
   /// - with [compress] it is re-encoded by [profile]: 720p30 H.264 at
   ///   ~2.5 Mbit/s by default, 1080p30 at ~5 Mbit/s for HD, unless it is
-  ///   already that lean ([VideoPlan]); a compressor failure,
-  ///   or an output larger than the source, sends the source instead;
+  ///   already that lean ([VideoPlan]); a compressor failure leaves the
+  ///   send retryable instead of uploading the original without consent;
   /// - width/height are the displayed size (a portrait clip stored rotated
   ///   is announced portrait), with the duration;
   /// - the thumbnail is the first frame at ≤ 800 px JPEG with a blurhash;
@@ -90,8 +95,14 @@ extension PrepareVideo on XFile {
     MediaProfile profile,
   ) async {
     if (job?.cancelled ?? false) throw const VideoPrepareCancelled();
-    final native = PlatformInfos.supportsVideoTranscode && path.isNotEmpty;
+    final native =
+        (debugVideoTranscodeSupported ??
+            PlatformInfos.supportsVideoTranscode) &&
+        path.isNotEmpty;
     final sourceSize = await length();
+    if (!compress && sourceSize > maxUploadSize) {
+      throw FileTooBigMatrixException(sourceSize, maxUploadSize);
+    }
     MediaInfo? source;
     if (native) {
       try {
@@ -99,6 +110,15 @@ extension PrepareVideo on XFile {
       } catch (e) {
         Logs().w('Video could not be probed', e.runtimeType);
       }
+    }
+    if (job?.cancelled ?? false) throw const VideoPrepareCancelled();
+    if (compress &&
+        sourceSize > MediaQuality.videoSmallBytes &&
+        (!native ||
+            source == null ||
+            (source.width ?? 0) <= 0 ||
+            (source.height ?? 0) <= 0)) {
+      throw const MediaPreparationException();
     }
     final plan = compress && source != null
         ? VideoPlan.decide(
@@ -117,19 +137,22 @@ extension PrepareVideo on XFile {
     try {
       if (!plan.skip) {
         output = await _compress(plan, job);
-        if (output != null) {
-          final outputSize = await XFile(output).length();
-          if (outputSize >= sourceSize) {
-            // A lean source the encoder could not beat: the original wins.
-            await _deleteCodecOutput(output);
-            output = null;
-          } else {
-            try {
-              info = await LightCompressor().getMediaInfo(output);
-            } catch (_) {
-              // Keep the source's size and duration.
-            }
-          }
+        final outputSize = await XFile(output).length();
+        if (outputSize <= 0 || outputSize >= sourceSize) {
+          throw const MediaPreparationException();
+        }
+        try {
+          info = await LightCompressor().getMediaInfo(output);
+        } catch (_) {
+          // The source's dimensions would incorrectly advertise 4K
+          // after a 720p encode. Keep the planned stored frame size.
+          info = MediaInfo(
+            width: plan.width,
+            height: plan.height,
+            duration: source?.duration,
+            rotation: source?.rotation,
+            mimeType: 'video/mp4',
+          );
         }
       }
       if (job?.cancelled ?? false) throw const VideoPrepareCancelled();
@@ -146,9 +169,11 @@ extension PrepareVideo on XFile {
         info?.rotation,
       );
       final thumbnail = native ? await _thumbnail(sendPath) : null;
+      if (job?.cancelled ?? false) throw const VideoPrepareCancelled();
       final bytes = output == null
           ? await readAsBytes()
           : await XFile(output).readAsBytes();
+      if (job?.cancelled ?? false) throw const VideoPrepareCancelled();
       return (
         MatrixVideoFile(
           bytes: bytes,
@@ -167,8 +192,8 @@ extension PrepareVideo on XFile {
     }
   }
 
-  /// The re-encoded copy's path, or null to send the source.
-  Future<String?> _compress(VideoPlan plan, VideoPrepareJob? job) async {
+  /// The re-encoded copy's path. Failure never uploads the original.
+  Future<String> _compress(VideoPlan plan, VideoPrepareJob? job) async {
     job?._running = true;
     try {
       final result = await LightCompressor().compressVideo(
@@ -176,6 +201,9 @@ extension PrepareVideo on XFile {
         videoQuality: VideoQuality.medium,
         android: AndroidConfig(isSharedStorage: false),
         ios: IOSConfig(saveInGallery: false),
+        audio: plan.profile == MediaProfile.economy
+            ? AudioConfig(bitrate: plan.profile.videoAudioBitrate)
+            : null,
         // A lean source would otherwise fail; the plan already decided.
         isMinBitrateCheckEnabled: false,
         video: Video(
@@ -196,16 +224,15 @@ extension PrepareVideo on XFile {
       if (result is OnSuccess && result.destinationPath != path) {
         return result.destinationPath;
       }
-      if (result is OnFailure) {
-        Logs().w('Video compression failed, sending the original');
-      }
-      return null;
+      throw const MediaPreparationException();
     } on VideoPrepareCancelled {
+      rethrow;
+    } on MediaPreparationException {
       rethrow;
     } catch (e) {
       if (job?.cancelled ?? false) throw const VideoPrepareCancelled();
-      Logs().w('Video compression failed, sending the original', e.runtimeType);
-      return null;
+      Logs().w('Video compression failed', e.runtimeType);
+      throw const MediaPreparationException();
     } finally {
       job?._running = false;
     }
@@ -230,13 +257,20 @@ extension PrepareVideo on XFile {
           calcBlurhash: true,
         ),
       );
+      // An unreadable frame is optional; never attach the full-size source
+      // frame as a thumbnail when the resizer cannot process it.
+      if (small == null ||
+          small.width > MediaQuality.thumbnailMaxSide ||
+          small.height > MediaQuality.thumbnailMaxSide) {
+        return null;
+      }
       return MatrixImageFile(
-        bytes: small?.bytes ?? frame,
+        bytes: small.bytes,
         name: '$base.thumbnail.jpg',
-        mimeType: small?.mimeType ?? 'image/jpeg',
-        width: small?.width,
-        height: small?.height,
-        blurhash: small?.blurhash,
+        mimeType: small.mimeType ?? 'image/jpeg',
+        width: small.width,
+        height: small.height,
+        blurhash: small.blurhash,
       );
     } catch (e) {
       Logs().w('Video thumbnail failed', e.runtimeType);

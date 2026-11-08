@@ -379,6 +379,43 @@ void main() {
       expect(transport.media, hasLength(4));
     });
 
+    test(
+      'prefetch reserves concurrent transfers inside its byte budget',
+      () async {
+        StickerMediaCache.debugSetShared(await open());
+        await StickerPrefetch(
+          client,
+          allowed: () async => true,
+          byteBudget: () async => 1000,
+        ).run([for (var i = 0; i < 20; i++) _sticker(i)]);
+        expect(transport.media, hasLength(2), reason: 'two 500-byte files fit');
+        expect(
+          transport.peak,
+          1,
+          reason: 'a reservation also bounds concurrent unknown-size files',
+        );
+      },
+    );
+
+    test(
+      'failed oversized sticker responses consume their reserved budget',
+      () async {
+        final cache = await open();
+        StickerMediaCache.debugSetShared(cache);
+        await StickerPrefetch(
+          client,
+          allowed: () async => true,
+          byteBudget: () async => 400,
+        ).run([for (var i = 0; i < 20; i++) _sticker(i)]);
+        expect(transport.media, hasLength(1));
+        expect(
+          await cache.usageBytes(),
+          0,
+          reason: 'oversized response was rejected before caching',
+        );
+      },
+    );
+
     test('cache clear stops the entire old prefetch run', () async {
       final cache = await open();
       StickerMediaCache.debugSetShared(cache);

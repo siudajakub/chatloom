@@ -25,10 +25,15 @@ class _Transport extends http.BaseClient {
 
   Uint8List body;
   var requests = 0;
+  Completer<void>? requested, release;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     requests++;
+    if (requested case final waiting? when !waiting.isCompleted) {
+      waiting.complete();
+    }
+    await release?.future;
     return http.StreamedResponse(Stream.value(body), 200);
   }
 }
@@ -82,6 +87,8 @@ class _ProtectedDatabase implements ProtectedMatrixDatabase {
 }
 
 class _PendingVideoCache implements VideoFileCache {
+  @override
+  int get generation => 0;
   final started = Completer<void>();
   final release = Completer<void>();
   final removed = <String>[];
@@ -261,8 +268,8 @@ void main() {
       await cache.write(key('mxc://x/a'), _bytes(_big, 1));
       now = now.add(const Duration(minutes: 1));
       await cache.write(key('mxc://x/b'), _bytes(_big, 2));
-      now = now.add(const Duration(minutes: 1));
-      // Reading A makes B the least recently used.
+      now = now.add(VideoFileCache.touchInterval);
+      // Reading A after the coarse touch interval makes B least recently used.
       expect(await cache.read(key('mxc://x/a')), isNotNull);
       now = now.add(const Duration(minutes: 1));
       await cache.write(key('mxc://x/c'), _bytes(_big, 3));
@@ -270,6 +277,56 @@ void main() {
       expect(await cache.read(key('mxc://x/a')), isNotNull);
       expect(await cache.read(key('mxc://x/c')), isNotNull);
       expect(names(cache.directory), hasLength(2));
+    });
+
+    test('small writes share an amortized directory scan', () async {
+      final cache = await open(maxBytes: 5000);
+      for (var i = 0; i < 4; i++) {
+        await cache.write('$i'.padLeft(64, '0'), _bytes(1000, i), reel: true);
+      }
+      expect(cache.debugEvictionScans, 1);
+      expect(await cache.usageBytes(), 4000);
+      await cache.setBudget(2000);
+      expect(await cache.usageBytes(), lessThanOrEqualTo(2000));
+      expect(cache.debugEvictionScans, 2);
+    });
+
+    test(
+      'clear revokes queued writes before disk work and permits retry',
+      () async {
+        final cache = await open(maxBytes: 5000);
+        final key = 'a' * 64;
+        final writing = cache.write(key, _bytes(1000, 1), reel: true);
+        final clearing = cache.clear();
+        expect(await writing, isFalse);
+        await clearing;
+        expect(await cache.usageBytes(), 0);
+        expect(await cache.write(key, _bytes(1000, 2), reel: true), isTrue);
+        expect((await cache.read(key, reel: true))!.first, 2);
+      },
+    );
+
+    test('repeated video hits do not rewrite last-use metadata', () async {
+      final cache = await open();
+      final key = 'a' * 64;
+      await cache.write(key, _bytes(_big, 1));
+      final storedAt = (await File(
+        '${cache.directory.path}/$key.enc',
+      ).stat()).modified;
+      now = now.add(const Duration(hours: 1));
+      await cache.read(key);
+      expect(
+        (await File('${cache.directory.path}/$key.enc').stat()).modified,
+        storedAt,
+      );
+      now = now.add(VideoFileCache.touchInterval);
+      await cache.read(key);
+      expect(
+        (await File(
+          '${cache.directory.path}/$key.enc',
+        ).stat()).modified.toUtc(),
+        now,
+      );
     });
 
     test('the file just stored stays even when it alone fills the '
@@ -437,6 +494,36 @@ void main() {
           token: MediaDownloadToken(),
           videoCache: () async => cache,
         );
+
+    test(
+      'clearing videos revokes a pending transfer and keeps a newer retry',
+      () async {
+        final cache = await open();
+        final event = _EncryptedVideo(room, ciphertext: transport.body);
+        final key = VideoFileCache.keyFor(
+          client.userID!,
+          event.attachmentMxcUrl!,
+        );
+        transport.requested = Completer<void>();
+        transport.release = Completer<void>();
+        final loading = download(event, cache);
+        final rejected = expectLater(
+          loading,
+          throwsA(isA<MediaDownloadCancelled>()),
+        );
+        await transport.requested!.future;
+        await cache.clear();
+        await cache.write(key, _bytes(_big, 0x7b));
+        transport.release!.complete();
+        await rejected;
+        expect(
+          (await cache.read(key))!.first,
+          0x7b,
+          reason:
+              'a stale transfer cannot repopulate or remove the newer entry',
+        );
+      },
+    );
 
     test('stores the ciphertext only and reopens without a download', () async {
       final cache = await open();
@@ -756,7 +843,12 @@ void main() {
       database.generation++;
       cache.release.complete();
       await expectLater(future, throwsA(isA<MediaDownloadCancelled>()));
-      expect(cache.removed, hasLength(1));
+      expect(
+        cache.removed,
+        isEmpty,
+        reason:
+            'clear serializes real cache writes; late cleanup must not delete a newer retry',
+      );
     });
   });
 }

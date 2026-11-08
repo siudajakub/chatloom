@@ -698,6 +698,43 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
   });
 
+  testWidgets('economy is per send, exclusive with HD, and avoids rereads', (
+    tester,
+  ) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final room = _MediaRoom(_MediaClient());
+    final image = _CountingImage();
+    await open(tester, room, files: [image]);
+    final before = image.reads;
+    await tester.tap(find.byTooltip('Send with less data'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byTooltip('Economy on: photos up to 1280 px, video up to 480p'),
+      findsOneWidget,
+    );
+    expect(image.reads, before);
+    await tester.tap(find.byTooltip('Send in HD'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byTooltip('Economy on: photos up to 1280 px, video up to 480p'),
+      findsNothing,
+    );
+    await tester.tap(find.byTooltip('Send with less data'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.hd_outlined), findsOneWidget);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(room.sent.single.shrink, MediaQuality.photoEconomyMaxSide);
+    await tester.tap(find.text('Open attachments'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byTooltip('Economy on: photos up to 1280 px, video up to 480p'),
+      findsNothing,
+    );
+    expect(find.byTooltip('Send with less data'), findsOneWidget);
+  });
+
   testWidgets('HD sends photos at 2560 px, for this send only', (tester) async {
     OutgoingEcho.debugWriter = FakeEchoes();
     addTearDown(() => OutgoingEcho.debugWriter = null);
