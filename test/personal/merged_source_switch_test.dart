@@ -3,12 +3,17 @@
 // composer). The page is hosted like `PersonChatRoutePage`: every private
 // store notification re-reads the person, i.e. hands over a new PersonGroup
 // object for the same group. Fictional offline fixtures only.
+import 'dart:convert';
+
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat_event_list.dart';
+import 'package:chatloom/pages/chat/chat_input_row.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart';
+import 'package:chatloom/pages/chat/conversation_attachment_destination.dart';
 import 'package:chatloom/pages/chat/conversation_source.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/send_file_dialog.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/person_group_identity.dart';
 import 'package:chatloom/personal/ui/notion_network_selector.dart';
@@ -245,6 +250,39 @@ void main() {
     );
     return instagram;
   }
+
+  testWidgets(
+    'merged photo preview chooses a network without changing the draft',
+    (tester) async {
+      await mountRoute(tester);
+      await tester.enterText(find.byType(TextField), 'Fictional caption');
+      await tester.pumpAndSettle();
+      final host = tester
+          .widget<ChatInputRow>(find.byType(ChatInputRow))
+          .controller;
+      final preview = host.sendImageFromClipBoard(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(SendFileDialog), findsOneWidget);
+      expect(find.text('Send via WhatsApp'), findsOneWidget);
+      await tester.tap(find.byType(ConversationAttachmentDestination));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Telegram').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Send via Telegram'), findsOneWidget);
+      expect(find.text('Fictional caption'), findsWidgets);
+      await tester.tap(find.byTooltip('Cancel'));
+      await tester.pumpAndSettle();
+      await preview;
+      expect(find.byType(SendFileDialog), findsNothing);
+      expect(chip(tester).network.toLowerCase(), 'whatsapp');
+      expect(editor(tester).controller!.text, 'Fictional caption');
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('an empty saved draft follows the latest incoming source', (
     tester,

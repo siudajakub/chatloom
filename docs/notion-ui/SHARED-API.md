@@ -219,3 +219,20 @@ excluded without independently verified native provenance. Unknown is hidden,
 never synthesized as offline. Legacy profile presence uses the same policy.
 
 Implementation and verification: `docs/personal/conversation-activity-implementation-2026-10-23.md`.
+
+## Attachment destination — 2026-11-08
+
+A merged chat supplies `SendFileDialog.sourceChoice` with a
+`ConversationAttachmentDestination(network:, recipient:, replyLocked:,
+onPressed:)`. The whole row above the caption opens the existing source
+picker. It names both the network and recipient, and fades the changed
+identity through `NotionReappear(rise: 0)`, respecting reduced motion.
+Reply attachments explain their source lock; accepted items keep the whole
+remaining batch on the same source. The preview disables sending while a
+source choice is pending, handles picker errors locally, and keeps its
+caption controller and editing state through selection/cancellation.
+The footer and file preview scroll when large text, long captions or the
+keyboard leave too little height; Send stays at the footer's visible edge.
+Photo, video and document sends use the selected destination's frozen
+context, preflight and acceptance callback, without changing text routing
+merely because the user browsed or canceled the preview.

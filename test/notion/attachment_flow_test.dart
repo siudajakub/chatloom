@@ -2,19 +2,23 @@
 // Fictional offline media. These fixtures never open a picker or contact a server.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/conversation_attachment_destination.dart';
+import 'package:chatloom/pages/chat/conversation_source_picker.dart';
 import 'package:chatloom/pages/chat/send_file_dialog.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/media/caption_followup.dart';
 import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:cross_file/cross_file.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart';
 
 import '../personal/outgoing_media_support.dart';
 import 'conversation_test_support.dart';
@@ -129,6 +133,16 @@ class _UnreadableImage extends XFile {
 }
 
 void main() {
+  setUpAll(() async {
+    final fonts = FontLoader('Roboto');
+    for (final weight in ['Regular', 'Medium', 'Bold']) {
+      fonts.addFont(rootBundle.load('assets/notion/fonts/Roboto-$weight.ttf'));
+    }
+    await fonts.load();
+    await (FontLoader(
+      'MaterialIcons',
+    )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+  });
   Future<void> open(
     WidgetTester tester,
     _MediaRoom room, {
@@ -138,10 +152,20 @@ void main() {
     bool asFiles = false,
     String caption = 'Fictional caption',
     AttachmentSourceChoice? sourceChoice,
+    ThemeData? theme,
+    double textScale = 1,
+    double keyboardHeight = 0,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
-        theme: ThemeData(platform: TargetPlatform.android),
+        theme: theme ?? ThemeData(platform: TargetPlatform.android),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(textScale),
+            viewInsets: EdgeInsets.only(bottom: keyboardHeight),
+          ),
+          child: child!,
+        ),
         localizationsDelegates: L10n.localizationsDelegates,
         supportedLocales: const [Locale('en')],
         home: Scaffold(
@@ -354,8 +378,11 @@ void main() {
       first,
       caption: '',
       sourceChoice: AttachmentSourceChoice(
-        chip: (context, room, onPressed) =>
-            TextButton(onPressed: onPressed, child: Text('via ${room.id}')),
+        chip: (context, room, onPressed) => ConversationAttachmentDestination(
+          network: identical(room, first) ? 'messenger' : 'telegram',
+          recipient: 'Fictional recipient',
+          onPressed: onPressed,
+        ),
         choose: (context, current) async {
           choosingFrom = current;
           return AttachmentDestination(
@@ -369,11 +396,11 @@ void main() {
         },
       ),
     );
-    expect(find.text('via ${first.id}'), findsOneWidget);
-    await tester.tap(find.text('via ${first.id}'));
+    expect(find.text('Send via Messenger'), findsOneWidget);
+    await tester.tap(find.text('Send via Messenger'));
     await tester.pumpAndSettle();
     expect(choosingFrom, first);
-    expect(find.text('via ${second.id}'), findsOneWidget);
+    expect(find.text('Send via Telegram'), findsOneWidget);
     await tester.tap(find.byTooltip('Send'));
     await tester.pumpAndSettle();
     expect(find.byType(SendFileDialog), findsNothing);
@@ -381,6 +408,173 @@ void main() {
     expect(second.sent.map((send) => send.name), ['fictional.txt']);
     expect(checked, [second.id]);
     expect(accepted, [second.id]);
+  });
+
+  testWidgets('canceling the network sheet keeps the photo and caption', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final client = _MediaClient();
+    final room = _MediaRoom(client);
+    final second = _MediaRoom(client, '!fictional-telegram:example.invalid');
+    final source = ConversationRef(
+      accountId: room.client.userID!,
+      roomId: room.id,
+      network: 'messenger',
+    );
+    await open(
+      tester,
+      room,
+      files: [_CountingImage()],
+      theme: NotionTheme.build(Brightness.dark),
+      sourceChoice: AttachmentSourceChoice(
+        chip: (context, room, onPressed) => ConversationAttachmentDestination(
+          network: identical(room, second) ? 'telegram' : 'messenger',
+          recipient: 'Fictional recipient',
+          onPressed: onPressed,
+        ),
+        choose: (context, current) async {
+          final selected = await showConversationSourcePicker(
+            context,
+            selected: source,
+            sources: [
+              ConversationSourceOption(
+                conversation: source,
+                title: 'Fictional recipient',
+              ),
+              ConversationSourceOption(
+                conversation: ConversationRef(
+                  accountId: source.accountId,
+                  roomId: second.id,
+                  network: 'telegram',
+                ),
+                title: 'Fictional recipient',
+              ),
+            ],
+          );
+          return selected?.roomId == second.id
+              ? AttachmentDestination(room: second)
+              : null;
+        },
+      ),
+    );
+    final field = find.byType(TextField);
+    final controller = tester.widget<TextField>(field).controller;
+    expect(
+      tester.getBottomLeft(find.byType(ConversationAttachmentDestination)).dy,
+      lessThanOrEqualTo(tester.getTopLeft(field).dy),
+    );
+    await tester.tap(find.text('Send via Messenger'));
+    await tester.pumpAndSettle();
+    expect(find.text('Send via'), findsOneWidget);
+    expect(find.text('Telegram'), findsOneWidget);
+    await tester.tap(find.byTooltip('Cancel source selection'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(field).controller, same(controller));
+    expect(find.text('Fictional caption'), findsOneWidget);
+    expect(find.text('Photo'), findsOneWidget);
+    expect(find.text('Send via Messenger'), findsOneWidget);
+    expect(room.sent, isEmpty);
+    await tester.tap(find.text('Send via Messenger'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Telegram'));
+    await tester.pumpAndSettle();
+    expect(find.text('Send via Telegram'), findsOneWidget);
+    expect(tester.widget<TextField>(field).controller, same(controller));
+    expect(find.text('Fictional caption'), findsOneWidget);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(room.sent, isEmpty);
+    expect(second.sent.single.msgtype, MessageTypes.Image);
+    expect(second.sent.single.extra?['body'], 'Fictional caption');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('sending waits for a pending source choice, and errors recover', (
+    tester,
+  ) async {
+    OutgoingEcho.debugWriter = FakeEchoes();
+    addTearDown(() => OutgoingEcho.debugWriter = null);
+    final room = _MediaRoom(_MediaClient());
+    final pending = Completer<AttachmentDestination?>();
+    var attempts = 0;
+    await open(
+      tester,
+      room,
+      sourceChoice: AttachmentSourceChoice(
+        chip: (context, room, onPressed) => ConversationAttachmentDestination(
+          network: 'messenger',
+          recipient: 'Fictional recipient',
+          onPressed: onPressed,
+        ),
+        choose: (context, current) async {
+          attempts++;
+          if (attempts == 1) return await pending.future;
+          return null;
+        },
+      ),
+    );
+    await tester.tap(find.text('Send via Messenger'));
+    await tester.pump();
+    // A keyboard shortcut or programmatic submit must also respect the gate.
+    await tester.tap(find.byType(TextField));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(room.sent, isEmpty);
+    expect(
+      tester
+          .widget<ConversationAttachmentDestination>(
+            find.byType(ConversationAttachmentDestination),
+          )
+          .onPressed,
+      isNull,
+    );
+    pending.completeError(StateError('Fictional picker failure'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Couldn’t change the network. Try again.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Send via Messenger'));
+    await tester.pumpAndSettle();
+    expect(attempts, 2);
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    expect(room.sent, hasLength(1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('destination keeps the caption usable at 320px and 2x text', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final room = _MediaRoom(_MediaClient());
+    await open(
+      tester,
+      room,
+      textScale: 2,
+      keyboardHeight: 260,
+      sourceChoice: AttachmentSourceChoice(
+        chip: (context, room, onPressed) => ConversationAttachmentDestination(
+          network: 'messenger',
+          recipient: 'A long fictional recipient name for accessibility',
+          onPressed: onPressed,
+        ),
+        choose: (context, current) async => null,
+      ),
+    );
+    expect(tester.getSize(find.byType(TextField)).width, greaterThan(200));
+    expect(
+      tester.getBottomLeft(find.byTooltip('Send')).dy,
+      lessThanOrEqualTo(460),
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('files go out in order, each with its own transaction', (
@@ -405,7 +599,20 @@ void main() {
         ..failWriteNumber = 2;
       addTearDown(() => OutgoingEcho.debugWriter = null);
       final room = _MediaRoom(_MediaClient());
-      await open(tester, room, files: [_file('one.txt'), _file('two.txt')]);
+      await open(
+        tester,
+        room,
+        files: [_file('one.txt'), _file('two.txt')],
+        sourceChoice: AttachmentSourceChoice(
+          chip: (context, room, onPressed) => ConversationAttachmentDestination(
+            network: 'messenger',
+            recipient: 'Fictional recipient',
+            onPressed: onPressed,
+          ),
+          choose: (context, room) async =>
+              throw StateError('Cannot move a partially sent selection'),
+        ),
+      );
       await tester.tap(find.byTooltip('Send'));
       await tester.pumpAndSettle();
       expect(
@@ -413,6 +620,14 @@ void main() {
         findsOneWidget,
       );
       expect(find.textContaining('could not be prepared'), findsOneWidget);
+      expect(
+        tester
+            .widget<ConversationAttachmentDestination>(
+              find.byType(ConversationAttachmentDestination),
+            )
+            .onPressed,
+        isNull,
+      );
       await tester.tap(find.byTooltip('Send'));
       await tester.pumpAndSettle();
       expect(find.byType(SendFileDialog), findsNothing);

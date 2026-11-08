@@ -46,6 +46,7 @@ SOURCES = (
  'lib/pages/chat/conversation_grouping.dart', 'lib/pages/chat/conversation_bubble.dart',
  'lib/pages/chat/conversation_motion.dart', 'lib/pages/chat/conversation_message_gestures.dart',
  'lib/pages/chat/compact_composer.dart', 'lib/pages/chat/conversation_source_picker.dart',
+ 'lib/pages/chat/conversation_attachment_destination.dart',
  'lib/pages/chat/composer_action_tray.dart', 'lib/pages/chat/voice_record_button.dart',
  'lib/pages/chat/conversation_service_chip.dart',
  'lib/config/themes.dart', 'lib/widgets/layouts/two_column_layout.dart',

@@ -17,6 +17,7 @@ import 'package:chatloom/pages/chat/compact_composer.dart';
 import 'package:chatloom/pages/chat/composer_dictation.dart';
 import 'package:chatloom/pages/chat/composer_keyboard.dart';
 import 'package:chatloom/pages/chat/composer_send_later.dart';
+import 'package:chatloom/pages/chat/conversation_attachment_destination.dart';
 import 'package:chatloom/pages/chat/conversation_drop_target.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
@@ -2533,15 +2534,18 @@ class _MergedChatPageState extends State<_MergedChatView>
           preflight: initial.preflight,
           onAccepted: initial.onAccepted,
           sourceChoice: AttachmentSourceChoice(
-            chip: (context, room, onPressed) => ConversationSourceChip(
-              network: PersonalClient.networkOf(room),
-              compact: false,
-              locked: sourceReply != null,
-              onPressed: sourceReply == null && frozenGroup.members.length > 1
-                  ? onPressed
-                  : null,
-            ),
+            chip: (context, room, onPressed) =>
+                ConversationAttachmentDestination(
+                  network: PersonalClient.networkOf(room),
+                  recipient: room.getLocalizedDisplayname(),
+                  replyLocked: sourceReply != null,
+                  onPressed:
+                      sourceReply == null && frozenGroup.members.length > 1
+                      ? onPressed
+                      : null,
+                ),
             choose: (context, current) async {
+              if (sourceReply != null) return null;
               final value = await showConversationSourcePicker(
                 context,
                 selected: personal.ref(current),
