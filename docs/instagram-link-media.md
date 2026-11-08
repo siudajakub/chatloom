@@ -20,9 +20,36 @@ file requests return mime and base64 data. The client never receives the
 Instagram cookies or signed CDN URLs. A missing bridge or inaccessible
 material offers retry and Open in Instagram.
 
-The existing account file cache is bounded and account scoped. Synthetic
+Downloaded link assets and metadata use the account's encrypted file cache,
+with an absolute 24-hour lifetime from download. Playback does not extend it.
+Assets up to 64 MiB fit within the existing shared 128 MiB budget; ordinary
+attachments retain their existing limits. Concurrent copies share one load,
+and reopening or rebuilding the preview reads the saved copy. Completed
+download futures are released, so a mounted preview cannot bypass expiry.
+Cache clearing, account changes and revoked access reject late results.
+Protected and disappearing sources retain their existing restrictions.
+
+Native encrypted shared reels use the ciphertext video cache at every size,
+also for at most 24 hours without extending the download timestamp on reads.
+Unencrypted shared reels use the encrypted SQLCipher cache with the same
+one-day policy. Both bypass the SDK's ordinary 30-day media cache. Synthetic
 media events are local presentation adapters, not Matrix timeline messages.
 They are not offered to the native message-forwarding action.
+
+## Video size
+
+The companion Instagram bridge compresses permalink videos and shared XMA
+videos before sending them to the client: H.264 MP4, at most 720 × 1280
+(or 1280 × 720), at most 30 fps, CRF 28, 1.8 Mbit/s video peak and AAC
+96 kbit/s. Smaller sources are not enlarged. This preserves sound and a
+useful phone-sized picture while reducing large original downloads.
+Transcoding errors are reported rather than silently returning the original.
+
+Compression requires the updated bridge and FFmpeg at runtime. Updating the
+client alone enables its cache changes. Files already uploaded to Matrix
+retain their original encoding; new bridge uploads and direct-media fetches
+use the compression path. Local source changes do not deploy either service
+or install a new application.
 
 ## Current limits and evidence
 
