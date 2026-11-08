@@ -12,6 +12,11 @@ import 'encrypted_media_cache.dart';
 class ProtectedMatrixDatabase extends MatrixSdkDatabase {
   final EncryptedMediaCache _media;
 
+  /// Revokes in-progress media downloads when cache clearing or logout starts.
+  /// Callers capture this before I/O and reject results from an older value.
+  int get mediaCacheGeneration => _mediaCacheGeneration;
+  int _mediaCacheGeneration = 0;
+
   /// Clears media kept outside this database (the ciphertext video cache,
   /// opened-file copies) on logout and "clear cache". Its failure never
   /// blocks clearing the database.
@@ -63,18 +68,24 @@ class ProtectedMatrixDatabase extends MatrixSdkDatabase {
   Future<void> deleteOldFiles(int savedAt) => _media.deleteOldFiles(savedAt);
 
   @override
-  Future<void> clearCache() => preserveOnStorageFailure(() async {
-    await _clearFileCaches();
-    await _media.clear();
-    await super.clearCache();
-  });
+  Future<void> clearCache() {
+    _mediaCacheGeneration++;
+    return preserveOnStorageFailure(() async {
+      await _clearFileCaches();
+      await _media.clear();
+      await super.clearCache();
+    });
+  }
 
   @override
-  Future<void> clear() => preserveOnStorageFailure(() async {
-    await _clearFileCaches();
-    await _media.clear();
-    await super.clear();
-  });
+  Future<void> clear() {
+    _mediaCacheGeneration++;
+    return preserveOnStorageFailure(() async {
+      await _clearFileCaches();
+      await _media.clear();
+      await super.clear();
+    });
+  }
 
   Future<void> _clearFileCaches() async {
     try {
