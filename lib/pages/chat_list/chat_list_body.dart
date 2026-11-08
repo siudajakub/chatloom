@@ -46,7 +46,8 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
       ]),
       builder: (context, _) {
         final projection = inbox.projection;
-        final rooms = controller.filterRooms();
+        final usable = !inbox.loading && !inbox.localLoadFailed;
+        final rooms = usable ? controller.filterRooms() : <Room>[];
         // Network marks on avatars only while every network is listed and
         // there is more than one (UX-17, FT-12).
         final showNetworks =
@@ -95,8 +96,8 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
           });
         }
         return NotionInboxPage(
-          unreadCount: controller.unreadViewCount(),
-          requestCount: controller.requestViewCount(),
+          unreadCount: usable ? controller.unreadViewCount() : 0,
+          requestCount: usable ? controller.requestViewCount() : 0,
           scrollController: controller.scrollController,
           rowCount: rooms.length,
           rowOrder: [for (final room in rooms) room.id],
@@ -152,7 +153,12 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
           },
           pins: pins,
           loading: inbox.loading,
-          emptyMessage: controller.personalFilter == InboxFilter.aside
+          onRetryLoading: inbox.localLoadFailed
+              ? controller.retryLocalInbox
+              : null,
+          emptyMessage: inbox.localLoadFailed
+              ? 'Retry loading your chats, or check sync and storage in Settings.'
+              : controller.personalFilter == InboxFilter.aside
               ? 'No chats in Aside${controller.selectedNetwork == null ? '' : ' from this network'}. Hold a chat and choose Move to Aside.'
               : controller.selectedNetwork != null
               ? 'No chats from this network in the current view.'
@@ -173,7 +179,7 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
           onViewSelected: (view) => controller.setPersonalFilter(view, null),
           onManageNetworks: () => context.push('/rooms/settings/networks'),
           onNetworkSelected: controller.setNetwork,
-          onMarkAllRead: controller.markViewRead,
+          onMarkAllRead: usable ? controller.markViewRead : null,
           onReorderPins: controller.reorderPins,
         );
       },

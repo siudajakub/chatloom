@@ -9,6 +9,7 @@ import 'package:chatloom/personal/performance_probe_client.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/notion_network_adapter.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
+import 'package:chatloom/utils/owned_async_wait.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 
@@ -36,6 +37,8 @@ class InboxController extends ChangeNotifier {
     this.personal, {
     this.debounce = const Duration(milliseconds: 250),
     this.maxWait = const Duration(seconds: 1),
+    Future<void>? localReady,
+    this.startupCatchUp = const Duration(seconds: 3),
   }) {
     _failed = client.onSyncStatus.value?.status == SyncStatus.error;
     _loading = client.prevBatch == null;
@@ -53,6 +56,69 @@ class InboxController extends ChangeNotifier {
         client,
       ).listen((_) => _mark(all: true), onError: (_) {}),
     ]);
+    if (localReady != null ||
+        client.roomsLoading != null ||
+        client.accountDataLoading != null) {
+      _hydrating = true;
+      unawaited(_restore(localReady));
+    }
+  }
+
+  /// Prefer a coherent first frame, but never require connectivity to open
+  /// an existing inbox. This deadline bounds only the network catch-up;
+  /// encrypted local metadata must finish before rows can be classified.
+  final Duration startupCatchUp;
+  bool _hydrating = false;
+  bool get localLoadFailed => _localLoadFailed;
+  bool _localLoadFailed = false;
+  Timer? _startupTimer;
+  Completer<void>? _startupDeadline;
+  final _startupWait = OwnedAsyncWait();
+
+  /// Reopen local state after a recoverable storage error. Repeated taps
+  /// share the active restoration and never start extra reads.
+  void retryLocal(Future<void> Function() load) {
+    if (_detached || _hydrating) return;
+    _localLoadFailed = false;
+    _hydrating = true;
+    _mark(touch: true);
+    unawaited(_restore(Future<void>.sync(load)));
+  }
+
+  Future<void> _restore(Future<void>? localReady) async {
+    // Observe a failed initial request immediately, even while disk reads
+    // are still pending. The SDK continues its own retry loop.
+    final catchUp = client.firstSyncReceived?.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    try {
+      final restored = await _startupWait.until(
+        Future.wait<dynamic>([
+          if (client.roomsLoading != null) client.roomsLoading!,
+          if (client.accountDataLoading != null) client.accountDataLoading!,
+          ?localReady,
+        ]),
+      );
+      if (!restored || _detached) return;
+      if (catchUp != null && client.rooms.isNotEmpty) {
+        final deadline = _startupDeadline = Completer<void>();
+        _startupTimer = Timer(startupCatchUp, deadline.complete);
+        await Future.any<void>([catchUp, deadline.future]);
+      }
+    } catch (_) {
+      _localLoadFailed = true;
+      // Connection/storage health owns actionable errors. A failed catch-up
+      // must not strand saved conversations behind an endless skeleton.
+    } finally {
+      _startupTimer?.cancel();
+      _startupTimer = null;
+      _startupDeadline = null;
+      if (!_detached) {
+        _hydrating = false;
+        _mark(all: true, touch: true);
+      }
+    }
   }
 
   int? _seenContent;
@@ -151,7 +217,7 @@ class InboxController extends ChangeNotifier {
   bool get _pending => _all || _touched || _changed.isNotEmpty;
 
   /// True until the first sync finished.
-  bool get loading => client.prevBatch == null && !_failed;
+  bool get loading => _hydrating || (client.prevBatch == null && !_failed);
 
   InboxIndex get index {
     final index = _index;
@@ -377,6 +443,11 @@ class InboxController extends ChangeNotifier {
   void detach() {
     if (_detached) return;
     _detached = true;
+    _startupWait.cancel();
+    _startupTimer?.cancel();
+    _startupTimer = null;
+    final deadline = _startupDeadline;
+    if (deadline != null && !deadline.isCompleted) deadline.complete();
     _timer?.cancel();
     _timer = null;
     _cooldown?.cancel();

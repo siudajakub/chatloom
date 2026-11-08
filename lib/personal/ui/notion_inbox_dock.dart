@@ -22,7 +22,7 @@ List<String> notionInboxDockLabelLines(String label) {
 
 class NotionInboxDock extends StatefulWidget {
   final VoidCallback onSettings;
-  final VoidCallback onSearch;
+  final VoidCallback? onSearch;
   final ValueChanged<String?> onNetworkSelected;
   final List<String> networks;
   final String? selectedNetwork;
@@ -248,52 +248,56 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
     BuildContext context, {
     required IconData icon,
     required String label,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
     required bool large,
   }) => Semantics(
     key: ValueKey('notion_dock_${label.toLowerCase()}'),
     button: true,
+    enabled: onTap != null,
     label: label,
-    child: InkWell(
-      onTap: onTap,
-      customBorder: NotionShapes.pill,
-      child: NotionPressable(
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: large ? 4 : 6,
-            vertical: 10,
-          ),
-          child: large
-              ? Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(icon, size: 25),
-                    const SizedBox(height: 4),
-                    Text(
-                      label,
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, height: 1.2),
-                    ),
-                  ],
-                )
-              : Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(icon, size: 26),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
+    child: Opacity(
+      opacity: onTap == null ? .45 : 1,
+      child: InkWell(
+        onTap: onTap,
+        customBorder: NotionShapes.pill,
+        child: NotionPressable(
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: large ? 4 : 6,
+              vertical: 10,
+            ),
+            child: large
+                ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(icon, size: 25),
+                      const SizedBox(height: 4),
+                      Text(
                         label,
                         maxLines: 1,
                         softWrap: false,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 15),
+                        style: const TextStyle(fontSize: 13, height: 1.2),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  )
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(icon, size: 26),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          softWrap: false,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 15),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
         ),
       ),
     ),

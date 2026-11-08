@@ -1,5 +1,31 @@
 # Notion dark v2 design system
 
+## Inbox startup and freshness
+
+The inbox first restores rooms, account data, private metadata, hidden
+messages and kept-message previews from encrypted local storage. A saved
+sync cursor alone does not mean these records are ready. While restoring,
+show skeleton rows without cached rows, pins or unread/request badges;
+disable search and the bulk mark-read action. Settings remains available.
+Do not prefetch avatars for hidden rows.
+
+For an existing inbox, wait at most three seconds for the initial network
+catch-up after local restoration, then allow saved conversations to open.
+Continue updating in the background. Rebuild the index when restoration
+finishes, including when an earlier build saw an empty room list. Routine
+syncs and returning from a conversation keep the usable list on screen.
+An actual local restoration error must not be described as an empty inbox:
+keep unclassified rows hidden and offer a local Retry action. Repeated taps
+share the pending restoration; a successful retry clears the failure.
+
+The header quietly distinguishes updating from connection trouble. Brief
+requests and one failed attempt do not warrant an offline warning. Bridge
+and worker notices need fresh sync evidence after startup/resume and stay
+hidden while the connection cannot be established. Local encryption,
+storage and notification issues retain their own evidence and actions.
+Muted-chat unread fallbacks respect persisted and local read markers;
+explicit unread marks and server notification counts remain authoritative.
+
 The rules for any UI in `client/`. It covers the tokens, the primitives, how
 legacy Material widgets map to them, and how the rules are enforced. If a
 value or widget you need is missing, add it to `lib/ui/notion/` (with a
