@@ -236,3 +236,22 @@ keyboard leave too little height; Send stays at the footer's visible edge.
 Photo, video and document sends use the selected destination's frozen
 context, preflight and acceptance callback, without changing text routing
 merely because the user browsed or canceled the preview.
+
+## WhatsApp rich messages — 2026-11-08
+
+`NotionWhatsAppActions(actions:, onOpen:, onCopy:, textColor:, linkColor:, backgroundColor:)`
+uses `NotionMessageUrlAction(label:, url:)`. Both callbacks receive the exact
+received URL. The adapter validates HTTP(S) before opening/copying; the
+presenter does no network or account work. `backgroundColor` is the actual
+bubble fill used for AA link contrast; defaults to the Notion surface in
+standalone cards.
+
+`NotionReadOnlyPoll(question:, options:, status:, textColor:, linkColor:)`
+uses `NotionPollOption(id:, label:, votes:, selected:)`. Null votes means
+unknown. The adapter owns localized status and available Matrix relation
+results; the primitive has no mutation callback. Both ordinary and merged
+messages enter through `MessageContent`, preserving their source room.
+
+The incoming versioned bridge extension, compatibility behavior, disabled
+WhatsApp operations and release boundaries are documented in
+[`whatsapp-rich-messages.md`](../whatsapp-rich-messages.md).

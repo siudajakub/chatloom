@@ -826,3 +826,20 @@ instant (`StickerSearchIndex`: emoji, words, shortcodes, alt text, pack
 titles, ranked); back closes a search before the panel. Empty, no-result
 and error states are `NotionEmptyState`; the GIF results load under a
 `NotionSkeleton`.
+
+## Received WhatsApp cards and polls
+
+`NotionWhatsAppActions` (`notion_whatsapp_message.dart`) presents received
+HTTP(S) actions as a label and visible destination domain, with separate open
+and copy targets of at least 48 dp. Pass the conversation bubble's foreground
+and link roles plus `backgroundColor` for the actual bubble fill. Link text
+uses `NotionContrast.readable` to reach 4.5:1 on that fill; the accent tuned
+for the page alone is insufficient on a grey incoming bubble. Labels wrap at large text sizes;
+the complete URL is available in the tooltip. No blur, preview fetch or reply
+operation belongs in this primitive.
+
+`NotionReadOnlyPoll` takes question, options, optional vote counts/selection
+and a localized status. It has no voting callback or editable controls. A
+missing vote count stays unknown, while a known zero is displayed as zero.
+Both presenters use the existing Notion typography, spacing and rounded
+shapes, with dark/light goldens in `whatsapp_message_test.dart`.

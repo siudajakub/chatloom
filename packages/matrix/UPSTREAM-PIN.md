@@ -249,3 +249,16 @@ messages"):
   `RedactionCapture.toString` is redacted. The app installs it only while
   "Keep deleted messages" is on (`lib/personal/kept_messages.dart`).
   Regression: `test/redaction_capture_test.dart`.
+- `Timeline.fetchAggregatedEvents(throwOnError: true)` optionally propagates
+  relation HTTP/decryption failures to an explicit results presenter. The
+  default remains best-effort for existing background/history callers. First
+  and coalesced callers use the same handling; failed requests are evicted
+  without scheduling an unobserved failed future. WhatsApp read-only polls
+  use this to distinguish unavailable/partial results from no received votes.
+  Regression: application `test/notion/whatsapp_rich_message_adapter_test.dart`.
+- Timeline poll-response redactions preserve content-free tombstones in
+  `m.reference` aggregation, including responses fetched outside timeline.events.
+  Redactions are retained for the timeline's lifetime so a pending relation page
+  cannot revive deleted votes, nor can disposing/re-mounting the poll widget.
+  No persisted event type or encryption behavior changes. Covered by the same
+  adapter suite and existing timeline redaction regression tests.

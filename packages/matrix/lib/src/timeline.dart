@@ -50,6 +50,10 @@ class Timeline {
   /// retried.
   final Map<String, Future<void>> _relationRequests = {};
 
+  // A redaction may arrive before its response is returned by /relations.
+  // Keep it for this timeline's lifetime, including while a poll is offscreen.
+  final Map<String, Event> _relationRedactions = {};
+
   TimelineChunk chunk;
 
   /// Searches for the event in this timeline. If not
@@ -548,11 +552,36 @@ class Timeline {
   }
 
   void addAggregatedEvent(Event event) {
+    if (event.type == EventTypes.Redaction && event.redacts != null) {
+      _relationRedactions[event.redacts!] = event;
+      for (final entry in aggregatedEvents.entries) {
+        final references = entry.value[RelationshipTypes.reference];
+        if (references == null) continue;
+        var changed = false;
+        for (final response in references) {
+          if (response.type == PollEventContent.responseType &&
+              response.eventId == event.redacts) {
+            // Keep the reference bucket, but strip the response contents.
+            // A tombstone prevents an older vote from becoming current.
+            response.setRedactionEvent(event);
+            changed = true;
+          }
+        }
+        if (changed && onChange != null) {
+          final index = _findEvent(event_id: entry.key);
+          if (index < events.length) onChange?.call(index);
+        }
+      }
+    }
     // we want to add an event to the aggregation tree
     final relationshipType = event.relationshipType;
     final relationshipEventId = event.relationshipEventId;
     if (relationshipType == null || relationshipEventId == null) {
       return; // nothing to do
+    }
+    if (event.type == PollEventContent.responseType) {
+      final redaction = _relationRedactions[event.eventId];
+      if (redaction != null) event.setRedactionEvent(redaction);
     }
     final e =
         (aggregatedEvents[relationshipEventId] ??=
@@ -588,27 +617,30 @@ class Timeline {
   /// Paginates through all results and deduplicates via [addAggregatedEvent].
   /// Skips if this relation has already been fetched. Concurrent calls for the
   /// same relation are coalesced into a single request.
+  /// [throwOnError] lets an explicit result presenter show a partial/error
+  /// state. Background callers keep the existing best-effort behavior.
   Future<void> fetchAggregatedEvents(
     String eventId,
     String relType, {
     String? eventType,
+    bool throwOnError = false,
   }) async {
     final key = eventType != null
         ? '$eventId:$relType:$eventType'
         : '$eventId:$relType';
 
-    if (_relationRequests.containsKey(key)) return _relationRequests[key]!;
-
-    final future = _doFetchAggregatedEvents(
+    final future = _relationRequests[key] ??= _doFetchAggregatedEvents(
       eventId,
       relType,
       eventType: eventType,
     );
-    _relationRequests[key] = future;
     try {
       await future;
     } catch (_) {
-      unawaited(_relationRequests.remove(key));
+      if (identical(_relationRequests[key], future)) {
+        _relationRequests.remove(key);
+      }
+      if (throwOnError) rethrow;
     }
   }
 
@@ -732,7 +764,11 @@ class Timeline {
       if (event.type == EventTypes.Redaction) {
         final index = _findEvent(event_id: event.redacts);
         if (index < events.length) {
-          removeAggregatedEvent(events[index]);
+          // Poll response tombstones remain in their reference bucket so
+          // results stay correct across row disposal and cached re-mounts.
+          if (events[index].type != PollEventContent.responseType) {
+            removeAggregatedEvent(events[index]);
+          }
 
           // Is the redacted event a reaction or an edit? Then update the
           // event this belongs to. Fork (ChatLoom): only those; a thread

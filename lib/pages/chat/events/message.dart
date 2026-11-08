@@ -426,6 +426,9 @@ class Message extends StatelessWidget {
             linkColor: custom is int || own
                 ? textColor
                 : theme.colorScheme.primary,
+            backgroundColor: custom is int
+                ? Color(custom)
+                : (own ? bubbleColors.outgoing : bubbleColors.incoming),
             onInfoTab: onInfoTab,
             borderRadius: radius,
             timeline: timeline,

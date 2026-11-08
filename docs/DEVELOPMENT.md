@@ -67,6 +67,8 @@ ffmpeg with librsvg, or `cairosvg`). Do not edit the PNGs by hand.
 
 ## Feature notes
 
+- [WhatsApp links and read-only polls](whatsapp-rich-messages.md): incoming
+  bridge contract, disabled outgoing operations, compatibility and rollout.
 - [Instagram link media](instagram-link-media.md): optional bridge contract,
   integration behavior and current acceptance limits.
 - [Voice notes and round videos](voice-recording.md): microphone capture,

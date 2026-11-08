@@ -195,6 +195,22 @@ Map<String, Object?> forwardableContent(Map<String, Object?> content) {
       );
     }
   }
+  final interactive = WhatsAppInteractiveContent.fromContent(copy);
+  copy.remove(WhatsAppInteractiveContent.contentKey);
+  if (interactive != null) {
+    // A forwarded copy is an ordinary message, with no source-bound rich
+    // action payload. Keep every valid URL visible and copyable as text.
+    final lines = [interactive.body];
+    final targets = <String>{};
+    for (final action in interactive.actions) {
+      if (targets.add(action.url)) {
+        lines.add('${action.label}: ${action.url}');
+      }
+    }
+    copy['body'] = lines.where((line) => line.isNotEmpty).join('\n\n');
+    copy.remove('format');
+    copy.remove('formatted_body');
+  }
   return copy;
 }
 

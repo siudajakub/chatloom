@@ -17,3 +17,4 @@ export 'src/transcript_timing.dart';
 export 'src/transcription.dart';
 export 'src/conversation_summary.dart';
 export 'src/dictation.dart';
+export 'src/whatsapp_rich_message.dart';

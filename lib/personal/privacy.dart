@@ -17,6 +17,7 @@ import 'round_video/telegram_media_protocol.dart';
 import 'round_video/telegram_room_binding.dart';
 import 'round_video/telegram_round_service.dart';
 import 'voice_playback.dart';
+import 'whatsapp/whatsapp_action_policy.dart';
 
 final _roundReadCutoffKey = Object();
 final _committedRoundKey = Object();
@@ -174,6 +175,7 @@ abstract final class PersonalPrivacy {
     };
     TelegramRoundService.of(client);
     client.wrapOutgoingRequest = (room, type, content, txid, send) async {
+      WhatsAppActionPolicy.authorizeOutgoing(room, type, content);
       final server = client.baseUri;
       if (server == null) throw const PrivacySuppressed();
       if (isTelegramMediaControl(type) ||
@@ -211,6 +213,7 @@ abstract final class PersonalPrivacy {
     };
     client.authorizeOutgoingEvent = (room, type, content) async {
       if (isJournal(room)) return;
+      WhatsAppActionPolicy.authorizeOutgoing(room, type, content);
       if (content['msgtype'] is String &&
           isTelegramMediaControl(content['msgtype'] as String)) {
         throw const PrivacySuppressed();

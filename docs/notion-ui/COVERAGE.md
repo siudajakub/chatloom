@@ -47,3 +47,16 @@ Inline waveform/flat fallback, drag preview + release seek, ±10s, speed, save, 
 ## Profile content — 2026-10-16
 
 Profile refinement, three shared-content tabs/grid, short ordinary/merged menu and legacy-label inbox visibility are implemented locally. Real SDK SENDING/history regression and bounded source controller covered; see [implementation and evidence](../personal/profile-content-2026-10-16.md). Real account/device/CI/deployment remain NOT RUN.
+
+## WhatsApp rich messages — 2026-11-08
+
+Received native/hydrated URL buttons use the versioned bridge extension, a
+validated parser and the same renderer in ordinary/merged chats. Exact targets
+survive Copy link, profile Links and safe forwarding. Media properties remain
+intact; business cards do not disappear inside photo albums. Received disclosed
+MSC3381 polls support nested and dedicated event formats, available results and
+read-only presentation. WhatsApp create/vote/end and business replies remain
+disabled in UI and final send authorization. Other networks retain their polls.
+
+No lost-URL history repair, new callback/list sending, flows/payments or account
+risk guarantee is included. See [contract and release boundaries](../whatsapp-rich-messages.md).
