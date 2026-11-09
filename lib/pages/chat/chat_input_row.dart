@@ -20,6 +20,7 @@ import 'package:chatloom/personal/round_video/round_availability.dart'
 import 'package:chatloom/personal/round_video/round_outbox_sync.dart';
 import 'package:chatloom/personal/round_video/round_record_button.dart';
 import 'package:chatloom/personal/stickers/sticker_suggestions.dart';
+import 'package:chatloom/personal/whatsapp/whatsapp_action_policy.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/widgets/avatar.dart';
@@ -76,7 +77,9 @@ composerAttachOffers(Room room) {
     photo: photo,
     video: video,
     location: offers(BridgeFeature.location),
-    poll: offers(BridgeFeature.poll),
+    poll:
+        offers(BridgeFeature.poll) &&
+        WhatsAppActionPolicy.allows(room, WhatsAppAction.createPoll),
   );
 }
 

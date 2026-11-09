@@ -458,6 +458,7 @@ class _BlockingPollAggregationTimeline extends Timeline {
     String eventId,
     String relType, {
     String? eventType,
+    bool throwOnError = false,
   }) async {
     if (!aggregationStarted.isCompleted) {
       aggregationStarted.complete();

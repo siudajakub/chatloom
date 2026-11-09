@@ -86,7 +86,7 @@ void main() {
         MockClient((request) async {
           requests++;
           return request.url.path.contains('/thumbnail/')
-              ? http.Response('{"errcode":"M_UNKNOWN","error":"Missing"}', 503)
+              ? http.Response('{"errcode":"M_UNKNOWN","error":"Missing"}', 404)
               : http.Response.bytes(pixel, 200);
         }),
       );

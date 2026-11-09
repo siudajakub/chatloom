@@ -83,7 +83,13 @@ final _slackDm = <String, Object?>{
 };
 
 ConversationRoom _room(String id, Map<String, Object?>? features) {
-  final room = ConversationRoom(ConversationClient(), '!$id:example.invalid');
+  final declaredId = features?['id'] as String?;
+  final network = declaredId?.split('.').last.split('+').first ?? 'matrix';
+  final room = ConversationRoom(
+    ConversationClient(),
+    '!$id:example.invalid',
+    network: network,
+  );
   if (features == null) {
     room.states.remove(bridgeFeaturesEventType);
   } else {
@@ -109,7 +115,12 @@ void main() {
       poll: true,
     ));
     final whatsapp = composerAttachOffers(_room('wa', _whatsapp));
-    expect(whatsapp.poll && whatsapp.location && whatsapp.file, isTrue);
+    expect(
+      whatsapp.poll,
+      isFalse,
+      reason: 'WhatsApp polls are read-only in v1',
+    );
+    expect(whatsapp.location && whatsapp.file, isTrue);
     final telegram = composerAttachOffers(_room('tg', _telegramDm));
     expect(telegram.poll, isFalse, reason: 'Telegram has no bridged polls');
     expect(telegram.location, isTrue);
@@ -223,7 +234,11 @@ void main() {
     expect(tester.widget<NotionButton>(create).onPressed, isNull);
     await tester.enterText(fields.at(3), 'Other');
     await tester.pump();
-    expect(tester.widget<NotionButton>(create).onPressed, isNotNull);
+    expect(
+      tester.widget<NotionButton>(create).onPressed,
+      isNull,
+      reason: 'Valid options still cannot create a WhatsApp poll in v1',
+    );
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }

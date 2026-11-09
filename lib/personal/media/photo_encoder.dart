@@ -26,6 +26,7 @@ import 'package:blurhash_dart/blurhash_dart.dart';
 import 'package:image/image.dart' as img;
 import 'package:matrix/matrix.dart';
 
+import 'media_preparation_exception.dart';
 import 'media_quality.dart';
 
 /// What the header of an encoded image says, without decoding it.
@@ -471,9 +472,23 @@ Future<String?> _blurhashOfImage(ui.Image image) async {
 }
 
 /// The SDK's `customImageResizer` (photos and their thumbnails; see the
-/// library comment). Returns null only when the image cannot be read at
-/// all; the SDK then sends the original.
+/// library comment). Unreadable thumbnails are optional; an unreadable
+/// full image fails preparation so the original is never uploaded silently.
 Future<MatrixImageFileResizedResponse?> encodePhoto(
+  MatrixImageFileResizeArguments arguments,
+) async {
+  try {
+    return await _encodePhoto(arguments);
+  } on MediaPreparationException {
+    rethrow;
+  } catch (e) {
+    Logs().w('Photo could not be prepared for sending', e.runtimeType);
+    if (arguments.maxDimension <= MediaQuality.thumbnailMaxSide) return null;
+    throw const MediaPreparationException();
+  }
+}
+
+Future<MatrixImageFileResizedResponse?> _encodePhoto(
   MatrixImageFileResizeArguments arguments,
 ) async {
   final bytes = arguments.bytes;
@@ -483,19 +498,8 @@ Future<MatrixImageFileResizedResponse?> encodePhoto(
     (width, height) = await _probe(bytes);
   } catch (e) {
     Logs().w('Photo could not be read for sending', e.runtimeType);
-    // Undecodable here (e.g. a format the engine lacks): still never send
-    // its location when the container is one we can clean.
-    final w = header.width, h = header.height;
-    if (w == null || h == null) return null;
-    final turned = (header.orientation ?? 1) >= 5;
-    return MatrixImageFileResizedResponse(
-      bytes: stripPhotoMetadata(bytes, header.format),
-      width: turned ? h : w,
-      height: turned ? w : h,
-      originalWidth: turned ? h : w,
-      originalHeight: turned ? w : h,
-      mimeType: header.mimeType,
-    );
+    if (arguments.maxDimension <= MediaQuality.thumbnailMaxSide) return null;
+    throw const MediaPreparationException();
   }
   final plan = PhotoPlan.decide(
     format: header.format,
@@ -527,13 +531,14 @@ Future<MatrixImageFileResizedResponse?> encodePhoto(
     width: plan.width,
     height: plan.height,
   );
+  var imageDisposed = false;
   try {
     // Animated: resizing would keep only the first frame.
     if (frames > 1) return await keep();
     final outWidth = image.width, outHeight = image.height;
     if (plan.action == PhotoAction.png) {
       final png = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (png == null) return await keep();
+      if (png == null) throw const MediaPreparationException();
       return MatrixImageFileResizedResponse(
         bytes: png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
         width: outWidth,
@@ -546,7 +551,11 @@ Future<MatrixImageFileResizedResponse?> encodePhoto(
     final rgba = await image.toByteData(
       format: ui.ImageByteFormat.rawStraightRgba,
     );
-    if (rgba == null) return await keep();
+    if (rgba == null) throw const MediaPreparationException();
+    // The encoder only needs RGBA from here. Release the native decoded
+    // frame before the JPEG isolate allocates its own image and output.
+    image.dispose();
+    imageDisposed = true;
     final (jpeg, blurhash) = await encodeJpegRgba(
       rgba.buffer.asUint8List(rgba.offsetInBytes, rgba.lengthInBytes),
       outWidth,
@@ -565,7 +574,7 @@ Future<MatrixImageFileResizedResponse?> encodePhoto(
       blurhash: blurhash,
     );
   } finally {
-    image.dispose();
+    if (!imageDisposed) image.dispose();
   }
 }
 

@@ -19,6 +19,7 @@ import 'package:chatloom/personal/media/gallery_batch.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
+import 'package:chatloom/personal/media/photo_encoder.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:chatloom/utils/other_party_can_receive.dart';
@@ -87,11 +88,11 @@ class AttachmentDestination {
   });
 }
 
-/// A merged chat's source in the send preview: a chip beside the caption
+/// A merged chat's source in the send preview: a row above the caption
 /// names the network the attachments go to and, until the first one is in
 /// the chat, lets the user send them through another source.
 class AttachmentSourceChoice {
-  /// The chip for [room]; [onPressed] is null while the choice is locked
+  /// The destination row for [room]; [onPressed] is null while locked
   /// (a send is under way or some attachments are already in the chat).
   final Widget Function(
     BuildContext context,
@@ -198,8 +199,8 @@ class _SendPreviewRoute extends PageRoute<AttachmentSendResult> {
 ///
 /// It never asks whether to compress (J, 2026-10-24): photos and videos
 /// are compressed on the device before upload ([MediaProfile.standard]),
-/// unless the small "HD" chip in the header is on for this send
-/// ([MediaProfile.hd]; per send, never remembered). The exact original
+/// with Economy or HD available in the header for this send
+/// ([MediaProfile.economy], [MediaProfile.hd]; never remembered). The exact original
 /// goes out only from the attach menu's "File" entry ([sendAsFiles]).
 class SendFileDialog extends StatefulWidget {
   final Room room;
@@ -292,8 +293,13 @@ class _Item {
 class SendFileDialogState extends State<SendFileDialog> {
   /// The "HD" chip: this send only, off every time the preview opens.
   bool hd = false;
+  bool economy = false;
 
-  MediaProfile get _profile => hd ? MediaProfile.hd : MediaProfile.standard;
+  MediaProfile get _profile => hd
+      ? MediaProfile.hd
+      : economy
+      ? MediaProfile.economy
+      : MediaProfile.standard;
   bool _sending = false;
   int _accepted = 0;
   String? _problem;
@@ -348,19 +354,22 @@ class SendFileDialogState extends State<SendFileDialog> {
   Future<void> _chooseSource() async {
     final choice = widget.sourceChoice;
     if (choice == null || _locked || _choosingSource) return;
-    _choosingSource = true;
-    final AttachmentDestination? next;
+    setState(() => _choosingSource = true);
     try {
-      next = await choice.choose(context, _to.room);
+      final next = await choice.choose(context, _to.room);
+      if (next == null || !mounted || _sending || _accepted > 0) return;
+      setState(() {
+        _to = next;
+        _problem = null;
+        _split = _captionNeedsSplit(_labelTextController.text.trim());
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _problem = 'Couldn’t change the network. Try again.');
+      }
     } finally {
-      _choosingSource = false;
+      if (mounted) setState(() => _choosingSource = false);
     }
-    if (next == null || !mounted || _locked) return;
-    setState(() {
-      _to = next!;
-      _problem = null;
-      _split = _captionNeedsSplit(_labelTextController.text.trim());
-    });
   }
 
   bool get _hasMedia => _items.any((item) => item.kind != _Kind.other);
@@ -534,7 +543,18 @@ class SendFileDialogState extends State<SendFileDialog> {
         file.path,
         quality: 70,
       );
-      return await XFile(framePath).readAsBytes();
+      final bytes = await XFile(framePath).readAsBytes();
+      // Retain a bounded preview, rather than a full-resolution frame for
+      // each visited video in a large selection.
+      final small = await encodePhoto(
+        MatrixImageFileResizeArguments(
+          bytes: bytes,
+          maxDimension: MediaQuality.photoEconomyMaxSide,
+          fileName: 'video-preview.jpg',
+          calcBlurhash: false,
+        ),
+      );
+      return small?.bytes;
     } catch (_) {
       return null;
     } finally {
@@ -552,7 +572,7 @@ class SendFileDialogState extends State<SendFileDialog> {
   /// failure ("Not sent · Tap to retry") are shown in the bubble. Only a
   /// problem found before anything is shown keeps the dialog open.
   Future<void> _send() async {
-    if (_sending) return;
+    if (_sending || _choosingSource) return;
     final label = _labelTextController.text.trim();
     setState(() {
       _sending = true;
@@ -600,11 +620,7 @@ class SendFileDialogState extends State<SendFileDialog> {
         final size = await xfile.length();
         if (!mounted) return;
         final asDocument = widget.sendAsFiles && item.kind != _Kind.other;
-        final transcode =
-            item.kind == _Kind.video &&
-            !widget.sendAsFiles &&
-            PlatformInfos.supportsVideoTranscode &&
-            xfile.path.isNotEmpty;
+        final transcode = item.kind == _Kind.video && !widget.sendAsFiles;
         if (!transcode && size > maxUploadSize) {
           throw FileTooBigMatrixException(size, maxUploadSize);
         }
@@ -681,7 +697,8 @@ class SendFileDialogState extends State<SendFileDialog> {
           file,
           txid: _transactionIds[i],
           inReplyTo: _to.replyTo,
-          // The long side also selects the JPEG quality (q80, HD q85) and
+          // The long side also selects the JPEG quality (Economy q72,
+          // standard q80, HD q85) and
           // is stored with the bubble, so Retry keeps the same profile.
           shrinkImageMaxDimension:
               !widget.sendAsFiles && file is MatrixImageFile
@@ -835,163 +852,201 @@ class SendFileDialogState extends State<SendFileDialog> {
         child: Scaffold(
           backgroundColor: NotionMediaColors.viewer,
           body: BackdropGroup(
-            child: Column(
-              children: [
-                _PreviewHeader(
-                  title: _title(),
-                  onClose: _sending ? null : _close,
-                  closeLabel: l10n.cancel,
-                  editLabel: current.kind == _Kind.video
-                      ? 'Edit video'
-                      : 'Edit photo',
-                  onEdit: _canEdit(current) && !_locked
-                      ? () => _edit(_page)
-                      : null,
-                  removeLabel: l10n.remove,
-                  onRemove: _items.length > 1 && !_locked
-                      ? () => _remove(_page)
-                      : null,
-                  showHd: !widget.sendAsFiles && _hasMedia,
-                  hd: hd,
-                  onHd: _locked ? null : () => setState(() => hd = !hd),
-                ),
-                Expanded(
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: PageView.builder(
-                          controller: _pages,
-                          itemCount: _items.length,
-                          onPageChanged: (page) => setState(() => _page = page),
-                          itemBuilder: (context, i) => _PreviewPage(
-                            key: ObjectKey(_items[i]),
-                            item: _items[i],
-                            heroTag: _heroTag(i),
-                            videoFrame: _items[i].kind == _Kind.video
-                                ? _videoFrame(_items[i])
-                                : null,
-                          ),
-                        ),
-                      ),
-                      if (PlatformInfos.isDesktop && _items.length > 1) ...[
-                        if (_page > 0)
-                          Align(
-                            alignment: AlignmentDirectional.centerStart,
-                            child: Padding(
-                              padding: const EdgeInsets.all(NotionSpace.md),
-                              child: NotionGlassPill(
-                                icon: Icons.chevron_left_rounded,
-                                tooltip: 'Previous',
-                                onPressed: () => _goTo(_page - 1),
-                              ),
-                            ),
-                          ),
-                        if (_page < _items.length - 1)
-                          Align(
-                            alignment: AlignmentDirectional.centerEnd,
-                            child: Padding(
-                              padding: const EdgeInsets.all(NotionSpace.md),
-                              child: NotionGlassPill(
-                                icon: Icons.chevron_right_rounded,
-                                tooltip: 'Next',
-                                onPressed: () => _goTo(_page + 1),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ],
+            child: LayoutBuilder(
+              builder: (context, viewport) => Column(
+                children: [
+                  _PreviewHeader(
+                    title: _title(),
+                    onClose: _sending ? null : _close,
+                    closeLabel: l10n.cancel,
+                    editLabel: current.kind == _Kind.video
+                        ? 'Edit video'
+                        : 'Edit photo',
+                    onEdit: _canEdit(current) && !_locked
+                        ? () => _edit(_page)
+                        : null,
+                    removeLabel: l10n.remove,
+                    onRemove: _items.length > 1 && !_locked
+                        ? () => _remove(_page)
+                        : null,
+                    showHd: !widget.sendAsFiles && _hasMedia,
+                    hd: hd,
+                    economy: economy,
+                    onHd: _locked
+                        ? null
+                        : () => setState(() {
+                            hd = !hd;
+                            economy = false;
+                          }),
+                    onEconomy: _locked
+                        ? null
+                        : () => setState(() {
+                            economy = !economy;
+                            hd = false;
+                          }),
                   ),
-                ),
-                NotionGlassBar(
-                  hairlineTop: true,
-                  child: SafeArea(
-                    top: false,
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(
-                          maxWidth: NotionSize.contentMaxWidth,
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(
-                            NotionSpace.sm,
-                            NotionSpace.xs,
-                            NotionSpace.sm,
-                            NotionSpace.sm,
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: PageView.builder(
+                            controller: _pages,
+                            itemCount: _items.length,
+                            onPageChanged: (page) =>
+                                setState(() => _page = page),
+                            itemBuilder: (context, i) => _PreviewPage(
+                              key: ObjectKey(_items[i]),
+                              item: _items[i],
+                              heroTag: _heroTag(i),
+                              videoFrame: _items[i].kind == _Kind.video
+                                  ? _videoFrame(_items[i])
+                                  : null,
+                            ),
                           ),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              if (_accepted > 0)
-                                _Notice(
-                                  '$_accepted of ${_items.length} attachments are already in the chat. Send again for the rest.',
+                        ),
+                        if (PlatformInfos.isDesktop && _items.length > 1) ...[
+                          if (_page > 0)
+                            Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: Padding(
+                                padding: const EdgeInsets.all(NotionSpace.md),
+                                child: NotionGlassPill(
+                                  icon: Icons.chevron_left_rounded,
+                                  tooltip: 'Previous',
+                                  onPressed: () => _goTo(_page - 1),
                                 ),
-                              if (_problem != null)
-                                Semantics(
-                                  liveRegion: true,
-                                  child: _Notice(
-                                    _problem!,
-                                    color: tokens.colors.danger,
-                                  ),
-                                ),
-                              if (_split) const _Notice(CaptionFollowUp.notice),
-                              if (_items.length > 1)
-                                _ThumbnailStrip(
-                                  items: _items,
-                                  selected: _page,
-                                  onSelect: _goTo,
-                                ),
-                              if (widget.sendAsFiles && _hasMedia)
-                                FutureBuilder<int>(
-                                  future: _totalSize,
-                                  builder: (context, size) => _Notice(
-                                    _items.length > 1
-                                        ? 'Sent as files, unchanged'
-                                              '${size.hasData ? ' · ${size.data!.toDouble().sizeString}' : ''}'
-                                        : 'Sent as a file, unchanged'
-                                              '${size.hasData ? ' · ${size.data!.toDouble().sizeString}' : ''}',
-                                  ),
-                                ),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  if (widget.sourceChoice case final choice?)
-                                    Padding(
-                                      padding: const EdgeInsetsDirectional.only(
-                                        end: NotionSpace.xxs,
-                                      ),
-                                      child: choice.chip(
-                                        context,
-                                        _to.room,
-                                        _locked ? null : _chooseSource,
-                                      ),
-                                    ),
-                                  Expanded(
-                                    child: Focus(
-                                      onKeyEvent: _captionKey,
-                                      child: _CaptionField(
-                                        controller: _labelTextController,
-                                        focusNode: _captionFocus,
-                                        readOnly: _locked,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: NotionSpace.xs),
-                                  _SendButton(
-                                    label: l10n.send,
-                                    busy: _sending,
-                                    onPressed: _sending ? null : _send,
-                                  ),
-                                ],
                               ),
-                            ],
+                            ),
+                          if (_page < _items.length - 1)
+                            Align(
+                              alignment: AlignmentDirectional.centerEnd,
+                              child: Padding(
+                                padding: const EdgeInsets.all(NotionSpace.md),
+                                child: NotionGlassPill(
+                                  icon: Icons.chevron_right_rounded,
+                                  tooltip: 'Next',
+                                  onPressed: () => _goTo(_page + 1),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  // Long captions, notices and large text must not put Send
+                  // behind the keyboard. Keep some preview visible and let
+                  // the footer scroll, initially at its caption/send edge.
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight:
+                          (viewport.maxHeight -
+                                  NotionSize.headerHeight -
+                                  MediaQuery.paddingOf(context).top)
+                              .clamp(0.0, double.infinity) *
+                          .75,
+                    ),
+                    child: NotionGlassBar(
+                      hairlineTop: true,
+                      child: SingleChildScrollView(
+                        reverse: true,
+                        child: SafeArea(
+                          top: false,
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                maxWidth: NotionSize.contentMaxWidth,
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  NotionSpace.sm,
+                                  NotionSpace.xs,
+                                  NotionSpace.sm,
+                                  NotionSpace.sm,
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (_accepted > 0)
+                                      _Notice(
+                                        '$_accepted of ${_items.length} attachments are already in the chat. Send again for the rest.',
+                                      ),
+                                    if (_problem != null)
+                                      Semantics(
+                                        liveRegion: true,
+                                        child: _Notice(
+                                          _problem!,
+                                          color: tokens.colors.danger,
+                                        ),
+                                      ),
+                                    if (_split)
+                                      const _Notice(CaptionFollowUp.notice),
+                                    if (_items.length > 1)
+                                      _ThumbnailStrip(
+                                        items: _items,
+                                        selected: _page,
+                                        onSelect: _goTo,
+                                      ),
+                                    if (widget.sendAsFiles && _hasMedia)
+                                      FutureBuilder<int>(
+                                        future: _totalSize,
+                                        builder: (context, size) => _Notice(
+                                          _items.length > 1
+                                              ? 'Sent as files, unchanged'
+                                                    '${size.hasData ? ' · ${size.data!.toDouble().sizeString}' : ''}'
+                                              : 'Sent as a file, unchanged'
+                                                    '${size.hasData ? ' · ${size.data!.toDouble().sizeString}' : ''}',
+                                        ),
+                                      ),
+                                    if (widget.sourceChoice case final choice?)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: NotionSpace.xxs,
+                                        ),
+                                        child: choice.chip(
+                                          context,
+                                          _to.room,
+                                          _locked || _choosingSource
+                                              ? null
+                                              : _chooseSource,
+                                        ),
+                                      ),
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        Expanded(
+                                          child: Focus(
+                                            onKeyEvent: _captionKey,
+                                            child: _CaptionField(
+                                              controller: _labelTextController,
+                                              focusNode: _captionFocus,
+                                              readOnly: _locked,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: NotionSpace.xs),
+                                        _SendButton(
+                                          label: l10n.send,
+                                          busy: _sending,
+                                          onPressed: _sending || _choosingSource
+                                              ? null
+                                              : _send,
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -1039,7 +1094,8 @@ class _PreviewHeader extends StatelessWidget {
 
   /// The "HD" chip (Telegram), for photos and videos.
   final bool showHd, hd;
-  final VoidCallback? onHd;
+  final bool economy;
+  final VoidCallback? onHd, onEconomy;
 
   const _PreviewHeader({
     required this.title,
@@ -1051,7 +1107,9 @@ class _PreviewHeader extends StatelessWidget {
     required this.removeLabel,
     this.showHd = false,
     this.hd = false,
+    this.economy = false,
     this.onHd,
+    this.onEconomy,
   });
 
   @override
@@ -1083,6 +1141,18 @@ class _PreviewHeader extends StatelessWidget {
                 ),
               ),
               if (showHd) _HdChip(hd: hd, onPressed: onHd),
+              if (showHd)
+                Semantics(
+                  toggled: economy,
+                  child: NotionIconButton(
+                    icon: Icons.data_saver_on_rounded,
+                    label: economy
+                        ? 'Economy on: photos up to 1280 px, video up to 480p'
+                        : 'Send with less data',
+                    selected: economy,
+                    onPressed: onEconomy,
+                  ),
+                ),
               if (onEdit != null)
                 NotionIconButton(
                   icon: Icons.edit_outlined,
@@ -1133,20 +1203,20 @@ class _PreviewPage extends StatelessWidget {
               tag: heroTag,
               createRectTween: NotionMediaHero.rectTween,
               child: ClipRRect(
-              borderRadius: NotionRadius.mdAll,
-              child: Image(
-                image: ResizeImage(
-                  image,
-                  width: width,
-                  height: height,
-                  policy: ResizeImagePolicy.fit,
+                borderRadius: NotionRadius.mdAll,
+                child: Image(
+                  image: ResizeImage(
+                    image,
+                    width: width,
+                    height: height,
+                    policy: ResizeImagePolicy.fit,
+                  ),
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  errorBuilder: (context, error, _) =>
+                      _FileCard(item: item, broken: true),
                 ),
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                errorBuilder: (context, error, _) =>
-                    _FileCard(item: item, broken: true),
               ),
-            ),
             ),
           );
         }
@@ -1167,17 +1237,17 @@ class _PreviewPage extends StatelessWidget {
                     tag: heroTag,
                     createRectTween: NotionMediaHero.rectTween,
                     child: ClipRRect(
-                    borderRadius: NotionRadius.mdAll,
-                    child: Image(
-                      image: ResizeImage(
-                        MemoryImage(bytes),
-                        width: width,
-                        height: height,
-                        policy: ResizeImagePolicy.fit,
+                      borderRadius: NotionRadius.mdAll,
+                      child: Image(
+                        image: ResizeImage(
+                          MemoryImage(bytes),
+                          width: width,
+                          height: height,
+                          policy: ResizeImagePolicy.fit,
+                        ),
+                        fit: BoxFit.contain,
                       ),
-                      fit: BoxFit.contain,
                     ),
-                  ),
                   ),
                   const DecoratedBox(
                     decoration: ShapeDecoration(
@@ -1216,61 +1286,63 @@ class _FileCard extends StatelessWidget {
     final type = item.file.name.contains('.')
         ? item.file.name.split('.').last.toUpperCase()
         : (item.mimeType ?? '');
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: NotionSize.dialogMaxWidth),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: NotionRadius.lgAll,
-          border: Border.all(color: colors.border),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(NotionSpace.md),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                broken
-                    ? Icons.broken_image_outlined
-                    : switch (item.kind) {
-                        _Kind.video => Icons.video_file_outlined,
-                        _Kind.image => Icons.image_outlined,
-                        _Kind.other =>
-                          item.mimeType?.startsWith('audio/') ?? false
-                              ? Icons.audio_file_outlined
-                              : Icons.description_outlined,
-                      },
-                size: NotionSize.iconLg,
-                color: colors.textSecondary,
-              ),
-              const SizedBox(width: NotionSpace.sm),
-              Flexible(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.file.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.notion.typography.body,
-                    ),
-                    FutureBuilder<int>(
-                      future: _lengthOf(item.file),
-                      builder: (context, size) => Text(
-                        [
-                          if (size.hasData) size.data!.toDouble().sizeString,
-                          if (type.isNotEmpty) type,
-                        ].join(' · '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: context.notion.typography.footnoteMuted,
-                      ),
-                    ),
-                  ],
+    return SingleChildScrollView(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: NotionSize.dialogMaxWidth),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: NotionRadius.lgAll,
+            border: Border.all(color: colors.border),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(NotionSpace.md),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  broken
+                      ? Icons.broken_image_outlined
+                      : switch (item.kind) {
+                          _Kind.video => Icons.video_file_outlined,
+                          _Kind.image => Icons.image_outlined,
+                          _Kind.other =>
+                            item.mimeType?.startsWith('audio/') ?? false
+                                ? Icons.audio_file_outlined
+                                : Icons.description_outlined,
+                        },
+                  size: NotionSize.iconLg,
+                  color: colors.textSecondary,
                 ),
-              ),
-            ],
+                const SizedBox(width: NotionSpace.sm),
+                Flexible(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.file.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.notion.typography.body,
+                      ),
+                      FutureBuilder<int>(
+                        future: _lengthOf(item.file),
+                        builder: (context, size) => Text(
+                          [
+                            if (size.hasData) size.data!.toDouble().sizeString,
+                            if (type.isNotEmpty) type,
+                          ].join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: context.notion.typography.footnoteMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

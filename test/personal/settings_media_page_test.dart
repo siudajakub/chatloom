@@ -24,6 +24,7 @@ void main() {
       AppSettings.personalRoundNoiseReduction,
       AppSettings.personalAutoDownloadVoiceRounds,
       AppSettings.personalAutoDownloadWifiOnly,
+      AppSettings.personalDataSaver,
     ]) {
       await AppSettings.store.remove(setting.key);
     }
@@ -71,7 +72,12 @@ void main() {
       find.text('Auto-download voice messages & round videos'),
       findsOneWidget,
     );
-    expect(find.text('Play instantly, no waiting'), findsOneWidget);
+    expect(
+      find.text('Prepare recent messages for faster playback'),
+      findsOneWidget,
+    );
+    expect(find.text('Storage & cache'), findsOneWidget);
+    expect(toggle(tester, AppSettings.personalDataSaver).value, true);
     expect(
       find.text('Uses the call microphone mode; may sound like a phone call.'),
       findsOneWidget,
@@ -110,7 +116,7 @@ void main() {
     );
     expect(
       toggle(tester, AppSettings.personalAutoDownloadWifiOnly).value,
-      false,
+      true,
     );
   });
 
@@ -130,8 +136,23 @@ void main() {
     await tap(tester, AppSettings.personalRoundStabilization);
     expect(AppSettings.personalRoundStabilization.value, isFalse);
     await tap(tester, AppSettings.personalAutoDownloadWifiOnly);
-    expect(AppSettings.personalAutoDownloadWifiOnly.value, isTrue);
+    expect(AppSettings.personalAutoDownloadWifiOnly.value, isFalse);
+    await tap(tester, AppSettings.personalDataSaver);
+    expect(AppSettings.personalDataSaver.value, isFalse);
     expect(toggle(tester, AppSettings.personalVoiceHighQuality).value, isTrue);
+  });
+
+  testWidgets('explicit mobile-download and data-saver choices are preserved', (
+    tester,
+  ) async {
+    await AppSettings.personalAutoDownloadWifiOnly.setItem(false);
+    await AppSettings.personalDataSaver.setItem(false);
+    await mount(tester);
+    expect(
+      toggle(tester, AppSettings.personalAutoDownloadWifiOnly).value,
+      false,
+    );
+    expect(toggle(tester, AppSettings.personalDataSaver).value, false);
   });
 
   testWidgets('voice isolation locks noise suppression, gain and echo on', (

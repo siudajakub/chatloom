@@ -275,10 +275,28 @@ class KeptMessages extends ChangeNotifier {
   /// Starts loading [client]'s kept messages (idempotent); retries a load
   /// that failed because the store was not open yet.
   void load(Client client) {
+    unawaited(ensureLoaded(client));
+  }
+
+  /// Waits until device-local kept messages are applied, without networking.
+  /// Failed store reads are retried on the next call, as with [load].
+  Future<void> ensureLoaded(Client client, {bool requireSuccess = false}) {
     final account = _account(client);
-    if (account != null && !account.loaded && !account.loading) {
+    if (account == null) {
+      return requireSuccess
+          ? Future<void>.error(StateError('Kept messages are unavailable'))
+          : Future<void>.value();
+    }
+    if (!account.loaded && !account.loading) {
       account.ready = _load(account);
     }
+    final ready = account.ready;
+    if (!requireSuccess) return ready;
+    return ready.then((_) {
+      if (_disposed || !account.active || !account.loaded) {
+        throw StateError('Kept messages could not be loaded');
+      }
+    });
   }
 
   /// What [capture] would keep, or null (pure: no store, no listener).
@@ -387,6 +405,7 @@ class KeptMessages extends ChangeNotifier {
   /// Sign-out: forgets [client]'s kept messages here and deletes them from
   /// the device store while it is still open (before [PersonalClient.dispose]).
   Future<void> forget(Client client, PersonalClient? personal) async {
+    _accounts[client]?.active = false;
     _accounts[client] = null;
     _listeners[client] = null;
     _clients.remove(client);
@@ -424,6 +443,7 @@ class KeptMessages extends ChangeNotifier {
     } finally {
       account.loading = false;
     }
+    if (!account.active || _disposed) return;
     account.loaded = true;
     final loaded = <String, KeptMessage>{};
     final unreadable = <String>[];
@@ -446,6 +466,7 @@ class KeptMessages extends ChangeNotifier {
     final dropped = _prune(account, persist: false)..addAll(unreadable);
     if (account.entries.isNotEmpty) _changed();
     for (final key in dropped) {
+      if (!account.active || _disposed) return;
       try {
         await storage.delete(key);
       } catch (_) {}
@@ -482,10 +503,19 @@ class KeptMessages extends ChangeNotifier {
 
   @visibleForTesting
   void debugReset(Client client) {
+    _accounts[client]?.active = false;
     _accounts[client] = null;
     _listeners[client] = null;
     _clients.remove(client);
     client.onBeforeRedaction = null;
+  }
+
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   @visibleForTesting
@@ -501,6 +531,7 @@ class _KeptAccount {
   /// Insertion order = deletion order (oldest first).
   final entries = <String, KeptMessage>{};
   Future<void> ready = Future.value();
+  bool active = true;
   bool loaded = false;
   bool loading = false;
 }

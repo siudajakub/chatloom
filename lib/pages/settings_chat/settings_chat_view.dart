@@ -231,7 +231,7 @@ class SettingsChatView extends StatelessWidget {
             key: const Key('settings_voice_video_row'),
             leading: const Icon(Icons.mic_none_outlined),
             title: 'Voice messages & round videos',
-            subtitle: 'Recording quality, noise reduction, auto-download',
+            subtitle: 'Recording, data saver, downloads and cache',
             onTap: () => context.push('/rooms/settings/chat/media'),
           ),
           NotionListRow(

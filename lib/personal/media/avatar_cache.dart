@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,6 +10,8 @@ import 'package:chatloom/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_dat
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'cache_budget.dart';
 
 /// Long-lived disk cache of avatars (rooms, people, bridged contacts).
 ///
@@ -32,6 +33,11 @@ class AvatarCache {
   static const int maxBytes = 96 * 1024 * 1024;
   static const Duration retention = Duration(days: 120);
 
+  /// A row must never fetch an unbounded original when a bridge has no
+  /// thumbnail. The full viewer is an explicit action with a larger cap.
+  static const previewDownloadMaxBytes = 2 * 1024 * 1024;
+  static const fullDownloadMaxBytes = 64 * 1024 * 1024;
+
   /// Physical thumbnail sizes asked of the server.
   static const List<int> buckets = [96, 256, 640];
 
@@ -49,11 +55,13 @@ class AvatarCache {
         await getProtectedStorageCipher(keyStorageName),
       );
       final base = await getApplicationSupportDirectory();
+      final budget = await MediaCacheBudget.read();
       return await StickerMediaCache.open(
         Directory('${base.path}/$folderName'),
         key: raw,
-        maxBytes: maxBytes,
+        maxBytes: budget.avatarBytes,
         retention: retention,
+        trimOnOpen: false,
       );
     } catch (error) {
       Logs().w('avatar_cache_unavailable', error.runtimeType.toString());
@@ -150,7 +158,11 @@ class AvatarCache {
     Future<Uint8List> download() async {
       checkCurrent();
       if (!isThumbnail) {
-        final bytes = await client.downloadMxcCached(uri, databaseCache: false);
+        final bytes = await client.downloadMxcCached(
+          uri,
+          databaseCache: false,
+          maxBytes: fullDownloadMaxBytes,
+        );
         checkCurrent();
         return bytes;
       }
@@ -163,18 +175,24 @@ class AvatarCache {
           isThumbnail: true,
           animated: false,
           databaseCache: false,
+          maxBytes: previewDownloadMaxBytes,
         );
         checkCurrent();
         return bytes;
       } on MatrixException catch (e) {
-        // Bridge direct media may serve originals while thumbnail generation
-        // fails (including 5xx). A rate limit still backs off immediately.
+        // Missing bridge thumbnails may fall back to a bounded original.
+        // A server outage or rate limit must not fan out into another GET.
         if (e.error == MatrixError.M_LIMIT_EXCEEDED ||
-            e.response?.statusCode == 429) {
+            e.response?.statusCode == 429 ||
+            (e.response?.statusCode ?? 0) >= 500) {
           rethrow;
         }
         checkCurrent();
-        final bytes = await client.downloadMxcCached(uri, databaseCache: false);
+        final bytes = await client.downloadMxcCached(
+          uri,
+          databaseCache: false,
+          maxBytes: previewDownloadMaxBytes,
+        );
         checkCurrent();
         return bytes;
       }
@@ -196,7 +214,7 @@ class AvatarCache {
   }
 
   /// Keys already queued or stored by [prefetch] in this run.
-  static final _prefetched = LinkedHashSet<String>();
+  static final _prefetched = <String>{};
   static final _pending = <String>{};
   static final _queue = <(Client, String, Uri, int, int)>[];
   static int _running = 0;
@@ -219,6 +237,9 @@ class AvatarCache {
     _prefetched.clear();
     _loads.clear();
   }
+
+  /// Storage settings revoke both queued prefetch and in-progress loads.
+  static void cancelPending() => _resetPending();
 
   /// Warms the disk cache for [uris] at [physicalSide] (inbox rows beyond
   /// the screen), a couple at a time, so a scroll shows them from disk.

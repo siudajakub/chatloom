@@ -10,6 +10,7 @@ import 'dart:typed_data';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
+import 'package:chatloom/personal/media/protected_matrix_database.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/bounded_byte_cache.dart';
 import 'package:chatloom/utils/client_download_content_extension.dart';
@@ -218,7 +219,7 @@ typedef _ImageKey = (
   _Account,
 );
 
-typedef _Account = (String?, Uri?, DatabaseApi);
+typedef _Account = (String?, Uri?, DatabaseApi, int);
 
 typedef _EventFlight = ({
   Future<MatrixFile> future,
@@ -247,7 +248,8 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   // A preview and its quoted/grid copy may mount in the same frame. The SDK
   // caches ciphertext but does not share concurrent downloads/decryption.
   // Limit sharing to the exact event instance, preserving its SDK access gate.
-  static final _eventLoads = Expando<Map<(bool, _Account), _EventFlight>>();
+  static final _eventLoads =
+      Expando<Map<(bool, _Account, bool, int), _EventFlight>>();
   _EventFlight? _eventFlight;
 
   void _releaseEvent() {
@@ -258,7 +260,9 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   Future<MatrixFile> _attachment(Event event, bool thumbnail) {
     final pending = _eventLoads[event] ??= {};
     final account = _accountOf(event.room.client);
-    final key = (thumbnail, account);
+    final deferOriginal = _deferOriginal(event, thumbnail);
+    final maxBytes = _imageTransferLimit;
+    final key = (thumbnail, account, deferOriginal, maxBytes);
     final flight = pending.putIfAbsent(key, () {
       final client = event.room.client;
       final abort = Completer<void>();
@@ -307,16 +311,21 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
                       if (_accountOf(client) != account) {
                         throw StateError('Media account changed during load');
                       }
+                      if (deferOriginal) throw const MediaDownloadDeferred();
                       return client.downloadMediaBytes(
                         uri,
                         abortTrigger: abort.future,
                         cancelled: () => abort.isCompleted,
+                        maxBytes: maxBytes,
                       );
                     },
             ),
           ).then((file) {
             if (_accountOf(event.room.client) != account) {
               throw StateError('Media account changed during load');
+            }
+            if (file.bytes.length > _maxImageBytes) {
+              throw const MediaDownloadLimitExceeded(_maxImageBytes);
             }
             return file;
           });
@@ -343,6 +352,46 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   }
 
   Uint8List? _imageData;
+  static const _maxAutomaticOriginalBytes = 2 * 1024 * 1024;
+  static const _maxImageBytes = 64 * 1024 * 1024;
+  bool _deferred = false;
+  bool _allowOriginal = false;
+  MediaReadCancellation? _uriCancellation;
+
+  int get _imageTransferLimit => widget.isThumbnail && !_allowOriginal
+      ? (AppSettings.personalDataSaver.value
+            ? _maxAutomaticOriginalBytes
+            : 8 * 1024 * 1024)
+      : _maxImageBytes;
+
+  MediaReadCancellation get _uriRead =>
+      _uriCancellation ??= MediaReadCancellation();
+
+  // Stable physical buckets prevent one server rendition/cache entry for
+  // every fractional layout width while keeping thumbnail requests bounded.
+  static double? _thumbnailSide(double? side) {
+    if (side == null || !side.isFinite || side <= 0) return null;
+    for (final bucket in [96, 192, 320, 480, 640, 800, 1024, 1600]) {
+      if (side <= bucket) return bucket.toDouble();
+    }
+    return 1600;
+  }
+
+  bool _automaticOriginal(Event event, bool thumbnail) =>
+      widget.isThumbnail &&
+      (!thumbnail ||
+          event.attachmentOrThumbnailMxcUrl(getThumbnail: true) ==
+              event.attachmentMxcUrl) &&
+      !_allowOriginal &&
+      AppSettings.personalDataSaver.value &&
+      event.messageType == MessageTypes.Image;
+
+  bool _deferOriginal(Event event, bool thumbnail) {
+    if (!_automaticOriginal(event, thumbnail)) return false;
+    final size = event.infoMap['size'];
+    return size is! int || size <= 0 || size > _maxAutomaticOriginalBytes;
+  }
+
   LottieComposition? _lottie;
   Timer? _retryTimer;
   int _generation = 0, _failures = 0;
@@ -417,8 +466,15 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
             !RoundMediaPolicy.fromContent(event.content).canPlay);
   }
 
-  static _Account _accountOf(Client client) =>
-      (client.userID, client.homeserver, client.database);
+  static _Account _accountOf(Client client) {
+    final database = client.database;
+    return (
+      client.userID,
+      client.homeserver,
+      database,
+      database is ProtectedMatrixDatabase ? database.mediaCacheGeneration : 0,
+    );
+  }
 
   bool get _accountChanged =>
       _dependencyAccount != null &&
@@ -454,7 +510,11 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       _fail(generation);
       return;
     }
-    if (key != null) _imageDataCache.put(key, data);
+    // A full-resolution original must not evict the entire scrolling cache.
+    // Its mounted widget owns the bytes until it is closed.
+    if (key != null && data.length <= 8 * 1024 * 1024) {
+      _imageDataCache.put(key, data);
+    }
     setState(() {
       _imageData = data;
       _lottie = lottie;
@@ -545,8 +605,12 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       widget.cacheName ?? '',
       cacheKey,
       widget.uri?.toString() ?? widget.event?.eventId,
-      !sized || widget.width == null ? null : widget.width! * dpr,
-      !sized || widget.height == null ? null : widget.height! * dpr,
+      sized
+          ? _thumbnailSide(widget.width == null ? null : widget.width! * dpr)
+          : null,
+      sized
+          ? _thumbnailSide(widget.height == null ? null : widget.height! * dpr)
+          : null,
       widget.isThumbnail,
       widget.animated,
       widget.thumbnailMethod,
@@ -590,7 +654,15 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       // Encrypted media has no server-side thumbnail: the original only.
       final data = await _decrypt(
         client,
-        await client.downloadMxcCached(uri),
+        await client.downloadMxcCached(
+          uri,
+          allowNetwork:
+              !widget.isThumbnail ||
+              _allowOriginal ||
+              !AppSettings.personalDataSaver.value,
+          maxBytes: _imageTransferLimit,
+          cancellation: _uriRead,
+        ),
         encryption,
       );
       if (!mounted || generation != _generation) return;
@@ -601,9 +673,13 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     if (uri != null) {
       final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
       final width = widget.width;
-      final realWidth = width == null ? null : width * devicePixelRatio;
+      final realWidth = width == null
+          ? null
+          : _thumbnailSide(width * devicePixelRatio);
       final height = widget.height;
-      final realHeight = height == null ? null : height * devicePixelRatio;
+      final realHeight = height == null
+          ? null
+          : _thumbnailSide(height * devicePixelRatio);
 
       Uint8List remoteData;
       final loadBytes = widget.loadBytes;
@@ -630,6 +706,8 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
           thumbnailMethod: widget.thumbnailMethod,
           isThumbnail: widget.isThumbnail,
           animated: widget.animated,
+          maxBytes: _imageTransferLimit,
+          cancellation: _uriRead,
         );
       } on MatrixException catch (e) {
         if (!widget.isThumbnail) rethrow;
@@ -639,7 +717,12 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
         // Some bridge and remote media has no thumbnail (404/unrecognized);
         // the original still loads.
         Logs().d('Thumbnail unavailable, loading original', e);
-        remoteData = await client.downloadMxcCached(uri);
+        remoteData = await client.downloadMxcCached(
+          uri,
+          allowNetwork: _allowOriginal || !AppSettings.personalDataSaver.value,
+          maxBytes: _imageTransferLimit,
+          cancellation: _uriRead,
+        );
       }
       if (await _acceptLottie(remoteData, key, generation, client)) return;
       _accept(remoteData, key, generation);
@@ -654,6 +737,13 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       );
       final useThumbnail =
           widget.isThumbnail && event.hasThumbnail && !lottieMime;
+      // Scanner downloads cannot use our transport callback. Defer an
+      // oversized original before invoking that path; its SDK access gate
+      // still runs when the user explicitly requests it.
+      if (client.contentScannerConfig != null &&
+          _deferOriginal(event, useThumbnail)) {
+        throw const MediaDownloadDeferred();
+      }
       if (!useThumbnail &&
           !lottieMime &&
           !{
@@ -694,6 +784,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     if (!mounted ||
         !_active ||
         _loading ||
+        _deferred ||
         _failed ||
         _imageData != null ||
         (widget.uri == null && widget.event == null)) {
@@ -706,6 +797,19 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       // No thumbnail, or the attachment is not an image.
       if (generation == _generation && _imageData == null) {
         _report(MxcImageLoad.failed);
+      }
+    } on MediaDownloadDeferred catch (_) {
+      if (mounted && generation == _generation) {
+        setState(() => _deferred = true);
+      }
+    } on MediaDownloadLimitExceeded catch (_) {
+      if (mounted &&
+          generation == _generation &&
+          widget.isThumbnail &&
+          !_allowOriginal) {
+        setState(() => _deferred = true);
+      } else {
+        _fail(generation);
       }
     } on IOException catch (_) {
       _scheduleRetry(generation);
@@ -748,6 +852,13 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   }
 
   void _resetImage() {
+    _uriCancellation?.cancel();
+    _uriCancellation = null;
+    final capped = _capped;
+    _capped = null;
+    if (capped != null) {
+      unawaited(capped.evict().catchError((Object _) => false));
+    }
     _generation++;
     _releaseEvent();
     _retryTimer?.cancel();
@@ -755,6 +866,8 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     _failures = 0;
     _failed = false;
     _retrying = false;
+    _deferred = false;
+    _allowOriginal = false;
     _imageData = null;
     _lottie = null;
     _fromCache = false;
@@ -823,6 +936,13 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       _failures = 0;
       if (widget.retryFailedAfter != null) _failed = false;
       unawaited(_tryLoad());
+    } else {
+      // Abort invisible work, retaining already decoded content for resume.
+      _generation++;
+      _releaseEvent();
+      _uriCancellation?.cancel();
+      _uriCancellation = null;
+      _loading = false;
     }
   }
 
@@ -865,6 +985,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _uriCancellation?.cancel();
     final capped = _capped;
     if (capped != null) {
       unawaited(capped.evict().catchError((Object _) => false));
@@ -905,10 +1026,12 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
             height.isFinite &&
             width > 0 &&
             height > 0) {
-          return CoverResizeImage(
-            original,
-            width: max(1, (width * dpr).ceil()),
-            height: max(1, (height * dpr).ceil()),
+          return _track(
+            CoverResizeImage(
+              original,
+              width: max(1, (width * dpr).ceil()),
+              height: max(1, (height * dpr).ceil()),
+            ),
           );
         }
       }
@@ -963,6 +1086,56 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       height: widget.height,
       placeholder: widget.placeholder,
     );
+    if (_deferred && !hasData && !blocked) {
+      return SizedBox(
+        width: widget.width,
+        height: widget.height,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            placeholder,
+            LayoutBuilder(
+              builder: (context, constraints) {
+                // Quote thumbnails are only 34 dp; their enclosing quote
+                // already opens the original. Do not squeeze a new control
+                // into a slot smaller than a touch target.
+                if (constraints.maxWidth < NotionTokens.touchTarget ||
+                    constraints.maxHeight < NotionTokens.touchTarget) {
+                  return Semantics(
+                    label: 'Image not downloaded. Open the message to view.',
+                    child: const Icon(
+                      Icons.download_outlined,
+                      size: NotionSize.iconSm,
+                    ),
+                  );
+                }
+                void load() {
+                  setState(() {
+                    _resetImage();
+                    _allowOriginal = true;
+                  });
+                }
+
+                final textScale = MediaQuery.textScalerOf(context).scale(1);
+                if (constraints.maxWidth <
+                    NotionTokens.touchTarget * 4 * textScale) {
+                  return NotionIconButton(
+                    icon: Icons.download_outlined,
+                    label: 'Load image',
+                    onPressed: load,
+                  );
+                }
+                return NotionButton(
+                  label: 'Load image',
+                  icon: Icons.download_outlined,
+                  onPressed: load,
+                );
+              },
+            ),
+          ],
+        ),
+      );
+    }
     if ((_failed || _retrying || blocked) && !hasData) {
       // Static: the caller's placeholder (with a broken-image mark unless it
       // asked for the placeholder alone) or the broken-image tile.

@@ -1,5 +1,40 @@
 # Notion dark v2 design system
 
+## Media resource controls
+
+The existing voice/round settings page contains Data saver and Storage &
+cache. Deferred image originals show a static Load image action; tiny quote
+thumbnails retain their enclosing message action. Cached frames and separate
+thumbnails stay usable. Attachment previews offer Economy beside HD without
+changing Standard or resizing the preview. Cache actions preserve history,
+keys and pending sends. Exact limits: `docs/media-resource-policy.md`.
+
+## Inbox startup and freshness
+
+The inbox first restores rooms, account data, private metadata, hidden
+messages and kept-message previews from encrypted local storage. A saved
+sync cursor alone does not mean these records are ready. While restoring,
+show skeleton rows without cached rows, pins or unread/request badges;
+disable search and the bulk mark-read action. Settings remains available.
+Do not prefetch avatars for hidden rows.
+
+For an existing inbox, wait at most three seconds for the initial network
+catch-up after local restoration, then allow saved conversations to open.
+Continue updating in the background. Rebuild the index when restoration
+finishes, including when an earlier build saw an empty room list. Routine
+syncs and returning from a conversation keep the usable list on screen.
+An actual local restoration error must not be described as an empty inbox:
+keep unclassified rows hidden and offer a local Retry action. Repeated taps
+share the pending restoration; a successful retry clears the failure.
+
+The header quietly distinguishes updating from connection trouble. Brief
+requests and one failed attempt do not warrant an offline warning. Bridge
+and worker notices need fresh sync evidence after startup/resume and stay
+hidden while the connection cannot be established. Local encryption,
+storage and notification issues retain their own evidence and actions.
+Muted-chat unread fallbacks respect persisted and local read markers;
+explicit unread marks and server notification counts remain authoritative.
+
 The rules for any UI in `client/`. It covers the tokens, the primitives, how
 legacy Material widgets map to them, and how the rules are enforced. If a
 value or widget you need is missing, add it to `lib/ui/notion/` (with a
@@ -811,3 +846,20 @@ instant (`StickerSearchIndex`: emoji, words, shortcodes, alt text, pack
 titles, ranked); back closes a search before the panel. Empty, no-result
 and error states are `NotionEmptyState`; the GIF results load under a
 `NotionSkeleton`.
+
+## Received WhatsApp cards and polls
+
+`NotionWhatsAppActions` (`notion_whatsapp_message.dart`) presents received
+HTTP(S) actions as a label and visible destination domain, with separate open
+and copy targets of at least 48 dp. Pass the conversation bubble's foreground
+and link roles plus `backgroundColor` for the actual bubble fill. Link text
+uses `NotionContrast.readable` to reach 4.5:1 on that fill; the accent tuned
+for the page alone is insufficient on a grey incoming bubble. Labels wrap at large text sizes;
+the complete URL is available in the tooltip. No blur, preview fetch or reply
+operation belongs in this primitive.
+
+`NotionReadOnlyPoll` takes question, options, optional vote counts/selection
+and a localized status. It has no voting callback or editable controls. A
+missing vote count stays unknown, while a known zero is displayed as zero.
+Both presenters use the existing Notion typography, spacing and rounded
+shapes, with dark/light goldens in `whatsapp_message_test.dart`.

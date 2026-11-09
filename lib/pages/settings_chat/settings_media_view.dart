@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/pages/settings_chat/settings_storage_view.dart';
+import 'package:chatloom/personal/media/media_prefetcher.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -44,6 +46,10 @@ class _SettingsMediaPageState extends State<SettingsMediaPage> {
     setState(() => _pending.add(setting));
     try {
       await setting.setItem(value);
+      if (setting == AppSettings.personalAutoDownloadVoiceRounds ||
+          setting == AppSettings.personalAutoDownloadWifiOnly) {
+        MediaPrefetcher.surfaceChanged();
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -166,9 +172,14 @@ class _SettingsMediaPageState extends State<SettingsMediaPage> {
           ],
           const NotionSettingsSection('Media downloads'),
           _toggle(
+            AppSettings.personalDataSaver,
+            title: 'Data saver',
+            subtitle: 'Use previews; tap to download large original images',
+          ),
+          _toggle(
             AppSettings.personalAutoDownloadVoiceRounds,
             title: 'Auto-download voice messages & round videos',
-            subtitle: 'Play instantly, no waiting',
+            subtitle: 'Prepare recent messages for faster playback',
           ),
           _toggle(
             AppSettings.personalAutoDownloadWifiOnly,
@@ -177,6 +188,16 @@ class _SettingsMediaPageState extends State<SettingsMediaPage> {
                 ? 'Skip automatic downloads on mobile data'
                 : 'Turn on auto-download first',
             enabled: autoDownload,
+          ),
+          NotionListRow(
+            leading: const Icon(Icons.storage_outlined),
+            title: 'Storage & cache',
+            subtitle: 'Cache limit, usage and selective clearing',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const SettingsStoragePage(),
+              ),
+            ),
           ),
           Padding(
             padding: const EdgeInsets.only(top: NotionSpace.md),

@@ -46,6 +46,7 @@ class NotionInboxPage extends StatelessWidget {
   /// example "Connecting…"). Grows in and out; null hides it.
   final Widget? headerStatus;
   final bool loading;
+  final VoidCallback? onRetryLoading;
   final String? emptyMessage;
 
   /// Unread chats of the current network selection, on the "Unread" chip.
@@ -76,6 +77,7 @@ class NotionInboxPage extends StatelessWidget {
     this.status,
     this.headerStatus,
     this.loading = false,
+    this.onRetryLoading,
     this.emptyMessage,
     this.unreadCount = 0,
     this.requestCount = 0,
@@ -89,12 +91,17 @@ class NotionInboxPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final safe = MediaQuery.paddingOf(context);
     final builder = rowBuilder ?? ((context, index) => rows[index]);
-    final count = rowBuilder == null ? rows.length : rowCount ?? 0;
+    final unavailable = loading || onRetryLoading != null;
+    final count = unavailable
+        ? 0
+        : rowBuilder == null
+        ? rows.length
+        : rowCount ?? 0;
     final dockClearance =
         safe.bottom +
         notionInboxDockHeight(MediaQuery.textScalerOf(context)) +
         36;
-    final showPins = pins.isNotEmpty;
+    final showPins = !unavailable && pins.isNotEmpty;
     final emptyText =
         emptyMessage ??
         (selectedView == InboxFilter.aside
@@ -192,8 +199,8 @@ class NotionInboxPage extends StatelessWidget {
                     child: NotionInboxViewChips(
                       selected: selectedView,
                       onViewSelected: onViewSelected,
-                      unreadCount: unreadCount,
-                      requestCount: requestCount,
+                      unreadCount: unavailable ? 0 : unreadCount,
+                      requestCount: unavailable ? 0 : requestCount,
                     ),
                   ),
                 ),
@@ -222,8 +229,19 @@ class NotionInboxPage extends StatelessWidget {
                       alignment: AlignmentDirectional.topCenter,
                       child: NotionEmptyState(
                         key: ValueKey(emptyText),
-                        icon: Icons.chat_bubble_outline,
-                        title: emptyText,
+                        icon: onRetryLoading == null
+                            ? Icons.chat_bubble_outline
+                            : Icons.storage_outlined,
+                        title: onRetryLoading == null
+                            ? emptyText
+                            : 'Saved chats could not be loaded',
+                        message: onRetryLoading == null ? null : emptyText,
+                        action: onRetryLoading == null
+                            ? null
+                            : NotionButton(
+                                label: 'Retry',
+                                onPressed: onRetryLoading,
+                              ),
                       ),
                     ),
                   ),
@@ -276,14 +294,14 @@ class NotionInboxPage extends StatelessWidget {
           ),
           child: NotionInboxDock(
             onSettings: onSettings,
-            onSearch: onSearch,
+            onSearch: unavailable ? null : onSearch,
             onNetworkSelected: onNetworkSelected,
             networks: networks,
             selectedNetwork: selectedNetwork,
             selectedView: selectedView,
             onViewSelected: onViewSelected,
             onManageNetworks: onManageNetworks,
-            onMarkAllRead: onMarkAllRead,
+            onMarkAllRead: unavailable ? null : onMarkAllRead,
           ),
         ),
       ),

@@ -63,6 +63,10 @@ class _PreviewClient extends _Client {
 }
 
 class _Controller extends ChatListController {
+  // This fixture supplies its rooms in memory and never opens native storage.
+  @override
+  Future<void> loadLocalInbox(Client client) async {}
+
   @override
   // Native plugins are outside this offline subscription regression.
   // ignore: must_call_super

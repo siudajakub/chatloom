@@ -8,14 +8,54 @@ import 'dart:math' show max, min;
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:chatloom/personal/media/protected_matrix_database.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
 
 // Weakly owned by the account client; only unfinished work lives here. Sharing
 // the complete read/download/store avoids racing a second SQL read and HTTP
 // request when the same picture appears in several visible widgets.
-typedef _MediaLoadKey = (Uri, bool, Duration, String?, Uri?, DatabaseApi);
-final _mediaLoads = Expando<Map<_MediaLoadKey, Future<Uint8List>>>();
+typedef _MediaLoadKey = (
+  Uri,
+  bool,
+  Duration,
+  String?,
+  Uri?,
+  DatabaseApi,
+  int,
+  bool,
+  int?,
+);
+final _mediaLoads = Expando<Map<_MediaLoadKey, _MediaLoad>>();
+
+/// One visible consumer of a shared read. Cancelling the last consumer
+/// aborts HTTP, including a response stalled before its first byte.
+class MediaReadCancellation {
+  final _signal = Completer<void>();
+  Future<void> get onCancel => _signal.future;
+  bool get cancelled => _signal.isCompleted;
+  void cancel() {
+    if (!_signal.isCompleted) _signal.complete();
+  }
+}
+
+class _MediaLoad {
+  final abort = Completer<void>();
+  late final Future<Uint8List> future;
+  int consumers = 0;
+  bool settled = false;
+}
+
+/// A preview needs an explicit tap before fetching its original bytes.
+class MediaDownloadDeferred implements Exception {
+  const MediaDownloadDeferred();
+}
+
+/// Enforced while receiving chunks, before buffering an oversized response.
+class MediaDownloadLimitExceeded implements Exception {
+  final int limit;
+  const MediaDownloadLimitExceeded(this.limit);
+}
 
 extension ClientDownloadContentExtension on Client {
   /// Downloads [mxc] (or its thumbnail), through the SQLCipher media cache
@@ -30,16 +70,27 @@ extension ClientDownloadContentExtension on Client {
     ThumbnailMethod? thumbnailMethod,
     bool rounded = false,
     bool databaseCache = true,
+    bool allowNetwork = true,
+    int? maxBytes,
+    MediaReadCancellation? cancellation,
     Duration timeout = const Duration(seconds: 30),
   }) async {
     final account = userID;
     final server = homeserver;
     final cacheDatabase = database;
+    final generation = cacheDatabase is ProtectedMatrixDatabase
+        ? cacheDatabase.mediaCacheGeneration
+        : 0;
     final token = accessToken;
+    if (cancellation?.cancelled ?? false) {
+      throw const MediaDownloadDeferred();
+    }
     void ensureCurrent() {
       if (userID != account ||
           homeserver != server ||
-          !identical(database, cacheDatabase)) {
+          !identical(database, cacheDatabase) ||
+          (cacheDatabase is ProtectedMatrixDatabase &&
+              cacheDatabase.mediaCacheGeneration != generation)) {
         throw StateError('Media account changed during load');
       }
     }
@@ -64,8 +115,13 @@ extension ClientDownloadContentExtension on Client {
       account,
       server,
       cacheDatabase,
+      generation,
+      allowNetwork,
+      maxBytes,
     );
-    final imageData = await pending.putIfAbsent(requestKey, () {
+    final flight = pending.putIfAbsent(requestKey, () {
+      final flight = _MediaLoad();
+      final abort = flight.abort;
       late final Future<Uint8List> work;
       work =
           (() async {
@@ -74,8 +130,10 @@ extension ClientDownloadContentExtension on Client {
               ensureCurrent();
               if (cachedData != null) return cachedData;
             }
+            if (!allowNetwork || abort.isCompleted) {
+              throw const MediaDownloadDeferred();
+            }
 
-            final abort = Completer<void>();
             // Cold URI resolution may probe /versions. Its header wait uses
             // the same deadline as the actual image transfer.
             final response =
@@ -100,6 +158,10 @@ extension ClientDownloadContentExtension on Client {
                     httpUri,
                     token: token,
                     abortTrigger: abort.future,
+                    maxBytes: maxBytes,
+                    onLimit: () {
+                      if (!abort.isCompleted) abort.complete();
+                    },
                   );
                 })().timeout(
                   timeout,
@@ -109,6 +171,7 @@ extension ClientDownloadContentExtension on Client {
                   },
                 );
             ensureCurrent();
+            if (abort.isCompleted) throw const MediaDownloadDeferred();
             if (response.statusCode != 200) {
               try {
                 unexpectedResponse(response, response.bodyBytes);
@@ -129,12 +192,34 @@ extension ClientDownloadContentExtension on Client {
             ensureCurrent();
             return bytes;
           })().whenComplete(() {
-            if (identical(pending[requestKey], work)) {
+            flight.settled = true;
+            if (identical(pending[requestKey], flight)) {
               pending.remove(requestKey);
             }
           });
-      return work;
+      flight.future = work;
+      return flight;
     });
+    flight.consumers++;
+    var released = false;
+    void release() {
+      if (released) return;
+      released = true;
+      if (--flight.consumers == 0 && !flight.settled) {
+        if (!flight.abort.isCompleted) flight.abort.complete();
+        if (identical(pending[requestKey], flight)) pending.remove(requestKey);
+      }
+    }
+
+    final cancelled = cancellation?.onCancel.then<Uint8List>((_) {
+      release();
+      throw const MediaDownloadDeferred();
+    });
+    final imageData =
+        await (cancelled == null
+                ? flight.future
+                : Future.any([flight.future, cancelled]))
+            .whenComplete(release);
     ensureCurrent();
 
     if (rounded) {
@@ -156,11 +241,18 @@ extension ClientDownloadContentExtension on Client {
     Uri resolvedUri, {
     required Future<void> abortTrigger,
     required bool Function() cancelled,
+    int? maxBytes,
   }) async {
     final account = (userID, homeserver, database);
+    final cacheDatabase = database;
+    final generation = cacheDatabase is ProtectedMatrixDatabase
+        ? cacheDatabase.mediaCacheGeneration
+        : 0;
     void guard() {
       if (cancelled()) throw TimeoutException('Media download timed out');
-      if ((userID, homeserver, database) != account) {
+      if ((userID, homeserver, database) != account ||
+          (cacheDatabase is ProtectedMatrixDatabase &&
+              cacheDatabase.mediaCacheGeneration != generation)) {
         throw StateError('Media account changed during load');
       }
     }
@@ -171,6 +263,7 @@ extension ClientDownloadContentExtension on Client {
       resolvedUri,
       token: accessToken,
       abortTrigger: abortTrigger,
+      maxBytes: maxBytes,
     );
     guard();
     if (response.statusCode >= 400) {
@@ -190,11 +283,36 @@ Future<http.Response> _abortableGet(
   Uri uri, {
   required String? token,
   required Future<void> abortTrigger,
+  int? maxBytes,
+  void Function()? onLimit,
 }) async {
   final request = http.AbortableRequest('GET', uri, abortTrigger: abortTrigger);
   if (token != null) request.headers['authorization'] = 'Bearer $token';
   final response = await client.send(request);
-  return http.Response.fromStream(response);
+  if (maxBytes == null) return http.Response.fromStream(response);
+  if (response.contentLength != null && response.contentLength! > maxBytes) {
+    onLimit?.call();
+    // Cancelling the body releases the underlying connection as well.
+    await response.stream.listen((_) {}).cancel();
+    throw MediaDownloadLimitExceeded(maxBytes);
+  }
+  final bytes = BytesBuilder(copy: false);
+  await for (final chunk in response.stream) {
+    if (bytes.length + chunk.length > maxBytes) {
+      onLimit?.call();
+      throw MediaDownloadLimitExceeded(maxBytes);
+    }
+    bytes.add(chunk);
+  }
+  return http.Response.bytes(
+    bytes.takeBytes(),
+    response.statusCode,
+    request: response.request,
+    headers: response.headers,
+    isRedirect: response.isRedirect,
+    persistentConnection: response.persistentConnection,
+    reasonPhrase: response.reasonPhrase,
+  );
 }
 
 /// Center-cropped circular PNG with a cover-sized decode and disposed native

@@ -1170,6 +1170,9 @@ class Room {
               .first
               .unsigned![fileSendingStatusKey] =
           FileSendingStatus.generatingThumbnail.name;
+      // A requested shrink is mandatory; thumbnail creation is optional.
+      // Failed compression must not silently upload the original image.
+      var imagePrepared = shrinkImageMaxDimension == null;
       try {
         // Local patch (ChatLoom): shrink first, then derive the thumbnail
         // from the shrunk image. Same files, but a full-resolution photo is
@@ -1183,6 +1186,7 @@ class Room {
             nativeImplementations: client.nativeImplementations,
           );
         }
+        imagePrepared = true;
         thumbnail ??= await file.generateThumbnail(
           nativeImplementations: client.nativeImplementations,
           customImageResizer: client.customImageResizer,
@@ -1196,6 +1200,20 @@ class Room {
         }
       } catch (e, s) {
         Logs().e('Unable to shrink image before sending!', e, s);
+        if (!imagePrepared) {
+          syncUpdate
+                  .rooms!
+                  .join!
+                  .values
+                  .first
+                  .timeline!
+                  .events!
+                  .first
+                  .unsigned![messageSendingStatusKey] =
+              EventStatus.error.intValue;
+          await _handleFakeSync(syncUpdate);
+          rethrow;
+        }
       }
     }
 

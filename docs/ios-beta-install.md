@@ -1,6 +1,6 @@
 # ChatLoom beta na iPhonie — instalacja z Maca
 
-Gałąź: `feat/ios-reels-thread-preview-beta` w `themeaningW/chatloom`.
+Gałąź: `feat/ios-reels-upstream-integration` w `themeaningW/chatloom`.
 To osobna wersja do testów przed merge do `main`; nie jest wydaniem App Store.
 
 ## Wymagania
@@ -17,7 +17,7 @@ To osobna wersja do testów przed merge do `main`; nie jest wydaniem App Store.
 ## Pobranie i przygotowanie
 
 ```sh
-git clone --branch feat/ios-reels-thread-preview-beta --single-branch \
+git clone --branch feat/ios-reels-upstream-integration --single-branch \
   https://github.com/themeaningW/chatloom.git
 cd chatloom
 flutter --version

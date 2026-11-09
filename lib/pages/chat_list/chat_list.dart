@@ -451,9 +451,10 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     }
     _selectionKey = null;
     rowMemo.clear();
-    return _inbox = InboxController(client, personal)
-      ..active = _inboxVisible
-      ..addListener(_offerShortcuts);
+    return _inbox =
+        InboxController(client, personal, localReady: loadLocalInbox(client))
+          ..active = _inboxVisible
+          ..addListener(_offerShortcuts);
   }
 
   final _shortcuts = ConversationShortcutPublisher();
@@ -663,17 +664,30 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     await shortcuts.listenAction(_dispatchShortcut);
   }
 
+  void retryLocalInbox() {
+    final client = Matrix.of(context).client;
+    inbox.retryLocal(() => loadLocalInbox(client));
+  }
+
+  @protected
+  Future<void> loadLocalInbox(Client client) async {
+    await PersonalClient.of(client).loadLocal();
+    // Local preview privacy must not wait for journal networking. Apply
+    // hidden/kept records before publishing the first usable inbox.
+    await Future.wait([
+      HiddenMessages.instance.ensureLoaded(client, requireSuccess: true),
+      KeptMessages.instance.ensureLoaded(client, requireSuccess: true),
+    ]);
+    SeenPositions.instance.load(client);
+    ViewOnceOpenings.instance.load(client);
+  }
+
   void _loadAccountInbox(Client client) {
+    // The inbox controller owns local readiness; journal networking can
+    // complete independently and reports problems through inbox health.
     PersonalClient.of(client)
         .load()
         .then((_) {
-          // Messages removed for you (FX-16), from the store just opened.
-          HiddenMessages.instance.load(client);
-          KeptMessages.instance.load(client);
-          // Where incognito chats reopen, ready before the first tap.
-          SeenPositions.instance.load(client);
-          // Instagram view-once media already opened on this device.
-          ViewOnceOpenings.instance.load(client);
           if (mounted && Matrix.of(context).client == client) setState(() {});
         })
         .catchError((Object error, StackTrace stack) {
@@ -1192,9 +1206,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       InboxSwipeChoice.moveDown =>
         movable
             ? NotionSwipeActionSide(
-                icon: movedDown
-                    ? Icons.vertical_align_top
-                    : Icons.low_priority,
+                icon: movedDown ? Icons.vertical_align_top : Icons.low_priority,
                 label: movedDown ? 'Move up' : 'Move down',
                 onCommit: () => commit(
                   movedDown ? ChatMenuAction.moveUp : ChatMenuAction.moveDown,

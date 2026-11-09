@@ -8,6 +8,7 @@ import 'package:chatloom/utils/start_push_foreground_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 
+import 'media_preparation_exception.dart';
 import 'send_error_text.dart';
 import 'upload_progress.dart';
 import 'voice_format.dart';
@@ -423,6 +424,8 @@ abstract final class OutgoingMedia {
       // A deliberate refusal (e.g. the video is still too large) is told
       // as such, not as "could not be prepared".
       rethrow;
+    } on MediaPreparationException {
+      rethrow;
     } catch (_) {
       if (_discarded.contains(key)) throw const _Discarded();
       throw const _PrepareFailed();
@@ -783,6 +786,7 @@ abstract final class OutgoingMedia {
   /// A plain-language reason for the failure sheet. Server and network
   /// errors go through [sendErrorText], i.e. the shared Matrix error text.
   static String describeFailure(Object error) => switch (error) {
+    MediaPreparationException() => error.message,
     _PrepareFailed() => 'The file could not be prepared for sending.',
     _NotConfirmed() =>
       'ChatLoom could not confirm that the server received this file. '

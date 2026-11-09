@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Offline: synthetic bytes in a private temp folder; nothing is sent.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:chatloom/personal/media/cancellable_download.dart';
+import 'package:chatloom/personal/media/encrypted_media_cache.dart';
+import 'package:chatloom/personal/media/protected_matrix_database.dart';
 import 'package:chatloom/personal/media/video_file_cache.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart' as sqlite;
 
 const _big = VideoFileCache.minBytes + 1;
 
@@ -21,18 +25,92 @@ class _Transport extends http.BaseClient {
 
   Uint8List body;
   var requests = 0;
+  Completer<void>? requested, release;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     requests++;
+    if (requested case final waiting? when !waiting.isCompleted) {
+      waiting.complete();
+    }
+    await release?.future;
     return http.StreamedResponse(Stream.value(body), 200);
   }
 }
 
 class _Database implements DatabaseApi {
+  final deleted = <Uri>[];
+
+  @override
+  Future<bool> deleteFile(Uri mxcUri) async {
+    deleted.add(mxcUri);
+    return true;
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw StateError('Unexpected database access');
+}
+
+/// Uses the real short-lived BLOB cache without opening a Matrix account.
+class _ProtectedDatabase implements ProtectedMatrixDatabase {
+  _ProtectedDatabase(this.media);
+
+  final EncryptedMediaCache media;
+  final stored = <Uri>[];
+  final deleted = <Uri>[];
+  Future<void> Function()? afterStore;
+  int generation = 0;
+
+  @override
+  int get mediaCacheGeneration => generation;
+
+  @override
+  Future<Uint8List?> getFile(Uri key) => media.getFile(key);
+
+  @override
+  Future<void> storeFile(Uri key, Uint8List bytes, int time) async {
+    await media.storeFile(key, bytes, time);
+    stored.add(key);
+    await afterStore?.call();
+  }
+
+  @override
+  Future<bool> deleteFile(Uri key) async {
+    deleted.add(key);
+    return media.deleteFile(key);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Unexpected database access');
+}
+
+class _PendingVideoCache implements VideoFileCache {
+  @override
+  int get generation => 0;
+  final started = Completer<void>();
+  final release = Completer<void>();
+  final removed = <String>[];
+
+  @override
+  Future<Uint8List?> read(String key, {bool reel = false}) async => null;
+
+  @override
+  Future<bool> write(String key, Uint8List bytes, {bool reel = false}) async {
+    started.complete();
+    await release.future;
+    return true;
+  }
+
+  @override
+  Future<void> remove(String key, {bool reel = false}) async {
+    removed.add(key);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Unexpected cache access');
 }
 
 /// "Decrypts" like the SDK: the bytes from the download callback must equal
@@ -63,6 +141,7 @@ class _EncryptedVideo extends Event {
 
   final Uint8List ciphertext;
   var decrypts = 0;
+  bool? usedSdkCache;
 
   @override
   Future<MatrixFile> downloadAndDecryptAttachment({
@@ -73,6 +152,7 @@ class _EncryptedVideo extends Event {
     bool cacheAttachment = true,
     void Function(int)? onDownloadProgress,
   }) async {
+    usedSdkCache = cacheAttachment;
     final data = await downloadCallback!(
       Uri.parse('https://example.invalid/m'),
     );
@@ -188,8 +268,8 @@ void main() {
       await cache.write(key('mxc://x/a'), _bytes(_big, 1));
       now = now.add(const Duration(minutes: 1));
       await cache.write(key('mxc://x/b'), _bytes(_big, 2));
-      now = now.add(const Duration(minutes: 1));
-      // Reading A makes B the least recently used.
+      now = now.add(VideoFileCache.touchInterval);
+      // Reading A after the coarse touch interval makes B least recently used.
       expect(await cache.read(key('mxc://x/a')), isNotNull);
       now = now.add(const Duration(minutes: 1));
       await cache.write(key('mxc://x/c'), _bytes(_big, 3));
@@ -197,6 +277,56 @@ void main() {
       expect(await cache.read(key('mxc://x/a')), isNotNull);
       expect(await cache.read(key('mxc://x/c')), isNotNull);
       expect(names(cache.directory), hasLength(2));
+    });
+
+    test('small writes share an amortized directory scan', () async {
+      final cache = await open(maxBytes: 5000);
+      for (var i = 0; i < 4; i++) {
+        await cache.write('$i'.padLeft(64, '0'), _bytes(1000, i), reel: true);
+      }
+      expect(cache.debugEvictionScans, 1);
+      expect(await cache.usageBytes(), 4000);
+      await cache.setBudget(2000);
+      expect(await cache.usageBytes(), lessThanOrEqualTo(2000));
+      expect(cache.debugEvictionScans, 2);
+    });
+
+    test(
+      'clear revokes queued writes before disk work and permits retry',
+      () async {
+        final cache = await open(maxBytes: 5000);
+        final key = 'a' * 64;
+        final writing = cache.write(key, _bytes(1000, 1), reel: true);
+        final clearing = cache.clear();
+        expect(await writing, isFalse);
+        await clearing;
+        expect(await cache.usageBytes(), 0);
+        expect(await cache.write(key, _bytes(1000, 2), reel: true), isTrue);
+        expect((await cache.read(key, reel: true))!.first, 2);
+      },
+    );
+
+    test('repeated video hits do not rewrite last-use metadata', () async {
+      final cache = await open();
+      final key = 'a' * 64;
+      await cache.write(key, _bytes(_big, 1));
+      final storedAt = (await File(
+        '${cache.directory.path}/$key.enc',
+      ).stat()).modified;
+      now = now.add(const Duration(hours: 1));
+      await cache.read(key);
+      expect(
+        (await File('${cache.directory.path}/$key.enc').stat()).modified,
+        storedAt,
+      );
+      now = now.add(VideoFileCache.touchInterval);
+      await cache.read(key);
+      expect(
+        (await File(
+          '${cache.directory.path}/$key.enc',
+        ).stat()).modified.toUtc(),
+        now,
+      );
     });
 
     test('the file just stored stays even when it alone fills the '
@@ -218,10 +348,52 @@ void main() {
       expect(names(cache.directory), isEmpty);
     });
 
+    test('small reels expire exactly one day after storing, even after '
+        'repeated reads', () async {
+      final cache = await open();
+      final key = VideoFileCache.keyFor('@a:x', Uri.parse('mxc://x/reel'));
+      final savedAt = now;
+      expect(await cache.write(key, _bytes(1024, 1), reel: true), isTrue);
+      expect(names(cache.directory), ['$key.reel.enc']);
+      now = now.add(const Duration(hours: 23));
+      expect(await cache.read(key, reel: true), hasLength(1024));
+      expect(
+        (await File(
+          '${cache.directory.path}/$key.reel.enc',
+        ).stat()).modified.toUtc(),
+        savedAt,
+      );
+      now = savedAt.add(VideoFileCache.reelRetention);
+      expect(await cache.read(key, reel: true), isNull);
+      expect(names(cache.directory), isEmpty);
+    });
+
+    test('eviction expires reels while ordinary videos keep their '
+        'thirty-day retention', () async {
+      final cache = await open();
+      final video = VideoFileCache.keyFor('@a:x', Uri.parse('mxc://x/video'));
+      final reel = VideoFileCache.keyFor('@a:x', Uri.parse('mxc://x/reel'));
+      await cache.write(video, _bytes(_big, 1));
+      await cache.write(reel, _bytes(1024, 2), reel: true);
+      now = now.add(VideoFileCache.reelRetention);
+      expect(await cache.evict(), _big);
+      expect(names(cache.directory), ['$video.enc']);
+      expect(await cache.read(video), isNotNull);
+    });
+
+    test('a legacy reel copy with unknown download time is dropped', () async {
+      final cache = await open();
+      final key = VideoFileCache.keyFor('@a:x', Uri.parse('mxc://x/reel'));
+      await cache.write(key, _bytes(_big, 1));
+      expect(await cache.read(key, reel: true), isNull);
+      expect(names(cache.directory), isEmpty);
+    });
+
     test('clear removes only cache files', () async {
       final cache = await open();
       final key = VideoFileCache.keyFor('@a:x', Uri.parse('mxc://x/a'));
       await cache.write(key, _bytes(_big, 1));
+      await cache.write(key, _bytes(1024, 2), reel: true);
       File('${cache.directory.path}/unrelated').writeAsStringSync('keep');
       await cache.clear();
       expect(names(cache.directory), ['unrelated']);
@@ -250,6 +422,19 @@ void main() {
       expect(
         VideoFileCache.appliesTo(
           _EncryptedVideo(room, ciphertext: _bytes(_big, 1)),
+        ),
+        isTrue,
+      );
+    });
+
+    test('encrypted shared reels use the short cache even below 10 MB', () {
+      expect(
+        VideoFileCache.appliesTo(
+          _EncryptedVideo(
+            room,
+            ciphertext: _bytes(1000, 1),
+            extra: {'external_url': 'https://www.instagram.com/reel/fixture/'},
+          ),
         ),
         isTrue,
       );
@@ -290,12 +475,14 @@ void main() {
     late _Transport transport;
     late Client client;
     late Room room;
+    late _Database database;
 
     setUp(() {
       transport = _Transport(_bytes(_big, 0x5a));
+      database = _Database();
       client = Client(
         'video cache download',
-        database: _Database(),
+        database: database,
         httpClient: transport,
       )..setUserId('@fixture:example.invalid');
       room = Room(id: '!fixture:example.invalid', client: client);
@@ -307,6 +494,36 @@ void main() {
           token: MediaDownloadToken(),
           videoCache: () async => cache,
         );
+
+    test(
+      'clearing videos revokes a pending transfer and keeps a newer retry',
+      () async {
+        final cache = await open();
+        final event = _EncryptedVideo(room, ciphertext: transport.body);
+        final key = VideoFileCache.keyFor(
+          client.userID!,
+          event.attachmentMxcUrl!,
+        );
+        transport.requested = Completer<void>();
+        transport.release = Completer<void>();
+        final loading = download(event, cache);
+        final rejected = expectLater(
+          loading,
+          throwsA(isA<MediaDownloadCancelled>()),
+        );
+        await transport.requested!.future;
+        await cache.clear();
+        await cache.write(key, _bytes(_big, 0x7b));
+        transport.release!.complete();
+        await rejected;
+        expect(
+          (await cache.read(key))!.first,
+          0x7b,
+          reason:
+              'a stale transfer cannot repopulate or remove the newer entry',
+        );
+      },
+    );
 
     test('stores the ciphertext only and reopens without a download', () async {
       final cache = await open();
@@ -324,6 +541,77 @@ void main() {
       expect(transport.requests, 1, reason: 'served from the cache');
       expect(second.bytes.first, 0x5a ^ 0xff);
       expect(event.decrypts, 2, reason: 'the SDK checks every cached read');
+      expect(event.usedSdkCache, isTrue);
+    });
+
+    test('an immediate reel reopen uses ciphertext; after one day it '
+        'downloads again and never uses the SDK thirty-day cache', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final cache = await open();
+      final event = _EncryptedVideo(
+        room,
+        ciphertext: transport.body,
+        extra: {'external_url': 'https://www.instagram.com/reel/fixture/'},
+      );
+      final savedAt = now;
+      await download(event, cache);
+      // No settling/waiting for a background write before the second tap.
+      final second = await download(event, cache);
+      expect(transport.requests, 1);
+      expect(second.bytes.first, 0x5a ^ 0xff);
+      expect(event.usedSdkCache, isFalse);
+      expect(database.deleted, [
+        event.attachmentMxcUrl,
+        event.attachmentMxcUrl,
+      ]);
+      final stored = await _stored(cache.directory, 0x5a);
+      expect(stored.path, endsWith('.reel.enc'));
+      expect(stored.readAsBytesSync(), transport.body);
+      now = savedAt.add(const Duration(hours: 23));
+      await download(event, cache);
+      expect(transport.requests, 1);
+      now = savedAt.add(VideoFileCache.reelRetention);
+      await download(event, cache);
+      expect(transport.requests, 2);
+      expect(event.decrypts, 4);
+    });
+
+    test(
+      'cancelling while ciphertext is being stored prevents playback',
+      () async {
+        final cache = _PendingVideoCache();
+        final event = _EncryptedVideo(room, ciphertext: transport.body);
+        final token = MediaDownloadToken();
+        final future = downloadAttachmentCancellable(
+          event,
+          token: token,
+          videoCache: () async => cache,
+        );
+        await cache.started.future;
+        token.cancel();
+        cache.release.complete();
+        await expectLater(future, throwsA(isA<MediaDownloadCancelled>()));
+      },
+    );
+
+    test('a damaged reel ciphertext is replaced after SDK verification '
+        'fails', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final cache = await open();
+      final event = _EncryptedVideo(
+        room,
+        ciphertext: transport.body,
+        extra: {'external_url': 'https://www.facebook.com/reel/fixture/'},
+      );
+      final key = VideoFileCache.keyFor(
+        client.userID!,
+        event.attachmentMxcUrl!,
+      );
+      await cache.write(key, _bytes(1024, 0x01), reel: true);
+      final file = await download(event, cache);
+      expect(file.bytes.first, 0x5a ^ 0xff);
+      expect(transport.requests, 1);
+      expect(await cache.read(key, reel: true), transport.body);
     });
 
     test('no decrypted bytes anywhere under the cache folder', () async {
@@ -365,6 +653,202 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(transport.requests, 2);
       expect(names(cache.directory), isEmpty);
+    });
+
+    test('unencrypted reels without SQLCipher stay uncached and bypass '
+        'the SDK thirty-day cache', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final cache = await open();
+      final event = _EncryptedVideo(
+        room,
+        ciphertext: transport.body,
+        encrypted: false,
+        extra: {'external_url': 'https://www.instagram.com/reel/fixture/'},
+      );
+      await download(event, cache);
+      await download(event, cache);
+      expect(transport.requests, 2);
+      expect(event.usedSdkCache, isFalse);
+      expect(names(cache.directory), isEmpty);
+    });
+  });
+
+  group('unencrypted native reels in SQLCipher', () {
+    final factory = sqlite.createDatabaseFactoryFfi(noIsolate: true);
+    late sqlite.Database sql;
+    late EncryptedMediaCache media;
+    late _ProtectedDatabase database;
+    late _Transport transport;
+    late Client client;
+    late Room room;
+
+    setUp(() async {
+      sql = await factory.openDatabase(
+        '${temp.path}/synthetic-cache.sqlite',
+        options: sqlite.OpenDatabaseOptions(
+          onConfigure: (db) => db.execute(
+            "PRAGMA key = '${base64UrlEncode(List<int>.filled(32, 7))}'",
+          ),
+        ),
+      );
+      media = EncryptedMediaCache(sql, now: () => now);
+      await media.initialize();
+      database = _ProtectedDatabase(media);
+      transport = _Transport(_bytes(_big, 0x5a));
+      client = Client(
+        'native reel encrypted cache',
+        database: database,
+        httpClient: transport,
+      )..setUserId('@fixture:example.invalid');
+      room = Room(id: '!fixture:example.invalid', client: client);
+    });
+
+    tearDown(() => sql.close());
+
+    _EncryptedVideo reel({Map<String, Object?> extra = const {}}) =>
+        _EncryptedVideo(
+          room,
+          ciphertext: transport.body,
+          encrypted: false,
+          extra: {
+            'external_url': 'https://www.instagram.com/reel/fixture/',
+            ...extra,
+          },
+        );
+
+    Future<MatrixFile> download(Event event, {MediaDownloadToken? token}) =>
+        downloadAttachmentCancellable(
+          event,
+          token: token ?? MediaDownloadToken(),
+          videoCache: () async => throw StateError('plaintext disk cache'),
+        );
+
+    test('large unencrypted reel reopens from the encrypted BLOB cache '
+        'with an opaque one-day key and no plaintext disk file', () async {
+      final event = reel();
+      await download(event);
+      final second = await download(event);
+      expect(second.bytes, transport.body);
+      expect(transport.requests, 1);
+      expect(event.usedSdkCache, isFalse);
+      final key = database.stored.single;
+      expect(
+        key.toString(),
+        matches(RegExp(r'^chatloom-media://instagram/native/[0-9a-f]{64}$')),
+      );
+      expect(await media.getFile(key), transport.body);
+      expect(await media.getFile(event.attachmentMxcUrl!), isNull);
+      expect(database.deleted, [
+        event.attachmentMxcUrl,
+        event.attachmentMxcUrl,
+      ]);
+      expect(
+        Directory('${temp.path}/${VideoFileCache.folderName}').existsSync(),
+        isFalse,
+      );
+    });
+
+    test('native BLOB reads never extend the one-day lifetime', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final event = reel();
+      final savedAt = now;
+      await download(event);
+      now = savedAt.add(const Duration(hours: 23));
+      await download(event);
+      expect(transport.requests, 1);
+      now = savedAt.add(EncryptedMediaCache.instagramRetention);
+      await download(event);
+      expect(transport.requests, 2);
+    });
+
+    test('local permalink adapters retain their own cache flow', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final event = reel(extra: {'chatloom.local_media': true});
+      await download(event);
+      expect(event.usedSdkCache, isTrue);
+      expect(database.stored, isEmpty);
+      expect(database.deleted, isEmpty);
+    });
+
+    test('disappearing unencrypted reels are not stored', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final event = reel(
+        extra: {
+          'com.beeper.disappearing_timer': {
+            'type': 'after_read',
+            'timer': 60000,
+          },
+        },
+      );
+      await download(event);
+      await download(event);
+      expect(transport.requests, 2);
+      expect(database.stored, isEmpty);
+      expect(event.usedSdkCache, isFalse);
+      expect(await sql.query('personal_media_cache'), isEmpty);
+    });
+
+    test('cancelling during a BLOB store prevents playback', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      database.afterStore = () async {
+        started.complete();
+        await release.future;
+      };
+      final token = MediaDownloadToken();
+      final future = download(reel(), token: token);
+      await started.future;
+      token.cancel();
+      release.complete();
+      await expectLater(future, throwsA(isA<MediaDownloadCancelled>()));
+    });
+
+    test('clear-cache revokes stale playback without deleting a newer '
+        'same-key cache entry', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      database.afterStore = () async {
+        started.complete();
+        await release.future;
+      };
+      final future = download(reel());
+      await started.future;
+      database.generation++;
+      await media.clear();
+      final key = database.stored.single;
+      final newerBytes = _bytes(1024, 0x7b);
+      await media.storeFile(key, newerBytes, 0);
+      release.complete();
+      await expectLater(future, throwsA(isA<MediaDownloadCancelled>()));
+      expect(await media.getFile(key), newerBytes);
+    });
+
+    test('clear-cache also revokes an encrypted native reel during its '
+        'ciphertext-file store', () async {
+      transport.body = _bytes(1024, 0x5a);
+      final cache = _PendingVideoCache();
+      final event = _EncryptedVideo(
+        room,
+        ciphertext: transport.body,
+        extra: {'external_url': 'https://www.instagram.com/reel/fixture/'},
+      );
+      final future = downloadAttachmentCancellable(
+        event,
+        token: MediaDownloadToken(),
+        videoCache: () async => cache,
+      );
+      await cache.started.future;
+      database.generation++;
+      cache.release.complete();
+      await expectLater(future, throwsA(isA<MediaDownloadCancelled>()));
+      expect(
+        cache.removed,
+        isEmpty,
+        reason:
+            'clear serializes real cache writes; late cleanup must not delete a newer retry',
+      );
     });
   });
 }

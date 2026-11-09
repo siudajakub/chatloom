@@ -231,20 +231,27 @@ class _InboxHealthStatusState extends State<InboxHealthStatus> {
     );
   }
 
-  List<HealthIssue> _issues() => combineHealthIssues(
-    // A passing connection problem is the header line's alone; only a
-    // lasting one earns the notice (and hides the stale bridge and worker
-    // signals).
-    connection: _connection.lasting
-        ? _connection.value
-        : ConnectionPhase.online,
-    e2ee: _health.issues,
-    bridges: _bridges.problems,
-    pushPhase: _push?.phase(),
-    pushDiagnostics: _pushDiagnostics,
-    worker: _worker(),
-    now: _now(),
-  );
+  List<HealthIssue> _issues() {
+    // Bridge reports and worker heartbeats arrive through sync. Cached
+    // reports cannot diagnose their current health before catch-up, or
+    // while sync itself cannot reach the server. Local setup, storage,
+    // encryption and notification evidence remains actionable.
+    final staleRemoteSignals =
+        _connection.awaitingFreshSync || _connection.raw.offline;
+    return combineHealthIssues(
+      // A passing connection problem is the header line's alone; only a
+      // lasting one earns the notice.
+      connection: _connection.lasting
+          ? _connection.value
+          : ConnectionPhase.online,
+      e2ee: _health.issues,
+      bridges: staleRemoteSignals ? const [] : _bridges.problems,
+      pushPhase: _push?.phase(),
+      pushDiagnostics: _pushDiagnostics,
+      worker: staleRemoteSignals ? null : _worker(),
+      now: _now(),
+    );
+  }
 
   int? _busyIndex(List<HealthIssue> issues) {
     if (_retrying) {

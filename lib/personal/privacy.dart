@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/personal/media/media_prefetcher.dart';
+import 'package:chatloom/personal/media/protected_matrix_database.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -16,6 +17,7 @@ import 'round_video/telegram_media_protocol.dart';
 import 'round_video/telegram_room_binding.dart';
 import 'round_video/telegram_round_service.dart';
 import 'voice_playback.dart';
+import 'whatsapp/whatsapp_action_policy.dart';
 
 final _roundReadCutoffKey = Object();
 final _committedRoundKey = Object();
@@ -29,20 +31,28 @@ abstract final class PersonalPrivacy {
   static int surfaceLockGeneration = 0;
   static bool get surfaceUnlocked => _surfaceUnlocked;
   static set surfaceUnlocked(bool value) {
+    final changed = _surfaceUnlocked != value;
     if (_surfaceUnlocked != value) {
       surfaceGeneration++;
       surfaceLockGeneration++;
     }
     _surfaceUnlocked = value;
+    if (changed) MediaPrefetcher.surfaceChanged();
   }
 
   static bool get surfaceForeground => _surfaceForeground;
   static set surfaceForeground(bool value) {
+    final changed = _surfaceForeground != value;
     if (_surfaceForeground != value) surfaceGeneration++;
     _surfaceForeground = value;
+    if (changed) MediaPrefetcher.surfaceChanged();
   }
 
-  static void invalidatePlayedIntents() => surfaceGeneration++;
+  static void invalidatePlayedIntents() {
+    surfaceGeneration++;
+    MediaPrefetcher.surfaceChanged();
+  }
+
   static PrivacyPolicy get policy => PrivacyPolicy(
     incognito: AppSettings.personalIncognito.value,
     typingEnabled: AppSettings.sendTypingNotifications.value,
@@ -157,8 +167,15 @@ abstract final class PersonalPrivacy {
   }
 
   static void bind(Client client) {
+    client.attachmentCacheGeneration = () {
+      final database = client.database;
+      return database is ProtectedMatrixDatabase
+          ? database.mediaCacheGeneration
+          : 0;
+    };
     TelegramRoundService.of(client);
     client.wrapOutgoingRequest = (room, type, content, txid, send) async {
+      WhatsAppActionPolicy.authorizeOutgoing(room, type, content);
       final server = client.baseUri;
       if (server == null) throw const PrivacySuppressed();
       if (isTelegramMediaControl(type) ||
@@ -196,6 +213,7 @@ abstract final class PersonalPrivacy {
     };
     client.authorizeOutgoingEvent = (room, type, content) async {
       if (isJournal(room)) return;
+      WhatsAppActionPolicy.authorizeOutgoing(room, type, content);
       if (content['msgtype'] is String &&
           isTelegramMediaControl(content['msgtype'] as String)) {
         throw const PrivacySuppressed();

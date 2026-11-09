@@ -3,6 +3,7 @@
 import 'dart:async';
 
 import 'package:chatloom/personal/media/avatar_cache.dart';
+import 'package:chatloom/utils/client_download_content_extension.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -38,7 +39,7 @@ void main() {
     expect(AvatarCache.bucketFor(5000), 640);
   });
 
-  for (final status in [404, 503]) {
+  for (final status in [404]) {
     test('thumbnail $status still loads the bridge original', () async {
       final requests = <String>[];
       final client = _MediaClient(
@@ -66,6 +67,63 @@ void main() {
       expect(requests.last, contains('/download/'));
     });
   }
+
+  test(
+    'a thumbnail outage does not trigger a second original download',
+    () async {
+      var requests = 0;
+      final client = _MediaClient(
+        MockClient((_) async {
+          requests++;
+          return http.Response(
+            '{"errcode":"M_UNKNOWN","error":"Unavailable"}',
+            503,
+          );
+        }),
+      );
+      await expectLater(
+        AvatarCache.loadAvatar(
+          client,
+          Uri.parse('mxc://example.invalid/outage'),
+          width: 40,
+          height: 40,
+          isThumbnail: true,
+          animated: false,
+          thumbnailMethod: ThumbnailMethod.crop,
+        ),
+        throwsA(isA<MatrixException>()),
+      );
+      expect(requests, 1);
+    },
+  );
+
+  test('a missing thumbnail never buffers an oversized original', () async {
+    var requests = 0;
+    final client = _MediaClient(
+      MockClient((request) async {
+        requests++;
+        return request.url.path.contains('/thumbnail/')
+            ? http.Response('{"errcode":"M_UNKNOWN","error":"Missing"}', 404)
+            : http.Response.bytes(
+                List.filled(AvatarCache.previewDownloadMaxBytes + 1, 7),
+                200,
+              );
+      }),
+    );
+    await expectLater(
+      AvatarCache.loadAvatar(
+        client,
+        Uri.parse('mxc://example.invalid/oversized'),
+        width: 40,
+        height: 40,
+        isThumbnail: true,
+        animated: false,
+        thumbnailMethod: ThumbnailMethod.crop,
+      ),
+      throwsA(isA<MediaDownloadLimitExceeded>()),
+    );
+    expect(requests, 2);
+  });
 
   test(
     'full photo viewer requests the original without a crop thumbnail',
@@ -151,7 +209,7 @@ void main() {
         return request.url.path.contains('/thumbnail/')
             ? http.Response(
                 '{"errcode":"M_UNKNOWN","error":"Unavailable"}',
-                503,
+                404,
               )
             : http.Response.bytes([1, 2, 3], 200);
       }),

@@ -397,6 +397,35 @@ void main() {
   });
 
   group('existing push checks', () {
+    test('persisted read marker prevents muted cold-start false unread', () {
+      final client = _clientWith(_defaults(override: [_ownRule(_a)]));
+      final room = ConversationRoom(client, _a);
+      room.lastEvent = room.message(r'$read', 'synthetic');
+      room.roomAccountData['m.fully_read'] = BasicEvent(
+        type: 'm.fully_read',
+        content: {'event_id': r'$read'},
+      );
+      // Restored account data is present before ephemeral receipts arrive.
+      expect(room.hasNewMessages, isTrue);
+      expect(chatLoomSilencedUnread(room), isFalse);
+      expect(personalRoomUnread(room), isFalse);
+
+      // Explicit unread and server counts still take precedence.
+      room.roomAccountData['m.marked_unread'] = BasicEvent(
+        type: 'm.marked_unread',
+        content: {'unread': true},
+      );
+      expect(personalRoomUnread(room), isTrue);
+      room.roomAccountData.remove('m.marked_unread');
+      room.notificationCount = 1;
+      expect(personalRoomUnread(room), isTrue);
+      room.notificationCount = 0;
+
+      // An older marker must not hide a genuinely new message.
+      room.lastEvent = room.message(r'$new', 'new synthetic', minute: 41);
+      expect(personalRoomUnread(room), isTrue);
+    });
+
     test('ChatLoom\'s rules are not the account\'s: verdict and summary', () {
       final client = ConversationClient();
       final room = ConversationRoom(client, _a);

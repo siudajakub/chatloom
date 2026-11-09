@@ -1,4 +1,6 @@
 Upstream Matrix Dart SDK commit: 355bf1d2d471ef2ab578d83a14a684cea7c07a1c
+Local patch (2026-11-08): required image compression errors in Room.sendFileEvent propagate before upload, rather than silently sending the original. Optional thumbnail failures remain independent. Regression: application test/personal/sdk_send_file_event_test.dart (no upload after required resizer failure, same-transaction retry). No transport or encryption changes.
+Local patch (2026-11-08): optional Client.attachmentCacheGeneration snapshots the application's cache generation before attachment I/O. Event.downloadAndDecryptAttachment checks the generation and account/database context before storing or delivering bytes, including scanner-managed downloads. Clear cache cannot be undone by a late SDK automatic cache store. Application PersonalPrivacy.bind installs the hook; other SDK consumers retain default behavior. Regressions: test/personal/client_download_content_test.dart (ordinary GET and encrypted scanner POST).
 Local patch (2026-10-23): room preview refresh rechecks event types after decryption and pages past encrypted bridge status reports. Sync repairs cached or newly decrypted non-preview last events. Concurrent refreshes share one request and cannot overwrite a newer live send. Delivery events remain in the timeline; transport and cryptography are unchanged. Regression: app `test/personal/room_preview_recovery_test.dart`.
 Local patch: timeline database pagination excludes unsynced local echoes from its synced-ID offset, preventing a missing first event on the next page. Regression: real SQL database fixture in app `test/notion/content_history_controller_test.dart`.
 Local patch: application clients opt in to cancellable exponential sync retry delays with `syncErrorMaxTimeoutSec = 60`; the SDK default preserves the fixed base interval for the worker and other consumers. Push `oneShotSync`, foreground resume and explicit retries bypass the timer; background disable/dispose cancels it. Successful sync clears the failure count. No push registration, notification eligibility, presence policy or cryptographic changes. Regression: app `test/personal/resource_optimization_test.dart`.
@@ -247,3 +249,16 @@ messages"):
   `RedactionCapture.toString` is redacted. The app installs it only while
   "Keep deleted messages" is on (`lib/personal/kept_messages.dart`).
   Regression: `test/redaction_capture_test.dart`.
+- `Timeline.fetchAggregatedEvents(throwOnError: true)` optionally propagates
+  relation HTTP/decryption failures to an explicit results presenter. The
+  default remains best-effort for existing background/history callers. First
+  and coalesced callers use the same handling; failed requests are evicted
+  without scheduling an unobserved failed future. WhatsApp read-only polls
+  use this to distinguish unavailable/partial results from no received votes.
+  Regression: application `test/notion/whatsapp_rich_message_adapter_test.dart`.
+- Timeline poll-response redactions preserve content-free tombstones in
+  `m.reference` aggregation, including responses fetched outside timeline.events.
+  Redactions are retained for the timeline's lifetime so a pending relation page
+  cannot revive deleted votes, nor can disposing/re-mounting the poll widget.
+  No persisted event type or encryption behavior changes. Covered by the same
+  adapter suite and existing timeline redaction regression tests.

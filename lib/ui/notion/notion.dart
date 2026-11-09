@@ -49,6 +49,7 @@ export 'notion_synced_transcript.dart';
 export 'notion_tokens.dart';
 export 'notion_view_once.dart';
 export 'notion_wallpapers.dart';
+export 'notion_whatsapp_message.dart';
 
 /// Uses the active theme so the existing light/system preference remains usable.
 class NotionIconButton extends StatelessWidget {

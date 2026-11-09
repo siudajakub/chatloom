@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -10,11 +11,12 @@ import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:personal_core/personal_core.dart';
 
+import 'cache_budget.dart';
 import 'private_directories_stub.dart'
     if (dart.library.ffi) 'private_directories_native.dart'
     as native;
 
-/// Disk cache of large E2EE videos (MD-11): reopening a video over 10 MB
+/// Disk cache of large E2EE videos and shared reels: reopening a video
 /// does not download it again (Telegram keeps a media cache too).
 ///
 /// At-rest posture (J, 2026-10-24): the cache holds **only the downloaded
@@ -23,14 +25,16 @@ import 'private_directories_stub.dart'
 /// checks the SHA-256 on every read before it decrypts, so a cached file is
 /// worthless without the account's database and a tampered one is rejected.
 /// Unencrypted-room media would be plaintext on disk and is not cached.
-/// Smaller files stay in the SQLCipher media cache
-/// (`EncryptedMediaCache`, up to [minBytes] each).
+/// Smaller ordinary videos stay in the SQLCipher media cache
+/// (`EncryptedMediaCache`, up to [minBytes] each). Reels use this cache at
+/// every size, with an absolute [reelRetention] lifetime.
 ///
 /// Layout: one file per attachment in a private (0700, no symlink) folder of
 /// the app's cache directory, named by a SHA-256 of the account and the mxc
 /// URI (no server name, media id, room or file name on disk). The file time
-/// is the last access; past [maxBytes] the least recently used files go,
-/// files older than [retention] too. Cleared on logout and with the SDK's
+/// is the last access for ordinary videos and the download time for reels;
+/// past [maxBytes] the oldest files go, expired files too. A reel read never
+/// extends its one-day lifetime. Cleared on logout and with the SDK's
 /// "clear cache" (`ProtectedMatrixDatabase`). Any storage problem disables
 /// the cache for the call (the video is then downloaded as before); it never
 /// deletes anything outside its own folder.
@@ -39,17 +43,38 @@ class VideoFileCache {
   static const int minBytes = 10 * 1000 * 1000;
   static const int defaultMaxBytes = 512 * 1024 * 1024;
   static const Duration defaultRetention = Duration(days: 30);
+  static const Duration reelRetention = Duration(days: 1);
   static const String folderName = 'chatloom_video_cache';
 
-  static final _entryName = RegExp(r'^[0-9a-f]{64}\.enc$');
+  static final _entryName = RegExp(r'^[0-9a-f]{64}(?:\.reel)?\.enc$');
   static final _partialName = RegExp(r'^\.partial_[A-Za-z0-9_-]{16}$');
 
   final Directory directory;
-  final int maxBytes;
+  int _maxBytes;
+  int get maxBytes => _maxBytes;
   final Duration retention;
   final DateTime Function() _now;
+  int? _total;
+  int _generation = 0;
 
-  VideoFileCache._(this.directory, this.maxBytes, this.retention, this._now);
+  /// Captured before network I/O; a settings clear revokes late results.
+  int get generation => _generation;
+  Future<void> _work = Future.value();
+  Future<void>? _clearing;
+  final _reads = <Future<Uint8List?>>{};
+
+  /// Ordinary playback should not write metadata every time a clip opens.
+  static const touchInterval = Duration(hours: 12);
+  @visibleForTesting
+  int debugEvictionScans = 0;
+
+  VideoFileCache._(this.directory, this._maxBytes, this.retention, this._now);
+
+  Future<T> _serialize<T>(Future<T> Function() work) {
+    final pending = _work.then((_) => work());
+    _work = pending.then<void>((_) {}, onError: (Object _) {});
+    return pending;
+  }
 
   /// Opens (creating owner-only) [directory]. Throws when it is not a
   /// private real directory; callers then skip the cache.
@@ -59,6 +84,7 @@ class VideoFileCache {
     Duration retention = defaultRetention,
     DateTime Function()? now,
   }) async {
+    if (maxBytes <= 0) throw ArgumentError.value(maxBytes, 'maxBytes');
     await directory.parent.create(recursive: true);
     // Resolve system aliases of the parent once (Android `/data/user/0`),
     // but never follow the cache folder itself.
@@ -91,7 +117,14 @@ class VideoFileCache {
     if (kIsWeb) return null;
     try {
       final base = await getApplicationCacheDirectory();
-      return await open(Directory('${base.path}/$folderName'));
+      final budget = await MediaCacheBudget.read();
+      final cache = await open(
+        Directory('${base.path}/$folderName'),
+        maxBytes: budget.videoBytes,
+      );
+      // Do not purge an existing cache just because a version adds settings.
+      // Expired entries remain unreadable and the next write trims as needed.
+      return cache;
     } catch (error) {
       Logs().w('video_cache_unavailable', error.runtimeType.toString());
       return null;
@@ -109,7 +142,8 @@ class VideoFileCache {
 
   /// Whether [event]'s attachment may use this cache: a playable, storable
   /// (not protected, not disappearing) **encrypted** video whose announced
-  /// size is over [minBytes] (or unknown: the stored length decides).
+  /// size is over [minBytes] (or unknown: the stored length decides), or a
+  /// shared reel of any size.
   static bool appliesTo(Event event) {
     if (kIsWeb || event.redacted || !event.isAttachmentEncrypted) {
       return false;
@@ -120,8 +154,14 @@ class VideoFileCache {
     if (!video) return false;
     if (!RoundMediaPolicy.fromContent(event.content).canPersist) return false;
     final size = event.infoMap.tryGet<int>('size');
-    return size == null || size > minBytes;
+    return isReel(event) || size == null || size > minBytes;
   }
+
+  /// Shared Instagram/Facebook video, rather than a directly sent clip.
+  static bool isReel(Event event) =>
+      (event.messageType == MessageTypes.Video ||
+          event.attachmentMimetype.toLowerCase().startsWith('video/')) &&
+      isMetaShare(event.content);
 
   /// File name for [mxc] of [account]: a hash, so neither the server, the
   /// media id nor the account appears on disk.
@@ -129,17 +169,45 @@ class VideoFileCache {
       .convert(utf8.encode('chatloom-video-cache-v1\n$account\n$mxc'))
       .toString();
 
-  File _entry(String key) {
+  File _entry(String key, {bool reel = false}) {
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(key)) {
       throw ArgumentError.value(key, 'key');
     }
-    return File('${directory.path}/$key.enc');
+    return File('${directory.path}/$key${reel ? '.reel' : ''}.enc');
   }
 
-  /// The cached ciphertext of [key], or null. A hit marks it recently used.
-  Future<Uint8List?> read(String key) async {
+  Duration _retentionFor(bool reel) =>
+      reel && retention > reelRetention ? reelRetention : retention;
+
+  /// The cached ciphertext of [key], or null. Ordinary video hits mark the
+  /// file recently used; [reel] hits never move its download time.
+  Future<Uint8List?> read(String key, {bool reel = false}) {
+    if (_clearing != null) return Future.value();
+    final pending = _read(key, reel: reel, generation: _generation);
+    _reads.add(pending);
+    unawaited(
+      pending.then<void>(
+        (_) => _reads.remove(pending),
+        onError: (Object _) => _reads.remove(pending),
+      ),
+    );
+    return pending;
+  }
+
+  Future<Uint8List?> _read(
+    String key, {
+    required bool reel,
+    required int generation,
+  }) async {
     await _validate();
-    final file = _entry(key);
+    final file = _entry(key, reel: reel);
+    // Old app versions stored reels with the ordinary sliding lifetime.
+    // Their original download time is unknown: drop, rather than reuse it.
+    if (reel) await _delete(_entry(key));
+    if (await FileSystemEntity.type(file.path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      return null;
+    }
     final FileStat stat;
     try {
       stat = await FileStat.stat(file.path);
@@ -148,15 +216,17 @@ class VideoFileCache {
     }
     if (stat.type != FileSystemEntityType.file) return null;
     final now = _now();
-    if (now.difference(stat.modified) > retention) {
+    if (now.difference(stat.modified) >= _retentionFor(reel)) {
       await _delete(file);
       return null;
     }
     try {
       final bytes = await file.readAsBytes();
-      // The file time is the LRU order.
-      await file.setLastModified(now);
-      return bytes;
+      // Ordinary videos keep their LRU order; reels have an absolute TTL.
+      if (!reel && now.difference(stat.modified) >= touchInterval) {
+        await file.setLastModified(now);
+      }
+      return generation == _generation ? bytes : null;
     } on FileSystemException {
       return null;
     }
@@ -164,14 +234,31 @@ class VideoFileCache {
 
   /// Stores [ciphertext] for [key] (atomically: a partial file is renamed
   /// once complete), then trims the cache to [maxBytes]. Bytes that are not
-  /// over [minBytes] or larger than the whole cache are not stored.
-  Future<bool> write(String key, Uint8List ciphertext) async {
-    if (ciphertext.lengthInBytes <= minBytes ||
+  /// over [minBytes] (except [reel]) or larger than the whole cache are not
+  /// stored.
+  Future<bool> write(String key, Uint8List ciphertext, {bool reel = false}) {
+    if (_clearing != null) return Future.value(false);
+    final generation = _generation;
+    return _serialize(
+      () => _write(key, ciphertext, reel: reel, generation: generation),
+    );
+  }
+
+  Future<bool> _write(
+    String key,
+    Uint8List ciphertext, {
+    required bool reel,
+    required int generation,
+  }) async {
+    if (generation != _generation) return false;
+    if ((!reel && ciphertext.lengthInBytes <= minBytes) ||
+        ciphertext.isEmpty ||
         ciphertext.lengthInBytes > maxBytes) {
       return false;
     }
     await _validate();
-    final target = _entry(key);
+    final target = _entry(key, reel: reel);
+    if (reel) await _delete(_entry(key));
     final random = Random.secure();
     final suffix = base64UrlEncode(
       List<int>.generate(12, (_) => random.nextInt(256)),
@@ -179,22 +266,58 @@ class VideoFileCache {
     final partial = File('${directory.path}/.partial_$suffix');
     try {
       await partial.writeAsBytes(ciphertext, flush: true);
+      if (generation != _generation) {
+        await _delete(partial);
+        return false;
+      }
       await partial.rename(target.path);
       await target.setLastModified(_now());
+      final total = _total;
+      if (total != null) _total = total + ciphertext.lengthInBytes;
     } catch (_) {
       await _delete(partial);
       return false;
     }
-    await evict(keep: key);
+    if (_total == null || _total! > maxBytes) {
+      await _evict(keep: key, keepReel: reel);
+    }
     return true;
   }
 
-  Future<void> remove(String key) => _delete(_entry(key));
+  Future<void> remove(String key, {bool reel = false}) =>
+      _serialize(() => _delete(_entry(key, reel: reel)));
+
+  Future<void> setBudget(int bytes, {bool trim = true}) => _serialize(() async {
+    if (bytes <= 0) throw ArgumentError.value(bytes, 'bytes');
+    _maxBytes = bytes;
+    if (trim) await _evict();
+  });
+
+  /// Physical bytes of this cache's files only, including partial writes.
+  /// Called on demand by storage settings, never on playback or sync.
+  Future<int> usageBytes() => _serialize(() async {
+    await _validate();
+    var bytes = 0;
+    await for (final item in directory.list(followLinks: false)) {
+      final name = item.uri.pathSegments.last;
+      if (item is! File ||
+          !(_entryName.hasMatch(name) || _partialName.hasMatch(name))) {
+        continue;
+      }
+      final stat = await item.stat();
+      if (stat.type == FileSystemEntityType.file) bytes += stat.size;
+    }
+    return bytes;
+  });
 
   /// Deletes expired files, then the least recently used ones until the
   /// cache fits [maxBytes]. [keep] (the file just stored) always stays.
   /// Returns the bytes left.
-  Future<int> evict({String? keep}) async {
+  Future<int> evict({String? keep, bool keepReel = false}) =>
+      _serialize(() => _evict(keep: keep, keepReel: keepReel));
+
+  Future<int> _evict({String? keep, bool keepReel = false}) async {
+    debugEvictionScans++;
     await _validate();
     final now = _now();
     final entries = <(File, int, DateTime)>[];
@@ -210,7 +333,8 @@ class VideoFileCache {
         continue;
       }
       if (!_entryName.hasMatch(name)) continue;
-      if (now.difference(stat.modified) > retention) {
+      if (now.difference(stat.modified) >=
+          _retentionFor(name.endsWith('.reel.enc'))) {
         await _delete(item);
         continue;
       }
@@ -218,7 +342,9 @@ class VideoFileCache {
     }
     // Most recently used first.
     entries.sort((a, b) => b.$3.compareTo(a.$3));
-    final keepName = keep == null ? null : '$keep.enc';
+    final keepName = keep == null
+        ? null
+        : '$keep${keepReel ? '.reel' : ''}.enc';
     var total = 0;
     for (final (file, size, _) in entries) {
       if (file.uri.pathSegments.last == keepName) total += size;
@@ -231,11 +357,34 @@ class VideoFileCache {
         await _delete(file);
       }
     }
-    return total;
+    return _total = total;
   }
 
   /// Removes every cached file (only this cache's own names).
-  Future<void> clear() async {
+  Future<void> clear() {
+    final clearing = _clearing;
+    if (clearing != null) return clearing;
+    _generation++;
+    final pending = _serialize(() async {
+      await Future.wait(_reads);
+      await _clear();
+      _total = 0;
+    });
+    _clearing = pending;
+    unawaited(
+      pending.then<void>(
+        (_) {
+          if (identical(_clearing, pending)) _clearing = null;
+        },
+        onError: (Object _) {
+          if (identical(_clearing, pending)) _clearing = null;
+        },
+      ),
+    );
+    return pending;
+  }
+
+  Future<void> _clear() async {
     await _validate();
     await for (final item in directory.list(followLinks: false)) {
       final name = item.uri.pathSegments.last;

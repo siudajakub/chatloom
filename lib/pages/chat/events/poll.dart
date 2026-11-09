@@ -6,6 +6,7 @@
 import 'package:async/async.dart';
 import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/whatsapp/whatsapp_action_policy.dart';
 import 'package:chatloom/utils/url_launcher.dart';
 import 'package:chatloom/widgets/avatar.dart';
 import 'package:chatloom/widgets/future_loading_dialog.dart';
@@ -26,10 +27,17 @@ class PollWidget extends StatelessWidget {
     super.key,
   });
 
-  void _endPoll(BuildContext context) =>
-      showFutureLoadingDialog(context: context, future: event.endPoll);
+  void _endPoll(BuildContext context) {
+    if (!WhatsAppActionPolicy.allows(event.room, WhatsAppAction.endPoll)) {
+      return;
+    }
+    showFutureLoadingDialog(context: context, future: event.endPoll);
+  }
 
   void _toggleVote(BuildContext context, String answerId, int maxSelection) {
+    if (!WhatsAppActionPolicy.allows(event.room, WhatsAppAction.vote)) {
+      return;
+    }
     final userId = event.room.client.userID!;
     final answerIds = event.getPollResponses(timeline)[userId] ?? {};
     if (!answerIds.remove(answerId)) {
@@ -57,6 +65,7 @@ class PollWidget extends StatelessWidget {
     final responses = event.getPollResponses(timeline);
     final pollHasBeenEnded = event.getPollHasBeenEnded(timeline);
     final canVote =
+        WhatsAppActionPolicy.allows(event.room, WhatsAppAction.vote) &&
         event.room.canSendEvent(PollEventContent.responseType) &&
         !pollHasBeenEnded;
     final maxPolls = responses.length;
@@ -181,7 +190,9 @@ class PollWidget extends StatelessWidget {
               ),
             );
           }),
-          if (!pollHasBeenEnded && event.senderId == event.room.client.userID)
+          if (!pollHasBeenEnded &&
+              event.senderId == event.room.client.userID &&
+              WhatsAppActionPolicy.allows(event.room, WhatsAppAction.endPoll))
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: OutlinedButton(

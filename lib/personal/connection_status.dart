@@ -100,13 +100,42 @@ class ConnectionStatusMonitor extends ChangeNotifier
        _hasNetwork = hasNetwork ?? _deviceHasNetwork,
        _quickRequest = quickRequest ?? _always;
 
-  factory ConnectionStatusMonitor.forClient(Client client) =>
-      ConnectionStatusMonitor(
-        statuses: () => client.onSyncStatus.stream,
-        current: () => client.onSyncStatus.value,
-        firstSync: () => client.prevBatch == null,
-        quickRequest: () => client.syncRequestTimeout == Duration.zero,
-      );
+  factory ConnectionStatusMonitor.forClient(Client client) {
+    final monitor = ConnectionStatusMonitor(
+      statuses: () => client.onSyncStatus.stream,
+      current: () => client.onSyncStatus.value,
+      firstSync: () => client.prevBatch == null,
+      quickRequest: () => client.syncRequestTimeout == Duration.zero,
+    );
+    // prevBatch describes the disk cache, not whether this process has
+    // received anything from the server. Keep cached startup truthful too.
+    final initialSync = client.firstSyncReceived;
+    monitor._initialSyncPending = initialSync != null;
+    unawaited(
+      initialSync?.then<void>(
+        (_) {
+          // The SDK resolves this future even after a handled sync error.
+          // A finished response, or the normal long-poll following one,
+          // provides the evidence that the cached state was refreshed.
+          final status = client.onSyncStatus.value?.status;
+          final timeout = client.syncRequestTimeout;
+          final refreshed =
+              status == SyncStatus.finished ||
+              (status == SyncStatus.waitingForResponse &&
+                  timeout != null &&
+                  timeout > Duration.zero);
+          if (!refreshed) return;
+          monitor._initialSyncPending = false;
+          if (monitor.hasListeners) monitor._update();
+        },
+        onError: (Object _, StackTrace _) {
+          // A failed initial request is not a successful refresh. The sync
+          // stream owns retry evidence and clears this flag on success.
+        },
+      ),
+    );
+    return monitor;
+  }
 
   static final _byClient = Expando<ConnectionStatusMonitor>(
     'connection status',
@@ -137,6 +166,7 @@ class ConnectionStatusMonitor extends ChangeNotifier
 
   StreamSubscription<SyncStatusUpdate>? _subscription;
   Timer? _grace;
+  ConnectionPhase? _gracePhase;
   Timer? _stall;
   Timer? _lastingTimer;
   SyncStatus? _status;
@@ -145,6 +175,9 @@ class ConnectionStatusMonitor extends ChangeNotifier
   bool _stalled = false;
   bool _noNetwork = false;
   bool _catchingUp = false;
+  bool _initialSyncPending = false;
+  bool _notifiedFreshSyncPending = false;
+  bool _notifiedOffline = false;
   bool _lasting = false;
   int _probe = 0;
   ConnectionPhase _raw = ConnectionPhase.online;
@@ -163,6 +196,11 @@ class ConnectionStatusMonitor extends ChangeNotifier
 
   /// Whether the app is on screen (see [background] and [resumed]).
   bool get foreground => _foreground;
+
+  /// Cached bridge/worker signals may be stale until startup or resume
+  /// catch-up completes. Unlike ordinary processing, this is a reason to
+  /// defer notices that depend on fresh server state.
+  bool get awaitingFreshSync => _initialSyncPending || _catchingUp;
 
   bool get _failing =>
       _failures >= failuresToShow || (_stalled && _failures > 0);
@@ -194,6 +232,10 @@ class ConnectionStatusMonitor extends ChangeNotifier
   void resumed({bool catchingUp = false}) {
     _foreground = true;
     _reset();
+    // A status from a suspended request is not evidence about the new
+    // foreground sync. In particular, stale processing must not keep
+    // "Updating…" alive when the catch-up is skipped without emitting.
+    _status = null;
     _catchingUp = catchingUp && hasListeners;
     _update();
   }
@@ -222,6 +264,7 @@ class ConnectionStatusMonitor extends ChangeNotifier
   void _attach() {
     final current = _current();
     _status = current?.status;
+    if (_status == SyncStatus.finished) _initialSyncPending = false;
     // Listeners come and go (a builder with a new merged listenable re-adds
     // its listener): the failures counted so far stand while the latest
     // status is still a failure. One from before anyone listened is one
@@ -283,6 +326,7 @@ class ConnectionStatusMonitor extends ChangeNotifier
         _noNetwork = false;
         _probe++;
       case SyncStatus.finished:
+        _initialSyncPending = false;
         _reset();
     }
     _update();
@@ -314,13 +358,23 @@ class ConnectionStatusMonitor extends ChangeNotifier
   }
 
   void _update() {
+    _updatePhase();
+    // Health notices use freshness immediately, independently of the
+    // header's visual debounce. Do not strand them behind a cancelled grace.
+    if (_notifiedFreshSyncPending != awaitingFreshSync ||
+        _notifiedOffline != _raw.offline) {
+      _notify();
+    }
+  }
+
+  void _updatePhase() {
     _raw = _foreground
         ? rawConnectionPhase(
             status: _status,
             failing: _failing,
             noNetwork: _noNetwork,
             firstSync: _firstSync(),
-            catchingUp: _catchingUp,
+            catchingUp: _catchingUp || _initialSyncPending,
           )
         : ConnectionPhase.online;
     if (_raw == ConnectionPhase.online) {
@@ -338,10 +392,18 @@ class ConnectionStatusMonitor extends ChangeNotifier
     final grace = _raw == ConnectionPhase.updating
         ? updatingGrace
         : offlineGrace;
+    // Each new phase earns its own grace. Processing that briefly follows
+    // a failed request must not inherit its almost-expired offline timer
+    // (and a new failure must not inherit the updating timer either).
+    if (_grace != null && _gracePhase != _raw) {
+      _grace!.cancel();
+      _grace = null;
+    }
     if (grace == Duration.zero) {
       _set(_raw);
       return;
     }
+    _gracePhase = _raw;
     _grace ??= Timer(grace, () {
       _grace = null;
       if (_raw != ConnectionPhase.online) _set(_raw);
@@ -352,6 +414,12 @@ class ConnectionStatusMonitor extends ChangeNotifier
     final lasting = _updateLasting(phase);
     if (_value == phase && !lasting) return;
     _value = phase;
+    _notify();
+  }
+
+  void _notify() {
+    _notifiedFreshSyncPending = awaitingFreshSync;
+    _notifiedOffline = _raw.offline;
     notifyListeners();
   }
 
@@ -364,7 +432,7 @@ class ConnectionStatusMonitor extends ChangeNotifier
         _lastingTimer = null;
         if (!_value.offline || _lasting) return;
         _lasting = true;
-        notifyListeners();
+        _notify();
       });
       return false;
     }

@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/media/media_preparation_exception.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/send_error_text.dart';
 import 'package:chatloom/personal/privacy.dart';
@@ -318,6 +319,53 @@ void main() {
     expect(echoes.statusOf('big'), EventStatus.error.intValue);
     expect(OutgoingMedia.failureOf('big'), contains('too large'));
   });
+
+  test(
+    'compression refusal explains recovery and Retry keeps the same send',
+    () async {
+      final room = MediaRoom(ConversationClient());
+      var attempts = 0;
+      final pending = MatrixVideoFile(
+        bytes: Uint8List(0),
+        name: 'clip.mp4',
+        mimeType: 'video/mp4',
+      );
+      final ticket = await OutgoingMedia.send(
+        room,
+        pending,
+        txid: 'compression-refused',
+        prepare: () async {
+          if (attempts++ == 0) throw const MediaPreparationException();
+          return (
+            MatrixVideoFile(
+              bytes: Uint8List.fromList([1, 2, 3]),
+              name: 'clip.mp4',
+              mimeType: 'video/mp4',
+            ),
+            null,
+          );
+        },
+      );
+      await expectLater(
+        ticket.accepted,
+        throwsA(isA<MediaPreparationException>()),
+      );
+      expect(room.sent, isEmpty);
+      expect(
+        OutgoingMedia.failureOf(ticket.transactionId),
+        contains('Retry, or choose File'),
+      );
+      final failed = Event.fromMatrixEvent(
+        echoes.events['compression-refused']!,
+        room,
+      );
+      final retry = await OutgoingMedia.retry(failed);
+      expect(await retry.accepted, r'$accepted');
+      expect(room.sent.single.txid, 'compression-refused');
+      expect(room.sent.single.file.bytes, [1, 2, 3]);
+      expect(attempts, 2);
+    },
+  );
 
   test('an accepted event is never downgraded to "Not sent"', () async {
     final room = MediaRoom(ConversationClient());

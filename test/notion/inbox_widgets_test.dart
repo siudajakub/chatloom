@@ -27,6 +27,72 @@ Widget host(Widget child, {double scale = 1}) => MaterialApp(
 
 Widget avatar() => const ColoredBox(color: Color(0xFF555555));
 void main() {
+  testWidgets('storage failure hides saved rows and offers a local retry', (
+    tester,
+  ) async {
+    var retries = 0;
+    await tester.pumpWidget(
+      host(
+        NotionInboxPage(
+          rows: const [Text('Unclassified saved chat')],
+          pins: const [],
+          unreadCount: 75,
+          emptyMessage: 'Retry loading your chats.',
+          onRetryLoading: () => retries++,
+          onSettings: () {},
+          onSearch: () {},
+          onNetworkSelected: (_) {},
+          networks: const [],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Unclassified saved chat'), findsNothing);
+    expect(find.text('75'), findsNothing);
+    expect(find.text('Saved chats could not be loaded'), findsOneWidget);
+    await tester.tap(find.text('Retry'));
+    expect(retries, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+  testWidgets('loading replaces cached rows, pins and unread counters', (
+    tester,
+  ) async {
+    var searches = 0;
+    Widget page(bool loading) => NotionInboxPage(
+      loading: loading,
+      rows: const [Text('Saved chat preview')],
+      pins: [
+        NotionPinnedShortcut(
+          name: 'Saved pin',
+          avatar: avatar(),
+          onTap: () {},
+          order: 0,
+        ),
+      ],
+      unreadCount: 75,
+      requestCount: 9,
+      onSettings: () {},
+      onSearch: () => searches++,
+      onNetworkSelected: (_) {},
+      networks: const [],
+    );
+    await tester.pumpWidget(host(page(true)));
+    expect(find.byType(NotionSkeleton), findsOneWidget);
+    expect(find.text('Saved chat preview'), findsNothing);
+    expect(find.text('Saved pin'), findsNothing);
+    expect(find.text('75'), findsNothing);
+    expect(find.text('Requests'), findsNothing);
+    await tester.tap(find.text('Search'));
+    expect(searches, 0);
+    await tester.pumpWidget(host(page(false)));
+    await tester.pumpAndSettle();
+    expect(find.byType(NotionSkeleton), findsNothing);
+    expect(find.text('Saved chat preview'), findsOneWidget);
+    expect(find.text('Saved pin'), findsOneWidget);
+    await tester.tap(find.text('Search'));
+    expect(searches, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   testWidgets(
     'Aside is reachable from chips and the dock without changing network',
     (tester) async {

@@ -2,6 +2,8 @@
 // "Keep deleted messages": which deletions are kept, the bounded device
 // store, clearing, sign-out, privacy, the SDK hook and the deletion
 // notification text. Fictional offline fixtures; no account or network.
+import 'dart:async';
+
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
@@ -37,9 +39,16 @@ class _Client extends Client {
 class _MemoryStorage implements KeptMessagesStorage {
   final records = <String, Map<String, dynamic>>{};
   int writes = 0;
+  int reads = 0;
+  Completer<void>? readGate;
   final deleted = <String>[];
   @override
-  Future<Map<String, Map<String, dynamic>>> readAll() async => {...records};
+  Future<Map<String, Map<String, dynamic>>> readAll() async {
+    reads++;
+    await readGate?.future;
+    return {...records};
+  }
+
   @override
   Future<void> write(String key, Map<String, dynamic> value) async {
     writes++;
@@ -200,7 +209,11 @@ void main() {
         content: {'reason': 'Message disappeared'},
       );
       final viewOnce = capture(
-        message(extra: {'com.beeper.view_limited': {'count': 1}}),
+        message(
+          extra: {
+            'com.beeper.view_limited': {'count': 1},
+          },
+        ),
       );
       final disappearing = capture(
         message(
@@ -280,6 +293,67 @@ void main() {
   });
 
   group('device store', () {
+    test(
+      'ensureLoaded awaits hydrated entries and shares the store read',
+      () async {
+        final gate = storage.readGate = Completer<void>();
+        storage.records['${room.id}|\$a'] = KeptMessage(
+          roomId: room.id,
+          eventId: r'$a',
+          senderId: _anna,
+          type: EventTypes.Message,
+          content: const {'body': 'synthetic'},
+          sentAt: now,
+          deletedAt: now,
+          deletedBy: _anna,
+          kind: DeletedKind.other,
+        ).toJson();
+        final ready = kept.ensureLoaded(client);
+        expect(identical(ready, kept.ensureLoaded(client)), isTrue);
+        expect(kept.countFor(client), 0);
+        expect(storage.reads, 1);
+        gate.complete();
+        await ready;
+        expect(kept.countFor(client), 1);
+        await kept.ensureLoaded(client);
+        expect(storage.reads, 1);
+      },
+    );
+
+    test(
+      'dispose during hydration leaves entries and stored data alone',
+      () async {
+        final gate = storage.readGate = Completer<void>();
+        storage.records['unreadable'] = {'v': 99};
+        final ready = kept.ensureLoaded(client);
+        final required = expectLater(
+          kept.ensureLoaded(client, requireSuccess: true),
+          throwsStateError,
+        );
+        kept.dispose();
+        gate.complete();
+        await ready;
+        await required;
+        expect(kept.countFor(client), 0);
+        expect(storage.deleted, isEmpty);
+      },
+    );
+
+    test('required hydration reports read failure and can retry', () async {
+      var failing = true;
+      kept = KeptMessages(
+        storageFor: (_) => _FlakyStorage(storage, () => failing),
+        optionsFor: () => options,
+      );
+      await expectLater(
+        kept.ensureLoaded(client, requireSuccess: true),
+        throwsStateError,
+      );
+      failing = false;
+      await kept.ensureLoaded(client, requireSuccess: true);
+      expect(kept.countFor(client), 0);
+    });
+
     test('bounded by age and count when loaded', () async {
       kept = KeptMessages(
         storageFor: (_) => storage,
@@ -299,18 +373,27 @@ void main() {
         kind: DeletedKind.other,
       );
       storage.records
-        ..['${room.id}|\$old0'] = entry(0, now.subtract(const Duration(days: 181))).toJson()
-        ..['${room.id}|\$old1'] = entry(1, now.subtract(const Duration(days: 3))).toJson()
-        ..['${room.id}|\$old2'] = entry(2, now.subtract(const Duration(days: 2))).toJson()
-        ..['${room.id}|\$old3'] = entry(3, now.subtract(const Duration(days: 1))).toJson()
+        ..['${room.id}|\$old0'] = entry(
+          0,
+          now.subtract(const Duration(days: 181)),
+        ).toJson()
+        ..['${room.id}|\$old1'] = entry(
+          1,
+          now.subtract(const Duration(days: 3)),
+        ).toJson()
+        ..['${room.id}|\$old2'] = entry(
+          2,
+          now.subtract(const Duration(days: 2)),
+        ).toJson()
+        ..['${room.id}|\$old3'] = entry(
+          3,
+          now.subtract(const Duration(days: 1)),
+        ).toJson()
         ..['${room.id}|broken'] = {'v': 99};
       kept.load(client);
       await kept.debugReady(client);
       expect(kept.countFor(client), 2);
-      expect(storage.records.keys, {
-        '${room.id}|\$old2',
-        '${room.id}|\$old3',
-      });
+      expect(storage.records.keys, {'${room.id}|\$old2', '${room.id}|\$old3'});
       // A new deletion pushes the oldest out.
       await kept.capture(capture(message()));
       expect(kept.countFor(client), 2);

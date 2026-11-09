@@ -92,8 +92,12 @@ enum AppSettings<T> {
   ),
   personalAutoDownloadWifiOnly<bool>(
     'pl.personal.media.auto_download_wifi_only',
-    false,
+    true,
   ),
+
+  /// Prefer previews over large original images until explicitly opened.
+  /// Defaults are read, never migrated over an explicit stored preference.
+  personalDataSaver<bool>('pl.personal.media.data_saver', true),
 
   /// Voice note capture: platform voice-communication path (AEC + NS + AGC).
   personalVoiceIsolation<bool>('pl.personal.voice.isolation', false),
@@ -185,6 +189,7 @@ enum AppSettings<T> {
   /// `InboxSwipeChoice.name` (archive, read, pin, moveDown, none).
   inboxSwipeLeft<String>('pl.personal.inbox.swipe_left', 'archive'),
   inboxSwipeRight<String>('pl.personal.inbox.swipe_right', 'read'),
+
   /// Chat header line "online" / "last seen …" from received Matrix
   /// presence. Display only: it never changes what this device sends.
   /// Settings › Privacy & security › "Show activity status".

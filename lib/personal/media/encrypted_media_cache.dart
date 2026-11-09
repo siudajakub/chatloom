@@ -24,7 +24,8 @@ import '../storage/database_policy.dart';
 class EncryptedMediaCache {
   final Database _cacheDatabase;
   final int maxFileSize;
-  final int maxCacheBytes;
+  int _maxCacheBytes;
+  int get maxCacheBytes => _maxCacheBytes;
   final Duration retention;
   final Duration pruneInterval;
   final Duration touchInterval;
@@ -51,15 +52,40 @@ class EncryptedMediaCache {
   /// eviction. They still expire after [retention].
   static const outgoingPrefix = 'cache://';
 
+  /// Link metadata and downloaded Instagram media are short-lived, even when
+  /// read repeatedly. Both use the account's existing encrypted cache budget.
+  static const instagramRetention = Duration(days: 1);
+  static const instagramMaxFileSize = 64 * 1024 * 1024;
+
+  static bool isInstagramKey(Uri key) =>
+      (key.scheme == 'chatloom-media' || key.scheme == 'chatloom-link') &&
+      key.host == 'instagram' &&
+      key.userInfo.isEmpty &&
+      !key.hasPort;
+
+  Duration _retentionFor(Uri key) =>
+      isInstagramKey(key) && retention > instagramRetention
+      ? instagramRetention
+      : retention;
+
+  // Internal URI keys are canonical, with the host followed by a path or a
+  // query/fragment delimiter. Match the complete host, never a lookalike.
+  static const _instagramKeySql =
+      "(media_key = 'chatloom-media://instagram' "
+      "OR media_key GLOB 'chatloom-media://instagram[/#?]*' "
+      "OR media_key = 'chatloom-link://instagram' "
+      "OR media_key GLOB 'chatloom-link://instagram[/#?]*')";
+
   EncryptedMediaCache(
     this._cacheDatabase, {
     this.maxFileSize = 10 * 1000 * 1000,
-    this.maxCacheBytes = 128 * 1024 * 1024,
+    int maxCacheBytes = 128 * 1024 * 1024,
     this.retention = const Duration(days: 30),
     this.pruneInterval = const Duration(hours: 1),
     this.touchInterval = const Duration(hours: 12),
     DateTime Function()? now,
-  }) : _now = now ?? DateTime.now;
+  }) : _maxCacheBytes = maxCacheBytes,
+       _now = now ?? DateTime.now;
 
   Future<void> initialize() => preserveOnStorageFailure(() async {
     await _cacheDatabase.execute(
@@ -81,9 +107,53 @@ class EncryptedMediaCache {
     _cachedBytesBound = 0;
   });
 
+  /// Storage settings clear downloaded media only. The SDK's retry copies
+  /// are durable send state, not disposable downloads.
+  Future<void> clearDownloaded() => preserveOnStorageFailure(() async {
+    await _cacheDatabase.delete(
+      'personal_media_cache',
+      where: 'media_key NOT LIKE ?',
+      whereArgs: ['$outgoingPrefix%'],
+    );
+    _cachedBytesBound = null;
+  });
+
+  /// Logical BLOB bytes, without reading their payload or counting the
+  /// whole SQLCipher database (which also holds history and keys).
+  Future<({int downloaded, int outgoing})> usage() =>
+      preserveOnStorageFailure(() async {
+        final rows = await _cacheDatabase.rawQuery(
+          'SELECT COALESCE(SUM(CASE WHEN media_key LIKE ? '
+          'THEN 0 ELSE length(bytes) END), 0) AS downloaded, '
+          'COALESCE(SUM(CASE WHEN media_key LIKE ? '
+          'THEN length(bytes) ELSE 0 END), 0) AS outgoing '
+          'FROM personal_media_cache',
+          ['$outgoingPrefix%', '$outgoingPrefix%'],
+        );
+        return (
+          downloaded: rows.single['downloaded']! as int,
+          outgoing: rows.single['outgoing']! as int,
+        );
+      });
+
+  /// Applying a saved setting at open does not purge existing media. An
+  /// explicit change may trim immediately; subsequent stores always obey it.
+  Future<void> setBudget(int bytes, {bool trim = true}) =>
+      preserveOnStorageFailure(() async {
+        if (bytes <= 0) throw ArgumentError.value(bytes, 'bytes');
+        _maxCacheBytes = bytes;
+        _cachedBytesBound = null;
+        if (trim) {
+          await _cacheDatabase.transaction(_evict);
+        }
+      });
+
   Future<void> storeFile(Uri mxcUri, Uint8List bytes, int time) =>
       preserveOnStorageFailure(() async {
-        if (bytes.length > maxFileSize || bytes.length > maxCacheBytes) return;
+        final fileLimit = isInstagramKey(mxcUri)
+            ? instagramMaxFileSize
+            : maxFileSize;
+        if (bytes.length > fileLimit || bytes.length > maxCacheBytes) return;
         final now = _now().millisecondsSinceEpoch;
         final key = mxcUri.toString();
         await _cacheDatabase.transaction((tx) async {
@@ -100,48 +170,54 @@ class EncryptedMediaCache {
             _cachedBytesBound = bound + bytes.length;
             return;
           }
-          debugEvictionScans++;
-          // length() of a BLOB comes from the record header; accessed_at
-          // (stored after the BLOB) is what makes this a full read.
-          final sizes = await tx.rawQuery(
-            'SELECT media_key, length(bytes) AS size FROM personal_media_cache '
-            'ORDER BY accessed_at DESC, media_key ASC',
-          );
-          var total = 0;
-          for (final row in sizes) {
-            total += row['size']! as int;
-          }
-          if (total <= maxCacheBytes) {
-            _cachedBytesBound = total;
-            return;
-          }
-          // This device's copies of unsent files ([outgoingPrefix]) are
-          // never evicted: they are the only source for Retry, and the send
-          // (or a Delete) removes them.
-          var retained = 0;
-          for (final row in sizes) {
-            if ((row['media_key']! as String).startsWith(outgoingPrefix)) {
-              retained += row['size']! as int;
-            }
-          }
-          for (final row in sizes) {
-            final size = row['size']! as int;
-            final rowKey = row['media_key']! as String;
-            if (rowKey.startsWith(outgoingPrefix)) continue;
-            // The file just stored is never evicted to make room for itself.
-            if (rowKey == key || retained + size <= evictToBytes) {
-              retained += size;
-              continue;
-            }
-            await tx.delete(
-              'personal_media_cache',
-              where: 'media_key = ?',
-              whereArgs: [rowKey],
-            );
-          }
-          _cachedBytesBound = retained;
+          await _evict(tx, keep: key);
         });
       });
+
+  Future<void> _evict(Transaction tx, {String? keep}) async {
+    debugEvictionScans++;
+    // length() of a BLOB comes from the record header; accessed_at
+    // (stored after the BLOB) is what makes this a full read.
+    final sizes = await tx.rawQuery(
+      'SELECT media_key, length(bytes) AS size FROM personal_media_cache '
+      'ORDER BY accessed_at DESC, media_key ASC',
+    );
+    var total = 0;
+    for (final row in sizes) {
+      total += row['size']! as int;
+    }
+    if (total <= maxCacheBytes) {
+      _cachedBytesBound = total;
+      return;
+    }
+    // This device's copies of unsent files ([outgoingPrefix]) are
+    // never evicted: they are the only source for Retry, and the send
+    // (or a Delete) removes them.
+    var retained = 0;
+    for (final row in sizes) {
+      final rowKey = row['media_key']! as String;
+      if (rowKey.startsWith(outgoingPrefix) || rowKey == keep) {
+        retained += row['size']! as int;
+      }
+    }
+    for (final row in sizes) {
+      final size = row['size']! as int;
+      final rowKey = row['media_key']! as String;
+      // Reserve the just-written file before considering older entries;
+      // otherwise equal-timestamp key ordering could exceed the budget.
+      if (rowKey.startsWith(outgoingPrefix) || rowKey == keep) continue;
+      if (retained + size <= evictToBytes) {
+        retained += size;
+        continue;
+      }
+      await tx.delete(
+        'personal_media_cache',
+        where: 'media_key = ?',
+        whereArgs: [rowKey],
+      );
+    }
+    _cachedBytesBound = retained;
+  }
 
   Future<Uint8List?> getFile(Uri mxcUri) => preserveOnStorageFailure(() async {
     final now = _now();
@@ -151,7 +227,7 @@ class EncryptedMediaCache {
       where: 'media_key = ? AND saved_at > ?',
       whereArgs: [
         mxcUri.toString(),
-        now.subtract(retention).millisecondsSinceEpoch,
+        now.subtract(_retentionFor(mxcUri)).millisecondsSinceEpoch,
       ],
       limit: 1,
     );
@@ -180,7 +256,10 @@ class EncryptedMediaCache {
     final rows = await _cacheDatabase.rawQuery(
       'SELECT 1 FROM personal_media_cache '
       'WHERE media_key = ? AND saved_at > ? LIMIT 1',
-      [mxcUri.toString(), _now().subtract(retention).millisecondsSinceEpoch],
+      [
+        mxcUri.toString(),
+        _now().subtract(_retentionFor(mxcUri)).millisecondsSinceEpoch,
+      ],
     );
     return rows.isNotEmpty;
   });
@@ -194,7 +273,8 @@ class EncryptedMediaCache {
         0;
   });
 
-  /// Removes files older than [retention]. The SDK calls this after every
+  /// Removes files older than their retention, capped at one day for
+  /// Instagram media and metadata. The SDK calls this after every
   /// sync; it runs at most once per [pruneInterval]. Expired files are never
   /// returned in between: [getFile] and [hasFile] check the age themselves.
   Future<void> deleteOldFiles(int savedAt) =>
@@ -217,6 +297,15 @@ class EncryptedMediaCache {
       where: 'saved_at <= ?',
       whereArgs: [now.subtract(retention).millisecondsSinceEpoch],
     );
+    if (retention > instagramRetention) {
+      // Also applies to entries written before short Instagram retention was
+      // introduced. The saved_at index limits the work without BLOB reads.
+      await _cacheDatabase.delete(
+        'personal_media_cache',
+        where: 'saved_at <= ? AND $_instagramKeySql',
+        whereArgs: [now.subtract(instagramRetention).millisecondsSinceEpoch],
+      );
+    }
     _lastPrune = now;
   }
 }

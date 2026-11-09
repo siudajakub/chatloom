@@ -22,6 +22,7 @@ import 'package:chatloom/personal/reel_metadata.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
+import 'package:chatloom/personal/whatsapp/whatsapp_action_policy.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:material_ui/material_ui.dart';
@@ -48,11 +49,13 @@ import 'message_download_content.dart';
 import 'reel_caption.dart';
 import 'sticker_event.dart';
 import 'view_once_message.dart';
+import 'whatsapp_rich_message.dart';
 
 class MessageContent extends StatelessWidget {
   final Event event;
   final Color textColor;
   final Color linkColor;
+  final Color? backgroundColor;
   final void Function(Event)? onInfoTab;
   final BorderRadius borderRadius;
   final Timeline timeline;
@@ -76,6 +79,7 @@ class MessageContent extends StatelessWidget {
     required this.timeline,
     required this.textColor,
     required this.linkColor,
+    this.backgroundColor,
     required this.borderRadius,
     required this.selected,
     required this.bigEmojis,
@@ -133,7 +137,7 @@ class MessageContent extends StatelessWidget {
     if (isUndecryptable(event)) {
       return UndecryptableMessage(event, textColor: textColor);
     }
-    // Instagram view-once photo/video: "Tap to view" until opened here.
+    // Keep native view-once handling ahead of every rich-content wrapper.
     final viewOnce = mediaPolicy.viewOnceMode;
     if (viewOnce != null &&
         {MessageTypes.Image, MessageTypes.Video}.contains(event.messageType)) {
@@ -144,6 +148,48 @@ class MessageContent extends StatelessWidget {
         borderRadius: borderRadius,
         textColor: textColor,
         linkColor: linkColor,
+      );
+    }
+    // A bridge poll is usually an ordinary m.room.message with a nested
+    // MSC3381 payload. Do not feed it to SDK helpers that require another
+    // event type and a legacy top-level text field.
+    final isWhatsApp =
+        WhatsAppActionPolicy.isWhatsApp(event.room) ||
+        event.content['fi.mau.whatsapp.poll'] is Map;
+    final poll = isWhatsApp
+        ? WhatsAppPollSnapshot.fromContent(event.content)
+        : null;
+    if (poll != null) {
+      return WhatsAppPollMessage(
+        event: event,
+        timeline: timeline,
+        poll: poll,
+        textColor: textColor,
+        linkColor: linkColor,
+      );
+    }
+    final interactive = WhatsAppInteractiveContent.fromContent(event.content);
+    if (interactive != null) {
+      return WhatsAppInteractiveMessage(
+        event: event,
+        message: interactive,
+        textColor: textColor,
+        linkColor: linkColor,
+        backgroundColor: backgroundColor,
+        contentBuilder: (displayEvent) => MessageContent(
+          displayEvent,
+          timeline: timeline,
+          textColor: textColor,
+          linkColor: linkColor,
+          backgroundColor: backgroundColor,
+          borderRadius: borderRadius,
+          selected: selected,
+          bigEmojis: bigEmojis,
+          onInfoTab: onInfoTab,
+          roundStatus: roundStatus,
+          outgoing: outgoing,
+          album: this.album,
+        ),
       );
     }
     // MSC4274 gallery: one message, many photos/videos/files.
@@ -523,6 +569,10 @@ class MessageContent extends StatelessWidget {
             onInfoTab: onInfoTab,
             fontSize: fontSize,
           );
+        }
+        if (isWhatsApp) {
+          // Unsupported/new poll variants keep the bridge's readable body.
+          return Text(event.body, style: TextStyle(color: textColor));
         }
         return PollWidget(
           event: event,

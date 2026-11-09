@@ -18,8 +18,9 @@
 ///
 /// Sending never asks whether to compress (J, 2026-10-24): every photo and
 /// video is compressed on the device before upload by the [MediaProfile]
-/// chosen in the send preview — [MediaProfile.standard] unless the "HD"
-/// chip is on for that send ([MediaProfile.hd]: photos 2560 px JPEG q85,
+/// chosen in the send preview — [MediaProfile.standard] by default,
+/// [MediaProfile.economy] for smaller files (1280 px JPEG q72, 480p30
+/// ≈ 0.9 Mbit/s) or [MediaProfile.hd] for more detail (2560 px JPEG q85,
 /// video 1080p30 ≈ 5 Mbit/s, still without EXIF/GPS). The exact original
 /// bytes go out only through the attach menu's "File" entry (a document).
 library;
@@ -32,6 +33,13 @@ abstract final class MediaQuality {
   /// size, under Telegram HD (2560).
   static const photoMaxSide = 2048;
   static const photoJpegQuality = 80;
+
+  /// Optional low-transfer send; the standard profile remains the default.
+  static const photoEconomyMaxSide = 1280;
+  static const photoEconomyJpegQuality = 72;
+  static const videoEconomyMaxSide = 854;
+  static const videoEconomyBitrate = 900 * 1000;
+  static const videoEconomySkipBitrate = 1200 * 1000;
 
   /// The SDK's thumbnail side (`Client.defaultThumbnailSize`): a timeline
   /// bubble at 2.6 dpr.
@@ -97,6 +105,15 @@ abstract final class MediaQuality {
 /// "uncompressed" profile: the original file is sent as a document through
 /// the attach menu's "File" entry instead.
 enum MediaProfile {
+  /// Smaller photos and 480p video, selected deliberately for this send.
+  economy(
+    photoMaxSide: MediaQuality.photoEconomyMaxSide,
+    photoJpegQuality: MediaQuality.photoEconomyJpegQuality,
+    videoMaxSide: MediaQuality.videoEconomyMaxSide,
+    videoBitrate: MediaQuality.videoEconomyBitrate,
+    videoSkipBitrate: MediaQuality.videoEconomySkipBitrate,
+  ),
+
   /// The automatic sweet spot (the default of every send).
   standard(
     photoMaxSide: MediaQuality.photoMaxSide,
@@ -130,12 +147,19 @@ enum MediaProfile {
   final int videoSkipBitrate;
 
   int get videoMaxFps => MediaQuality.videoMaxFps;
+  int get videoAudioBitrate =>
+      this == economy ? 96000 : MediaQuality.videoAudioBitrate;
 
   /// The profile a photo send used, from the long side it was given. The
   /// SDK hands the resizer only this number (and the outbox stores only
   /// it for Retry), so the JPEG quality is derived from it.
   static MediaProfile ofPhotoMaxSide(int maxSide) =>
-      maxSide >= MediaQuality.photoHdMaxSide ? hd : standard;
+      maxSide >= MediaQuality.photoHdMaxSide
+      ? hd
+      : maxSide > MediaQuality.thumbnailMaxSide &&
+            maxSide <= MediaQuality.photoEconomyMaxSide
+      ? economy
+      : standard;
 }
 
 /// The encoded format of a still image, sniffed from its header.
@@ -195,6 +219,9 @@ class PhotoPlan {
     final h = math.max(1, (height * scale).round());
     final shrink = scale < 1;
     final thumbnail = maxSide <= MediaQuality.thumbnailMaxSide;
+    final economy =
+        !thumbnail &&
+        MediaProfile.ofPhotoMaxSide(maxSide) == MediaProfile.economy;
     final jpegQuality = thumbnail
         ? MediaQuality.thumbnailJpegQuality
         : MediaProfile.ofPhotoMaxSide(maxSide).photoJpegQuality;
@@ -210,8 +237,11 @@ class PhotoPlan {
     }
     final upright = orientation == null || orientation == 1;
     final efficient =
-        bytes <= MediaQuality.smallPhotoBytes ||
-        bytes <= width * height * MediaQuality.efficientBytesPerPixel;
+        bytes <= (economy ? 150 * 1000 : MediaQuality.smallPhotoBytes) ||
+        bytes <=
+            width *
+                height *
+                (economy ? 0.25 : MediaQuality.efficientBytesPerPixel);
     switch (format) {
       case PhotoFormat.jpeg:
         if (!shrink && upright && efficient) {
@@ -225,14 +255,20 @@ class PhotoPlan {
         return PhotoPlan._(PhotoAction.jpeg, w, h, quality: jpegQuality);
       case PhotoFormat.png:
         if (!shrink &&
-            (thumbnail || bytes <= MediaQuality.screenshotKeepBytes)) {
+            (thumbnail ||
+                bytes <=
+                    (economy
+                        ? 500 * 1000
+                        : MediaQuality.screenshotKeepBytes))) {
           return PhotoPlan._(PhotoAction.keep, width, height);
         }
         return PhotoPlan._(
           PhotoAction.jpeg,
           w,
           h,
-          quality: thumbnail ? jpegQuality : MediaQuality.screenshotJpegQuality,
+          quality: thumbnail
+              ? jpegQuality
+              : (economy ? 80 : MediaQuality.screenshotJpegQuality),
           fullChroma: !thumbnail,
         );
       case PhotoFormat.gif:
@@ -317,9 +353,7 @@ class VideoPlan {
     final w = even(width * scale);
     final h = even(height * scale);
     final budget = seconds > 0
-        ? seconds *
-              (profile.videoBitrate + MediaQuality.videoAudioBitrate) /
-              8e6
+        ? seconds * (profile.videoBitrate + profile.videoAudioBitrate) / 8e6
         : 0.0;
     var target = math.max(1, budget.ceil());
     // Never ask for more than the source holds (a very short or lean clip).

@@ -52,6 +52,11 @@ abstract final class MediaAlbums {
       return false;
     }
     if (event.status.isError) return false;
+    // A business card's buttons belong to this exact message. Grouping it
+    // into an album can otherwise hide actions on a non-leading member.
+    if (event.content.containsKey(WhatsAppInteractiveContent.contentKey)) {
+      return false;
+    }
     // A sticker sent as an image floats alone at sticker size.
     if (StickerEvents.isImageSticker(event)) return false;
     if (event.inReplyToEventId(includingFallback: false) != null) return false;

@@ -110,3 +110,37 @@ Packages `flutter_animate 4.5.2` and `skeletonizer 3.0.0` (exact pins; new trans
 ## Harness selection rule — 2026-10-24 (wave 6)
 
 `scripts/verify-notion-ui.py` no longer keeps a hand list of excluded suites. A `test/notion/*_test.dart` suite runs in the presenter harness only if its whole import/export/part closure resolves there (harness sources, `test/notion` helpers, `personal_core`, the pinned package graph) and every `lib/*.dart` path literal it reads at runtime is a harness source. Suites reaching the Matrix SDK, providers, plugins or app controllers (42 now, including every former `*_controller_test`/`*_adapter_test`) are listed on each run and execute with native hooks in the full app suite. Presenter sources must be self-contained: a `SOURCES` file importing a file outside the harness fails the gate with the missing paths instead of a compile error. The gate had been failing on `main` since wave 5 (`notion_inbox_view_chips.dart` and `notion_inbox_network_badge.dart` missing from `SOURCES`); both plus wave 6 `conversation_service_chip.dart` were added. Run: 34 suites, 337 tests PASS, analyzer 0 errors/0 warnings (5 infos). Three goldens regenerated after visual review: `screens/inbox-390.png` and `screens/inbox-390-scrolled.png` (wave 5 view chips All/Unread/Groups replace the "Messages" header), `screens/chat-details-390.png` (wave 6 header without the divider after Back). Real device/account rendering NOT RUN.
+
+## WhatsApp receive-only verification — 2026-11-08
+
+Focused application/SDK run: **66 PASS** across seven suites, with native hooks
+enabled and fictional events. Includes parser-compatible rendering, source-bound
+mutation blocking in both privacy modes, exact links/forward, pagination,
+revote/unvote, redactions before a pending page and after widget remount, partial
+failure and shared request retry, existing media and Matrix poll regressions.
+
+Three new goldens were generated and inspected: dark/light at 390x680 and
+320x1200 with 200% text and RTL. Presenter tests cover separate 48dp open/copy
+targets, keyboard/semantics, wrapping and AA link contrast on the actual bubble
+fill. Independent review disposition is ship for local receive/render, with all
+reported findings resolved. These are widget captures, not live-device evidence.
+
+The reproducible run uses detached verification checkout base
+7d9ba49f37644cc5c069793338c08a294de3aa11 plus this feature overlay. Concurrent
+media-prefetch edits in canonical privacy.dart were retained there and excluded
+from the verification copy; only the three WhatsApp authorization additions were
+applied to its base. The feature kit records exact source hashes and this scope.
+An initial canonical analyzer run was blocked by a separate in-progress
+MediaPrefetchNetwork.unmetered reference and unnecessary cast in media cache work.
+
+Final frozen analysis: 0 errors/warnings, 71 existing infos. Personal: 308 core
+tests and native storage/outbox/privacy gates PASS. Presentation: 428 PASS and
+harness analyzer PASS (9 existing infos), including all three new goldens.
+The canonical retry was canceled before execution while another session owned
+the Flutter queue for an Android build. Its earlier cache enum reference was
+subsequently removed; no current canonical PASS is claimed. Local evidence is
+under project artifacts/whatsapp-rich-2026-11-08; full scope is in the handoff.
+Real WhatsApp portal/process mapping, account history/E2EE, physical Android/macOS,
+native accessibility, signed app release, installation and production deployment
+remain **NOT RUN**. Bridge binary is a local goolm candidate with separately
+documented runtime/backend limitations.

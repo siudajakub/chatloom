@@ -3,6 +3,7 @@
 // engine of `flutter test`; no file leaves the test.
 import 'dart:typed_data';
 
+import 'package:chatloom/personal/media/media_preparation_exception.dart';
 import 'package:chatloom/personal/media/media_quality.dart';
 import 'package:chatloom/personal/media/photo_encoder.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -214,8 +215,26 @@ void main() {
       expect(out.bytes.length, lessThan(150 * 1000));
     });
 
-    test('unreadable bytes are left to the SDK (null)', () async {
-      expect(await _encode(Uint8List.fromList([1, 2, 3, 4])), isNull);
+    test(
+      'unreadable full images fail instead of sending the original',
+      () async {
+        await expectLater(
+          _encode(Uint8List.fromList([1, 2, 3, 4])),
+          throwsA(isA<MediaPreparationException>()),
+        );
+        expect(
+          await _encode(Uint8List.fromList([1, 2, 3, 4]), maxSide: 800),
+          isNull,
+        );
+      },
+    );
+
+    test('economy produces smaller images than the standard profile', () async {
+      final source = img.encodeJpg(_gradient(2400, 1800), quality: 100);
+      final standard = (await _encode(source))!;
+      final economy = (await _encode(source, maxSide: 1280))!;
+      expect((economy.width, economy.height), (1280, 960));
+      expect(economy.bytes.length, lessThan(standard.bytes.length));
     });
   });
 }

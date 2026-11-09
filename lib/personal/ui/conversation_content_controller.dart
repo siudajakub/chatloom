@@ -2,7 +2,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:html/parser.dart' show parseFragment;
 import 'package:matrix/matrix.dart';
-import 'package:personal_core/personal_core.dart' show RoundVideoDescriptor;
+import 'package:personal_core/personal_core.dart'
+    show RoundVideoDescriptor, WhatsAppInteractiveContent;
 
 bool sharedVisible(Event event) =>
     !event.redacted && event.type == EventTypes.Message;
@@ -76,20 +77,37 @@ List<String> _extractLinks(Event event) {
     r'''https?://[^\s<>"']+''',
     caseSensitive: false,
   ).allMatches(text).map((m) => m.group(0)!);
-  final formatted = event.content['formatted_body'];
+  final interactive = WhatsAppInteractiveContent.fromContent(event.content);
+  final exactActions =
+      interactive?.actions.map((action) => action.url).toSet() ??
+      const <String>{};
+  final formatted = interactive == null
+      ? event.content['formatted_body']
+      : interactive.formattedBody;
   final fragment = formatted is String ? parseFragment(formatted) : null;
   // The quoted original of a reply is someone else's message.
   for (final reply in fragment?.querySelectorAll('mx-reply') ?? const []) {
     reply.remove();
   }
   final candidates = [
-    ...plain(_withoutReplyFallback(event)),
+    ...plain(interactive?.body ?? _withoutReplyFallback(event)),
     if (fragment != null)
       ...fragment.querySelectorAll('a[href]').map((a) => a.attributes['href']!),
     if (fragment != null) ...plain(fragment.text ?? ''),
   ];
-  return candidates
+  final links = candidates
       .map((s) {
+        // Match structured URLs before normalizing prose punctuation;
+        // signed URLs can legally end with any of these characters.
+        String? exact;
+        for (final url in exactActions) {
+          if (s.startsWith(url) &&
+              RegExp(r'^[.,;!?)\]}]*$').hasMatch(s.substring(url.length)) &&
+              (exact == null || url.length > exact.length)) {
+            exact = url;
+          }
+        }
+        if (exact != null) return exact;
         s = s.replaceFirst(RegExp(r'[.,;!?]+$'), '');
         for (final pair in [('(', ')'), ('[', ']'), ('{', '}')]) {
           while (s.endsWith(pair.$2) &&
@@ -106,8 +124,13 @@ List<String> _extractLinks(Event event) {
             uri.host.isNotEmpty &&
             !_internalLink(uri);
       })
-      .toSet()
-      .toList(growable: false);
+      .toSet();
+  // Structured action URLs are exact values, not prose: punctuation at
+  // their end may be part of a signed URL and must not be stripped.
+  for (final url in exactActions) {
+    if (!_internalLink(Uri.parse(url))) links.add(url);
+  }
+  return links.toList(growable: false);
 }
 
 class ContentBatch {

@@ -9,6 +9,7 @@ import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/media/send_error_text.dart';
 import 'package:chatloom/personal/ui/notion_settings_body.dart'
     show NotionSettingsToggle;
+import 'package:chatloom/personal/whatsapp/whatsapp_action_policy.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -47,11 +48,13 @@ class StartPollBottomSheet extends StatefulWidget {
 
   /// Opens the sheet for [room].
   static Future<void> show(BuildContext context, Room room) =>
-      showNotionSheet<void>(
-        context: context,
-        title: 'New poll',
-        builder: (_) => StartPollBottomSheet(room: room),
-      );
+      !WhatsAppActionPolicy.allows(room, WhatsAppAction.createPoll)
+      ? Future<void>.value()
+      : showNotionSheet<void>(
+          context: context,
+          title: 'New poll',
+          builder: (_) => StartPollBottomSheet(room: room),
+        );
 
   @override
   State<StartPollBottomSheet> createState() => _StartPollBottomSheetState();
@@ -76,8 +79,14 @@ class _StartPollBottomSheetState extends State<StartPollBottomSheet> {
   /// The sheet closes at once: the poll's bubble shows "Sending" and, if it
   /// fails, "Not sent · Tap to retry" (same transaction on retry).
   Future<void> _createPoll() async {
+    if (!WhatsAppActionPolicy.allows(widget.room, WhatsAppAction.createPoll)) {
+      return;
+    }
     final proceed = await showTrustUserInRoomDialog(context, widget.room);
     if (!proceed || !mounted) return;
+    if (!WhatsAppActionPolicy.allows(widget.room, WhatsAppAction.createPoll)) {
+      return;
+    }
     final messenger = ScaffoldMessenger.of(context);
     var id = 0;
     _txid ??= widget.room.client.generateUniqueTransactionId();
@@ -244,7 +253,14 @@ class _StartPollBottomSheetState extends State<StartPollBottomSheet> {
               key: const ValueKey('poll-create'),
               label: 'Create poll',
               expand: true,
-              onPressed: _canCreate ? _createPoll : null,
+              onPressed:
+                  _canCreate &&
+                      WhatsAppActionPolicy.allows(
+                        widget.room,
+                        WhatsAppAction.createPoll,
+                      )
+                  ? _createPoll
+                  : null,
             ),
           ],
         ),

@@ -2,6 +2,8 @@
 // FX-16 "Remove for you": hidden in ChatLoom only. Fictional offline
 // fixtures; no account, no network.
 
+import 'dart:async';
+
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/personal/hidden_messages.dart';
@@ -24,9 +26,11 @@ class _Store implements HiddenMessagesStorage {
   int reads = 0;
   int writes = 0;
   Object? readFailure;
+  Completer<void>? readGate;
   @override
   Future<Map<String, dynamic>?> read() async {
     reads++;
+    await readGate?.future;
     if (readFailure != null) throw readFailure!;
     return value;
   }
@@ -126,6 +130,74 @@ void main() {
     HiddenMessages.instance.storageFor = HiddenMessages.defaultStorage;
   });
 
+  test(
+    'ensureLoaded waits for applied hides and shares an in-flight read',
+    () async {
+      final client = ConversationClient();
+      final room = ConversationRoom(client, '!restore:example.invalid');
+      final gate = store.readGate = Completer<void>();
+      store.value = {
+        'keys': ['!restore:example.invalid\u0000\$old'],
+      };
+      final hidden = HiddenMessages(storageFor: (_) => store);
+      final first = hidden.ensureLoaded(client);
+      expect(identical(first, hidden.ensureLoaded(client)), isTrue);
+      var done = false;
+      unawaited(first.then((_) => done = true));
+      await _settle();
+      expect(done, isFalse);
+      expect(store.reads, 1);
+      gate.complete();
+      await first;
+      expect(hidden.isHidden(_Message(room, r'$old')), isTrue);
+      await hidden.ensureLoaded(client);
+      expect(store.reads, 1);
+    },
+  );
+
+  test(
+    'dispose during hydration does not notify or restore hidden state',
+    () async {
+      final client = ConversationClient();
+      final room = ConversationRoom(client, '!restore:example.invalid');
+      final gate = store.readGate = Completer<void>();
+      store.value = {
+        'keys': ['!restore:example.invalid\u0000\$old'],
+      };
+      final hidden = HiddenMessages(storageFor: (_) => store);
+      final ready = hidden.ensureLoaded(client);
+      final required = expectLater(
+        hidden.ensureLoaded(client, requireSuccess: true),
+        throwsStateError,
+      );
+      await _settle();
+      hidden.dispose();
+      gate.complete();
+      await ready;
+      await required;
+      expect(hidden.isHidden(_Message(room, r'$old')), isFalse);
+    },
+  );
+
+  test('required hydration reports read failure and can retry', () async {
+    final client = ConversationClient();
+    final room = ConversationRoom(client, '!retry:example.invalid');
+    store
+      ..readFailure = StateError('fixture unavailable')
+      ..value = {
+        'keys': ['!retry:example.invalid\u0000\$old'],
+      };
+    final hidden = HiddenMessages(storageFor: (_) => store);
+    await expectLater(
+      hidden.ensureLoaded(client, requireSuccess: true),
+      throwsStateError,
+    );
+    store.readFailure = null;
+    await hidden.ensureLoaded(client, requireSuccess: true);
+    expect(hidden.isHidden(_Message(room, r'$old')), isTrue);
+    expect(store.reads, 2);
+  });
+
   test('hide filters the row, unhide brings it back', () async {
     final client = ConversationClient();
     final room = ConversationRoom(client, '!hide:example.invalid');
@@ -188,30 +260,33 @@ void main() {
     expect(notified, 1);
   });
 
-  test('a failed read never overwrites the stored hides; retry merges', () async {
-    final client = ConversationClient();
-    final room = ConversationRoom(client, '!retry:example.invalid');
-    store
-      ..value = {
-        'v': 1,
-        'keys': ['!retry:example.invalid\u0000\$old'],
-      }
-      ..readFailure = StateError('Encrypted storage is not open');
-    final hidden = HiddenMessages(storageFor: (_) => store)..load(client);
-    await _settle();
-    hidden.hide(_Message(room, r'$new'));
-    await _settle();
-    expect(store.writes, 0);
-    store.readFailure = null;
-    hidden.load(client); // the next open retries
-    await _settle();
-    expect(hidden.isHidden(_Message(room, r'$old')), isTrue);
-    expect(hidden.isHidden(_Message(room, r'$new')), isTrue);
-    expect(store.value?['keys'], [
-      '!retry:example.invalid\u0000\$old',
-      '!retry:example.invalid\u0000\$new',
-    ]);
-  });
+  test(
+    'a failed read never overwrites the stored hides; retry merges',
+    () async {
+      final client = ConversationClient();
+      final room = ConversationRoom(client, '!retry:example.invalid');
+      store
+        ..value = {
+          'v': 1,
+          'keys': ['!retry:example.invalid\u0000\$old'],
+        }
+        ..readFailure = StateError('Encrypted storage is not open');
+      final hidden = HiddenMessages(storageFor: (_) => store)..load(client);
+      await _settle();
+      hidden.hide(_Message(room, r'$new'));
+      await _settle();
+      expect(store.writes, 0);
+      store.readFailure = null;
+      hidden.load(client); // the next open retries
+      await _settle();
+      expect(hidden.isHidden(_Message(room, r'$old')), isTrue);
+      expect(hidden.isHidden(_Message(room, r'$new')), isTrue);
+      expect(store.value?['keys'], [
+        '!retry:example.invalid\u0000\$old',
+        '!retry:example.invalid\u0000\$new',
+      ]);
+    },
+  );
 
   test('bounded: the oldest hide falls out first', () async {
     final client = ConversationClient();
@@ -259,7 +334,10 @@ void main() {
       content: {
         'msgtype': MessageTypes.Text,
         'body': '* apple crumble',
-        'm.new_content': {'msgtype': MessageTypes.Text, 'body': 'apple crumble'},
+        'm.new_content': {
+          'msgtype': MessageTypes.Text,
+          'body': 'apple crumble',
+        },
         'm.relates_to': {'rel_type': 'm.replace', 'event_id': r'$secret'},
       },
       room: room,
@@ -280,20 +358,22 @@ void main() {
     hidden.debugReset(client);
   });
 
-  test('the default store is the device-local record, never the journal',
-      () async {
-    final client = _NetClient();
-    final personal = _Personal(client);
-    final storage = PersonalHiddenMessagesStorage(personal);
-    await storage.write({
-      'v': 1,
-      'keys': ['!r:example.invalid\u0000\$x'],
-    });
-    expect(await storage.read(), isNotNull);
-    expect(personal.local.keys, [PersonalHiddenMessagesStorage.key]);
-    expect(personal.synced, isEmpty);
-    expect(client.requests, isEmpty);
-  });
+  test(
+    'the default store is the device-local record, never the journal',
+    () async {
+      final client = _NetClient();
+      final personal = _Personal(client);
+      final storage = PersonalHiddenMessagesStorage(personal);
+      await storage.write({
+        'v': 1,
+        'keys': ['!r:example.invalid\u0000\$x'],
+      });
+      expect(await storage.read(), isNotNull);
+      expect(personal.local.keys, [PersonalHiddenMessagesStorage.key]);
+      expect(personal.synced, isEmpty);
+      expect(client.requests, isEmpty);
+    },
+  );
 
   testWidgets('Remove for you: snackbar explains, Undo shows it again, '
       'nothing is redacted, sent or synced', (tester) async {

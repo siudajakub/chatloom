@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'dart:convert';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/events/image_bubble.dart';
@@ -9,10 +8,10 @@ import 'package:chatloom/pages/chat/events/reel_caption.dart';
 import 'package:chatloom/pages/image_viewer/image_viewer.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/instagram_share.dart';
+import 'package:chatloom/personal/media/instagram_media.dart';
 import 'package:chatloom/personal/reel_metadata.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
-import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -81,7 +80,9 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
   void didUpdateWidget(covariant InstagramSharePreview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.share.url != widget.share.url ||
-        oldWidget.event?.eventId != widget.event?.eventId) {
+        oldWidget.event?.eventId != widget.event?.eventId ||
+        oldWidget.event?.room.id != widget.event?.room.id ||
+        !identical(oldWidget.event?.room.client, widget.event?.room.client)) {
       _generation++;
       _assets = [];
       _metadata = null;
@@ -144,103 +145,37 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
         );
       }
 
-      final metadataKey = Uri(
-        scheme: 'chatloom-link',
-        host: 'instagram',
-        path: 'v2/${original.eventId}/${widget.share.url.path}',
+      final post = await loadInstagramPost(
+        original: original,
+        url: widget.share.url,
+        request: () => request(false, 0),
       );
-      final db = client.database;
-      Object? response;
-      final cached = await db.getFile(metadataKey);
-      if (cached != null) {
-        try {
-          final envelope = jsonDecode(utf8.decode(cached));
-          if (envelope is Map &&
-              envelope['fetched_at'] is int &&
-              DateTime.now().millisecondsSinceEpoch -
-                      (envelope['fetched_at'] as int) <
-                  const Duration(days: 1).inMilliseconds) {
-            response = envelope['media'];
-          }
-        } catch (_) {
-          await db.deleteFile(metadataKey);
-        }
-      }
-      response ??= await request(false, 0);
       if (!mounted ||
           generation != _generation ||
           client.userID != user ||
           original.redacted) {
         return;
       }
-      if (response is! Map || response['assets'] is! List) {
-        throw StateError('Invalid media');
-      }
       final metadata = ReelMetadata.fromInstagramResponse(
         widget.share,
-        response,
+        post.response,
         fallbackCaption: _preview?.description,
       );
-      final metadataBytes = Uint8List.fromList(
-        utf8.encode(
-          jsonEncode({
-            'media': response,
-            'fetched_at': DateTime.now().millisecondsSinceEpoch,
-          }),
-        ),
-      );
-      if (metadataBytes.length < db.maxFileSize) {
-        await db.storeFile(
-          metadataKey,
-          metadataBytes,
-          DateTime.now().millisecondsSinceEpoch,
-        );
-      }
-      final items = response['assets'] as List;
-      if (items.isEmpty || items.length > 128) {
-        throw StateError('Invalid media');
-      }
+      final items = post.assets;
       final assets = <Event>[];
       for (var i = 0; i < items.length; i++) {
         final item = items[i];
-        if (item is! Map || !const ['image', 'video'].contains(item['type'])) {
+        if (!const ['image', 'video'].contains(item['type'])) {
           throw StateError('Invalid media');
         }
         final index = i;
         assets.add(
-          _InstagramAsset(
+          InstagramMediaAsset(
             original: original,
+            url: widget.share.url,
             index: i,
             info: item,
-            download: () async {
-              if (client.userID != user || original.redacted) {
-                throw StateError('Media access revoked');
-              }
-              await client.authorizeAttachmentAccess?.call(original, false);
-              final result = await request(true, index);
-              if (client.userID != user ||
-                  original.redacted ||
-                  result is! Map ||
-                  result['data'] is! String ||
-                  result['mime'] is! String) {
-                throw StateError('Media unavailable');
-              }
-              final encoded = result['data'] as String;
-              if (encoded.length > 90 * 1024 * 1024) {
-                throw StateError('Media too large');
-              }
-              final bytes = base64Decode(encoded);
-              if (bytes.isEmpty || bytes.length > 64 * 1024 * 1024) {
-                throw StateError('Media too large');
-              }
-              return MatrixFile(
-                bytes: bytes,
-                name: item['type'] == 'video'
-                    ? 'instagram.mp4'
-                    : 'instagram.jpg',
-                mimeType: result['mime'] as String,
-              );
-            },
+            request: () => request(true, index),
           ),
         );
       }
@@ -357,100 +292,4 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
       ),
     ],
   );
-}
-
-/// Local presentation adapter. Never sent or persisted as a Matrix message.
-/// External media never enters the SDK downloader that attaches Matrix auth.
-class _InstagramAsset extends Event {
-  final Event original;
-  final String? _owner;
-  final Future<MatrixFile> Function() download;
-  Future<MatrixFile>? _inflight;
-  _InstagramAsset({
-    required this.original,
-    required int index,
-    required Map info,
-    required this.download,
-  }) : _owner = original.room.client.userID,
-       super(
-         type: EventTypes.Message,
-         eventId: '${original.eventId}/instagram/$index',
-         senderId: original.senderId,
-         originServerTs: original.originServerTs,
-         room: original.room,
-         content: {
-           'msgtype': info['type'] == 'video'
-               ? MessageTypes.Video
-               : MessageTypes.Image,
-           'body': info['type'] == 'video' ? 'instagram.mp4' : 'instagram.jpg',
-           'url': 'mxc://chatloom-local.invalid/instagram',
-           'chatloom.local_media': true,
-           'info': {'w': info['width'], 'h': info['height']},
-         },
-       );
-  @override
-  Future<MatrixFile> downloadAndDecryptAttachment({
-    bool getThumbnail = false,
-    Future<Uint8List> Function(Uri)? downloadCallback,
-    bool fromLocalStoreOnly = false,
-    bool skipScanner = false,
-    bool cacheAttachment = true,
-    void Function(int)? onDownloadProgress,
-  }) async {
-    if (original.redacted ||
-        original.room.client.userID == null ||
-        original.room.client.userID != _owner) {
-      throw StateError('Media access revoked');
-    }
-    await original.room.client.authorizeAttachmentAccess?.call(
-      original,
-      getThumbnail,
-    );
-
-    final cacheKey = Uri(
-      scheme: 'chatloom-media',
-      host: 'instagram',
-      path: eventId,
-    );
-    Future<MatrixFile> load() async {
-      final db = original.room.client.database;
-      final cached = await db.getFile(cacheKey);
-      if (cached != null) {
-        return MatrixFile(
-          bytes: cached,
-          name: body,
-          mimeType: messageType == MessageTypes.Video
-              ? 'video/mp4'
-              : 'image/jpeg',
-        );
-      }
-      if (fromLocalStoreOnly) {
-        throw StateError('Not cached');
-      }
-      final file = await download();
-      if (cacheAttachment && file.size < db.maxFileSize) {
-        await db.storeFile(
-          cacheKey,
-          file.bytes,
-          DateTime.now().millisecondsSinceEpoch,
-        );
-      }
-      return file;
-    }
-
-    final future = _inflight ??= load();
-    try {
-      final file = await future;
-      if (original.redacted || original.room.client.userID != _owner) {
-        throw StateError('Media access revoked');
-      }
-      onDownloadProgress?.call(file.size);
-      return file;
-    } catch (_) {
-      if (identical(_inflight, future)) {
-        _inflight = null;
-      }
-      rethrow;
-    }
-  }
 }

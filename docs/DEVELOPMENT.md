@@ -67,6 +67,14 @@ ffmpeg with librsvg, or `cairosvg`). Do not edit the PNGs by hand.
 
 ## Feature notes
 
+Keep one shared application in `lib/` and `packages/`. Platform runners and
+system adapters do not own separate copies of chat features. See
+[the iOS/reels integration](upstream-reels-integration.md) for the merge
+decisions and current platform limits; Windows/Web work remains separate
+until its native/storage acceptance is complete.
+
+- [WhatsApp links and read-only polls](whatsapp-rich-messages.md): incoming
+  bridge contract, disabled outgoing operations, compatibility and rollout.
 - [Instagram link media](instagram-link-media.md): optional bridge contract,
   integration behavior and current acceptance limits.
 - [Voice notes and round videos](voice-recording.md): microphone capture,

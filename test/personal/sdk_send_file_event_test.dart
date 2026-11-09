@@ -226,7 +226,10 @@ void main() {
       );
       final echo = await database.getEventById('fixture-gone', room);
       expect(echo, isNotNull);
-      await expectLater(echo!.downloadAndDecryptAttachment(), throwsA(anything));
+      await expectLater(
+        echo!.downloadAndDecryptAttachment(),
+        throwsA(anything),
+      );
       await expectLater(
         echo.sendAgain(),
         throwsA(isA<FileNoLongerInCacheException>()),
@@ -370,6 +373,45 @@ void main() {
     }
     expect(await sending, r'$sent');
   });
+
+  test(
+    'a failed requested shrink uploads nothing and remains retryable',
+    () async {
+      final (client, room) = await _setUp();
+      client.customImageResizer = (_) async =>
+          throw StateError('fictional encoder failure');
+      final image = MatrixImageFile(
+        bytes: Uint8List(4000),
+        name: 'photo.jpg',
+        mimeType: 'image/jpeg',
+      );
+      await expectLater(
+        room.sendFileEvent(
+          image,
+          shrinkImageMaxDimension: 2048,
+          txid: 'fixture-encoder-failure',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(client.starts, isEmpty);
+      expect(client.sent, 0);
+      client.customImageResizer = _UploadClient._resize;
+      final retry = room.sendFileEvent(
+        image,
+        shrinkImageMaxDimension: 2048,
+        txid: 'fixture-encoder-failure',
+      );
+      for (var i = 0; i < 200 && client.starts.length < 2; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(client.starts.length, 2);
+      for (final gate in client.pending) {
+        gate.complete(Uri.parse('mxc://example.invalid/x'));
+      }
+      expect(await retry, r'$sent');
+      expect(client.sent, 1);
+    },
+  );
 
   test(
     'a cancelled send stops its upload and sends no event (MD-17)',

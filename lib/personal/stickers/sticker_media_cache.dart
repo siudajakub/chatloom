@@ -7,7 +7,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:chatloom/personal/media/media_prefetcher.dart'
-    show ClientMediaPrefetchPorts;
+    show ClientMediaPrefetchPorts, MediaPrefetchNetwork;
 import 'package:chatloom/utils/client_download_content_extension.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/flutter_matrix_dart_sdk_database/cipher.dart';
 import 'package:chatloom/utils/power_saving.dart';
@@ -17,6 +17,7 @@ import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:webcrypto/webcrypto.dart';
 
+import '../media/cache_budget.dart';
 import '../media/private_directories_stub.dart'
     if (dart.library.ffi) '../media/private_directories_native.dart'
     as native;
@@ -68,7 +69,8 @@ class StickerMediaCache {
   static final _partialName = RegExp(r'^\.partial_[A-Za-z0-9_-]{16}$');
 
   final Directory directory;
-  final int maxBytes;
+  int _maxBytes;
+  int get maxBytes => _maxBytes;
   final Duration retention;
   final AesGcmSecretKey _key;
   final DateTime Function() _now;
@@ -77,18 +79,25 @@ class StickerMediaCache {
   final _writes = <Future<bool>>{};
   int _generation = 0;
   Future<void>? _clearing;
+  Future<void> _work = Future.value();
 
   /// Bytes on disk as of the last scan plus later writes (an estimate: an
   /// overwrite counts twice until the next eviction recounts).
-  int _total = 0;
+  int? _total;
 
   StickerMediaCache._(
     this.directory,
-    this.maxBytes,
+    this._maxBytes,
     this.retention,
     this._key,
     this._now,
   );
+
+  Future<T> _serialize<T>(Future<T> Function() work) {
+    final pending = _work.then((_) => work());
+    _work = pending.then<void>((_) {}, onError: (Object _) {});
+    return pending;
+  }
 
   /// Opens (creating owner-only) [directory] with the 32-byte [key]. Throws
   /// when the folder is not a private real directory or the key is not
@@ -99,8 +108,10 @@ class StickerMediaCache {
     int maxBytes = defaultMaxBytes,
     Duration retention = defaultRetention,
     DateTime Function()? now,
+    bool trimOnOpen = true,
   }) async {
     if (key.length != 32) throw ArgumentError.value('<key>', 'key');
+    if (maxBytes <= 0) throw ArgumentError.value(maxBytes, 'maxBytes');
     await directory.parent.create(recursive: true);
     // Resolve system aliases of the parent once (Android `/data/user/0`),
     // but never follow the cache folder itself.
@@ -122,7 +133,7 @@ class StickerMediaCache {
     );
     await cache._validate();
     // Drops expired files and counts the rest.
-    await cache.evict();
+    if (trimOnOpen) await cache.evict();
     return cache;
   }
 
@@ -130,10 +141,15 @@ class StickerMediaCache {
 
   /// The app-wide cache, or null (web, no protected storage key, folder not
   /// private): then nothing is cached here.
-  static Future<StickerMediaCache?> shared() => _shared ??= openShared(
-    base: getApplicationSupportDirectory,
-    key: () => getProtectedStorageCipher(keyStorageName),
-  );
+  static Future<StickerMediaCache?> shared() => _shared ??= () async {
+    final budget = await MediaCacheBudget.read();
+    return openShared(
+      base: getApplicationSupportDirectory,
+      key: () => getProtectedStorageCipher(keyStorageName),
+      maxBytes: budget.stickerBytes,
+      trimOnOpen: false,
+    );
+  }();
 
   /// Opens the cache in `<base>/[folderName]` with the base64url [key];
   /// null on any failure.
@@ -142,6 +158,8 @@ class StickerMediaCache {
     required Future<Directory> Function() base,
     required Future<String> Function() key,
     DateTime Function()? now,
+    int maxBytes = defaultMaxBytes,
+    bool trimOnOpen = true,
   }) async {
     if (kIsWeb) return null;
     try {
@@ -149,7 +167,13 @@ class StickerMediaCache {
       // and go on first read or with the LRU.
       final raw = base64Url.decode(await key());
       final folder = Directory('${(await base()).path}/$folderName');
-      return await open(folder, key: raw, now: now);
+      return await open(
+        folder,
+        key: raw,
+        now: now,
+        maxBytes: maxBytes,
+        trimOnOpen: trimOnOpen,
+      );
     } catch (error) {
       Logs().w('sticker_cache_unavailable', error.runtimeType.toString());
       return null;
@@ -235,8 +259,15 @@ class StickerMediaCache {
     try {
       await _validate();
       final file = _entry(key);
+      if (await FileSystemEntity.type(file.path, followLinks: false) !=
+          FileSystemEntityType.file) {
+        return null;
+      }
       final stat = await FileStat.stat(file.path);
-      if (stat.type != FileSystemEntityType.file) return null;
+      if (stat.type != FileSystemEntityType.file ||
+          stat.size > maxEntryBytes + _magic.length + _nonceLength + 16) {
+        return null;
+      }
       final now = _now();
       if (now.difference(stat.modified) > retention) {
         await _delete(file);
@@ -264,16 +295,18 @@ class StickerMediaCache {
   /// throws.
   Future<bool> write(String key, Uint8List bytes) {
     if (_clearing != null) return Future.value(false);
-    final pending = _write(key, bytes, _generation);
+    final generation = _generation;
+    final pending = _serialize(() => _write(key, bytes, generation));
     _writes.add(pending);
     unawaited(pending.then<void>((_) => _writes.remove(pending)));
     return pending;
   }
 
   Future<bool> _write(String key, Uint8List bytes, int generation) async {
-    if (bytes.isEmpty ||
+    if (generation != _generation ||
+        bytes.isEmpty ||
         bytes.lengthInBytes > maxEntryBytes ||
-        bytes.lengthInBytes > maxBytes) {
+        bytes.lengthInBytes + _magic.length + _nonceLength + 16 > maxBytes) {
       return false;
     }
     File? partial;
@@ -294,14 +327,15 @@ class StickerMediaCache {
       }
       await partial.rename(target.path);
       await target.setLastModified(_now());
-      _total += sealed.length;
+      final total = _total;
+      if (total != null) _total = total + sealed.length;
     } catch (_) {
       if (partial != null) await _delete(partial);
       return false;
     }
-    if (_total > maxBytes) {
+    if (_total == null || _total! > maxBytes) {
       try {
-        await evict(keep: key);
+        await _evict(keep: key);
       } catch (_) {
         // The next write tries again.
       }
@@ -343,12 +377,37 @@ class StickerMediaCache {
     return result.future;
   }
 
-  Future<void> remove(String key) => _delete(_entry(key));
+  Future<void> remove(String key) => _serialize(() => _delete(_entry(key)));
+
+  Future<void> setBudget(int bytes, {bool trim = true}) => _serialize(() async {
+    if (bytes <= 0) throw ArgumentError.value(bytes, 'bytes');
+    _maxBytes = bytes;
+    if (trim) await _evict();
+  });
+
+  /// Physical bytes of this cache's files, including interrupted writes.
+  /// Counts metadata only; no decryption or file-content reads.
+  Future<int> usageBytes() => _serialize(() async {
+    await _validate();
+    var bytes = 0;
+    await for (final item in directory.list(followLinks: false)) {
+      final name = item.uri.pathSegments.last;
+      if (item is! File ||
+          !(_entryName.hasMatch(name) || _partialName.hasMatch(name))) {
+        continue;
+      }
+      final stat = await item.stat();
+      if (stat.type == FileSystemEntityType.file) bytes += stat.size;
+    }
+    return bytes;
+  });
 
   /// Deletes expired files, then the least recently used ones until the
   /// cache fits [maxBytes]. [keep] (the file just stored) always stays.
   /// Returns the bytes left.
-  Future<int> evict({String? keep}) async {
+  Future<int> evict({String? keep}) => _serialize(() => _evict(keep: keep));
+
+  Future<int> _evict({String? keep}) async {
     await _validate();
     final now = _now();
     final entries = <(File, int, DateTime)>[];
@@ -399,6 +458,7 @@ class StickerMediaCache {
     return _clearing = () async {
       try {
         await Future.wait<Object?>([..._reads, ..._writes]);
+        await _work;
         await _clearFolder(directory);
         _total = 0;
       } finally {
@@ -511,8 +571,7 @@ class StickerMediaCache {
     int? cacheGeneration;
     void checkAccount() {
       if (client.userID != account ||
-          (activeCache != null &&
-              activeCache._generation != cacheGeneration)) {
+          (activeCache != null && activeCache._generation != cacheGeneration)) {
         throw StateError('sticker_load_cancelled');
       }
     }
@@ -530,6 +589,7 @@ class StickerMediaCache {
         isThumbnail: thumbnail,
         animated: thumbnail ? animated : null,
         databaseCache: database,
+        maxBytes: thumbnail ? 2 * 1024 * 1024 : maxEntryBytes,
       );
       checkAccount();
       return bytes;
@@ -621,15 +681,24 @@ class StickerPrefetch {
     this.client, {
     this.concurrency = 4,
     @visibleForTesting Future<bool> Function()? allowed,
-  }) : _allowed = allowed ?? _defaultAllowed(client);
+    @visibleForTesting Future<int> Function()? byteBudget,
+  }) : _allowed = allowed ?? _defaultAllowed(client),
+       _byteBudget =
+           byteBudget ??
+           (allowed != null
+               ? () async => wifiBudgetBytes
+               : _defaultBudget(client));
 
   final Client client;
   final int concurrency;
   final Future<bool> Function() _allowed;
+  final Future<int> Function() _byteBudget;
   bool _cancelled = false;
 
   /// Upper bound of one run.
   static const maxItems = 240;
+  static const wifiBudgetBytes = 16 * 1024 * 1024;
+  static const cellularBudgetBytes = 2 * 1024 * 1024;
 
   bool get cancelled => _cancelled;
 
@@ -643,6 +712,15 @@ class StickerPrefetch {
         ports.surfaceGeneration == generation &&
         ports.surfaceActive &&
         await ports.networkAllowed();
+  }
+
+  static Future<int> Function() _defaultBudget(Client client) {
+    final ports = ClientMediaPrefetchPorts(client);
+    return () async => switch (await ports.networkPolicy()) {
+      MediaPrefetchNetwork.blocked => 0,
+      MediaPrefetchNetwork.cellularOrUnknown => cellularBudgetBytes,
+      MediaPrefetchNetwork.wifiOrEthernet => wifiBudgetBytes,
+    };
   }
 
   /// Downloads the originals of [items] that qualify
@@ -663,6 +741,10 @@ class StickerPrefetch {
         cache._generation == generation &&
         client.userID == account;
     if (!await _allowed()) return;
+    // A reservation covers the whole response cap of each in-flight GET.
+    // Successful small files release their unused reservation; failures are
+    // charged the full cap since received error/partial bytes are unknown.
+    var spent = 0, reserved = 0;
     final seen = <String>{};
     final queue = <Uri>[
       for (final item in items)
@@ -682,18 +764,31 @@ class StickerPrefetch {
           _cancelled = true;
           return;
         }
+        final remaining = await _byteBudget() - spent - reserved;
+        if (!wanted() || remaining <= 0) return;
+        final cap = remaining < StickerMediaCache.maxOriginalBytes
+            ? remaining
+            : StickerMediaCache.maxOriginalBytes;
+        reserved += cap;
+        var charged = 0;
         try {
           await cache.fetch(key, () async {
             if (!wanted()) throw StateError('sticker_prefetch_cancelled');
+            charged = cap;
             final bytes = await client.downloadMxcCached(
               uri,
               databaseCache: false,
+              maxBytes: cap,
             );
+            charged = bytes.lengthInBytes;
             if (!wanted()) throw StateError('sticker_prefetch_cancelled');
             return bytes;
           });
         } catch (_) {
           // The cell retries on its own when it is built.
+        } finally {
+          reserved -= cap;
+          spent += charged;
         }
       }
     }

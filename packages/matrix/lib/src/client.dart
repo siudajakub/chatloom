@@ -86,6 +86,11 @@ class Client extends MatrixApi {
   FutureOr<void> Function(Event event, bool thumbnail)?
   authorizeAttachmentAccess;
 
+  /// Optional application cache generation. Attachment downloads snapshot
+  /// this before I/O and reject stale results before cache writes or delivery.
+  /// This also covers scanner transports, which bypass downloadCallback.
+  int Function()? attachmentCacheGeneration;
+
   int? _id;
 
   // Keeps track of the currently ongoing syncRequest
