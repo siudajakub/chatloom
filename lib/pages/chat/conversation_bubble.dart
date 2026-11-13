@@ -869,6 +869,12 @@ abstract final class ConversationMedia {
   /// Short side of the shortest sticker edge (a very wide sticker).
   static const double stickerMinEdge = 32;
 
+  /// Share of a sticker's short side its emoji takes when the sticker
+  /// itself cannot be drawn (a WebM video sticker on macOS without a still
+  /// thumbnail): it stands in at sticker size, like Telegram's placeholder,
+  /// instead of a text-sized glyph lost in an empty frame.
+  static const double stickerEmojiShare = .66;
+
   /// The long side of a sticker (image, Lottie or video) on [screen]:
   /// half the short side, at most [stickerMaxSide] (phones) or
   /// [stickerWideSide] ([desktop] or a wide window). Never more than half

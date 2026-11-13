@@ -10,6 +10,7 @@ import 'package:chatloom/pages/chat/events/message_content.dart';
 import 'package:chatloom/pages/chat/events/sticker_event.dart';
 import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -338,5 +339,63 @@ void main() {
     final video = loop as InlineLoopVideo;
     expect(video.height, side(_phone));
     expect(video.width, closeTo(side(_phone) * 1080 / 1920, .01));
+  });
+
+  group('a video sticker that cannot play (WebM on macOS)', () {
+    tearDown(() => InlineLoopVideo.debugSupportsPlayback = null);
+
+    Future<void> pumpStill(WidgetTester tester, Event e) async {
+      InlineLoopVideo.debugSupportsPlayback = false;
+      final timeline = Timeline(
+        room: room,
+        chunk: TimelineChunk(events: [e]),
+      );
+      addTearDown(timeline.cancelSubscriptions);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: NotionTheme.build(Brightness.dark),
+          home: Align(
+            alignment: Alignment.topLeft,
+            child: InlineLoopVideo(
+              e,
+              width: 180,
+              height: 180,
+              timeline: timeline,
+            ),
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
+    }
+
+    Map<String, Object?> webm(String body) => {
+      'body': body,
+      'url': 'mxc://example.invalid/sticker',
+      'info': {'mimetype': 'video/webm', 'w': 512, 'h': 512},
+    };
+
+    testWidgets('shows its emoji at sticker size, not as a small glyph', (
+      tester,
+    ) async {
+      final e = event(webm('🕺'), type: EventTypes.Sticker);
+      expect(InlineLoopVideo.isVideoSticker(e), isTrue);
+      await pumpStill(tester, e);
+      final text = tester.widget<Text>(find.text('🕺'));
+      expect(
+        text.style!.fontSize,
+        closeTo(180 * ConversationMedia.stickerEmojiShare, .01),
+      );
+      expect(text.textScaler, TextScaler.noScaling);
+    });
+
+    testWidgets('a file-name body draws a sticker glyph, not its letters', (
+      tester,
+    ) async {
+      final e = event(webm('sticker.webm'), type: EventTypes.Sticker);
+      expect(InlineLoopVideo.stickerEmoji(e), isNull);
+      await pumpStill(tester, e);
+      expect(find.textContaining('st'), findsNothing);
+      expect(find.byIcon(Icons.sticky_note_2_outlined), findsOneWidget);
+    });
   });
 }

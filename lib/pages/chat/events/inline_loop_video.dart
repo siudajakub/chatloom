@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' show min;
 
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart'
@@ -111,6 +112,16 @@ class InlineLoopVideo extends StatefulWidget {
       width: info?.tryGet<num>('w'),
       height: info?.tryGet<num>('h'),
     );
+  }
+
+  /// The emoji a video sticker stands for (Telegram puts it in `body`), or
+  /// null when the body is a file name (`sticker.webm`) or empty.
+  static String? stickerEmoji(Event event) {
+    final glyph = event.body.trim().characters.firstOrNull;
+    if (glyph == null || glyph.runes.every((rune) => rune < 0x80)) {
+      return null;
+    }
+    return glyph;
   }
 
   /// WebM does not decode on macOS (AVFoundation); elsewhere it is tried.
@@ -405,12 +416,9 @@ class _InlineLoopVideoState extends State<InlineLoopVideo>
             fit: fit,
           )
         : _sticker
-        // A video sticker's body is its emoji (Telegram).
-        ? Center(
-            child: Text(
-              event.body.characters.take(2).toString(),
-              style: NotionType.title,
-            ),
+        ? _StickerStandIn(
+            emoji: InlineLoopVideo.stickerEmoji(event),
+            side: min(widget.width, widget.height),
           )
         : ColoredBox(color: context.notion.colors.surface);
     if (!event.hasThumbnail || !AppSettings.showThumbnailsInTimeline.value) {
@@ -481,6 +489,35 @@ class _InlineLoopVideoState extends State<InlineLoopVideo>
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A video sticker that cannot be drawn here (WebM on macOS) and has no
+/// still thumbnail: its emoji at sticker size (Telegram's placeholder), or
+/// a muted sticker glyph when the body names no emoji.
+class _StickerStandIn extends StatelessWidget {
+  const _StickerStandIn({required this.emoji, required this.side});
+
+  final String? emoji;
+  final double side;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = side * ConversationMedia.stickerEmojiShare;
+    final emoji = this.emoji;
+    return Center(
+      child: emoji == null
+          ? Icon(
+              Icons.sticky_note_2_outlined,
+              size: min(size, NotionSize.touchTarget),
+              color: context.notion.colors.textTertiary,
+            )
+          : Text(
+              emoji,
+              textScaler: TextScaler.noScaling,
+              style: NotionType.title.copyWith(fontSize: size, height: 1),
+            ),
     );
   }
 }
