@@ -38,6 +38,10 @@ class WorkerReadiness {
   /// merged persons again); null for older workers.
   final bool? metadataResync;
 
+  /// True when the worker answers `device.trust`: a trusted device approves
+  /// another verified own device; null for older workers.
+  final bool? deviceApproval;
+
   /// Private Scribe drafts need an explicit capability; an older heartbeat
   /// or the incoming-transcription capability does not imply support.
   final String? dictation;
@@ -64,6 +68,7 @@ class WorkerReadiness {
     this.autoTranscriptionLive,
     this.deviceKey,
     this.metadataResync,
+    this.deviceApproval,
     this.dictation,
     this.dictationVersion,
     this.summary,
@@ -111,6 +116,9 @@ class WorkerReadiness {
       metadataResync: payload['metadataResync'] is int
           ? (payload['metadataResync'] as int) >= 1
           : null,
+      deviceApproval: payload['deviceApproval'] is int
+          ? (payload['deviceApproval'] as int) >= 1
+          : null,
       dictation: allowed(payload['dictation'], {'ready', 'not_configured'}),
       dictationVersion: count(payload['dictationVersion']),
       summary: allowed(payload['summary'], {'ready', 'not_configured'}),
@@ -144,6 +152,7 @@ class WorkerReadiness {
       other.autoTranscriptionLive == autoTranscriptionLive &&
       other.deviceKey == deviceKey &&
       other.metadataResync == metadataResync &&
+      other.deviceApproval == deviceApproval &&
       other.dictation == dictation &&
       other.dictationVersion == dictationVersion &&
       other.summary == summary &&
@@ -172,7 +181,7 @@ class WorkerReadiness {
     autoTranscriptionLive,
     deviceKey,
     metadataResync,
-    Object.hash(dictation, dictationVersion, summary),
+    Object.hash(dictation, dictationVersion, summary, deviceApproval),
     summaryVersion,
     Object.hashAll(untrustedDevices),
   );

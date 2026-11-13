@@ -286,9 +286,17 @@ class PersonalClient extends ChangeNotifier {
     final replica = _replica;
     if (replica == null) return;
     final now = DateTime.now();
+    final approved = _approvedHere;
+    _approvedHere = false;
     for (final op in List.of(pending.values)) {
       if (!ready || _disposed) return;
       if (!isUnconfirmed(op, now: now)) continue;
+      if (approved && _resentAfterApproval(op)) {
+        // The worker ignored this device until another device approved it:
+        // its changes go out again even past the automatic limit.
+        await replica.reissue(op.opId);
+        continue;
+      }
       // Only metadata changes and the pairing request; paid or sending jobs
       // are resent only on request ([resendPending]).
       await replica.reissue(op.opId, automatic: true);
@@ -1240,6 +1248,20 @@ class PersonalClient extends ChangeNotifier {
     }
     for (final (event, op) in batch.results) {
       _checkActive();
+      if (op.kind == deviceTrustResultKind &&
+          op.payload['state'] == 'done' &&
+          op.payload['deviceId'] == client.deviceID) {
+        _approvedHere = true;
+      }
+      if (op.kind == deviceTrustResultKind &&
+          op.entityId.startsWith('device:')) {
+        final id = op.entityId.substring('device:'.length);
+        if (op.payload['state'] == 'done') {
+          _approvalErrors.remove(id);
+        } else if (op.payload['errorCode'] case final String code) {
+          _approvalErrors[id] = code;
+        }
+      }
       await _replica!.acceptResult(op);
       _acceptedResultEvents.add(event.eventId);
       _indexDueReminder(event, op);
@@ -2267,6 +2289,71 @@ class PersonalClient extends ChangeNotifier {
   bool get _resyncPending => pending.values.any(
     (op) => op.entityId == resyncEntity && op.kind == 'metadata.resync',
   );
+
+  // ── Device approval (2026-11-13) ────────────────────────────────────────
+  // The worker accepts commands only from devices pinned when it was paired.
+  // A device added later (a new Mac login, a reinstalled phone) stayed
+  // unheard: its Aside, merges and other private changes never reached the
+  // other devices. A trusted device now approves it with `device.trust`.
+
+  static const deviceTrustKind = 'device.trust';
+  static const deviceTrustResultKind = 'device.trust.result';
+
+  /// Set when a replay applied the approval of this device; the next drain
+  /// sends its unconfirmed changes again.
+  bool _approvedHere = false;
+  final _approvalErrors = <String, String>{};
+
+  /// Why the worker refused to approve [deviceId] last time, in words; null
+  /// when it did not.
+  String? approvalError(String deviceId) => switch (_approvalErrors[deviceId]) {
+    null => null,
+    'device_not_verified' =>
+      'Verify that device first (Security › Devices), then approve it again.',
+    'too_many_devices' => 'The background service trusts too many devices.',
+    _ => 'The background service could not approve it. Try again.',
+  };
+
+  static bool _resentAfterApproval(PersonalOperation op) =>
+      op.kind == 'metadata.put' ||
+      op.kind == 'metadata.delete' ||
+      op.kind == 'metadata.resync' ||
+      op.kind == 'worker.pairing';
+
+  /// Whether this device can approve others: the worker answers
+  /// `device.trust` and does not ignore this device itself.
+  bool get canApproveDevices =>
+      workerOnline &&
+      workerReadiness?.deviceApproval == true &&
+      !workerIgnoresThisDevice;
+
+  /// Own devices the worker reports as ignored, except this one, with an
+  /// approval not yet waiting for the worker.
+  List<String> get devicesAwaitingApproval {
+    if (!workerOnline) return const [];
+    final own = client.deviceID;
+    final waiting = {
+      for (final op in pending.values)
+        if (op.kind == deviceTrustKind) op.payload['deviceId'],
+    };
+    return [
+      for (final id in workerReadiness?.untrustedDevices ?? const <String>[])
+        if (id != own && !waiting.contains(id)) id,
+    ];
+  }
+
+  /// Whether this device's approval of [deviceId] waits for the worker.
+  bool isApprovalPending(String deviceId) => pending.values.any(
+    (op) => op.kind == deviceTrustKind && op.payload['deviceId'] == deviceId,
+  );
+
+  /// Asks the worker to trust [deviceId] (another verified own device).
+  Future<void> approveDevice(String deviceId) async {
+    if (!canApproveDevices) {
+      throw StateError('The background service cannot approve devices now');
+    }
+    await command(deviceTrustKind, 'device:$deviceId', {'deviceId': deviceId});
+  }
 
   /// Asks the worker to publish the stored merged persons again. Returns
   /// false when the worker cannot (offline or older) or a request already

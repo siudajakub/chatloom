@@ -252,6 +252,7 @@ String syncEntityTitle(
   }
   if (kind == 'worker.pairing') return 'Background service pairing';
   if (kind == 'metadata.resync') return 'Refresh merged conversations';
+  if (kind == 'device.trust') return 'Approve another device';
   if (entity == transcriptionPolicyEntity) return 'Transcription settings';
   for (final (prefix, label) in const [
     ('org:', 'Chat settings'),

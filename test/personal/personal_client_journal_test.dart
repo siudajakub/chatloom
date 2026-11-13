@@ -1019,34 +1019,37 @@ void main() {
       payload: {'healthy': true, 'verified': true, ...payload},
     );
 
-    test('a device asks a capable worker once for the stored persons', () async {
-      final store = _Store();
-      final journal = _Journal();
-      journal.history
-        ..add(_create(journal))
-        ..add(liveHeartbeat(journal, {'metadataResync': 1}));
-      final personal = _start(client, store, journal);
-      addTearDown(personal.dispose);
-      await personal.load();
-      await _idle();
-      expect(personal.canResyncMetadata, isTrue);
-      final asked = personal.pending.values
-          .where((op) => op.kind == 'metadata.resync')
-          .toList();
-      expect(asked, hasLength(1));
-      expect(asked.single.entityId, PersonalClient.resyncEntity);
-      expect(asked.single.payload['prefixes'], PersonalClient.resyncPrefixes);
-      // While it waits, another request is not staged.
-      expect(await personal.requestMetadataResync(), isFalse);
-      expect(
-        syncEntityTitle(
-          personal,
-          PersonalClient.resyncEntity,
-          operation: asked.single,
-        ),
-        'Refresh merged conversations',
-      );
-    });
+    test(
+      'a device asks a capable worker once for the stored persons',
+      () async {
+        final store = _Store();
+        final journal = _Journal();
+        journal.history
+          ..add(_create(journal))
+          ..add(liveHeartbeat(journal, {'metadataResync': 1}));
+        final personal = _start(client, store, journal);
+        addTearDown(personal.dispose);
+        await personal.load();
+        await _idle();
+        expect(personal.canResyncMetadata, isTrue);
+        final asked = personal.pending.values
+            .where((op) => op.kind == 'metadata.resync')
+            .toList();
+        expect(asked, hasLength(1));
+        expect(asked.single.entityId, PersonalClient.resyncEntity);
+        expect(asked.single.payload['prefixes'], PersonalClient.resyncPrefixes);
+        // While it waits, another request is not staged.
+        expect(await personal.requestMetadataResync(), isFalse);
+        expect(
+          syncEntityTitle(
+            personal,
+            PersonalClient.resyncEntity,
+            operation: asked.single,
+          ),
+          'Refresh merged conversations',
+        );
+      },
+    );
 
     test('an older worker is never asked', () async {
       final store = _Store();
@@ -1059,8 +1062,10 @@ void main() {
       await personal.load();
       await _idle();
       expect(personal.canResyncMetadata, isFalse);
-      expect(personal.pending.values.where((op) => op.kind == 'metadata.resync'),
-          isEmpty);
+      expect(
+        personal.pending.values.where((op) => op.kind == 'metadata.resync'),
+        isEmpty,
+      );
       expect(await personal.requestMetadataResync(), isFalse);
     });
 
@@ -1137,6 +1142,142 @@ void main() {
       expect(personal.workerIgnoresThisDevice, isTrue);
       client.deviceID = 'SYNTHETIC-ELSE';
       expect(personal.workerIgnoresThisDevice, isFalse);
+    });
+
+    test('a trusted device lists ignored devices and approves one', () async {
+      final store = _Store();
+      final journal = _Journal();
+      journal.history
+        ..add(_create(journal))
+        ..add(
+          liveHeartbeat(journal, {
+            'deviceApproval': 1,
+            'untrustedDevices': ['SYNTHETIC-MAC'],
+          }),
+        );
+      final personal = _start(client, store, journal);
+      addTearDown(personal.dispose);
+      await personal.load();
+      await _idle();
+      expect(personal.canApproveDevices, isTrue);
+      expect(personal.devicesAwaitingApproval, ['SYNTHETIC-MAC']);
+      await personal.approveDevice('SYNTHETIC-MAC');
+      final approval = personal.pending.values.singleWhere(
+        (op) => op.kind == PersonalClient.deviceTrustKind,
+      );
+      expect(approval.entityId, 'device:SYNTHETIC-MAC');
+      expect(approval.payload['deviceId'], 'SYNTHETIC-MAC');
+      expect(personal.isApprovalPending('SYNTHETIC-MAC'), isTrue);
+      expect(personal.devicesAwaitingApproval, isEmpty);
+      expect(
+        syncEntityTitle(personal, approval.entityId, operation: approval),
+        'Approve another device',
+      );
+    });
+
+    test('an older worker or an ignored device offers no approval', () async {
+      final store = _Store();
+      final journal = _Journal();
+      journal.history
+        ..add(_create(journal))
+        ..add(
+          liveHeartbeat(journal, {
+            'deviceApproval': 1,
+            'untrustedDevices': ['SYNTHETIC-THIS', 'SYNTHETIC-MAC'],
+          }),
+        );
+      final personal = _start(client, store, journal);
+      addTearDown(personal.dispose);
+      await personal.load();
+      expect(personal.workerIgnoresThisDevice, isTrue);
+      expect(personal.canApproveDevices, isFalse);
+      await expectLater(
+        personal.approveDevice('SYNTHETIC-MAC'),
+        throwsStateError,
+      );
+    });
+
+    test('a refused approval explains why', () async {
+      final store = _Store();
+      final journal = _Journal();
+      journal.history
+        ..add(_create(journal))
+        ..add(
+          _op(
+            journal,
+            'refused',
+            _min(1),
+            PersonalClient.deviceTrustResultKind,
+            entity: 'device:SYNTHETIC-MAC',
+            payload: {
+              'state': 'conflict',
+              'errorCode': 'device_not_verified',
+              'revision': 0,
+            },
+          ),
+        );
+      final personal = _start(client, store, journal);
+      addTearDown(personal.dispose);
+      await personal.load();
+      expect(personal.approvalError('SYNTHETIC-MAC'), contains('Verify'));
+      expect(personal.approvalError('SYNTHETIC-OTHER'), isNull);
+    });
+
+    test('approval of this device resends its unconfirmed changes', () async {
+      final store = _Store();
+      final journal = _Journal();
+      final stuck = PersonalOperation(
+        opId: 'stuck-aside',
+        kind: 'metadata.put',
+        entityId: 'org:fixture',
+        createdAt: DateTime.now().toUtc().subtract(const Duration(hours: 2)),
+        payload: {
+          'value': {'placement': 'aside'},
+        },
+      );
+      store.records['account:${client.userID}:replica:org:fixture'] = {
+        'revision': 0,
+        'generation': 0,
+        'commands': {stuck.opId: stuck.toJson()},
+        'attempted': [stuck.opId],
+        'attemptedAt': {
+          stuck.opId: DateTime.now()
+              .subtract(const Duration(hours: 1))
+              .millisecondsSinceEpoch,
+        },
+        // Both automatic re-issues were spent while the worker ignored it.
+        'reissues': PersonalReplica.maxAutomaticReissues,
+        'metadataInFlight': stuck.opId,
+        'localValue': {'placement': 'aside'},
+        'appliedResults': <String>[],
+      };
+      journal.history
+        ..add(_create(journal))
+        ..add(
+          _op(
+            journal,
+            'approved',
+            _min(1),
+            PersonalClient.deviceTrustResultKind,
+            entity: 'device:SYNTHETIC-THIS',
+            payload: {
+              'state': 'done',
+              'deviceId': 'SYNTHETIC-THIS',
+              'revision': 0,
+              'acceptedOpId': 'approve-from-phone',
+            },
+          ),
+        )
+        ..add(liveHeartbeat(journal, {'deviceApproval': 1}));
+      final personal = _start(client, store, journal);
+      addTearDown(personal.dispose);
+      await personal.load();
+      await _idle();
+      final resent = personal.pending.values.singleWhere(
+        (op) => op.entityId == 'org:fixture',
+      );
+      expect(resent.opId, isNot(stuck.opId));
+      expect(resent.payload['value'], {'placement': 'aside'});
     });
   });
 

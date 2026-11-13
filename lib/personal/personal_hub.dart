@@ -17,6 +17,7 @@ import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/send_later.dart' show runSendLater;
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/personal/summary/conversation_summary.dart';
+import 'package:chatloom/personal/ui/device_approval_section.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
@@ -465,11 +466,14 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                     title: 'Changes from this device stay here',
                     message:
                         'The background service does not trust this device yet, '
-                        'so merges and other private changes made here do not '
-                        'reach your other devices. Verify this device and add '
-                        'it to the service\'s trusted devices.',
+                        'so Aside, merges and other private changes made here '
+                        'do not reach your other devices. Verify this device, '
+                        'then open Private sync on a device that already syncs '
+                        'and approve this one. Waiting changes are sent again '
+                        'once it is approved.',
                   ),
                 ),
+                DeviceApprovalSection(personal: personal, run: run),
                 NotionSizeReveal(
                   visible: personal.canResyncMetadata,
                   child: NotionListRow(
