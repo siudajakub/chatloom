@@ -39,6 +39,28 @@ class WorkerJournal {
   static const checkpointKey = 'journal';
   static const heldKey = 'journal-held';
 
+  /// Devices approved from an already trusted device (`device.trust`),
+  /// kept beside the ones pinned in the configuration.
+  static const approvedDevicesKey = 'trusted-devices-approved';
+  static const deviceTrustKind = 'device.trust';
+  static const maxApprovedDevices = 32;
+
+  /// Device ids approved through `device.trust` so far.
+  static Set<String> approvedDevices(WorkerStore store) {
+    final raw = store.checkpoint(approvedDevicesKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final list = jsonDecode(raw);
+      return {
+        if (list is List)
+          for (final id in list)
+            if (id is String) id,
+      };
+    } on FormatException {
+      return {};
+    }
+  }
+
   /// An entry that fails while entries after it go through is parked after
   /// this many such passes; parked transient failures are queued again
   /// every [parkedRetry].
@@ -327,6 +349,7 @@ class WorkerJournal {
       PersonalOperation? op;
       try {
         op = PersonalOperation.fromJson(event.content);
+        if (op.kind == deviceTrustKind) _approveDevice(op);
         engine.accept(op);
       } on WorkerFailure catch (e) {
         if (op != null) {
@@ -339,6 +362,40 @@ class WorkerJournal {
       }
     }
     _saveCheckpoint(newest);
+  }
+
+  /// A trusted device approves another own device: it must be verified
+  /// (cross-signed) and unblocked now. From then on its commands count like
+  /// those of a pinned device, also after a restart. The approving command
+  /// itself passed [WorkerJournalTrust], so an unapproved device can never
+  /// approve itself.
+  void _approveDevice(PersonalOperation op) {
+    if (store.hasCommand(op.opId)) return;
+    final id = op.payload['deviceId'];
+    if (id is! String ||
+        id.isEmpty ||
+        id.length > 255 ||
+        op.entityId != 'device:$id') {
+      throw const WorkerFailure('invalid_device_trust');
+    }
+    final device = client.userDeviceKeys[client.userID]?.deviceKeys[id];
+    if (device == null ||
+        !device.verified ||
+        device.blocked ||
+        device.curve25519Key == null ||
+        device.ed25519Key == null) {
+      throw const WorkerFailure('device_not_verified');
+    }
+    if (trustedDevices.contains(id)) return;
+    final approved = approvedDevices(store);
+    if (approved.length >= maxApprovedDevices) {
+      throw const WorkerFailure('too_many_devices');
+    }
+    store.setCheckpoint(
+      approvedDevicesKey,
+      jsonEncode((approved..add(id)).toList()..sort()),
+    );
+    trustedDevices.add(id);
   }
 
   static bool _commandKind(Event event) {

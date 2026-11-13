@@ -355,7 +355,18 @@ shutdown are recorded in the operator's private acceptance notes.
 the worker account while the daemon is stopped. Pairing reuses an unambiguous
 self-only journal or creates the same private E2EE room/account-data pointer as
 the app. It pins a snapshot of the account's currently verified, valid devices;
-future devices require another explicit pairing operation. The HTTP guard
+future devices require another explicit pairing operation. Since 2026-11-13 a device
+the worker already trusts can do that from the app instead: Settings ›
+Advanced › Private sync lists the own devices whose commands the worker
+refuses (heartbeat `untrustedDevices`) with an Approve action, which sends
+`device.trust` (`entityId` `device:<id>`, payload `deviceId`). The worker
+accepts it only from a trusted device, only for a device that is verified
+(cross-signed) and unblocked now, keeps the approval in its store
+(`trusted-devices-approved`, at most 32, also across restarts) and answers
+`device.trust.result` (`device_not_verified` when refused). Commands the
+device sent meanwhile are read again; the approved app re-issues its
+unconfirmed metadata changes. The heartbeat advertises `deviceApproval: 1`.
+An unapproved device can never approve itself; `admin.sh pair` still works. The HTTP guard
 refuses non-journal sends, plaintext sends, room joins/invites and read activity.
 `enqueue` accepts only the private, explicit manifest of at most three source
 references, uses deterministic transaction IDs, and never retries an uncertain

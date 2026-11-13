@@ -270,6 +270,7 @@ class WorkerEngine {
       'reminder.create',
       'reminder.cancel',
       'worker.pairing',
+      'device.trust',
     }.contains(op.kind)) {
       return;
     }
@@ -295,6 +296,16 @@ class WorkerEngine {
       }
       if (op.kind == 'metadata.resync') {
         _resync(op);
+        return;
+      }
+      if (op.kind == 'device.trust') {
+        // The journal approved the device before handing the command here.
+        _publish(op, 'device.trust.result', {
+          'state': 'done',
+          'deviceId': op.payload['deviceId'],
+          'revision': 0,
+          'acceptedOpId': op.opId,
+        });
         return;
       }
       if (op.kind.startsWith('metadata.')) {
@@ -684,6 +695,8 @@ class WorkerEngine {
     op,
     op.kind == 'worker.pairing'
         ? 'worker.pairing.result'
+        : op.kind == 'device.trust'
+        ? 'device.trust.result'
         : op.kind.startsWith('transcript')
         ? 'transcript.result'
         : op.kind.startsWith('reminder')

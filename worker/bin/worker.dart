@@ -173,7 +173,9 @@ Future<void> main(List<String> arguments) async {
             ? OpenRouterTranscriptGister(openRouterApiKey(config, credentials))
             : null,
       );
-      final devices = config.trustedDeviceIds.toSet()..add(transport.deviceId);
+      final devices = config.trustedDeviceIds.toSet()
+        ..addAll(WorkerJournal.approvedDevices(store))
+        ..add(transport.deviceId);
       final journal = WorkerJournal(
         client,
         config.journalRoomId,
@@ -345,6 +347,9 @@ Future<void> main(List<String> arguments) async {
                 'autoTranscriptionLive': engine.liveScanActive,
                 // Answers `metadata.resync` (state of merged persons again).
                 'metadataResync': 1,
+                // Answers `device.trust` from a trusted device (approves
+                // another verified own device without re-pairing).
+                'deviceApproval': 1,
                 'summary': engine.summariesConfigured
                     ? 'ready'
                     : 'not_configured',

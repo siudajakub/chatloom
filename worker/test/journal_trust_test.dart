@@ -284,15 +284,20 @@ Event _command(
   required String envelopeDevice,
   required _Session? session,
   String sessionId = 'session-phone',
+  String kind = 'metadata.put',
+  String? entityId,
+  Map<String, dynamic>? payload,
 }) {
   final content = PersonalOperation(
     opId: id,
-    kind: 'metadata.put',
-    entityId: 'org:$id',
+    kind: kind,
+    entityId: entityId ?? 'org:$id',
     createdAt: _t0,
-    payload: {
-      'value': {'n': 1},
-    },
+    payload:
+        payload ??
+        {
+          'value': {'n': 1},
+        },
   ).toJson().cast<String, dynamic>();
   final event = Event(
     room: room,
@@ -465,6 +470,85 @@ void main() {
     );
     await expectLater(journal.start(), throwsA(isA<WorkerFailure>()));
     expect(store.hasCommand('forged'), isFalse);
+  });
+
+  group('device approval', () {
+    late _Session mac;
+    late WorkerStore store;
+    late WorkerJournal journal;
+    setUp(() {
+      client.device('MAC');
+      mac = _Session('session-mac', 'curve-MAC', 'ed-MAC');
+      client.encryption.keyManager.sessions[mac.sessionId] = mac;
+      store = WorkerStore(sqlite3.openInMemory());
+      journal = WorkerJournal(
+        client,
+        _roomId,
+        {'PHONE', 'WORKER'},
+        store,
+        WorkerEngine(store, _NoTransport(), _NoTranscriber()),
+      );
+    });
+    tearDown(() => journal.dispose());
+
+    Event approve(String id, String device, {required _Session session}) =>
+        _command(
+          client.room,
+          id,
+          envelopeDevice: session.senderKey.substring('curve-'.length),
+          session: session,
+          kind: WorkerJournal.deviceTrustKind,
+          entityId: 'device:$device',
+          payload: {'deviceId': device},
+        );
+
+    test('a trusted device approves another verified device', () async {
+      client.room.timeline.events.addAll([
+        _command(client.room, 'from-mac', envelopeDevice: 'MAC', session: mac),
+        approve('approve', 'MAC', session: phone),
+      ]);
+      await journal.start();
+      expect(store.hasCommand('from-mac'), isFalse);
+      expect(journal.untrustedDeviceIds, ['MAC']);
+      expect(WorkerJournal.approvedDevices(store), {'MAC'});
+      expect(
+        store.outboxEntry(stableId('result', 'approve'))?['kind'],
+        'device.trust.result',
+      );
+      // The refused command is read again once the trusted set changed.
+      await journal.reconcile();
+      expect(store.hasCommand('from-mac'), isTrue);
+      expect(journal.untrustedDeviceIds, isEmpty);
+      // A restart keeps the approval.
+      expect(WorkerJournal.approvedDevices(store), contains('MAC'));
+    });
+
+    test('an unapproved device cannot approve itself', () async {
+      client.room.timeline.events.addAll([
+        _command(
+          client.room,
+          'genuine',
+          envelopeDevice: 'PHONE',
+          session: phone,
+        ),
+        approve('self', 'MAC', session: mac),
+      ]);
+      await journal.start();
+      expect(store.hasCommand('self'), isFalse);
+      expect(WorkerJournal.approvedDevices(store), isEmpty);
+    });
+
+    test('an unverified device is refused', () async {
+      client.device('TABLET', verified: false);
+      client.room.timeline.events.add(
+        approve('tablet', 'TABLET', session: phone),
+      );
+      await journal.start();
+      expect(WorkerJournal.approvedDevices(store), isEmpty);
+      final result = store.outboxEntry(stableId('result', 'tablet'));
+      expect(result?['kind'], 'device.trust.result');
+      expect((result?['payload'] as Map)['errorCode'], 'device_not_verified');
+    });
   });
 
   group('incremental journal (wave 5)', () {
