@@ -280,6 +280,52 @@ void main() {
     expect(find.text('via Messenger'), findsOneWidget);
   });
 
+  testWidgets('bridge delivery reports do not split a merged series', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = ConversationClient();
+    final rooms = _fixture(client);
+    final b = rooms.b;
+    // Three own Messenger messages a minute apart; the bridge answers each
+    // with a hidden delivery report, as Beeper's bridges do.
+    for (final (i, text) in ['Own one', 'Own two', 'Own three'].indexed) {
+      final sent = b.message('\$own-b$i', text, outgoing: true, minute: 43 + i);
+      b.sourceEvents.insert(
+        0,
+        Event(
+          room: b,
+          eventId: '\$status-b$i',
+          type: 'com.beeper.message_send_status',
+          senderId: '@messengerbot:example.invalid',
+          originServerTs: sent.originServerTs,
+          content: {
+            'status': 'SUCCESS',
+            'network': 'messenger',
+            'm.relates_to': {
+              'rel_type': 'm.reference',
+              'event_id': sent.eventId,
+            },
+          },
+        ),
+      );
+    }
+    final personal = ConversationPersonal(client);
+    addTearDown(personal.dispose);
+    await _mount(
+      tester,
+      MergedChatPage(personal: personal, group: _group(personal, rooms.a, b)),
+      client,
+    );
+    for (final text in ['Own one', 'Own two', 'Own three']) {
+      expect(find.text(text), findsOneWidget);
+    }
+    // One heading for Anna's Messenger message, one for the own series;
+    // before, every own message carried its own "via Messenger".
+    expect(find.text('via Messenger'), findsNWidgets(2));
+  });
+
   testWidgets('both chats request older history without a button', (
     tester,
   ) async {

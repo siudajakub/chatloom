@@ -484,8 +484,6 @@ class _MergedChatPageState extends State<_MergedChatView>
     PollEventContent.startType,
   };
 
-  static const _seriesTypes = {..._rowTypes, EventTypes.Reaction};
-
   static bool _isRow(Event e) =>
       _rowTypes.contains(e.type) &&
       e.relationshipType != RelationshipTypes.edit &&
@@ -514,16 +512,18 @@ class _MergedChatPageState extends State<_MergedChatView>
     );
   }
 
-  /// Source-local series breaks: hidden state events still split a visual
-  /// series on either side. One linear pass per source timeline.
+  /// Source-local series breaks: a state event the ordinary chat shows
+  /// (merged rows leave it out) still splits a visual series on either side.
+  /// What the ordinary chat never draws does not: the bridge's delivery
+  /// report after every own message (`com.beeper.message_send_status`),
+  /// reactions, edits, redactions and bridge noise. One linear pass per
+  /// source timeline.
   static void _sourceBoundaries(List<Event> events, Map<String, bool> into) {
     final significant = <Event>[
       for (final e in events)
-        if (e.type != EventTypes.Reaction &&
-            e.relationshipType != RelationshipTypes.edit)
-          e,
+        if (e.isVisibleInGui) e,
     ];
-    bool separator(Event e) => !_seriesTypes.contains(e.type);
+    bool separator(Event e) => !_rowTypes.contains(e.type);
     for (var i = 0; i < significant.length; i++) {
       final e = significant[i];
       if (!_rowTypes.contains(e.type)) continue;
