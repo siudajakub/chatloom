@@ -77,7 +77,7 @@ abstract class ForegroundServices {
   static bool _channelNamed = false;
 
   static bool get platformSupported =>
-      PlatformInfos.isMobile || PlatformInfos.isWeb;
+      PlatformInfos.isAndroid || PlatformInfos.isWeb;
 
   static bool _beforeUnload(html.Event e) {
     e.preventDefault();
@@ -93,7 +93,7 @@ abstract class ForegroundServices {
   }
 
   static Future<bool> _nativeServiceRunning() async {
-    if (kIsWeb || !PlatformInfos.isMobile) return true;
+    if (kIsWeb || !PlatformInfos.isAndroid) return true;
     return FlutterForegroundTask.isRunningService;
   }
 
@@ -102,7 +102,7 @@ abstract class ForegroundServices {
       html.window.removeEventListener('beforeunload', _beforeUnload);
       return;
     }
-    if (PlatformInfos.isMobile) {
+    if (PlatformInfos.isAndroid) {
       if (!await FlutterForegroundTask.isRunningService) return;
       final result = await FlutterForegroundTask.stopService();
       if (result is! ServiceRequestSuccess) {
@@ -147,7 +147,7 @@ abstract class ForegroundServices {
   }
 
   static Future<void> _updateNativeService(List<String> running) async {
-    if (kIsWeb || !PlatformInfos.isMobile) return;
+    if (kIsWeb || !PlatformInfos.isAndroid) return;
     final text = foregroundServiceText(running);
     if (text == _shownText) return;
     final result = await FlutterForegroundTask.updateService(
@@ -162,7 +162,7 @@ abstract class ForegroundServices {
       html.window.addEventListener('beforeunload', _beforeUnload);
       return;
     }
-    if (PlatformInfos.isMobile) {
+    if (PlatformInfos.isAndroid) {
       final text = foregroundServiceText([
         ..._controller.runningServices,
         ?_controller.starting,

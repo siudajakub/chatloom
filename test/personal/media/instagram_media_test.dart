@@ -104,6 +104,82 @@ void main() {
   });
 
   test(
+    'caption and assets share a guarded load without refreshing expiry',
+    () async {
+      var metadataRequests = 0;
+      Future<Object?> request() async {
+        metadataRequests++;
+        return {
+          'canonical_url': _url.toString(),
+          'caption': 'Fictional caption',
+          'assets': [_info],
+        };
+      }
+
+      final first = await loadInstagramPost(
+        original: original,
+        url: _url,
+        request: request,
+      );
+      expect(first.response['caption'], 'Fictional caption');
+      expect(first.response['canonical_url'], _url.toString());
+      expect(first.assets.single, _info);
+      final downloadedAt = db.files.values.single.$2;
+      db.now = db.now.add(const Duration(hours: 23));
+      final cached = await loadInstagramPost(
+        original: original,
+        url: _url,
+        request: request,
+      );
+      expect(cached.response['caption'], 'Fictional caption');
+      expect(metadataRequests, 1);
+      expect(
+        db.writes,
+        1,
+        reason: 'reading a caption must not renew its one-day cache',
+      );
+      expect(db.files.values.single.$2, downloadedAt);
+      db.now = db.now.add(const Duration(hours: 1));
+      await loadInstagramPost(original: original, url: _url, request: request);
+      expect(
+        metadataRequests,
+        2,
+        reason: 'completed futures cannot bypass expiry',
+      );
+    },
+  );
+
+  test(
+    'post and legacy asset-list callers share one concurrent metadata request',
+    () async {
+      final pending = Completer<Object?>();
+      Future<Object?> request() {
+        requests++;
+        return pending.future;
+      }
+
+      final post = loadInstagramPost(
+        original: original,
+        url: _url,
+        request: request,
+      );
+      final assets = loadInstagramMetadata(
+        original: original,
+        url: _url,
+        request: request,
+      );
+      pending.complete({
+        'caption': 'Shared caption',
+        'assets': [_info],
+      });
+      expect((await post).response['caption'], 'Shared caption');
+      expect(await assets, [_info]);
+      expect(requests, 1);
+      expect(db.writes, 1);
+    },
+  );
+
+  test(
     'payload above the SDK 10 MB limit still reaches encrypted cache',
     () async {
       final media = asset(

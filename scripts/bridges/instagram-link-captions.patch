@@ -1,0 +1,31 @@
+diff --git a/pkg/igconnector/linkmedia.go b/pkg/igconnector/linkmedia.go
+index 3f989b9..2d09db3 100644
+--- a/pkg/igconnector/linkmedia.go
++++ b/pkg/igconnector/linkmedia.go
+@@ -84,6 +84,12 @@ func (ic *IGClient) linkMediaItems(ctx context.Context, t linkMediaTarget) ([]*r
+ 		}
+ 		item := res.Items[0]
+ 		if len(item.CarouselMedia) > 0 {
++			// Carousel children usually omit the post-level caption.
++			for _, child := range item.CarouselMedia {
++				if child.Caption.Text == "" {
++					child.Caption = item.Caption
++				}
++			}
+ 			return item.CarouselMedia, nil
+ 		}
+ 		return []*responses.Items{item}, nil
+@@ -240,7 +246,12 @@ func (ic *IGConnector) registerLinkMedia() {
+ 		w.Header().Set("Cache-Control", "no-store")
+ 		if !req.Download {
+ 			w.Header().Set("Content-Type", "application/json")
+-			json.NewEncoder(w).Encode(map[string]any{"assets": assets})
++			json.NewEncoder(w).Encode(map[string]any{
++				"assets": assets,
++				"canonical_url": req.URL,
++				"caption": items[0].Caption.Text,
++				"author": items[0].Caption.User.Username,
++			})
+ 			return
+ 		}
+ 		// Only server-returned media URLs are used, never an arbitrary caller URL.

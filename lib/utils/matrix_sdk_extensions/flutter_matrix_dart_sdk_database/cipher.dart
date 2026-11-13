@@ -4,8 +4,6 @@
 
 import 'package:chatloom/personal/storage/cipher_policy.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
-import 'package:chatloom/utils/platform_infos.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 const _passwordStorageKey = 'database_password';
 final _cipherPolicy = CipherPolicy(const _SecureKeyVault());
@@ -25,26 +23,10 @@ Future<String> getProtectedStorageCipher(
 class _SecureKeyVault implements KeyVault {
   const _SecureKeyVault();
 
-  static const _options = IOSOptions(groupId: 'group.im.fluffychat.app');
-
-  FlutterSecureStorage get _storage => const FlutterSecureStorage(
-    iOptions: _options,
-    mOptions: personalMacStorageOptions,
-  );
-
   @override
-  Future<String?> read(String key) async {
-    final value = await _storage.read(key: key, iOptions: _options);
-    if (value != null || !PlatformInfos.isIOS) return value;
-    // Preserve the legacy key as well: migration is a copy, never deletion.
-    final legacy = await personalSecureStorage.read(key: key);
-    if (legacy != null) {
-      await _storage.write(key: key, value: legacy, iOptions: _options);
-    }
-    return legacy;
-  }
+  Future<String?> read(String key) => personalSecureStorage.read(key: key);
 
   @override
   Future<void> write(String key, String value) =>
-      _storage.write(key: key, value: value, iOptions: _options);
+      personalSecureStorage.write(key: key, value: value);
 }

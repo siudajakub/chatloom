@@ -160,6 +160,6 @@ macos/Runner/GoogleService-Info.plist
 
 # Removed targets: `flutter pub get` can regenerate plugin registrants and
 # ephemeral symlinks here; they are not part of ChatLoom.
-/ios/
+# iOS runner is source-controlled; its own .gitignore excludes build/signing state.
 /linux/
 /windows/

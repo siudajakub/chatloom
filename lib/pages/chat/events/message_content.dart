@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2019-Present Contributors to FluffyChat
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:convert';
+
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
@@ -16,6 +18,7 @@ import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/instagram_share.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
+import 'package:chatloom/personal/reel_metadata.dart';
 import 'package:chatloom/personal/round_video/round_playback_queue.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
@@ -38,10 +41,12 @@ import 'gallery_message.dart';
 import 'html_message.dart';
 import 'image_bubble.dart';
 import 'inline_loop_video.dart';
+import 'inline_reel_video.dart';
 import 'instagram_share_preview.dart';
 import 'link_preview.dart';
 import 'map_bubble.dart';
 import 'message_download_content.dart';
+import 'reel_caption.dart';
 import 'sticker_event.dart';
 import 'view_once_message.dart';
 import 'whatsapp_rich_message.dart';
@@ -382,6 +387,20 @@ class MessageContent extends StatelessWidget {
                 },
               );
             }
+            final reel = ReelMetadata.fromContent(event.content);
+            if (reel != null && isMetaShare(event.content)) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  InlineReelVideo(
+                    key: ValueKey(('reel', event.eventId)),
+                    event: event,
+                  ),
+                  ReelCaption(metadata: reel, linkColor: linkColor),
+                ],
+              );
+            }
             return EventVideoPlayer(
               event,
               textColor: textColor,
@@ -472,6 +491,10 @@ class MessageContent extends StatelessWidget {
             final share = event.messageType == MessageTypes.Text
                 ? InstagramShare.fromText(event.body)
                 : null;
+            final comment = share?.withoutLink(
+              event.calcUnlocalizedBody(hideReply: true, plaintextBody: true),
+            );
+            if (comment != null) html = const HtmlEscape().convert(comment);
             final text = Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: HtmlMessage(
@@ -505,8 +528,13 @@ class MessageContent extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  InstagramSharePreview(share: share, event: event),
-                  Padding(padding: NotionBubble.padding, child: text),
+                  InstagramSharePreview(
+                    share: share,
+                    event: event,
+                    linkColor: linkColor,
+                  ),
+                  if (comment?.isNotEmpty == true)
+                    Padding(padding: NotionBubble.padding, child: text),
                 ],
               );
             }

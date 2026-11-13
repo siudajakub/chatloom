@@ -239,6 +239,26 @@ Over a wallpaper, time, names and reply captions sit in a
 `Theme.of(context).colorScheme.*` is also acceptable. Prefer the Notion
 names in new code because they say what the colour means.
 
+### Inbox conversation preview
+
+Holding an inbox row (or its desktop context-menu gesture) opens recent
+messages above the existing chat actions. The bounded preview shows up to
+locally saved messages in pages of forty, oldest to newest, with own/incoming bubbles,
+sender, time and the source network for merged chats. Its initial scroll
+position shows the newest message. Scrolling to the oldest loaded message (or
+`Load older messages`) extends the saved preview without moving the current
+scroll position. The end is labelled explicitly; it does not request remote
+history. Media are labels, never autoplay/downloads.
+It does not open a timeline, send receipts or change the unread count.
+`Open chat` explicitly takes the ordinary navigation path; tapping outside
+dismisses without marking anything read. The existing Pin, Mute, Archive and
+other actions remain available in the scrollable glass panel.
+
+Missing local history offers opening the conversation. Hidden/deleted
+messages use the conversation visibility rules; deleted content is never
+revealed unless the user explicitly kept it. Unknown administrator profiles
+are not fetched for the preview's neutral deleted-message placeholder.
+
 ### Typography: `NotionType.*` (const) or `context.notion.typography.*` (coloured)
 
 | Token | Size / weight | Use for |

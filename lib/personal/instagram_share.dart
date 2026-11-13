@@ -7,6 +7,16 @@ class InstagramShare {
 
   Uri get embedUrl => url.replace(path: '${url.path}embed/');
 
+  /// Removes this permalink only, retaining the sender's comment and other links.
+  String withoutLink(String text) => text.replaceAllMapped(
+    RegExp(r'''https?://[^\s<>"']+''', caseSensitive: false),
+    (match) {
+      final value = match.group(0)!;
+      final clean = value.replaceFirst(RegExp(r'[).,;!?]+$'), '');
+      return fromUrl(clean)?.url == url ? value.substring(clean.length) : value;
+    },
+  ).trim();
+
   static InstagramShare? fromText(String text) {
     // Matrix reply fallbacks quote the original. Preview only the new text.
     final body = text

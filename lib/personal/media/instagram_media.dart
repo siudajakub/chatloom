@@ -103,7 +103,27 @@ class _Source {
   }
 }
 
+/// Keep captions and the canonical permalink alongside the asset list. Both
+/// callers use the same account-scoped guarded load and absolute cache expiry.
+class InstagramPostMetadata {
+  final Map response;
+  final List<Map> assets;
+  InstagramPostMetadata(Map response, List<Map> assets)
+    : response = Map.unmodifiable(response),
+      assets = List.unmodifiable(assets);
+}
+
 Future<List<Map>> loadInstagramMetadata({
+  required Event original,
+  required Uri url,
+  required Future<Object?> Function() request,
+}) async => (await loadInstagramPost(
+  original: original,
+  url: url,
+  request: request,
+)).assets;
+
+Future<InstagramPostMetadata> loadInstagramPost({
   required Event original,
   required Uri url,
   required Future<Object?> Function() request,
@@ -111,7 +131,7 @@ Future<List<Map>> loadInstagramMetadata({
   final source = _Source(original);
   await source.authorize(false);
   final key = source.key(url);
-  List<Map> parse(Object? response) {
+  InstagramPostMetadata parse(Object? response) {
     if (response is! Map || response['assets'] is! List) {
       throw StateError('Invalid media');
     }
@@ -124,7 +144,7 @@ Future<List<Map>> loadInstagramMetadata({
         )) {
       throw StateError('Invalid media');
     }
-    return items.cast<Map>();
+    return InstagramPostMetadata(response, items.cast<Map>());
   }
 
   final bytes = await source.load(
