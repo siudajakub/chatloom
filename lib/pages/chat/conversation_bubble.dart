@@ -592,7 +592,10 @@ class _RenderOverlapBottom extends RenderProxyBox {
 
 /// Quoted original above a reply bubble: a muted pill of at most
 /// [NotionBubble.quoteMaxLines] lines, with an optional [caption] above it
-/// ("Anna replied to you") and an optional [leading] media thumbnail.
+/// ("Anna replied to you") and an optional [leading] media thumbnail. With
+/// a [detail] (a voice note's gist), [text] becomes a one-line label in
+/// footnote weight and the detail follows in up to
+/// [NotionBubble.quoteDetailMaxLines] lines.
 /// Presentation only; the caller resolves the original and its colours.
 class ConversationReplyQuote extends StatelessWidget {
   final String text;
@@ -609,6 +612,10 @@ class ConversationReplyQuote extends StatelessWidget {
   /// text is italic, as in the original's own placeholder.
   final IconData? textIcon;
 
+  /// What the quoted original says when [text] only names its kind
+  /// ("Voice message" → the gist of the voice note).
+  final String? detail;
+
   const ConversationReplyQuote({
     super.key,
     required this.text,
@@ -621,6 +628,7 @@ class ConversationReplyQuote extends StatelessWidget {
     this.onLongPress,
     this.semanticLabel,
     this.textIcon,
+    this.detail,
   });
 
   /// Opaque quote colours for an original whose bubble is [side] on a chat
@@ -696,16 +704,44 @@ class ConversationReplyQuote extends StatelessWidget {
                   const SizedBox(width: NotionSpace.xxs),
                 ],
                 Flexible(
-                  child: Text(
-                    text,
-                    maxLines: NotionBubble.quoteMaxLines,
-                    overflow: TextOverflow.ellipsis,
-                    textWidthBasis: TextWidthBasis.longestLine,
-                    style: NotionType.callout.copyWith(
-                      color: textColor,
-                      fontStyle: textIcon == null ? null : FontStyle.italic,
+                  child: switch (detail) {
+                    final detail? => Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          text,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textWidthBasis: TextWidthBasis.longestLine,
+                          style: NotionType.footnote.copyWith(
+                            color: textColor,
+                            fontWeight: FontWeight.w600,
+                            fontStyle: textIcon == null
+                                ? null
+                                : FontStyle.italic,
+                          ),
+                        ),
+                        Text(
+                          detail,
+                          maxLines: NotionBubble.quoteDetailMaxLines,
+                          overflow: TextOverflow.ellipsis,
+                          textWidthBasis: TextWidthBasis.longestLine,
+                          style: NotionType.callout.copyWith(color: textColor),
+                        ),
+                      ],
                     ),
-                  ),
+                    null => Text(
+                      text,
+                      maxLines: NotionBubble.quoteMaxLines,
+                      overflow: TextOverflow.ellipsis,
+                      textWidthBasis: TextWidthBasis.longestLine,
+                      style: NotionType.callout.copyWith(
+                        color: textColor,
+                        fontStyle: textIcon == null ? null : FontStyle.italic,
+                      ),
+                    ),
+                  },
                 ),
               ],
             ),

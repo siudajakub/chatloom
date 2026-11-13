@@ -1217,6 +1217,13 @@ class PersonalReplica {
         !payload.containsKey('timing')) {
       job.remove('timing');
     }
+    // So does the gist: it describes that text only.
+    if (job != null &&
+        payload != null &&
+        payload.containsKey('text') &&
+        !payload.containsKey('gist')) {
+      job.remove('gist');
+    }
     final meta = TranscriptTextParts.tryParse(job?['textParts']);
     final stored = record['transcriptText'];
     if (job != null) record['job'] = job;

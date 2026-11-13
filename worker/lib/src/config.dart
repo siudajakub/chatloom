@@ -39,6 +39,12 @@ class WorkerConfig {
   /// Optional second OpenRouter request for word timestamps. Absent means
   /// one paid transcription only, preserving existing operator configs.
   final TranscriptionModel? transcriptionTimingModel;
+
+  /// A one- or two-sentence gist of every finished transcript for reply
+  /// quotes (`transcriptGists`, default on; needs the OpenRouter key). One
+  /// small paid request per transcript longer than a short phrase, counted
+  /// in an automatic job's daily budget.
+  final bool transcriptGists;
   WorkerConfig({
     required this.stateDirectory,
     required this.temporaryDirectory,
@@ -55,6 +61,7 @@ class WorkerConfig {
     this.autoTranscriptionReels = false,
     this.transcriptionModel = TranscriptionModel.standard,
     this.transcriptionTimingModel,
+    this.transcriptGists = true,
   });
   factory WorkerConfig.read(String filename) {
     final value =
@@ -102,6 +109,7 @@ class WorkerConfig {
       transcriptionModel: model,
       transcriptionTimingModel: timingModel,
       autoTranscriptionReels: value['autoTranscriptionReels'] as bool? ?? false,
+      transcriptGists: value['transcriptGists'] as bool? ?? true,
       journalRoomId: value['journalRoomId'] as String? ?? '',
       trustedDeviceIds: (value['trustedDeviceIds'] as List? ?? [])
           .cast<String>(),

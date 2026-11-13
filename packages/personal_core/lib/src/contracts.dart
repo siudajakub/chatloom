@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:convert';
 
+import 'transcript_gist.dart';
+
 const personalSchemaVersion = 1;
 const personalEventType = 'pl.personal.client.operation.v1';
 const personalRoomMarker = 'pl.personal.client.journal.v1';
@@ -105,10 +107,14 @@ class TranscriptionJob {
   /// record). No worker writes it yet; absent keeps the original JSON shape,
   /// and apps estimate line times from the text instead.
   final Object? timing;
-  const TranscriptionJob({required this.id,required this.source,required this.state,this.language,this.text,this.model='gpt-transcribe',this.durationSeconds,this.estimatedCostUsd,this.errorCode,this.origin=TranscriptionOrigin.manual,this.timing});
+  /// A one- or two-sentence cue of [text] for reply quotes ("which voice
+  /// note was this?"), written by the worker; absent for older jobs and
+  /// when the cue could not be made. Apps fall back to the text itself.
+  final String? gist;
+  const TranscriptionJob({required this.id,required this.source,required this.state,this.language,this.text,this.model='gpt-transcribe',this.durationSeconds,this.estimatedCostUsd,this.errorCode,this.origin=TranscriptionOrigin.manual,this.timing,this.gist});
   bool get automatic => origin == TranscriptionOrigin.auto;
-  Map<String,Object?> toJson()=>{'id':id,'source':source.toJson(),'state':state.name,'language':language,'text':text,'model':model,'durationSeconds':durationSeconds,'estimatedCostUsd':estimatedCostUsd,'errorCode':errorCode,if (origin != TranscriptionOrigin.manual) 'origin':origin.name,if (timing != null) 'timing':timing};
-  factory TranscriptionJob.fromJson(Map<String,dynamic> j)=>TranscriptionJob(id:j['id'] as String,source:SourceEventRef.fromJson(Map<String,dynamic>.from(j['source'] as Map)),state:JobState.values.byName(j['state'] as String),language:j['language'] as String?,text:j['text'] as String?,model:j['model'] as String? ?? 'gpt-transcribe',durationSeconds:(j['durationSeconds'] as num?)?.toDouble(),estimatedCostUsd:(j['estimatedCostUsd'] as num?)?.toDouble(),errorCode:j['errorCode'] as String?,origin:transcriptionOriginFromJson(j['origin']),timing:j['text'] == null ? null : j['timing']);
+  Map<String,Object?> toJson()=>{'id':id,'source':source.toJson(),'state':state.name,'language':language,'text':text,'model':model,'durationSeconds':durationSeconds,'estimatedCostUsd':estimatedCostUsd,'errorCode':errorCode,if (origin != TranscriptionOrigin.manual) 'origin':origin.name,if (timing != null) 'timing':timing,if (gist != null) 'gist':gist};
+  factory TranscriptionJob.fromJson(Map<String,dynamic> j)=>TranscriptionJob(id:j['id'] as String,source:SourceEventRef.fromJson(Map<String,dynamic>.from(j['source'] as Map)),state:JobState.values.byName(j['state'] as String),language:j['language'] as String?,text:j['text'] as String?,model:j['model'] as String? ?? 'gpt-transcribe',durationSeconds:(j['durationSeconds'] as num?)?.toDouble(),estimatedCostUsd:(j['estimatedCostUsd'] as num?)?.toDouble(),errorCode:j['errorCode'] as String?,origin:transcriptionOriginFromJson(j['origin']),timing:j['text'] == null ? null : j['timing'],gist:j['text'] == null ? null : normalizeTranscriptGist(j['gist']));
   @override String toString()=>'TranscriptionJob(${state.name}, redacted)';
 }
 

@@ -18,9 +18,16 @@ class MediaTranscript {
     required this.text,
     this.timing,
     this.durationSeconds,
+    this.gist,
   });
 
   final String text;
+
+  /// The worker's one- or two-sentence cue of [text] for reply quotes.
+  final String? gist;
+
+  /// What a reply quote shows of this transcript: the gist, else the text.
+  String get quoteText => transcriptQuoteText(text, gist) ?? text;
 
   /// The worker's stored timestamps, when it wrote any (none do yet).
   final Object? timing;
@@ -55,6 +62,7 @@ class MediaTranscript {
       text: text,
       timing: job.timing,
       durationSeconds: job.durationSeconds,
+      gist: job.gist,
     );
   }
 
@@ -63,11 +71,12 @@ class MediaTranscript {
       other is MediaTranscript &&
       other.text == text &&
       identical(other.timing, timing) &&
-      other.durationSeconds == durationSeconds;
+      other.durationSeconds == durationSeconds &&
+      other.gist == gist;
 
   @override
   int get hashCode =>
-      Object.hash(text, identityHashCode(timing), durationSeconds);
+      Object.hash(text, identityHashCode(timing), durationSeconds, gist);
 }
 
 /// The length a message declares for its media (`info.duration`, ms).
@@ -117,14 +126,14 @@ class MediaTranscriptBuilder extends StatefulWidget {
     super.key,
     required this.event,
     required this.builder,
-    @visibleForTesting this.personalClient,
+    this.personalClient,
   });
 
   final Event? event;
   final Widget Function(BuildContext context, MediaTranscript? transcript)
   builder;
 
-  /// Test seam; production resolves the account's [PersonalClient].
+  /// Defaults to the account's [PersonalClient] (a seam for tests).
   final PersonalClient? personalClient;
 
   @override

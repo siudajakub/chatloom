@@ -502,6 +502,7 @@ class WorkerStore {
           ..remove('pendingResult')
           ..remove('textParts')
           ..remove('timing')
+          ..remove('gist')
           ..addAll({
             'text': null,
             'state': 'cancelled',

@@ -122,11 +122,16 @@ class TranscriptionResult {
   /// Segment/word timestamps of [text] (`TranscriptTiming.encode` record),
   /// when the provider model returned them in the same request.
   final Map<String, Object?>? timing;
+
+  /// The reply-quote gist of [text], when one is already known (an earlier
+  /// transcript of the same media); providers leave it null.
+  final String? gist;
   const TranscriptionResult(
     this.text,
     this.durationSeconds,
     this.estimatedCostUsd, {
     this.timing,
+    this.gist,
   });
 }
 

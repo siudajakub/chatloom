@@ -146,6 +146,13 @@ the original. A reply always starts a new group. Quote colours come from
 `ConversationReplyQuote.colorsFor(side:, page:, muted:)`: an opaque blend
 halfway from the original's bubble to the chat background, with text that
 reaches 4.5:1 (it also covers private chat palettes).
+A quote of a transcribed voice note or round video (`ReplyContent`) passes
+`detail:`: "Voice message" / "Video message" becomes a one-line footnote
+label in w600 and the worker's gist (`TranscriptionJob.gist`; the
+transcript itself while there is none) follows in up to
+`quoteDetailMaxLines` 3 callout lines, so the reader knows which note a
+reply answers without playing it. Nothing is requested for a quote; without
+a transcript the quote stays the plain label.
 
 Reactions follow Messenger: one pill per emoji (`NotionReactionChip`, no
 square frame) in `NotionReactionOverlap`, which lifts the row over the

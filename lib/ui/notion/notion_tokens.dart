@@ -177,6 +177,9 @@ abstract final class NotionBubble {
     7 + quoteOverlap,
   );
   static const int quoteMaxLines = 2;
+
+  /// Lines of a quote's detail under its label (a voice note's gist).
+  static const int quoteDetailMaxLines = 3;
   static const double quoteThumbnail = 34;
   static const double quoteThumbnailRadius = sm;
 

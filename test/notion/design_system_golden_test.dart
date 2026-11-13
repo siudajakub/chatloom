@@ -114,7 +114,12 @@ Widget _reactions() => Builder(
 );
 
 /// Messenger-like bubbles: grouped corners, pills, replies with a quote.
-Widget _bubbles({Color? page, Color? incoming, Color? outgoing}) => Builder(
+Widget _bubbles({
+  Color? page,
+  Color? incoming,
+  Color? outgoing,
+  bool voice = false,
+}) => Builder(
   builder: (context) {
     final bubble = ConversationBubbleColors.of(context);
     final background = page ?? context.notion.colors.background;
@@ -135,6 +140,7 @@ Widget _bubbles({Color? page, Color? incoming, Color? outgoing}) => Builder(
       required bool outgoing,
       required bool originalOwn,
       required String caption,
+      String? detail,
     }) {
       final colors = ConversationReplyQuote.colorsFor(
         side: fillOf(originalOwn),
@@ -143,6 +149,7 @@ Widget _bubbles({Color? page, Color? incoming, Color? outgoing}) => Builder(
       );
       return ConversationReplyQuote(
         text: text,
+        detail: detail,
         fill: colors.fill,
         textColor: colors.text,
         outgoing: outgoing,
@@ -165,6 +172,59 @@ Widget _bubbles({Color? page, Color? incoming, Color? outgoing}) => Builder(
       body: Text(text, style: TextStyle(color: textOn(out))),
     );
 
+    if (voice) {
+      // Replies to voice notes: the label, then the worker's gist (a long
+      // one is cut at three lines); a short note quotes itself.
+      return Scaffold(
+        backgroundColor: background,
+        body: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: NotionSpace.sm),
+            children: [
+              msg(
+                'dobra, biorę gry',
+                out: true,
+                quote: quote(
+                  'Voice message',
+                  detail:
+                      'Domek pod Zakopanem na sobotę, 900 zł za trzy noce; '
+                      'weź gry, Marek odbiera klucze przed 18.',
+                  outgoing: true,
+                  originalOwn: false,
+                  caption: 'Replied to Anna',
+                ),
+              ),
+              msg(
+                'no ba',
+                out: false,
+                quote: quote(
+                  'Voice message',
+                  detail: 'Okay, see you at eight!',
+                  outgoing: false,
+                  originalOwn: true,
+                  caption: 'Anna replied to you',
+                ),
+              ),
+              msg(
+                'tak, w czwartek',
+                out: true,
+                quote: quote(
+                  'Video message',
+                  detail:
+                      'Pyta, czy przesuwamy przegląd auta z wtorku na '
+                      'czwartek, bo serwis na Puławskiej ma wolne dopiero '
+                      'wtedy; prosi o numer VIN i zdjęcie dowodu '
+                      'rejestracyjnego jeszcze dziś wieczorem.',
+                  outgoing: true,
+                  originalOwn: false,
+                  caption: 'Replied to Anna',
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: background,
       body: SafeArea(
@@ -840,6 +900,20 @@ void main() {
   testWidgets(
     'bubbles and replies',
     (tester) => _golden(tester, 'bubbles-replies-dark', _bubbles()),
+  );
+  testWidgets(
+    'voice note replies',
+    (tester) =>
+        _golden(tester, 'bubbles-voice-replies-dark', _bubbles(voice: true)),
+  );
+  testWidgets(
+    'voice note replies light',
+    (tester) => _golden(
+      tester,
+      'bubbles-voice-replies-light',
+      _bubbles(voice: true),
+      brightness: Brightness.light,
+    ),
   );
   testWidgets(
     'bubbles and replies light',

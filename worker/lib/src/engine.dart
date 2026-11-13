@@ -8,6 +8,7 @@ import 'ports.dart';
 import 'store.dart';
 import 'summary_jobs.dart';
 import 'dictation_jobs.dart';
+import 'gist_provider.dart';
 import 'summary_provider.dart';
 
 String stableId(String namespace, String id) =>
@@ -142,6 +143,10 @@ class WorkerEngine {
   bool _autoScanBusy = false;
   DateTime? _autoScanAt;
   final Map<String, Future<void>> _activeTranscripts = {};
+
+  /// Writes the reply-quote gist of every finished transcript (null: none;
+  /// apps then quote the transcript itself).
+  final TranscriptGister? gister;
   Future<void> _largeSlot = Future<void>.value();
   DateTime? _mediaPrunedAt;
   Completer<void>? _wake;
@@ -156,6 +161,7 @@ class WorkerEngine {
     this.autoTranscriptionReels = false,
     this.maxConcurrentTranscripts = 2,
     ConversationSummarizer? summarizer,
+    this.gister,
     Transcriber? dictationTranscriber,
     PrivateDictationSource? dictationSource,
   }) : clock = clock ?? DateTime.now {
@@ -1237,6 +1243,7 @@ class WorkerEngine {
       job['text'] = null; // Explicit tombstone clears text in replica merges.
       job.remove('pendingResult');
       job.remove('timing'); // Erased with the text it times.
+      job.remove('gist'); // And with the text it describes.
       job['state'] = 'cancelled';
       job['errorCode'] = 'source_redacted';
       job['revision'] = (job['revision'] as int) + 1;
@@ -1465,6 +1472,10 @@ class WorkerEngine {
             _setState(current, 'processing', null);
           });
       cancel.check();
+      final transcribed = currentAttempt();
+      if (transcribed == null) return;
+      final gist = await _gist(transcribed, result, automatic, cancel);
+      cancel.check();
       if (currentAttempt() == null) return;
       final redacted = await _probeSource(source);
       cancel.check();
@@ -1477,16 +1488,19 @@ class WorkerEngine {
       final values = <String, dynamic>{
         'text': result.text,
         'durationSeconds': result.durationSeconds,
-        'estimatedCostUsd': result.estimatedCostUsd,
+        'estimatedCostUsd': result.estimatedCostUsd + gist.costUsd,
         // Timestamps belong to this text only (absent: none).
         'timing': ?result.timing,
+        // So does the reply-quote gist.
+        'gist': ?gist.text,
       };
       latest
         ..remove('retries')
         ..remove('waitingKeysSince')
         ..remove('providerAttemptAt')
         ..remove('pendingResult')
-        ..remove('timing');
+        ..remove('timing')
+        ..remove('gist');
       if (redacted == null) {
         latest['pendingResult'] = values;
         _parkOnSource(latest);
@@ -1668,6 +1682,55 @@ class WorkerEngine {
     return removed;
   }
 
+  /// The reply-quote gist of [result] and what it cost. A short transcript
+  /// is its own gist; a known gist (identical media) is reused; otherwise
+  /// one request to [gister], within an automatic job's daily budget. A
+  /// failed gist never fails the transcript: apps quote the text instead.
+  /// The transcript is kept as the pending result first, so a crash during
+  /// the request still publishes it (see [recover]).
+  Future<({String? text, double costUsd})> _gist(
+    Map<String, dynamic> job,
+    TranscriptionResult result,
+    bool automatic,
+    Cancellation cancel,
+  ) async {
+    final known =
+        transcriptGistVerbatim(result.text) ??
+        normalizeTranscriptGist(result.gist);
+    final provider = gister;
+    if (known != null ||
+        provider == null ||
+        !provider.configured ||
+        transcriptGistOneLine(result.text).isEmpty) {
+      return (text: known, costUsd: 0.0);
+    }
+    final ceiling = provider.ceilingUsd(result.text);
+    final id = job['id'] as String;
+    if (automatic &&
+        autoSpent(excluding: id) + result.estimatedCostUsd + ceiling >
+            autoPolicy().dailyBudgetUsd) {
+      return (text: null, costUsd: 0.0);
+    }
+    job['pendingResult'] = {
+      'text': result.text,
+      'durationSeconds': result.durationSeconds,
+      // Reserved: the gist request may be paid even if its answer is lost.
+      'estimatedCostUsd': result.estimatedCostUsd + ceiling,
+      'timing': ?result.timing,
+    };
+    store.saveJob(job);
+    try {
+      final gist = await provider.gist(result.text, cancel, () {});
+      return (text: gist.text, costUsd: gist.costUsd);
+    } on WorkerFailure catch (e) {
+      if (e.code == 'cancelled') rethrow;
+      return (text: null, costUsd: e is PaidRequestUnknown ? ceiling : 0.0);
+    } catch (_) {
+      cancel.check();
+      return (text: null, costUsd: ceiling);
+    }
+  }
+
   /// An earlier finished transcript of byte-identical media, at no cost.
   TranscriptionResult? _reusableTranscript(String mediaKey, String id) {
     final entry = _mediaEntry(store.checkpoint(mediaKey));
@@ -1685,6 +1748,7 @@ class WorkerEngine {
       duration is num ? duration.toDouble() : 0,
       0,
       timing: timing is Map ? Map<String, Object?>.from(timing) : null,
+      gist: normalizeTranscriptGist(job['gist']),
     );
   }
 

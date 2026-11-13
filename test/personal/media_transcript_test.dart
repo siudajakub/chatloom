@@ -2,6 +2,8 @@
 // The live transcript of the full-screen players: which transcript it shows
 // (done only, never requested), exact worker timestamps versus the estimate,
 // and the show/hide toggle. Fictional fixtures only.
+import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/events/reply_content.dart';
 import 'package:chatloom/personal/media_transcript.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -27,7 +29,13 @@ class _FakePersonal extends PersonalClient {
   @override
   Future<void> transcribe(Event e, {String? language}) async => requests++;
 
-  void setJob(Event e, JobState state, {String? text, Object? timing}) {
+  void setJob(
+    Event e,
+    JobState state, {
+    String? text,
+    Object? timing,
+    String? gist,
+  }) {
     final id = transcriptId(e);
     jobs[id] = TranscriptionJob(
       id: id,
@@ -42,6 +50,7 @@ class _FakePersonal extends PersonalClient {
       text: text,
       durationSeconds: 6,
       timing: timing,
+      gist: gist,
     );
     notifyListeners();
   }
@@ -109,6 +118,72 @@ void main() {
     await tester.pump();
     expect(seen, hasLength(builds));
     expect(personal.requests, 0);
+  });
+
+  group('reply quote of a voice note', () {
+    late Event note;
+    setUp(() {
+      note = ConversationRoom(client, '!voice:example.invalid').message(
+        r'$note',
+        'voice.ogg',
+        content: {
+          'msgtype': MessageTypes.Audio,
+          'body': 'voice.ogg',
+          'url': 'mxc://example.invalid/note',
+          'info': {'duration': 40000},
+          'org.matrix.msc3245.voice': <String, Object?>{},
+        },
+      );
+    });
+    Widget quote(Event event) => MaterialApp(
+      theme: NotionTheme.build(Brightness.dark),
+      localizationsDelegates: L10n.localizationsDelegates,
+      supportedLocales: L10n.supportedLocales,
+      home: Scaffold(
+        body: ReplyContent(
+          event,
+          fill: Colors.transparent,
+          textColor: Colors.transparent,
+          personalClient: personal,
+        ),
+      ),
+    );
+
+    testWidgets('shows the gist under its label once it is transcribed', (
+      tester,
+    ) async {
+      await tester.pumpWidget(quote(note));
+      await tester.pumpAndSettle();
+      expect(find.text('Voice message'), findsOneWidget);
+      // No transcript yet: the label alone, nothing requested.
+      expect(find.byType(Text), findsOneWidget);
+      // A transcript without a gist (older worker): its text instead.
+      personal.setJob(note, JobState.done, text: 'Hello Anna.\nThe cabin.');
+      await tester.pump();
+      expect(find.text('Hello Anna. The cabin.'), findsOneWidget);
+      personal.setJob(
+        note,
+        JobState.done,
+        text: 'Hello Anna. The cabin.',
+        gist: 'Cabin near Zakopane booked for Saturday.',
+      );
+      await tester.pump();
+      expect(find.text('Voice message'), findsOneWidget);
+      expect(
+        find.text('Cabin near Zakopane booked for Saturday.'),
+        findsOneWidget,
+      );
+      expect(personal.requests, 0);
+    });
+
+    testWidgets('an audio file keeps its plain quote', (tester) async {
+      // [voice] above is an audio file without the voice-note flag.
+      personal.setJob(voice, JobState.done, text: _text, gist: 'Greeting.');
+      await tester.pumpWidget(quote(voice));
+      await tester.pumpAndSettle();
+      expect(find.text('Greeting.'), findsNothing);
+      expect(find.byType(Text), findsOneWidget);
+    });
   });
 
   testWidgets('estimates line times without worker timestamps', (tester) async {

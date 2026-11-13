@@ -311,6 +311,22 @@ void main() {
       expect(r.transcripts[_entity]!.text, 'inaczej');
       expect(r.transcripts[_entity]!.timing, isNull);
     });
+
+    test('a gist never outlives the text it describes', () async {
+      final r = _replica(_Store());
+      await r.acceptResult(
+        _op('gisted', 'transcript.result', {
+          ..._job(3, 'done', text: 'długa notatka o domku'),
+          'gist': 'Domek pod Zakopanem.',
+        }),
+      );
+      expect(r.transcripts[_entity]!.gist, 'Domek pod Zakopanem.');
+      await r.acceptResult(
+        _op('again', 'transcript.result', _job(5, 'done', text: 'inaczej')),
+      );
+      expect(r.transcripts[_entity]!.text, 'inaczej');
+      expect(r.transcripts[_entity]!.gist, isNull);
+    });
   });
 
   group('seen markers', () {

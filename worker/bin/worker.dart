@@ -8,6 +8,7 @@ import 'package:path/path.dart' as path;
 import 'package:personal_core/personal_core.dart';
 import 'package:personal_worker/src/config.dart';
 import 'package:personal_worker/src/engine.dart';
+import 'package:personal_worker/src/gist_provider.dart';
 import 'package:personal_worker/src/summary_provider.dart';
 import 'package:personal_worker/src/heartbeat_schedule.dart';
 import 'package:personal_worker/src/journal.dart';
@@ -168,6 +169,9 @@ Future<void> main(List<String> arguments) async {
         summarizer: OpenRouterConversationSummarizer(
           openRouterApiKey(config, credentials),
         ),
+        gister: config.transcriptGists
+            ? OpenRouterTranscriptGister(openRouterApiKey(config, credentials))
+            : null,
       );
       final devices = config.trustedDeviceIds.toSet()..add(transport.deviceId);
       final journal = WorkerJournal(

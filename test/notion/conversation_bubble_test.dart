@@ -511,6 +511,38 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('a voice quote shows its label over the gist', (tester) async {
+    const gist =
+        'Cabin near Zakopane for Saturday, 900 zł; bring the board games, '
+        'Marek picks up the keys before six. One more line that is far too '
+        'long to fit the three lines a voice quote may use for its gist.';
+    await tester.pumpWidget(
+      host(
+        const SizedBox(
+          width: 240,
+          child: ConversationReplyQuote(
+            key: Key('quote'),
+            text: 'Voice message',
+            detail: gist,
+            fill: Color(0xFF2D2D2D),
+            textColor: Color(0xFFAAAAA5),
+            outgoing: false,
+          ),
+        ),
+      ),
+    );
+    final label = tester.widget<Text>(find.text('Voice message'));
+    final detail = tester.widget<Text>(find.text(gist));
+    expect(label.maxLines, 1);
+    expect(detail.maxLines, NotionBubble.quoteDetailMaxLines);
+    expect(detail.overflow, TextOverflow.ellipsis);
+    expect(
+      tester.getRect(find.text('Voice message')).bottom,
+      lessThanOrEqualTo(tester.getRect(find.text(gist)).top),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   test('quote colours stay opaque and readable on every chat palette', () {
     const pages = [
       Color(0xFF191919),
