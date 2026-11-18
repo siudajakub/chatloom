@@ -329,14 +329,20 @@ class NotionPalette {
         );
         onBubble = NotionContrast.readable(bubble, legacyText);
       case NotionIntensity.balanced:
-        // Solid and a little deeper than the brightest readable tone.
-        bubble = fillFor(_desaturate(seed, .85), _white, minimum: 5.2);
+        // A softened tone of the accent (not the raw fill) with a gentle
+        // top-to-bottom sheen: slightly lighter above, deeper below.
+        final top = fillFor(_desaturate(seed, .78), _white, minimum: 5.4);
+        final bottom = fillFor(_desaturate(seed, .86), _white, minimum: 6.4);
+        gradient = [top, bottom];
+        bubble = Color.lerp(top, bottom, .5)!;
         onBubble = _white;
       case NotionIntensity.vivid:
-        final start = fillFor(_saturate(seed, 1.1), _white);
+        // 5.4:1 so text still passes through the glass over a wallpaper.
+        final start = fillFor(_saturate(seed, 1.1), _white, minimum: 5.4);
         final end = fillFor(
           _saturate(appearance.gradientEnd ?? seed, 1.1),
           _white,
+          minimum: 5.4,
         );
         gradient = [start, end];
         // Inside the gradient the sRGB blend is darker than either stop, so

@@ -243,6 +243,17 @@ class ConversationBubble extends StatelessWidget {
         final ownFill = outgoing && backgroundColor == null;
         final gradient = ownFill ? colors.outgoingGradient : null;
         final ink = ownFill ? colors.outgoingText : colors.text;
+        // Glass: theme fills are faintly translucent over the wallpaper and
+        // carry a hairline rim; a private chat palette stays opaque.
+        final themeFill = backgroundColor == null;
+        double glass(Color c) =>
+            themeFill ? c.a * NotionBubble.fillOpacity : c.a;
+        final dark = Theme.of(context).brightness == Brightness.dark;
+        final rim = !themeFill
+            ? null
+            : ownFill
+            ? Colors.white.withValues(alpha: dark ? .16 : .22)
+            : (dark ? Colors.white : Colors.black).withValues(alpha: .06);
         final maxWidth = math.max(
           0.0,
           math.min(
@@ -286,14 +297,24 @@ class ConversationBubble extends StatelessWidget {
                             ? null
                             : backgroundColor ??
                                   (outgoing
-                                      ? colors.outgoing
-                                      : colors.incoming),
+                                          ? colors.outgoing
+                                          : colors.incoming)
+                                      .withValues(
+                                        alpha: glass(
+                                          outgoing
+                                              ? colors.outgoing
+                                              : colors.incoming,
+                                        ),
+                                      ),
                         gradient: gradient == null
                             ? null
                             : LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: gradient,
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  for (final c in gradient)
+                                    c.withValues(alpha: glass(c)),
+                                ],
                               ),
                         borderRadius: radius,
                       ),
@@ -305,7 +326,12 @@ class ConversationBubble extends StatelessWidget {
                                 alpha: flashOpacity * f.clamp(0.0, 1.0),
                               ),
                         border: t <= 0
-                            ? null
+                            ? (rim == null
+                                  ? null
+                                  : Border.all(
+                                      color: rim,
+                                      width: NotionBubble.rimWidth,
+                                    ))
                             : Border.all(
                                 color: ink.withAlpha(
                                   (140 * t.clamp(0.0, 1.0)).round(),

@@ -107,7 +107,7 @@ roles (no contrast work per build or per scroll frame).
 | Intensity | Own bubble | Accent | Letter avatars | Network marks |
 |---|---|---|---|---|
 | `muted` | grey with a 16 % hint of the hue, grey text | desaturated | grey | monochrome |
-| `balanced` (default) | solid accent, a little deeper, white text | the hue | tinted per name | monochrome |
+| `balanced` (default) | softened (desaturated) accent with a vertical sheen, lighter top → deeper bottom, white text | the hue | tinted per name | monochrome |
 | `vivid` (Messenger) | accent gradient (hue → `gradientEnd`), white text | the hue, saturated | saturated per name, white initials | brand colours |
 
 `graphite` + `muted` is exactly the original grey Notion look.
@@ -124,9 +124,17 @@ roles (no contrast work per build or per scroll frame).
 Contrast is computed, not hand-picked: `NotionPalette.fillFor` moves a hue's
 lightness until white text reaches 4.5:1, `inkOn` until the hue reads on the
 page; network marks need 3:1 (graphics). `test/notion/appearance_test.dart`
-checks every preset × intensity × brightness. Gradients exist only on Vivid
-own bubbles (static per bubble, never scroll-driven); every other surface
-stays flat. Status colours (`danger`, `success`, ...) never follow the
+checks every preset × intensity × brightness. Gradients exist only on
+Balanced and Vivid own bubbles (static per bubble, never scroll-driven);
+every other surface stays flat.
+
+Bubbles are glass without blur: theme fills (own and incoming) are drawn at
+`NotionBubble.fillOpacity` (92 %) so a wallpaper glows through faintly, with
+a `NotionBubble.rimWidth` hairline rim (white 16 % / 22 % light on own,
+6 % on incoming) in the foreground decoration, so layout never moves. Own
+text is tested at 4.5:1 composited over every wallpaper stop, white and
+black. No `BackdropFilter` per bubble. A private chat palette stays opaque
+with no rim. Status colours (`danger`, `success`, ...) never follow the
 accent.
 
 ### Message bubbles: `NotionBubble.*` (const)

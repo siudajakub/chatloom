@@ -274,11 +274,17 @@ void main() {
       return (decoration.decoration as BoxDecoration).color!;
     }
 
-    expect(await renderedColor(ThemeData.dark()), const Color(0xFF414141));
+    // Theme fills are glass: the role at NotionBubble.fillOpacity.
+    expect(
+      await renderedColor(ThemeData.dark()),
+      const Color(0xFF414141).withValues(alpha: NotionBubble.fillOpacity),
+    );
     final light = ThemeData.light();
     expect(
       await renderedColor(light),
-      light.colorScheme.surfaceContainerHighest,
+      light.colorScheme.surfaceContainerHighest.withValues(
+        alpha: NotionBubble.fillOpacity,
+      ),
     );
     expect(
       await renderedColor(
@@ -293,7 +299,7 @@ void main() {
           ],
         ),
       ),
-      Colors.blueGrey,
+      Colors.blueGrey.withValues(alpha: NotionBubble.fillOpacity),
     );
   });
 

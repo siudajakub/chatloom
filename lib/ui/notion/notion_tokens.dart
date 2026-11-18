@@ -161,6 +161,15 @@ abstract final class NotionBubble {
     vertical: 2,
   );
 
+  /// Opacity of the theme's bubble fills (own and incoming), so a chat
+  /// wallpaper glows through faintly. Text contrast is checked composited
+  /// over every wallpaper stop, white and black (`appearance_test.dart`).
+  /// A private chat palette's fill stays opaque.
+  static const double fillOpacity = .92;
+
+  /// Inner hairline that catches light on a bubble's edge (glass rim).
+  static const double rimWidth = .5;
+
   /// Between bubbles of one group, and between groups.
   static const double groupGap = 2;
   static const double seriesGap = 14;

@@ -48,6 +48,31 @@ void main() {
             reason: 'gradient stop $why',
           );
         }
+        // Theme bubbles are faintly translucent (glass): text must still
+        // pass composited over any wallpaper stop, white and black.
+        final under = [
+          const Color(0xFFFFFFFF),
+          const Color(0xFF000000),
+          base.background,
+          // Brightest wallpaper stops (notion_wallpapers.dart).
+          const Color(0xFF0FB5A6), const Color(0xFF06B6D4),
+          const Color(0xFF22C55E), const Color(0xFFF97316),
+          const Color(0xFFEC4899), const Color(0xFFD9A400),
+          const Color(0xFFF76B15), const Color(0xFF64748B),
+        ];
+        for (final fill in [p.bubble, ...?p.bubbleGradient]) {
+          for (final u in under) {
+            final seen = Color.alphaBlend(
+              fill.withValues(alpha: NotionBubble.fillOpacity),
+              u,
+            );
+            expect(
+              NotionContrast.ratio(p.onBubble, seen),
+              greaterThanOrEqualTo(4.5),
+              reason: 'glass bubble over $u $why',
+            );
+          }
+        }
         expect(
           NotionContrast.ratio(p.onAccentFill, p.accentFill),
           greaterThanOrEqualTo(4.5),
@@ -113,7 +138,8 @@ void main() {
       expect(muted.onBubble, ConversationBubbleColors.dark.text);
       expect(HSLColor.fromColor(muted.bubble).saturation, lessThan(.3));
       expect(balanced.onBubble, _white);
-      expect(balanced.bubbleGradient, isNull);
+      // Balanced: a softened accent with a vertical sheen.
+      expect(balanced.bubbleGradient, hasLength(2));
       expect(HSLColor.fromColor(balanced.bubble).saturation, greaterThan(.5));
       expect(vivid.bubbleGradient, hasLength(2));
       expect(vivid.bubbleGradient!.first, isNot(vivid.bubbleGradient!.last));
