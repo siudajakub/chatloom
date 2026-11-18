@@ -11,6 +11,7 @@ import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/notification_eligibility.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/poll_notice.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/reminder_notification.dart';
 import 'package:chatloom/personal/round_video/telegram_media_protocol.dart';
@@ -31,7 +32,9 @@ extension LocalNotificationsExtension on MatrixState {
 
   Future<void> showLocalNotification(Event event) async {
     if (!PlatformInfos.supportsSystemNotifications) return;
-    if (isTelegramMediaControl(event.type)) return;
+    if (isTelegramMediaControl(event.type) || isPollBookkeeping(event.type)) {
+      return;
+    }
     if (PersonalPrivacy.isJournal(event.room)) {
       // Same presenter, claim and trust checks as the background paths.
       if (!kIsWeb) {

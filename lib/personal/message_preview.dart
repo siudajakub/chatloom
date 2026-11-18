@@ -34,6 +34,7 @@ import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/own_sender.dart';
+import 'package:chatloom/personal/poll_notice.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:matrix/matrix.dart';
@@ -103,6 +104,8 @@ String? _label(Event event) {
     final question = _pollQuestion(event.content);
     return question == null ? 'Poll' : 'Poll: $question';
   }
+  if (pollResponseTypes.contains(event.type)) return 'Voted in a poll';
+  if (pollEndTypes.contains(event.type)) return 'Poll ended';
   if (event.type != EventTypes.Message) return null;
   switch (event.messageType) {
     case MessageTypes.Sticker:

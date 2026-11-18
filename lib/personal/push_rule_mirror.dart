@@ -44,6 +44,7 @@ import 'dart:math' as math;
 import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/poll_notice.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
@@ -473,6 +474,32 @@ class PushRuleMirror {
           .listen((_) => mirror.schedule());
     _mirrors[client] = attached;
     mirror.schedule();
+    _pollRules(client);
+  }
+
+  // Poll votes never push: one idempotent rule check per account sync that
+  // carries push rules, after the rules are known (one write at most).
+  static void _pollRules(Client client) {
+    var running = false;
+    var written = false;
+    Future<void> check() async {
+      if (running || written) return;
+      running = true;
+      try {
+        written = (await ensurePollRule(client)) != PollRuleOp.none;
+      } catch (e) {
+        Logs().w('Push rule mirror: poll rule failed', e.runtimeType);
+      } finally {
+        running = false;
+      }
+    }
+
+    _mirrors[client]!.polls = client.onSync.stream
+        .where(
+          (u) => u.accountData?.any((d) => d.type == 'm.push_rules') ?? false,
+        )
+        .listen((_) => unawaited(check()));
+    unawaited(check());
   }
 
   /// Stops mirroring for [client] (logout). Rules stay on the server.
@@ -483,10 +510,12 @@ class _Attached {
   final PushRuleMirror mirror;
   StreamSubscription<int>? changes;
   StreamSubscription<SyncUpdate>? rules;
+  StreamSubscription<SyncUpdate>? polls;
   _Attached(this.mirror);
   void dispose() {
     mirror.dispose();
     unawaited(changes?.cancel());
     unawaited(rules?.cancel());
+    unawaited(polls?.cancel());
   }
 }

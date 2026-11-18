@@ -203,6 +203,11 @@ void main() {
       }, type: 'org.matrix.msc3381.poll.start'),
       'Poll: Lunch?',
     );
+    expect(
+      label({}, type: 'org.matrix.msc3381.poll.response'),
+      'Voted in a poll',
+    );
+    expect(label({}, type: 'm.poll.end'), 'Poll ended');
     expect(label({'msgtype': 'm.emote', 'body': 'waves'}), '* waves');
     expect(
       label({'msgtype': 'm.notice', 'body': 'line 1\nline 2'}),

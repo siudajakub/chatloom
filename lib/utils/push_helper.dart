@@ -20,6 +20,7 @@ import 'package:chatloom/personal/notification_reply.dart';
 import 'package:chatloom/personal/notification_threads.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/poll_notice.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/private_avatar.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
@@ -339,7 +340,9 @@ Future<PushOutcome> _tryPushHelper(
   if (event == null) return PushOutcome.cleared;
 
   // Known bridge controls are internal state, including background pushes.
-  if (isTelegramMediaControl(event.type)) return PushOutcome.control;
+  if (isTelegramMediaControl(event.type) || isPollBookkeeping(event.type)) {
+    return PushOutcome.control;
+  }
   updateAppBadge(notification.counts?.unread ?? 0);
 
   if (PersonalPrivacy.isJournal(event.room)) {
@@ -910,8 +913,11 @@ Future<_NotificationAvatars> _loadNotificationAvatars({
 
 /// Earlier senders' icons live only in the encrypted media cache, keyed by
 /// the opaque person key.
-Uri _personIconKey(String personKey) =>
-    Uri(scheme: 'personal-notification-avatar', host: 'person', path: personKey);
+Uri _personIconKey(String personKey) => Uri(
+  scheme: 'personal-notification-avatar',
+  host: 'person',
+  path: personKey,
+);
 
 Future<void> _storePersonIcon(
   Client client,
@@ -1223,9 +1229,9 @@ Future<void> _clearReadNotifications(
   required PushWorkBudget work,
 }) async {
   Logs().v('Notification is a clearing indicator.');
-  final active = (await work.wait(
-    plugin.getActiveNotifications,
-  )).where((n) => n.groupKey == client.clientName && n.id != null).toList();
+  final active = (await work.wait(plugin.getActiveNotifications))
+      .where((n) => n.groupKey == client.clientName && n.id != null)
+      .toList();
   if (active.isEmpty) return;
   if (single && unread == 0) {
     for (final notification in active) {
@@ -1250,8 +1256,7 @@ Future<void> _clearReadNotifications(
     await personal.loadLocal().timeout(const Duration(seconds: 3));
     for (final group in personal.groups) {
       shows[personNotificationId(client.clientName, group.id)] = [
-        for (final member in group.members)
-          ?client.getRoomById(member.roomId),
+        for (final member in group.members) ?client.getRoomById(member.roomId),
       ];
     }
   } catch (_) {}
