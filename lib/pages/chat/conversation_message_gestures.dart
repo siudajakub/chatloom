@@ -575,14 +575,26 @@ class _ConversationMessageGesturesState
           followerAnchor: toolbarOnLeft
               ? Alignment.centerRight
               : Alignment.centerLeft,
+          // Opaque for the pointer over its whole padded box: the padding
+          // touches the bubble and reaches above and below the pill, so a
+          // pointer crossing over (also diagonally) stays inside.
           child: MouseRegion(
             onEnter: (_) => hover.set(bar: true),
             onExit: (_) => hover.set(bar: false),
-            // The padding touches the bubble, so the pointer moves from
-            // the bubble onto the toolbar without leaving both.
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: NotionSpace.xs),
-              child: NotionHoverToolbar(actions: _hoverItems()),
+              padding: const EdgeInsets.symmetric(
+                horizontal: NotionSpace.sm,
+                vertical: NotionSpace.xs,
+              ),
+              child: ValueListenableBuilder<bool>(
+                valueListenable: hover.visible,
+                builder: (context, visible, _) => NotionHoverToolbar(
+                  actions: _hoverItems(),
+                  visible: visible,
+                  bubbleOnRight: toolbarOnLeft,
+                  onHidden: hover.hidden,
+                ),
+              ),
             ),
           ),
         ),
@@ -913,44 +925,92 @@ class _ConversationMessageGesturesState
 }
 
 /// Whether the pointer is over a message surface or its hover toolbar; the
-/// toolbar shows while either holds. Exit and enter of one pointer move
-/// land in the same frame, so crossing from the bubble onto the toolbar
-/// never hides it.
+/// toolbar shows while either holds. Leaving both starts
+/// [NotionHoverToolbar.hideGrace]: a pointer that reaches either again in
+/// time (crossing the gap between them, cutting a corner) keeps the toolbar.
+/// After the grace the toolbar plays its exit ([visible] false) and the
+/// portal closes once it has finished ([hidden]).
 class _HoverToolbarState {
   final portal = OverlayPortalController();
   final link = LayerLink();
+  final visible = ValueNotifier<bool>(false);
   bool _surface = false;
   bool _bar = false;
   bool _disposed = false;
+  Timer? _grace;
 
   void set({bool? surface, bool? bar}) {
     if (_disposed) return;
     _surface = surface ?? _surface;
     _bar = bar ?? _bar;
-    _apply();
+    if (_surface || _bar) {
+      _grace?.cancel();
+      _grace = null;
+      _toggle(true);
+    } else {
+      _grace ??= Timer(NotionHoverToolbar.hideGrace, () {
+        _grace = null;
+        if (!_surface && !_bar) _toggle(false);
+      });
+    }
   }
 
+  /// Hides at once, without the exit (an action was chosen).
   void clear() {
     _surface = false;
     _bar = false;
-    _apply();
+    _grace?.cancel();
+    _grace = null;
+    if (_disposed || (!visible.value && !portal.isShowing)) return;
+    // Also called from build: change nothing while the tree is locked.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (!_surface && !_bar) clear();
+      });
+      return;
+    }
+    visible.value = false;
+    _portal(false);
   }
 
-  void _apply() {
+  /// The exit finished.
+  void hidden() {
+    if (!visible.value) _portal(false);
+  }
+
+  void _toggle(bool show) {
     if (_disposed) return;
-    final show = _surface || _bar;
-    if (show == portal.isShowing) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (show == (_surface || _bar)) _toggle(show);
+      });
+      return;
+    }
+    visible.value = show;
+    if (show) _portal(true);
+  }
+
+  void _portal(bool show) {
+    if (_disposed || show == portal.isShowing) return;
     // Pointer events may arrive while the tree is locked (a layout-driven
     // hover update): toggle after this frame in that case.
     if (SchedulerBinding.instance.schedulerPhase ==
         SchedulerPhase.persistentCallbacks) {
-      SchedulerBinding.instance.addPostFrameCallback((_) => _apply());
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (show == visible.value) _portal(show);
+      });
       return;
     }
     show ? portal.show() : portal.hide();
   }
 
-  void dispose() => _disposed = true;
+  void dispose() {
+    _disposed = true;
+    _grace?.cancel();
+    visible.dispose();
+  }
 }
 
 /// The render object the surface is drawn into: probed for interactive
@@ -1010,7 +1070,13 @@ class _MessageHorizontalDragRecognizer extends HorizontalDragGestureRecognizer {
 class _MessageDoubleTapRecognizer extends GestureRecognizer {
   _MessageDoubleTapRecognizer(this.allowed, {required this.nearSurface})
     : super(
-        supportedDevices: {PointerDeviceKind.touch},
+        // A mouse double click (macOS, a trackpad tap-tap) reacts too;
+        // touch-only left it to the selection area, which selected a word.
+        supportedDevices: {
+          PointerDeviceKind.touch,
+          PointerDeviceKind.mouse,
+          PointerDeviceKind.trackpad,
+        },
         allowedButtonsFilter: (buttons) => buttons == kPrimaryButton,
       ) {
     _OffSurfaceTap.listen();

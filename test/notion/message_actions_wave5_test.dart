@@ -729,6 +729,7 @@ void main() {
       );
       expect(press?.reactionsOnly, isTrue);
       await mouse.moveTo(const Offset(1, 1));
+      await tester.pump(NotionHoverToolbar.hideGrace);
       await tester.pumpAndSettle();
       expect(find.byType(NotionHoverToolbar), findsNothing);
     });
