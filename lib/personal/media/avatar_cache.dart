@@ -178,7 +178,12 @@ class AvatarCache {
           maxBytes: previewDownloadMaxBytes,
         );
         checkCurrent();
-        return bytes;
+        if (looksLikeImage(bytes)) return bytes;
+        // A thumbnail the device cannot decode (an error page served as
+        // 200, an unknown format) falls through to the original below.
+        throw const _UndecodableThumbnail();
+      } on _UndecodableThumbnail {
+        checkCurrent();
       } on MatrixException catch (e) {
         // Missing bridge thumbnails may fall back to a bounded original.
         // A server outage or rate limit must not fan out into another GET.
@@ -188,29 +193,57 @@ class AvatarCache {
           rethrow;
         }
         checkCurrent();
-        final bytes = await client.downloadMxcCached(
-          uri,
-          databaseCache: false,
-          maxBytes: previewDownloadMaxBytes,
-        );
-        checkCurrent();
-        return bytes;
       }
+      final bytes = await client.downloadMxcCached(
+        uri,
+        databaseCache: false,
+        maxBytes: previewDownloadMaxBytes,
+      );
+      checkCurrent();
+      if (!looksLikeImage(bytes)) {
+        throw const FormatException('avatar_not_an_image');
+      }
+      return bytes;
     }
 
     final cache = await shared();
     checkCurrent();
     if (cache == null || account == null) return download();
-    final bytes = await cache.fetch(
-      StickerMediaCache.keyFor(
-        account,
-        uri,
-        isThumbnail ? 'avatar:$side' : 'avatar:original',
-      ),
-      download,
+    final key = StickerMediaCache.keyFor(
+      account,
+      uri,
+      isThumbnail ? 'avatar:$side' : 'avatar:original',
     );
+    final bytes = await cache.fetch(key, download);
     checkCurrent();
-    return bytes;
+    if (!isThumbnail || looksLikeImage(bytes)) return bytes;
+    // Undecodable bytes stored by an older build would otherwise be served
+    // for 120 days and every retry would show the same broken avatar.
+    await cache.remove(key);
+    checkCurrent();
+    return cache.fetch(key, download);
+  }
+
+  /// Signature check for formats the platform decoders handle. Bytes that
+  /// are none of these are never stored, so a later retry asks again.
+  @visibleForTesting
+  static bool looksLikeImage(Uint8List b) {
+    bool at(int offset, List<int> sig) {
+      if (b.length < offset + sig.length) return false;
+      for (var i = 0; i < sig.length; i++) {
+        if (b[offset + i] != sig[i]) return false;
+      }
+      return true;
+    }
+
+    return at(0, const [0xFF, 0xD8, 0xFF]) || // JPEG
+        at(0, const [0x89, 0x50, 0x4E, 0x47]) || // PNG
+        at(0, const [0x47, 0x49, 0x46, 0x38]) || // GIF
+        (at(0, const [0x52, 0x49, 0x46, 0x46]) &&
+            at(8, const [0x57, 0x45, 0x42, 0x50])) || // WebP
+        at(4, const [0x66, 0x74, 0x79, 0x70]) || // HEIC/AVIF (ftyp)
+        at(0, const [0x42, 0x4D]) || // BMP
+        at(0, const [0x00, 0x00, 0x01, 0x00]); // ICO
   }
 
   /// Keys already queued or stored by [prefetch] in this run.
@@ -304,4 +337,8 @@ class AvatarCache {
       );
     }
   }
+}
+
+class _UndecodableThumbnail implements Exception {
+  const _UndecodableThumbnail();
 }

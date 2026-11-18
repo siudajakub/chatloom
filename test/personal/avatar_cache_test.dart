@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:chatloom/personal/media/avatar_cache.dart';
 import 'package:chatloom/utils/client_download_content_extension.dart';
@@ -28,6 +29,8 @@ class _MediaClient extends Client {
   Future<bool> authenticatedMediaSupported() async => true;
 }
 
+const _png = [0x89, 0x50, 0x4E, 0x47, 1, 2, 3];
+
 void main() {
   setUp(() => AvatarCache.debugSetShared(null));
   tearDown(AvatarCache.debugResetShared);
@@ -50,7 +53,7 @@ void main() {
                   '{"errcode":"M_UNKNOWN","error":"Unavailable"}',
                   status,
                 )
-              : http.Response.bytes([1, 2, 3], 200);
+              : http.Response.bytes(_png, 200);
         }),
       );
       final bytes = await AvatarCache.loadAvatar(
@@ -62,7 +65,7 @@ void main() {
         animated: false,
         thumbnailMethod: ThumbnailMethod.crop,
       );
-      expect(bytes, [1, 2, 3]);
+      expect(bytes, _png);
       expect(requests, hasLength(2));
       expect(requests.last, contains('/download/'));
     });
@@ -132,7 +135,7 @@ void main() {
       final client = _MediaClient(
         MockClient((request) async {
           requests.add(request.url);
-          return http.Response.bytes([1, 2, 3], 200);
+          return http.Response.bytes(_png, 200);
         }),
       );
       await AvatarCache.loadAvatar(
@@ -211,7 +214,7 @@ void main() {
                 '{"errcode":"M_UNKNOWN","error":"Unavailable"}',
                 404,
               )
-            : http.Response.bytes([1, 2, 3], 200);
+            : http.Response.bytes(_png, 200);
       }),
     );
     Future<List<int>> load(int size) => AvatarCache.loadAvatar(
@@ -225,8 +228,8 @@ void main() {
     );
     final first = load(40), second = load(80);
     gate.complete();
-    expect(await first, [1, 2, 3]);
-    expect(await second, [1, 2, 3]);
+    expect(await first, _png);
+    expect(await second, _png);
     expect(requests, 2, reason: 'one thumbnail and one original for both rows');
   });
 
@@ -236,7 +239,7 @@ void main() {
       MockClient((_) async {
         started.complete();
         await gate.future;
-        return http.Response.bytes([1, 2, 3], 200);
+        return http.Response.bytes(_png, 200);
       }),
     )..setUserId('@first:example.invalid');
     final pending = AvatarCache.loadAvatar(
@@ -262,7 +265,7 @@ void main() {
         MockClient((_) async {
           requests++;
           await gate.future;
-          return http.Response.bytes([1, 2, 3], 200);
+          return http.Response.bytes(_png, 200);
         }),
       )..setUserId('@first:example.invalid');
       AvatarCache.prefetch(client, [
@@ -289,7 +292,7 @@ void main() {
     final client = _MediaClient(
       MockClient((_) async {
         requests++;
-        return http.Response.bytes([1, 2, 3], 200);
+        return http.Response.bytes(_png, 200);
       }),
     )..setUserId('@fixture:example.invalid');
     for (var batch = 0; batch < 17; batch++) {
@@ -302,5 +305,57 @@ void main() {
     expect(requests, 17 * 32);
     expect(AvatarCache.queuedCount, 0);
     expect(AvatarCache.rememberedCount, AvatarCache.maxRemembered);
+  });
+
+  test('image signatures accept platform formats only', () {
+    bool ok(List<int> b) => AvatarCache.looksLikeImage(Uint8List.fromList(b));
+    expect(ok(_png), isTrue);
+    expect(ok([0xFF, 0xD8, 0xFF, 0xE0]), isTrue);
+    expect(ok([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x68]), isTrue);
+    expect(ok('RIFF\x00\x00\x00\x00WEBPVP8'.codeUnits), isTrue);
+    expect(ok('<html>error</html>'.codeUnits), isFalse);
+    expect(ok('{"errcode":"M_UNKNOWN"}'.codeUnits), isFalse);
+    expect(ok(const []), isFalse);
+  });
+
+  test('undecodable thumbnail falls back to the original', () async {
+    final requests = <String>[];
+    final client = _MediaClient(
+      MockClient((request) async {
+        requests.add(request.url.path);
+        return request.url.path.contains('/thumbnail/')
+            ? http.Response('<html>not an image</html>', 200)
+            : http.Response.bytes(_png, 200);
+      }),
+    );
+    final bytes = await AvatarCache.loadAvatar(
+      client,
+      Uri.parse('mxc://example.invalid/undecodable'),
+      width: 40,
+      height: 40,
+      isThumbnail: true,
+      animated: false,
+      thumbnailMethod: ThumbnailMethod.crop,
+    );
+    expect(bytes, _png);
+    expect(requests.last, contains('/download/'));
+  });
+
+  test('undecodable original fails so a later retry asks again', () async {
+    final client = _MediaClient(
+      MockClient((_) async => http.Response('not an image', 200)),
+    );
+    await expectLater(
+      AvatarCache.loadAvatar(
+        client,
+        Uri.parse('mxc://example.invalid/broken'),
+        width: 40,
+        height: 40,
+        isThumbnail: true,
+        animated: false,
+        thumbnailMethod: ThumbnailMethod.crop,
+      ),
+      throwsFormatException,
+    );
   });
 }
