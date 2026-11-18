@@ -1033,7 +1033,6 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
 
   /// The composer row while recording (Telegram's record panel).
   Widget _panel(BuildContext context) {
-    final colors = context.notion.colors;
     final state = _controller.state;
     final locked =
         _controller.locked ||
@@ -1154,14 +1153,13 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
         reserve,
       ];
     }
-    return ColoredBox(
-      color: colors.background,
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: SizedBox(
-          height: RoundRecorderLayout.panelHeight,
-          child: Row(children: children),
-        ),
+    // Glass over the blurred chat, like the composer it stands in for.
+    return NotionGlassBar(
+      hairlineTop: true,
+      alignment: Alignment.topCenter,
+      child: SizedBox(
+        height: RoundRecorderLayout.panelHeight,
+        child: Row(children: children),
       ),
     );
   }

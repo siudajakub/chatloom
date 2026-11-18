@@ -105,7 +105,12 @@ void main() {
         of: find.byKey(const Key('dictation-editor')),
         matching: find.byType(TextField),
       );
-      expect(tester.widget<TextField>(field).expands, isTrue);
+      // Compact: the editor grows with the transcript, not to the screen.
+      expect(tester.widget<TextField>(field).expands, isFalse);
+      expect(
+        tester.getSize(find.byKey(const Key('dictation-panel'))).height,
+        lessThan(844 * .6),
+      );
       await tester.enterText(field, '   \n  ');
       await tester.pump();
       await tester.tap(find.byKey(const Key('dictation-primary')));
@@ -271,6 +276,7 @@ Widget dictationConversationFixture() => Scaffold(
       ),
       CompactComposer(
         useCompactActionToolbar: true,
+        primaryIsRecord: true,
         inlineActions: [
           ComposerAction(
             icon: Icons.sentiment_satisfied_alt_outlined,

@@ -220,6 +220,10 @@ void main() {
               : ChatPageWithRoom(room: a),
           client,
         );
+        // The phone composer is one row: recording actions fold behind
+        // the chevron.
+        await tester.tap(find.byTooltip('Show recording options'));
+        await tester.pumpAndSettle();
         final dictation = find.byKey(const ValueKey('composer-dictation'));
         expect(dictation, findsOneWidget);
         expect(tester.getSize(dictation), const Size.square(48));

@@ -50,142 +50,157 @@ class RecordingInputRow extends StatelessWidget {
         : paused
         ? 'Recording paused'
         : 'Recording';
-    return SizedBox(
-      height: ChatInputRow.height,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const SizedBox(width: 4),
-          IconButton(
-            key: const Key('voice_delete_button'),
-            tooltip: 'Delete recording',
-            style: IconButton.styleFrom(
-              minimumSize: const Size.square(NotionSize.touchTarget),
-            ),
-            icon: const Icon(Icons.delete_outline),
-            color: colors.danger,
-            onPressed: state.isSending ? null : state.requestDiscard,
-          ),
-          if (paused && !state.isReviewing)
-            IconButton(
-              key: const Key('voice_resume_button'),
-              tooltip: 'Resume recording',
-              style: IconButton.styleFrom(
-                minimumSize: const Size.square(NotionSize.touchTarget),
+    // A translucent glass pill in the composer's place. No blur: the row
+    // rises in with the composer's reappear motion (glass never animates).
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: NotionSpace.xs,
+        vertical: NotionSpace.xxs,
+      ),
+      child: NotionGlassPanel(
+        key: const Key('voice_recording_panel'),
+        blur: false,
+        overlay: false,
+        borderRadius: NotionGlass.dockRadius,
+        child: SizedBox(
+          height: ChatInputRow.height,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(width: 4),
+              IconButton(
+                key: const Key('voice_delete_button'),
+                tooltip: 'Delete recording',
+                style: IconButton.styleFrom(
+                  minimumSize: const Size.square(NotionSize.touchTarget),
+                ),
+                icon: const Icon(Icons.delete_outline),
+                color: colors.danger,
+                onPressed: state.isSending ? null : state.requestDiscard,
               ),
-              color: colors.text,
-              icon: const Icon(Icons.mic_none_outlined),
-              onPressed: state.canResume ? state.resume : null,
-            )
-          else if (!paused)
-            IconButton(
-              key: const Key('voice_pause_button'),
-              tooltip: 'Pause recording',
-              style: IconButton.styleFrom(
-                minimumSize: const Size.square(NotionSize.touchTarget),
-              ),
-              color: colors.text,
-              icon: const Icon(Icons.pause),
-              onPressed: state.controlsBusy ? null : state.pause,
-            ),
-          Expanded(
-            child: NotionFadeThrough(
-              alignment: AlignmentDirectional.centerStart,
-              child: paused && !state.isSending
-                  ? Semantics(
-                      key: const ValueKey('voice-preview'),
-                      container: true,
-                      liveRegion: true,
-                      label: '$status, ${formatDuration(state.duration)}',
-                      child: VoiceDraftPreview(
-                        prepare: state.finishForReview,
-                        duration: state.duration,
-                        waveform: state.reviewWaveform,
-                        enabled: !state.controlsBusy || state.isReviewing,
-                        createPlayer:
-                            createPreviewPlayer ??
-                            JustAudioVoiceDraftPlayer.new,
-                      ),
-                    )
-                  : Row(
-                      key: const ValueKey('voice-live'),
-                      children: [
-                        const SizedBox(width: 4),
-                        // Per-sample ticks rebuild only the clock and the waveform.
-                        ListenableBuilder(
-                          listenable: state.samples,
-                          child: RecordingDot(
-                            active: !paused && !state.isSending,
+              if (paused && !state.isReviewing)
+                IconButton(
+                  key: const Key('voice_resume_button'),
+                  tooltip: 'Resume recording',
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size.square(NotionSize.touchTarget),
+                  ),
+                  color: colors.text,
+                  icon: const Icon(Icons.mic_none_outlined),
+                  onPressed: state.canResume ? state.resume : null,
+                )
+              else if (!paused)
+                IconButton(
+                  key: const Key('voice_pause_button'),
+                  tooltip: 'Pause recording',
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size.square(NotionSize.touchTarget),
+                  ),
+                  color: colors.text,
+                  icon: const Icon(Icons.pause),
+                  onPressed: state.controlsBusy ? null : state.pause,
+                ),
+              Expanded(
+                child: NotionFadeThrough(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: paused && !state.isSending
+                      ? Semantics(
+                          key: const ValueKey('voice-preview'),
+                          container: true,
+                          liveRegion: true,
+                          label: '$status, ${formatDuration(state.duration)}',
+                          child: VoiceDraftPreview(
+                            prepare: state.finishForReview,
+                            duration: state.duration,
+                            waveform: state.reviewWaveform,
+                            enabled: !state.controlsBusy || state.isReviewing,
+                            createPlayer:
+                                createPreviewPlayer ??
+                                JustAudioVoiceDraftPlayer.new,
                           ),
-                          builder: (context, dot) {
-                            final time = formatDuration(state.duration);
-                            return Semantics(
-                              container: true,
-                              liveRegion: paused,
-                              label: '$status, $time',
-                              child: ExcludeSemantics(
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    dot!,
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      time,
-                                      style: NotionType.body.copyWith(
-                                        color: state.limitReached
-                                            ? colors.danger
-                                            : colors.text,
-                                        fontFeatures: const [
-                                          FontFeature.tabularFigures(),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                        )
+                      : Row(
+                          key: const ValueKey('voice-live'),
+                          children: [
+                            const SizedBox(width: 4),
+                            // Per-sample ticks rebuild only the clock and the waveform.
+                            ListenableBuilder(
+                              listenable: state.samples,
+                              child: RecordingDot(
+                                active: !paused && !state.isSending,
                               ),
-                            );
-                          },
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ExcludeSemantics(
-                            child: SizedBox(
-                              height: 32,
-                              child: RepaintBoundary(
-                                child: ListenableBuilder(
-                                  listenable: state.samples,
-                                  builder: (context, _) => CustomPaint(
-                                    painter: _LiveWaveformPainter(
-                                      amplitudes: state.amplitudeTimeline,
-                                      revision: state.amplitudeTimeline.length,
-                                      duration: state.duration,
-                                      color: paused
-                                          ? colors.textTertiary
-                                          : colors.text,
+                              builder: (context, dot) {
+                                final time = formatDuration(state.duration);
+                                return Semantics(
+                                  container: true,
+                                  liveRegion: paused,
+                                  label: '$status, $time',
+                                  child: ExcludeSemantics(
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        dot!,
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          time,
+                                          style: NotionType.body.copyWith(
+                                            color: state.limitReached
+                                                ? colors.danger
+                                                : colors.text,
+                                            fontFeatures: const [
+                                              FontFeature.tabularFigures(),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ExcludeSemantics(
+                                child: SizedBox(
+                                  height: 32,
+                                  child: RepaintBoundary(
+                                    child: ListenableBuilder(
+                                      listenable: state.samples,
+                                      builder: (context, _) => CustomPaint(
+                                        painter: _LiveWaveformPainter(
+                                          amplitudes: state.amplitudeTimeline,
+                                          revision:
+                                              state.amplitudeTimeline.length,
+                                          duration: state.duration,
+                                          color: paused
+                                              ? colors.textTertiary
+                                              : colors.text,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
-                      ],
-                    ),
-            ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              KeyedSubtree(
+                key: const Key('voice_send_button'),
+                child: NotionSendButton(
+                  tooltip: 'Send voice message',
+                  busy: state.isSending,
+                  onPressed: state.controlsBusy
+                      ? null
+                      : () => state.stopAndSend(onSend),
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
           ),
-          const SizedBox(width: 8),
-          KeyedSubtree(
-            key: const Key('voice_send_button'),
-            child: NotionSendButton(
-              tooltip: 'Send voice message',
-              busy: state.isSending,
-              onPressed: state.controlsBusy
-                  ? null
-                  : () => state.stopAndSend(onSend),
-            ),
-          ),
-          const SizedBox(width: 4),
-        ],
+        ),
       ),
     );
   }

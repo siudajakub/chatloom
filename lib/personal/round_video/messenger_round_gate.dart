@@ -5,6 +5,7 @@ import 'package:personal_core/bridge_capabilities.dart';
 import 'package:personal_core/personal_core.dart';
 
 import 'telegram_room_binding.dart';
+import 'upload_limit_probe.dart';
 
 /// `m.bridge` protocol ids of the Messenger mode of mautrix-meta: bridgev2
 /// publishes its Beeper bridge type (`facebookgo`) there, older bridges the
@@ -150,10 +151,7 @@ class MessengerRoundGate {
   }) async {
     if (of(room, network: network) == null) return null;
     try {
-      final limit = (await room.client.getConfig(
-        cacheLifetime: Duration.zero,
-        throwOnUpdateFailure: true,
-      )).mUploadSize;
+      final limit = await UploadLimitProbe.measure(room.client);
       _uploadLimits[room.client] = limit != null && limit > 0 ? limit : null;
       _unreachable[room.client] = null;
     } catch (_) {

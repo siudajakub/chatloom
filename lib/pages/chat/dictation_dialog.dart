@@ -29,6 +29,8 @@ Future<void> showDictationDialog(
   await showNotionCustomDialog<void>(
     context: context,
     barrierDismissible: false,
+    // Light: the conversation stays readable behind the glass card.
+    barrierColor: context.notion.colors.scrim.withValues(alpha: .35),
     builder: (_) => DictationDialog(
       room: room,
       transcribe: transcribe,
@@ -488,219 +490,181 @@ class DictationPanel extends StatelessWidget {
       media.size.height -
           media.viewInsets.bottom -
           media.padding.vertical -
-          NotionSpace.xl * 2,
+          NotionSpace.sm * 2,
     );
-    final height = math.min(media.size.height * .82, available);
-    return NotionDialogFrame(
-      padding: const EdgeInsets.all(NotionSpace.md),
-      maxWidth: NotionSize.sheetDialogMaxWidth,
-      child: SizedBox(
-        height: height,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final compact =
-                constraints.maxHeight < NotionSize.contentMaxWidth / 2;
-            final content = Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Semantics(
-                        header: true,
-                        child: Text(
-                          reviewing
-                              ? words(
-                                  'Sprawdź wiadomość',
-                                  'Review your message',
-                                )
-                              : words('Dyktuj wiadomość', 'Dictate a message'),
-                          style: tokens.typography.heading,
-                        ),
-                      ),
-                    ),
-                    NotionIconButton(
-                      icon: Icons.close,
-                      label: words('Zamknij dyktowanie', 'Close dictation'),
-                      onPressed: phase == DictationPhase.sending
-                          ? null
-                          : onClose,
-                    ),
-                  ],
+    final status = switch (phase) {
+      DictationPhase.transcribing => words(
+        'ElevenLabs Scribe v2 przygotowuje tekst…',
+        'ElevenLabs Scribe v2 is preparing the text…',
+      ),
+      DictationPhase.starting => words(
+        'Uruchamianie mikrofonu…',
+        'Starting microphone…',
+      ),
+      DictationPhase.error => words('Spróbuj ponownie', 'Try again'),
+      _ =>
+        paused
+            ? words('Nagranie wstrzymane', 'Recording paused')
+            : words('Nagrywanie · maks. 5 min', 'Recording · up to 5 min'),
+    };
+    // Compact and translucent: a glass card at the bottom, over the
+    // conversation (which stays visible), sized to its content. Only the
+    // review grows, with the transcript.
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Semantics(
+                header: true,
+                child: Text(
+                  reviewing
+                      ? words('Sprawdź wiadomość', 'Review your message')
+                      : words('Dyktuj wiadomość', 'Dictate a message'),
+                  style: tokens.typography.heading,
                 ),
-                if (!compact) ...[
-                  Text(
-                    reviewing
-                        ? words(
-                            'Popraw tekst albo od razu go wyślij.',
-                            'Make any edits, then send when ready.',
-                          )
-                        : words(
-                            'Mów naturalnie. Przygotujemy tekst do sprawdzenia.',
-                            'Speak naturally. We’ll prepare the text for review.',
-                          ),
-                    style: tokens.typography.calloutMuted,
-                  ),
-                  const SizedBox(height: NotionSpace.lg),
-                ],
-                Expanded(
-                  child: reviewing
-                      ? NotionTextField(
-                          key: const Key('dictation-editor'),
-                          controller: controller,
-                          hint: words('Treść wiadomości', 'Message text'),
-                          expands: true,
-                          readOnly: phase == DictationPhase.sending,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.newline,
-                        )
-                      : Center(
-                          child: SingleChildScrollView(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  phase == DictationPhase.error
-                                      ? Icons.error_outline
-                                      : Icons.mic_none_outlined,
-                                  size: NotionSize.avatarLg,
-                                  color: phase == DictationPhase.error
-                                      ? tokens.colors.danger
-                                      : tokens.colors.accent,
-                                ),
-                                const SizedBox(height: NotionSpace.lg),
-                                if (phase == DictationPhase.recording)
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      RecordingDot(active: !paused),
-                                      const SizedBox(width: NotionSpace.xs),
-                                      Text(
-                                        notionAudioTime(duration),
-                                        style: tokens.typography.title,
-                                      ),
-                                    ],
-                                  ),
-                                const SizedBox(height: NotionSpace.sm),
-                                Semantics(
-                                  liveRegion: true,
-                                  child: Text(
-                                    switch (phase) {
-                                      DictationPhase.transcribing => words(
-                                        'ElevenLabs Scribe v2 przygotowuje tekst…',
-                                        'ElevenLabs Scribe v2 is preparing the text…',
-                                      ),
-                                      DictationPhase.starting => words(
-                                        'Uruchamianie mikrofonu…',
-                                        'Starting microphone…',
-                                      ),
-                                      DictationPhase.error => words(
-                                        'Spróbuj ponownie',
-                                        'Try again',
-                                      ),
-                                      _ =>
-                                        paused
-                                            ? words(
-                                                'Nagranie wstrzymane',
-                                                'Recording paused',
-                                              )
-                                            : words(
-                                                'Nagrywanie · maks. 5 min',
-                                                'Recording · up to 5 min',
-                                              ),
-                                    },
-                                    textAlign: TextAlign.center,
-                                    style: tokens.typography.calloutMuted,
-                                  ),
-                                ),
-                                if (paused &&
-                                    onResume != null &&
-                                    phase == DictationPhase.recording)
-                                  NotionButton.ghost(
-                                    label: words(
-                                      'Wznów nagrywanie',
-                                      'Resume recording',
-                                    ),
-                                    icon: Icons.mic_none_outlined,
-                                    onPressed: onResume,
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                ),
-                if (error != null) ...[
-                  const SizedBox(height: NotionSpace.sm),
-                  Semantics(
-                    liveRegion: true,
-                    child: Text(
-                      error!,
-                      style: tokens.typography.callout.copyWith(
-                        color: tokens.colors.danger,
-                      ),
+              ),
+            ),
+            NotionIconButton(
+              icon: Icons.close,
+              label: words('Zamknij dyktowanie', 'Close dictation'),
+              onPressed: phase == DictationPhase.sending ? null : onClose,
+            ),
+          ],
+        ),
+        const SizedBox(height: NotionSpace.xs),
+        if (reviewing)
+          NotionTextField(
+            key: const Key('dictation-editor'),
+            controller: controller,
+            hint: words('Treść wiadomości', 'Message text'),
+            minLines: 3,
+            maxLines: 8,
+            readOnly: phase == DictationPhase.sending,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+          )
+        else
+          Row(
+            children: [
+              SizedBox.square(
+                dimension: NotionSize.touchTarget,
+                child: Center(
+                  child: switch (phase) {
+                    DictationPhase.recording => RecordingDot(active: !paused),
+                    DictationPhase.error => Icon(
+                      Icons.error_outline,
+                      color: tokens.colors.danger,
                     ),
-                  ),
-                ],
-                const SizedBox(height: NotionSpace.md),
-                if (!compact) ...[
-                  Text(
-                    reviewing
-                        ? words(
-                            'Do rozmowy trafi tylko tekst.',
-                            'Only the text will be sent to the conversation.',
-                          )
-                        : words(
-                            'Nagranie trafia do ElevenLabs w celu transkrypcji. Do rozmowy wyślesz tylko tekst.',
-                            'Audio is sent to ElevenLabs for transcription. Only text is sent to the conversation.',
-                          ),
-                    style: tokens.typography.footnoteMuted,
-                  ),
-                  const SizedBox(height: NotionSpace.md),
-                ],
-                ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: controller,
-                  builder: (context, value, _) => NotionButton.primary(
-                    key: const Key('dictation-primary'),
-                    label: reviewing
-                        ? words('Wyślij wiadomość', 'Send message')
-                        : phase == DictationPhase.error
-                        ? words('Spróbuj ponownie', 'Try again')
-                        : words(
-                            'Zatrzymaj i zamień na tekst',
-                            'Stop and transcribe',
-                          ),
-                    icon: reviewing ? Icons.arrow_upward : Icons.stop_rounded,
-                    expand: true,
-                    busy: busy,
-                    onPressed: busy || (reviewing && value.text.trim().isEmpty)
-                        ? null
-                        : onPrimary,
+                    _ => Icon(
+                      Icons.mic_none_outlined,
+                      color: tokens.colors.accent,
+                    ),
+                  },
+                ),
+              ),
+              if (phase == DictationPhase.recording) ...[
+                Text(
+                  notionAudioTime(duration),
+                  style: tokens.typography.title.copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
+                const SizedBox(width: NotionSpace.sm),
               ],
-            );
-            // Extremely short multi-window layouts still allow every control
-            // to be reached. Normal phone layouts keep the action pinned.
-            final accessibleScale =
-                media.textScaler.scale(NotionSize.headerHeight) /
-                NotionSize.headerHeight;
-            final minimumHeight =
-                NotionSize.headerHeight *
-                (error == null ? 3 : 6) *
-                accessibleScale;
-            if (constraints.maxHeight < minimumHeight) {
-              return SingleChildScrollView(
-                child: SizedBox(
-                  height:
-                      NotionSize.headerHeight *
-                      (error == null ? 5 : 8) *
-                      accessibleScale,
-                  child: content,
+              Expanded(
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(status, style: tokens.typography.calloutMuted),
                 ),
-              );
-            }
-            return content;
-          },
+              ),
+              if (paused &&
+                  onResume != null &&
+                  phase == DictationPhase.recording)
+                NotionButton.ghost(
+                  label: words('Wznów nagrywanie', 'Resume recording'),
+                  icon: Icons.mic_none_outlined,
+                  onPressed: onResume,
+                ),
+            ],
+          ),
+        if (error != null) ...[
+          const SizedBox(height: NotionSpace.xs),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              error!,
+              style: tokens.typography.callout.copyWith(
+                color: tokens.colors.danger,
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: NotionSpace.xs),
+        Text(
+          reviewing
+              ? words(
+                  'Do rozmowy trafi tylko tekst.',
+                  'Only the text will be sent to the conversation.',
+                )
+              : words(
+                  'Nagranie trafia do ElevenLabs w celu transkrypcji. Do rozmowy wyślesz tylko tekst.',
+                  'Audio is sent to ElevenLabs for transcription. Only text is sent to the conversation.',
+                ),
+          style: tokens.typography.footnoteMuted,
+        ),
+        const SizedBox(height: NotionSpace.sm),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: controller,
+          builder: (context, value, _) => NotionButton.primary(
+            key: const Key('dictation-primary'),
+            label: reviewing
+                ? words('Wyślij wiadomość', 'Send message')
+                : phase == DictationPhase.error
+                ? words('Spróbuj ponownie', 'Try again')
+                : words('Zatrzymaj i zamień na tekst', 'Stop and transcribe'),
+            icon: reviewing ? Icons.arrow_upward : Icons.stop_rounded,
+            expand: true,
+            busy: busy,
+            onPressed: busy || (reviewing && value.text.trim().isEmpty)
+                ? null
+                : onPrimary,
+          ),
+        ),
+      ],
+    );
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          NotionSpace.sm,
+          NotionSpace.sm,
+          NotionSpace.sm,
+          NotionSpace.sm + media.viewInsets.bottom,
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: NotionSize.sheetDialogMaxWidth,
+            maxHeight: available,
+          ),
+          child: NotionGlassPanel(
+            key: const Key('dictation-panel'),
+            padding: const EdgeInsets.fromLTRB(
+              NotionSpace.md,
+              NotionSpace.xs,
+              NotionSpace.xs,
+              NotionSpace.md,
+            ),
+            // Extremely short multi-window layouts still reach every control.
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsetsDirectional.only(end: NotionSpace.xs),
+                child: content,
+              ),
+            ),
+          ),
         ),
       ),
     );

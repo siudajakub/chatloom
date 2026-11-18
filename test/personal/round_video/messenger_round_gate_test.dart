@@ -10,6 +10,7 @@ import '../../../lib/personal/round_video/messenger_round_gate.dart';
 import '../../../lib/personal/round_video/round_availability.dart';
 import '../../../lib/personal/round_video/round_send_route.dart';
 import '../../../lib/personal/round_video/telegram_room_binding.dart';
+import '../../../lib/personal/round_video/upload_limit_probe.dart';
 
 const _owner = '@fixture-owner:example.invalid';
 const _bot = '@fixture-metabot:bridge.invalid';
@@ -296,6 +297,10 @@ void main() {
       2000000,
     );
     client.failConfig = true;
+    // A recent measurement covers a dropped request (UploadLimitProbe).
+    expect((await MessengerRoundGate.preflight(room))!.allowed, isTrue);
+    expect(MessengerRoundGate.uploadLimitUnreachable(client), isFalse);
+    UploadLimitProbe.forget(client);
     final failed = (await MessengerRoundGate.preflight(room))!;
     expect(failed.allowed, isFalse);
     expect(MessengerRoundGate.uploadLimitUnreachable(client), isTrue);
@@ -499,6 +504,7 @@ void main() {
             isFalse,
           );
           (room.client as _Client).failConfig = true;
+          UploadLimitProbe.forget(room.client);
           expect((await route.preflight(room))!.allowed, isFalse);
           expect(route.uploadLimitUnreachable(room.client), isTrue);
           expect(

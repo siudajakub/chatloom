@@ -56,6 +56,7 @@ void main() {
                     ),
                   ],
                   useCompactActionToolbar: true,
+                  primaryIsRecord: value.text.isEmpty,
                   secondaryAction: value.text.isEmpty
                       ? NotionIconButton(
                           icon: Icons.videocam_outlined,
@@ -88,9 +89,11 @@ void main() {
     ),
   );
 
+  final toggle = find.byTooltip('Show recording options');
+
   for (final direction in [TextDirection.ltr, TextDirection.rtl]) {
     testWidgets(
-      '320dp at 200% text keeps the editor and three 48dp actions ($direction)',
+      '320dp at 200% text is one row; the chevron reveals three 48dp actions ($direction)',
       (tester) async {
         await tester.binding.setSurfaceSize(const Size(320, 700));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -99,35 +102,64 @@ void main() {
         final dictate = find.byTooltip('Dictate a message');
         final round = find.byTooltip('Round video');
         final mic = find.byType(VoiceRecordButton);
-        expect(tester.getSize(find.byType(TextField)).width, greaterThan(120));
+        final add = find.byTooltip('Attach');
+        // One row: "+", the editor and the chevron share a line.
+        expect(tester.getCenter(add).dy, tester.getCenter(toggle).dy);
+        final folded = tester.getSize(find.byType(TextField)).width;
+        expect(folded, greaterThan(80));
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(find.byTooltip('Hide recording options'), findsOneWidget);
+        // They slide out over the end of the field; the editor keeps its
+        // width (and its text) underneath.
+        expect(tester.getSize(find.byType(TextField)).width, folded);
         for (final button in [dictate, round, mic]) {
           expect(tester.getSize(button), const Size.square(48));
+          expect(
+            tester.getCenter(button).dy,
+            closeTo(tester.getCenter(add).dy, 1.5),
+          );
         }
-        expect(tester.getCenter(dictate).dy, tester.getCenter(round).dy);
-        expect(tester.getCenter(round).dy, tester.getCenter(mic).dy);
+        final ltr = direction == TextDirection.ltr;
+        // They slide out towards the editor, the mic next to the chevron.
+        final chevron = tester.getCenter(
+          find.byTooltip('Hide recording options'),
+        );
+        expect(tester.getCenter(mic).dx < chevron.dx, ltr);
+        expect(tester.getCenter(dictate).dx < tester.getCenter(mic).dx, ltr);
+        await tester.tap(find.byTooltip('Hide recording options'));
+        await tester.pumpAndSettle();
+        expect(tester.getSize(find.byType(TextField)).width, folded);
         expect(tester.takeException(), isNull);
       },
     );
   }
 
-  testWidgets('typing keeps the phone toolbar and the same active editor', (
+  testWidgets('typing puts send in the chevron\'s place, same editor', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(320, 700));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(host());
     await tester.pumpAndSettle();
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
     await tester.showKeyboard(find.byType(TextField));
     final state = tester.state(find.byType(EditableText));
-    final editorRect = tester.getRect(find.byType(TextField));
-    final micRect = tester.getRect(find.byType(VoiceRecordButton));
+    final toggleCenter = tester.getCenter(
+      find.byTooltip('Hide recording options'),
+    );
     await tester.enterText(find.byType(TextField), 'Fictional draft');
     await tester.pumpAndSettle();
     expect(tester.state(find.byType(EditableText)), same(state));
-    expect(tester.getRect(find.byType(TextField)), editorRect);
-    expect(tester.getRect(find.byType(NotionSendButton)), micRect);
+    expect(tester.getCenter(find.byType(NotionSendButton)), toggleCenter);
     expect(find.byTooltip('Dictate a message'), findsNothing);
+    expect(find.byTooltip('Hide recording options'), findsNothing);
     expect(tester.testTextInput.isVisible, isTrue);
+    // Clearing the text brings the chevron back, folded.
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pumpAndSettle();
+    expect(toggle, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -138,13 +170,15 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(host());
     await tester.pumpAndSettle();
+    expect(toggle, findsNothing);
     final editorState = tester.state(find.byType(EditableText));
     final micState = tester.state(find.byType(VoiceRecordButton));
     await tester.binding.setSurfaceSize(const Size(320, 700));
     await tester.pumpAndSettle();
     expect(tester.state(find.byType(EditableText)), same(editorState));
     expect(tester.state(find.byType(VoiceRecordButton)), same(micState));
-    expect(tester.getSize(find.byType(TextField)).width, greaterThan(120));
+    expect(toggle, findsOneWidget);
+    expect(tester.getSize(find.byType(TextField)).width, greaterThan(80));
     expect(tester.takeException(), isNull);
   });
 }

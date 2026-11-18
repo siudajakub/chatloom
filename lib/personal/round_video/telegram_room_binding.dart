@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/bridge_capabilities.dart';
 import 'package:personal_core/personal_core.dart';
+import 'upload_limit_probe.dart';
 
 /// Authenticated state binds the fork, its login owner and the exact portal.
 /// A single room-features event or a network label never establishes trust.
@@ -164,10 +165,7 @@ class TelegramRoomBinding {
     final binding = of(room);
     if (binding == null) return null;
     try {
-      final limit = (await room.client.getConfig(
-        cacheLifetime: Duration.zero,
-        throwOnUpdateFailure: true,
-      )).mUploadSize;
+      final limit = await UploadLimitProbe.measure(room.client);
       if (limit == null || limit <= 0) {
         _uploadLimits.remove(room.client);
       } else {
@@ -182,6 +180,7 @@ class TelegramRoomBinding {
   }
 
   static void forget(Client client) {
+    UploadLimitProbe.forget(client);
     _uploadLimits.remove(client);
     _unreachable[client] = null;
     _trusted.remove(client);

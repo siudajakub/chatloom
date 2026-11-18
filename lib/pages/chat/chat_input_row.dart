@@ -32,6 +32,7 @@ import 'package:matrix/matrix.dart';
 import 'chat.dart' show AddPopupMenuActions;
 import 'composer_dictation.dart';
 import 'composer_menu.dart';
+import 'composer_notice.dart';
 import 'composer_recipient_notice.dart';
 import 'composer_send_later.dart';
 import 'conversation_source.dart';
@@ -523,6 +524,8 @@ class _ChatInputRowState extends State<ChatInputRow> {
           RoundOutboxSync(room: controller.room),
         // Telegram: a single emoji suggests matching stickers.
         StickerSuggestionStrip(host: controller),
+        // Transient notices from composer actions, above the field.
+        const ComposerNoticeStrip(),
         RecordingViewModel(
           builder: (context, recordingViewModel) {
             // A held recording keeps the composer (and this pointer) mounted.
@@ -616,6 +619,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
                   secondaryAction: _roundAction(record),
                   tertiaryAction: _dictationAction(record),
                   useCompactActionToolbar: PlatformInfos.platformCanRecord,
+                  primaryIsRecord: record.voice,
                   primaryAction: _primary(recordingViewModel, record),
                 ),
               ),
