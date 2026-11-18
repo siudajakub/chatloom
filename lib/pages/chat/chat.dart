@@ -14,6 +14,7 @@ import 'package:chatloom/pages/chat/chat_event_list.dart'
     show conversationReadMarkerRow, conversationUnreadCount;
 import 'package:chatloom/pages/chat/chat_message_actions.dart';
 import 'package:chatloom/pages/chat/chat_timeline_preload.dart';
+import 'package:chatloom/pages/chat/composer_notice.dart';
 import 'package:chatloom/pages/chat/chat_view.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart'
     show ConversationSourceChip;
@@ -2316,8 +2317,9 @@ class ChatController extends State<ChatPageWithRoom>
   @override
   List<ConversationMessageAction> messageActions(
     BuildContext context,
-    Event event,
-  ) => chatMessageActions(this, context, event);
+    Event event, {
+    List<Event>? album,
+  }) => chatMessageActions(this, context, event, album: album);
 
   /// The text a message shows (its newest edit).
   String eventText(Event event) {
@@ -2472,10 +2474,8 @@ class ChatController extends State<ChatPageWithRoom>
         setState(() => replyEvent = null);
       }
     } catch (error) {
-      if (mounted)
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(roundFailureMessage(error))));
+      // Above the composer: a snackbar would cover it.
+      if (mounted) ComposerNotice.show(context, roundFailureMessage(error));
     }
   }
 

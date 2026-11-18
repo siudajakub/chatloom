@@ -84,10 +84,13 @@ abstract interface class ConversationTimelineSource {
 
   /// The long-press menu of [event]: every action that applies to this one
   /// message (there is no multi-selection), in menu order.
+  ///
+  /// [album] is the photo/video album [event] leads (oldest first), if any.
   List<ConversationMessageAction> messageActions(
     BuildContext context,
-    Event event,
-  );
+    Event event, {
+    List<Event>? album,
+  });
   int? findChildIndexCallback(Key key, Map<String, int> thisEventsKeyMap);
 
   /// Opens a thread from its root, or null where threads are unavailable.

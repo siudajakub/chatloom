@@ -637,8 +637,11 @@ class _ChatEventListState extends State<ChatEventList>
                         scrollToEventId: controller.scrollToEventId,
                         readMarkerEventId: readMarkerRowId,
                         textSelectionActive: _textSelectionActive,
-                        menuActions: (event) =>
-                            controller.messageActions(context, event),
+                        menuActions: (event) => controller.messageActions(
+                          context,
+                          event,
+                          album: album?.members,
+                        ),
                         timeline: controller.timelineFor(event)!,
                         sourceLabel: controller.sourceLabelFor(event),
                         seriesBoundary: controller.seriesBoundary,

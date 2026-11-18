@@ -43,8 +43,9 @@ bool conversationMessageSelectable(Event display) =>
 List<ConversationMessageAction> chatMessageActions(
   ChatController controller,
   BuildContext context,
-  Event event,
-) {
+  Event event, {
+  List<Event>? album,
+}) {
   final l10n = L10n.of(context);
   final timeline = controller.timeline;
   final display = timeline == null ? event : event.getDisplayEvent(timeline);
@@ -155,6 +156,7 @@ List<ConversationMessageAction> chatMessageActions(
       controller.context,
       display,
       canSave: controller.canSaveEvent(display) && !isViewLimited(display),
+      album: album,
     ),
     // Raw message source: developer options only (CS-23).
     if (DeveloperOptions.enabled)

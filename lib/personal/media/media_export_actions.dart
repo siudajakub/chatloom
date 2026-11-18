@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
+import 'package:chatloom/personal/media/album_save.dart';
+import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/media/media_store.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -25,28 +27,44 @@ bool mediaOffersSaveAs({bool? android}) => android ?? PlatformInfos.isAndroid;
 /// Message-menu entries that export [display]'s attachment, in Telegram's
 /// order: save, save as, copy image. [context] must outlive the menu (the
 /// chat page's context): the download dialog and the confirmation use it.
+/// [album] is the photo/video album [display] leads (oldest first); Save then
+/// exports every item of it (as for a gallery message), not just [display].
 List<ConversationMessageAction> mediaExportMenuActions(
   BuildContext context,
   Event display, {
   required bool canSave,
-}) => [
-  if (canSave) ...[
-    ConversationMessageAction(
-      icon: Icons.download_outlined,
-      label: mediaSaveLabel(display),
-      onSelected: () => display.saveFile(context),
-    ),
-    if (mediaOffersSaveAs())
+  List<Event>? album,
+}) {
+  final group = albumSaveEvents(display, album);
+  // A gallery message has no single file; each item is gated on its own.
+  final canSaveGroup = GalleryContent.isGallery(display)
+      ? display.status.isSent && display.personalMediaExportAllowed
+      : canSave;
+  return [
+    if (group.isNotEmpty && canSaveGroup)
       ConversationMessageAction(
-        icon: Icons.save_as_outlined,
-        label: 'Save as…',
-        onSelected: () => display.saveFileAs(context),
+        icon: Icons.download_outlined,
+        label: albumSaveLabel(group),
+        onSelected: () => saveAlbumEvents(context, group),
+      )
+    else if (canSave) ...[
+      ConversationMessageAction(
+        icon: Icons.download_outlined,
+        label: mediaSaveLabel(display),
+        onSelected: () => display.saveFile(context),
       ),
-  ],
-  if (display.canCopyImage)
-    ConversationMessageAction(
-      icon: Icons.copy_all_outlined,
-      label: 'Copy image',
-      onSelected: () => display.copyImage(context),
-    ),
-];
+      if (mediaOffersSaveAs())
+        ConversationMessageAction(
+          icon: Icons.save_as_outlined,
+          label: 'Save as…',
+          onSelected: () => display.saveFileAs(context),
+        ),
+    ],
+    if (display.canCopyImage)
+      ConversationMessageAction(
+        icon: Icons.copy_all_outlined,
+        label: 'Copy image',
+        onSelected: () => display.copyImage(context),
+      ),
+  ];
+}

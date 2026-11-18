@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:async/async.dart' as async;
+import 'package:chatloom/personal/media/album_save.dart';
 import 'package:chatloom/personal/media/cancellable_download.dart';
 import 'package:chatloom/personal/media/open_file.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
@@ -167,3 +168,12 @@ extension LocalizedBody on Event {
       ?.tryGet<int>('size')
       ?.sizeString;
 }
+
+/// Saves every photo/video of an album or gallery message ([events]),
+/// each behind its own export gate.
+Future<void> saveAlbumEvents(BuildContext context, List<Event> events) =>
+    saveAlbum(
+      context,
+      events,
+      guard: (event) => event._guardMediaExport(context),
+    );

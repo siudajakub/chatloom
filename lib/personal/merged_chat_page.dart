@@ -16,6 +16,7 @@ import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/compact_composer.dart';
 import 'package:chatloom/pages/chat/composer_dictation.dart';
 import 'package:chatloom/pages/chat/composer_keyboard.dart';
+import 'package:chatloom/pages/chat/composer_notice.dart';
 import 'package:chatloom/pages/chat/composer_send_later.dart';
 import 'package:chatloom/pages/chat/conversation_attachment_destination.dart';
 import 'package:chatloom/pages/chat/conversation_drop_target.dart';
@@ -1746,8 +1747,9 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   List<ConversationMessageAction> messageActions(
     BuildContext context,
-    Event event,
-  ) {
+    Event event, {
+    List<Event>? album,
+  }) {
     final l10n = L10n.of(context);
     final display = _display(event);
     final failed = event.status.isError || display.status.isError;
@@ -1838,6 +1840,7 @@ class _MergedChatPageState extends State<_MergedChatView>
         display,
         // View-once media is never saved from ChatLoom (BR-10).
         canSave: _canSave(display) && !isViewLimited(display),
+        album: album,
       ),
       // Raw message source: developer options only (CS-23).
       if (DeveloperOptions.enabled)
@@ -2824,7 +2827,8 @@ class _MergedChatPageState extends State<_MergedChatView>
         });
       }
     } catch (error) {
-      _notify(roundFailureMessage(error));
+      // Above the composer: a snackbar would cover it.
+      if (mounted) ComposerNotice.show(context, roundFailureMessage(error));
     }
   }
 
